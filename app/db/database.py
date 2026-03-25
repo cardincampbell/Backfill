@@ -30,6 +30,19 @@ async def init_db():
                 manager_email             TEXT,
                 scheduling_platform       TEXT NOT NULL DEFAULT 'backfill_native',
                 scheduling_platform_id    TEXT,
+                integration_status       TEXT,
+                last_roster_sync_at      TEXT,
+                last_roster_sync_status  TEXT,
+                last_schedule_sync_at    TEXT,
+                last_schedule_sync_status TEXT,
+                last_sync_error          TEXT,
+                integration_state        TEXT,
+                last_event_sync_at       TEXT,
+                last_rolling_sync_at     TEXT,
+                last_daily_sync_at       TEXT,
+                last_writeback_at        TEXT,
+                writeback_enabled        INTEGER NOT NULL DEFAULT 0,
+                writeback_subscription_tier TEXT NOT NULL DEFAULT 'core',
                 onboarding_info           TEXT,
                 agency_supply_approved    INTEGER NOT NULL DEFAULT 0,
                 preferred_agency_partners TEXT NOT NULL DEFAULT '[]'
@@ -91,8 +104,12 @@ async def init_db():
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                 shift_id              INTEGER NOT NULL REFERENCES shifts(id),
                 status                TEXT NOT NULL DEFAULT 'active',
+                outreach_mode         TEXT NOT NULL DEFAULT 'cascade',
                 current_tier          INTEGER NOT NULL DEFAULT 1,
+                current_batch         INTEGER NOT NULL DEFAULT 0,
                 current_position      INTEGER NOT NULL DEFAULT 0,
+                confirmed_worker_id   INTEGER REFERENCES workers(id),
+                standby_queue         TEXT NOT NULL DEFAULT '[]',
                 manager_approved_tier3 INTEGER NOT NULL DEFAULT 0
             )
         """)
@@ -106,6 +123,8 @@ async def init_db():
                 channel              TEXT NOT NULL DEFAULT 'sms',
                 status               TEXT NOT NULL DEFAULT 'pending',
                 outcome              TEXT,
+                standby_position     INTEGER,
+                promoted_at          TEXT,
                 sent_at              TEXT,
                 responded_at         TEXT,
                 conversation_summary TEXT
@@ -158,6 +177,149 @@ async def init_db():
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS integration_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform        TEXT NOT NULL,
+                restaurant_id   INTEGER REFERENCES restaurants(id),
+                source_event_id TEXT,
+                event_type      TEXT,
+                event_scope     TEXT,
+                payload         TEXT NOT NULL DEFAULT '{}',
+                received_at     TEXT NOT NULL,
+                processed_at    TEXT,
+                status          TEXT NOT NULL DEFAULT 'received',
+                error           TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_events_source
+            ON integration_events(platform, source_event_id)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sync_jobs (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform             TEXT NOT NULL,
+                restaurant_id        INTEGER REFERENCES restaurants(id),
+                integration_event_id INTEGER REFERENCES integration_events(id),
+                job_type             TEXT NOT NULL,
+                priority             INTEGER NOT NULL DEFAULT 50,
+                scope                TEXT,
+                scope_ref            TEXT,
+                window_start         TEXT,
+                window_end           TEXT,
+                status               TEXT NOT NULL DEFAULT 'queued',
+                attempt_count        INTEGER NOT NULL DEFAULT 0,
+                max_attempts         INTEGER NOT NULL DEFAULT 3,
+                next_run_at          TEXT NOT NULL,
+                started_at           TEXT,
+                completed_at         TEXT,
+                last_error           TEXT,
+                idempotency_key      TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_jobs_due
+            ON sync_jobs(status, next_run_at, priority, platform, restaurant_id)
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_idempotency
+            ON sync_jobs(idempotency_key)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sync_runs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                sync_job_id   INTEGER NOT NULL REFERENCES sync_jobs(id),
+                attempt_number INTEGER NOT NULL,
+                started_at    TEXT NOT NULL,
+                completed_at  TEXT,
+                status        TEXT NOT NULL,
+                created_count INTEGER NOT NULL DEFAULT 0,
+                updated_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                latency_ms    INTEGER,
+                error         TEXT
+            )
+        """)
+
+        await _ensure_column(
+            db,
+            "restaurants",
+            "integration_status",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_roster_sync_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_roster_sync_status",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_schedule_sync_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_schedule_sync_status",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_sync_error",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "integration_state",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_event_sync_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_rolling_sync_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_daily_sync_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "last_writeback_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "writeback_enabled",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "restaurants",
+            "writeback_subscription_tier",
+            "TEXT NOT NULL DEFAULT 'core'",
+        )
         await _ensure_column(
             db,
             "workers",
@@ -186,6 +348,42 @@ async def init_db():
             db,
             "shifts",
             "reminder_sent_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "outreach_mode",
+            "TEXT NOT NULL DEFAULT 'cascade'",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "current_batch",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "confirmed_worker_id",
+            "INTEGER REFERENCES workers(id)",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "standby_queue",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        await _ensure_column(
+            db,
+            "outreach_attempts",
+            "standby_position",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "outreach_attempts",
+            "promoted_at",
             "TEXT",
         )
 

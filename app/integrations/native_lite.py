@@ -8,6 +8,8 @@ Used when:
 All writes go directly to the Backfill SQLite database.
 This adapter is always available and is the default.
 """
+from __future__ import annotations
+
 from app.integrations.base import SchedulingAdapter
 from app.db import queries
 

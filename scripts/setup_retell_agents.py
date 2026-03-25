@@ -97,8 +97,100 @@ FUNCTION_SCHEMAS = [
         },
     },
     {
+        "name": "claim_shift",
+        "description": "Atomically claim a shift for the worker if it is still open, or place them on standby if another worker already claimed it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cascade_id": {
+                    "type": "integer",
+                    "description": "ID of the active cascade for this shift.",
+                },
+                "worker_id": {
+                    "type": "integer",
+                    "description": "ID of the worker who was offered the shift.",
+                },
+                "conversation_summary": {
+                    "type": "string",
+                    "description": "Brief summary of the conversation for the audit log.",
+                    "default": "",
+                },
+            },
+            "required": ["cascade_id", "worker_id"],
+        },
+    },
+    {
+        "name": "decline_shift",
+        "description": "Record that a worker declined an outbound shift offer.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cascade_id": {
+                    "type": "integer",
+                    "description": "ID of the active cascade for this shift.",
+                },
+                "worker_id": {
+                    "type": "integer",
+                    "description": "ID of the worker who was offered the shift.",
+                },
+                "conversation_summary": {
+                    "type": "string",
+                    "description": "Brief summary of the conversation for the audit log.",
+                    "default": "",
+                },
+            },
+            "required": ["cascade_id", "worker_id"],
+        },
+    },
+    {
+        "name": "cancel_standby",
+        "description": "Remove a worker from the standby queue for a shift.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cascade_id": {
+                    "type": "integer",
+                    "description": "ID of the active or recently completed cascade.",
+                },
+                "worker_id": {
+                    "type": "integer",
+                    "description": "ID of the standby worker.",
+                },
+                "conversation_summary": {
+                    "type": "string",
+                    "description": "Brief summary of the conversation for the audit log.",
+                    "default": "",
+                },
+            },
+            "required": ["cascade_id", "worker_id"],
+        },
+    },
+    {
+        "name": "promote_standby",
+        "description": "Confirm a standby worker after the shift reopens.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cascade_id": {
+                    "type": "integer",
+                    "description": "ID of the related cascade.",
+                },
+                "worker_id": {
+                    "type": "integer",
+                    "description": "ID of the standby worker being promoted.",
+                },
+                "conversation_summary": {
+                    "type": "string",
+                    "description": "Brief summary of the conversation for the audit log.",
+                    "default": "",
+                },
+            },
+            "required": ["cascade_id", "worker_id"],
+        },
+    },
+    {
         "name": "confirm_fill",
-        "description": "Record whether a worker accepted or declined an outbound shift offer.",
+        "description": "Backward-compatible alias for older agent configs. Prefer claim_shift or decline_shift for new agents.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -189,6 +281,28 @@ FUNCTION_SCHEMAS = [
                 },
             },
             "required": ["restaurant_id", "role", "date", "start_time", "end_time", "pay_rate"],
+        },
+    },
+    {
+        "name": "send_onboarding_link",
+        "description": "Text the manager the correct Backfill onboarding link based on their scheduler situation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {
+                    "type": "string",
+                    "description": "Manager phone number in E.164 format.",
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "One of integration, csv_upload, or manual_form.",
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "Optional scheduler name for integration handoff: 7shifts, deputy, wheniwork, or homebase.",
+                },
+            },
+            "required": ["phone", "kind"],
         },
     },
 ]

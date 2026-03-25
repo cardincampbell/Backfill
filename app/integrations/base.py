@@ -2,6 +2,8 @@
 Abstract adapter interface — every scheduling platform integration implements this.
 Adding a new platform = writing a new adapter, not touching the core engine.
 """
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
@@ -7,7 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from app.config import settings
-from app.db.queries import get_shift, insert_restaurant, insert_shift, insert_worker
+from app.db.queries import get_shift, insert_restaurant, insert_shift, insert_worker, list_sync_jobs
 
 
 def _signed_json(secret: str, body: dict) -> tuple[str, str]:
@@ -95,11 +97,13 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
     )
 
     shift = await get_shift(db, shift_id)
+    sync_jobs = await list_sync_jobs(db, restaurant_id=restaurant_id, limit=10)
 
     assert response.status_code == 200
     assert response.json()["status"] == "vacancy_created"
     assert response.json()["result"]["worker_id"] == replacement_id
     assert shift["status"] == "vacant"
+    assert any(job["job_type"] == "event_reconcile" for job in sync_jobs)
 
 
 def test_deputy_webhook_rejects_invalid_signature(client, monkeypatch):

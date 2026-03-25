@@ -147,6 +147,141 @@ async def test_urgent_shift_uses_sms_and_voice(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby(db, monkeypatch):
+    restaurant_id = await _seed_restaurant(db)
+    caller_id = await insert_worker(
+        db,
+        {
+            "name": "Maria",
+            "phone": "+13105550101",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 1,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    first_yes_id = await insert_worker(
+        db,
+        {
+            "name": "James",
+            "phone": "+13105550103",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 2,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    second_yes_id = await insert_worker(
+        db,
+        {
+            "name": "Devon",
+            "phone": "+13105550104",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 3,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=1))
+
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+
+    async def _fake_call(*, to_number, metadata, agent_id=None):
+        return "CA123"
+
+    monkeypatch.setattr("app.services.retell.create_phone_call", _fake_call)
+
+    cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
+    result = await cascade_svc.advance(db, cascade["id"])
+
+    assert result["mode"] == "broadcast"
+    assert set(result["worker_ids"]) == {first_yes_id, second_yes_id}
+
+    confirmed = await cascade_svc.claim_shift(db, cascade["id"], first_yes_id, summary="Accepted by SMS")
+    standby = await cascade_svc.claim_shift(db, cascade["id"], second_yes_id, summary="Accepted a moment later")
+
+    updated_cascade = await get_cascade(db, cascade["id"])
+    shift = await get_shift(db, shift_id)
+
+    assert confirmed["status"] == "confirmed"
+    assert standby["status"] == "standby"
+    assert standby["standby_position"] == 1
+    assert updated_cascade["confirmed_worker_id"] == first_yes_id
+    assert updated_cascade["standby_queue"] == [second_yes_id]
+    assert shift["status"] == "filled"
+    assert shift["filled_by"] == first_yes_id
+
+
+@pytest.mark.asyncio
+async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
+    restaurant_id = await _seed_restaurant(db)
+    caller_id = await insert_worker(
+        db,
+        {
+            "name": "Maria",
+            "phone": "+13105550101",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 1,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    confirmed_id = await insert_worker(
+        db,
+        {
+            "name": "James",
+            "phone": "+13105550103",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 2,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    standby_id = await insert_worker(
+        db,
+        {
+            "name": "Devon",
+            "phone": "+13105550104",
+            "roles": ["line_cook"],
+            "certifications": ["food_handler_card"],
+            "priority_rank": 3,
+            "restaurant_id": restaurant_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=1))
+
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+
+    async def _fake_call(*, to_number, metadata, agent_id=None):
+        return "CA123"
+
+    monkeypatch.setattr("app.services.retell.create_phone_call", _fake_call)
+
+    cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
+    await cascade_svc.advance(db, cascade["id"])
+    await cascade_svc.claim_shift(db, cascade["id"], confirmed_id, summary="Confirmed")
+    await cascade_svc.claim_shift(db, cascade["id"], standby_id, summary="Standby")
+
+    result = await cascade_svc.cancel_standby(db, cascade["id"], standby_id, summary="Cancelled")
+    updated_cascade = await get_cascade(db, cascade["id"])
+
+    assert result["status"] == "standby_cancelled"
+    assert updated_cascade["standby_queue"] == []
+
+
+@pytest.mark.asyncio
 async def test_cascade_exhausted_when_no_eligible_workers_and_manager_notified(db, monkeypatch):
     restaurant_id = await _seed_restaurant(db)
     caller_id = await insert_worker(

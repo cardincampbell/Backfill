@@ -2,6 +2,8 @@
 Audit trail — every significant action in the system gets logged here.
 Call append() anywhere you would otherwise only print or log a message.
 """
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any, Optional
 import aiosqlite

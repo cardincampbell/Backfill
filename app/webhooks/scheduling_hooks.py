@@ -19,6 +19,7 @@ from app.db.database import get_db
 from app.db import queries
 from app.services import cascade as cascade_svc
 from app.services import shift_manager
+from app.services import sync_engine
 
 router = APIRouter(prefix="/webhooks/scheduling", tags=["scheduling-webhooks"])
 
@@ -99,7 +100,7 @@ async def _create_vacancy_from_webhook(
 ) -> dict:
     shift = await _resolve_local_shift(db, platform, body)
     if shift is None:
-        raise HTTPException(status_code=404, detail="No local shift matched this scheduler event")
+        return {"status": "queued_for_reconcile", "platform": platform}
     caller_id = await _resolve_worker_id(db, shift["restaurant_id"], body)
     cascade = await shift_manager.create_vacancy(
         db,
@@ -115,6 +116,57 @@ async def _create_vacancy_from_webhook(
         "cascade_id": cascade["id"],
         "result": result,
     }
+
+
+def _source_event_id(platform: str, body: dict[str, Any]) -> Optional[str]:
+    raw_id = _first_present(
+        body,
+        [
+            ("event_id",),
+            ("id",),
+            ("data", "event_id"),
+            ("resource", "id"),
+            ("meta", "id"),
+        ],
+    )
+    event_type = str(body.get("type") or body.get("event") or body.get("topic") or body.get("resource") or "")
+    if raw_id not in (None, ""):
+        return f"{platform}:{event_type}:{raw_id}"
+    return None
+
+
+async def _queue_platform_event(
+    db: aiosqlite.Connection,
+    platform: str,
+    body: dict[str, Any],
+    *,
+    event_type: Optional[str],
+    event_scope: str,
+    scope_ref: Optional[str] = None,
+    process_now: bool = False,
+) -> dict:
+    shift = await _resolve_local_shift(db, platform, body)
+    restaurant_id = int(shift["restaurant_id"]) if shift else None
+    queued = await sync_engine.enqueue_event_reconcile(
+        db,
+        platform=platform,
+        payload=body,
+        restaurant_id=restaurant_id,
+        event_type=event_type,
+        event_scope=event_scope,
+        scope_ref=scope_ref,
+        source_event_id=_source_event_id(platform, body),
+    )
+    response = {
+        "status": "queued",
+        "platform": platform,
+        "event": event_type,
+        "job_id": queued["job"]["id"] if queued.get("job") else None,
+        "integration_event_id": queued["event"]["id"] if queued.get("event") else None,
+    }
+    if process_now and queued.get("job"):
+        response["processed"] = await sync_engine.process_sync_job(db, int(queued["job"]["id"]))
+    return response
 
 
 @router.post("/seven_shifts")
@@ -133,10 +185,33 @@ async def seven_shifts_webhook(
     body = await request.json()
     event_type = body.get("type") or body.get("event")
     if event_type in {"shift.deleted", "shift.unassigned", "punch.callout"}:
-        return await _create_vacancy_from_webhook(db, "7shifts", body)
+        queued = await _queue_platform_event(
+            db,
+            "7shifts",
+            body,
+            event_type=event_type,
+            event_scope="shift",
+            scope_ref=str(_first_present(body, [("shift_id",), ("shift", "id"), ("data", "shift_id"), ("data", "id")]) or ""),
+            process_now=True,
+        )
+        vacancy = await _create_vacancy_from_webhook(db, "7shifts", body)
+        return {**queued, **vacancy}
     if event_type == "schedule.published":
-        return {"status": "ignored", "platform": "7shifts", "event": event_type}
-    return {"status": "ignored", "platform": "7shifts", "event": event_type}
+        return await _queue_platform_event(
+            db,
+            "7shifts",
+            body,
+            event_type=event_type,
+            event_scope="schedule",
+            process_now=True,
+        )
+    return await _queue_platform_event(
+        db,
+        "7shifts",
+        body,
+        event_type=event_type,
+        event_scope="unknown",
+    )
 
 
 @router.post("/deputy")
@@ -157,8 +232,24 @@ async def deputy_webhook(
     event = str(body.get("event") or body.get("action") or "")
     status = str(_first_present(body, [("data", "status"), ("data", "state"), ("status",)]) or "").lower()
     if topic.lower() == "roster" and (event.lower() == "delete" or status in {"deleted", "cancelled", "unassigned", "open"}):
-        return await _create_vacancy_from_webhook(db, "deputy", body)
-    return {"status": "ignored", "platform": "deputy", "topic": topic, "event": event}
+        queued = await _queue_platform_event(
+            db,
+            "deputy",
+            body,
+            event_type=f"{topic}.{event}",
+            event_scope="shift",
+            scope_ref=str(_first_present(body, [("resource", "id"), ("data", "shift_id"), ("data", "id")]) or ""),
+            process_now=True,
+        )
+        vacancy = await _create_vacancy_from_webhook(db, "deputy", body)
+        return {**queued, **vacancy}
+    return await _queue_platform_event(
+        db,
+        "deputy",
+        body,
+        event_type=f"{topic}.{event}",
+        event_scope="schedule",
+    )
 
 
 @router.post("/wheniwork")
@@ -177,5 +268,21 @@ async def when_i_work_webhook(
     body = await request.json()
     event_type = str(body.get("event") or body.get("type") or "")
     if event_type in {"shift.deleted", "shift.unassigned", "open_shift.created", "punch.callout"}:
-        return await _create_vacancy_from_webhook(db, "wheniwork", body)
-    return {"status": "ignored", "platform": "wheniwork", "event": event_type}
+        queued = await _queue_platform_event(
+            db,
+            "wheniwork",
+            body,
+            event_type=event_type,
+            event_scope="shift",
+            scope_ref=str(_first_present(body, [("shift_id",), ("data", "shift_id"), ("data", "id")]) or ""),
+            process_now=True,
+        )
+        vacancy = await _create_vacancy_from_webhook(db, "wheniwork", body)
+        return {**queued, **vacancy}
+    return await _queue_platform_event(
+        db,
+        "wheniwork",
+        body,
+        event_type=event_type,
+        event_scope="schedule",
+    )

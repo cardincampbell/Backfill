@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
@@ -17,7 +19,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Backfill",
-    description="AI coordination layer for shift coverage — powered by Retell AI",
+    description="Autonomous coverage infrastructure for hourly labor — powered by Retell AI",
     version="0.1.0",
     lifespan=lifespan,
 )

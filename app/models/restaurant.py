@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
@@ -22,6 +24,19 @@ class RestaurantCreate(BaseModel):
         description="'7shifts' | 'deputy' | 'wheniwork' | 'homebase' | 'backfill_native'",
     )
     scheduling_platform_id: Optional[str] = None
+    integration_status: Optional[str] = None
+    last_roster_sync_at: Optional[str] = None
+    last_roster_sync_status: Optional[str] = None
+    last_schedule_sync_at: Optional[str] = None
+    last_schedule_sync_status: Optional[str] = None
+    last_sync_error: Optional[str] = None
+    integration_state: Optional[str] = None
+    last_event_sync_at: Optional[str] = None
+    last_rolling_sync_at: Optional[str] = None
+    last_daily_sync_at: Optional[str] = None
+    last_writeback_at: Optional[str] = None
+    writeback_enabled: bool = False
+    writeback_subscription_tier: str = "core"
     onboarding_info: Optional[str] = Field(
         None, description="Parking, dress code, who to report to, etc."
     )

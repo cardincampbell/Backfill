@@ -12,18 +12,19 @@ export default async function HomePage() {
     <main>
       <section className="hero">
         <div className="hero-copy">
-          <span className="eyebrow">Call. We fill.</span>
-          <h1>AI shift coverage for hourly operations.</h1>
+          <span className="eyebrow">Autonomous Coverage Engine</span>
+          <h1>Autonomous coverage infrastructure for hourly labor.</h1>
           <p className="lede">
-            Workers call or text <strong>1-800-BACKFILL</strong>. Backfill identifies the shift,
-            launches the fill cascade, confirms coverage, and keeps the restaurant in one workflow.
+            Workers call or text <strong>1-800-BACKFILL</strong>. Backfill identifies the gap,
+            broadcasts to the fastest trusted replacement path, confirms coverage, and texts the
+            manager once the shift is handled.
           </p>
           <div className="cta-row">
             <Link className="button" href="/dashboard">
-              View restaurant dashboard
+              View operations dashboard
             </Link>
-            <Link className="button-secondary" href="/join">
-              Worker support layer
+            <Link className="button-secondary" href="/setup/connect">
+              Start restaurant setup
             </Link>
           </div>
         </div>
@@ -31,22 +32,22 @@ export default async function HomePage() {
           <StatCard
             label="Active cascades"
             value={summary?.cascades_active ?? "Offline"}
-            hint="Live from the FastAPI backend"
+            hint="Live coverage events from the backend"
           />
           <StatCard
             label="Vacant shifts"
             value={summary?.shifts_vacant ?? "Offline"}
-            hint="Current vacancies in Native Lite"
+            hint="Open coverage gaps in Native Lite"
           />
           <StatCard
             label="Filled shifts"
             value={summary?.shifts_filled ?? "Offline"}
-            hint="Recently confirmed coverage"
+            hint="Confirmed coverage outcomes"
           />
           <StatCard
             label="Workers tracked"
             value={summary?.workers ?? "Offline"}
-            hint="Roster and alumni records"
+            hint="Internal staff and alumni records"
           />
         </div>
       </section>
@@ -54,24 +55,28 @@ export default async function HomePage() {
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Support-layer surfaces</h2>
+            <h2>Structured surfaces</h2>
             <p className="muted">
-              These pages exist for the tasks that are awkward over phone and text, not as the primary product entry point.
+              The phone starts everything. These pages handle the structured work that does not belong in a call.
             </p>
           </div>
         </div>
         <div className="feature-grid">
-          <SectionCard title="Restaurants">
-            <p>View active vacancies, cascade status, roster data, and shift history.</p>
+          <SectionCard title="Connect a scheduler">
+            <p>Route restaurants to 7shifts, Deputy, When I Work, or Homebase setup without turning the website into the product.</p>
+            <p><Link className="text-link" href="/setup/connect">Open connect flow</Link></p>
           </SectionCard>
-          <SectionCard title="Workers">
-            <p>Complete profiles, confirm certifications, and review upcoming confirmed shifts.</p>
+          <SectionCard title="Upload a roster">
+            <p>Handle CSV onboarding for restaurants that have structured data but no supported writeable scheduler.</p>
+            <p><Link className="text-link" href="/setup/upload">Open upload path</Link></p>
           </SectionCard>
-          <SectionCard title="Partners">
-            <p>Reserve the portal surface for later without building the Tier 3 workflow yet.</p>
+          <SectionCard title="Add a team manually">
+            <p>Give no-software operators a fast path to get live with names, phone numbers, roles, and manager contacts.</p>
+            <p><Link className="text-link" href="/setup/add">Open manual setup</Link></p>
           </SectionCard>
-          <SectionCard title="Prospects">
-            <p>Keep marketing brutally simple: one number, one promise, one CTA.</p>
+          <SectionCard title="Complete worker details">
+            <p>Use the follow-up pages for certifications, preferences, and confirmed shifts after consent is collected by phone or text.</p>
+            <p><Link className="text-link" href="/join">Open worker profile flow</Link></p>
           </SectionCard>
         </div>
       </section>
@@ -79,16 +84,16 @@ export default async function HomePage() {
       <section className="section">
         <div className="two-up">
           <div className="callout">
-            <h3>Primary CTA</h3>
+            <h3>Manager experience</h3>
             <p>
-              Every piece of marketing should resolve to one instruction:
-              <strong> Call 1-800-BACKFILL.</strong>
+              Coverage in progress. Then one text:
+              <strong> Shift filled.</strong> No routine coordination, no manager scramble.
             </p>
           </div>
           {backendReachable ? (
             <div className="callout">
               <h3>Backend status</h3>
-              <p>The TypeScript frontend is reading live backend data server-side, which is the cleanest Vercel setup for now.</p>
+              <p>The Next app is reading live FastAPI data server-side so setup, dashboard, and status surfaces stay tied to the operating ledger.</p>
             </div>
           ) : (
             <EmptyState

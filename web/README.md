@@ -1,6 +1,9 @@
 # Backfill Web
 
-Vercel-friendly TypeScript frontend for the Backfill support-layer website.
+Vercel-friendly TypeScript frontend for the Backfill website.
+
+The phone number is the command surface. The web app handles structured setup,
+uploads, worker follow-up, and operations visibility.
 
 ## Local setup
 
@@ -11,6 +14,14 @@ Vercel-friendly TypeScript frontend for the Backfill support-layer website.
 3. Start the FastAPI backend separately on `http://127.0.0.1:8000`
 4. Run the frontend:
    `npm run dev`
+
+## Key routes
+
+- `/setup/connect` for scheduler connection paths
+- `/setup/upload` for CSV roster upload
+- `/setup/add` for manual restaurant/team entry
+- `/join` for worker follow-up after consent capture
+- `/dashboard` for Native Lite operations visibility
 
 ## Vercel
 

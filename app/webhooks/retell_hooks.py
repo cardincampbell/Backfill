@@ -7,6 +7,7 @@ import aiosqlite
 from app.db.database import get_db
 from app.services import caller_lookup, consent as consent_svc, shift_manager, cascade as cascade_svc
 from app.services import notifications as notifications_svc
+from app.services import onboarding as onboarding_svc
 from app.models.audit import AuditAction
 from app.services import audit as audit_svc
 
@@ -47,10 +48,15 @@ async def _dispatch(db: aiosqlite.Connection, name: str, args: dict) -> dict:
         "lookup_caller":   _lookup_caller,
         "log_consent":     _log_consent,
         "create_vacancy":  _create_vacancy,
+        "claim_shift":     _claim_shift,
+        "decline_shift":   _decline_shift,
+        "cancel_standby":  _cancel_standby,
+        "promote_standby": _promote_standby,
         "confirm_fill":    _confirm_fill,
         "get_open_shifts": _get_open_shifts,
         "get_shift_status": _get_shift_status,
         "create_open_shift": _create_open_shift,
+        "send_onboarding_link": _send_onboarding_link,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -102,19 +108,49 @@ async def _confirm_fill(db: aiosqlite.Connection, args: dict) -> dict:
     accepted = bool(args.get("accepted", False))
     summary = args.get("conversation_summary", "")
 
-    await cascade_svc.record_response(
-        db,
-        cascade_id=cascade_id,
-        worker_id=worker_id,
-        accepted=accepted,
-        summary=summary,
-    )
-
     if accepted:
+        result = await cascade_svc.claim_shift(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+        if result["status"] == "confirmed":
+            await notifications_svc.fire_manager_notification(db, cascade_id, worker_id, filled=True)
+            return {"status": "shift_filled", "worker_id": worker_id}
+        return result
+
+    await cascade_svc.decline_shift(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+    return {"status": "declined", "worker_id": worker_id}
+
+
+async def _claim_shift(db: aiosqlite.Connection, args: dict) -> dict:
+    cascade_id = int(args["cascade_id"])
+    worker_id = int(args["worker_id"])
+    summary = args.get("conversation_summary", "")
+    result = await cascade_svc.claim_shift(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+    if result["status"] == "confirmed":
         await notifications_svc.fire_manager_notification(db, cascade_id, worker_id, filled=True)
-        return {"status": "shift_filled", "worker_id": worker_id}
-    else:
-        return {"status": "declined", "worker_id": worker_id}
+    return result
+
+
+async def _decline_shift(db: aiosqlite.Connection, args: dict) -> dict:
+    cascade_id = int(args["cascade_id"])
+    worker_id = int(args["worker_id"])
+    summary = args.get("conversation_summary", "")
+    return await cascade_svc.decline_shift(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+
+
+async def _cancel_standby(db: aiosqlite.Connection, args: dict) -> dict:
+    cascade_id = int(args["cascade_id"])
+    worker_id = int(args["worker_id"])
+    summary = args.get("conversation_summary", "")
+    return await cascade_svc.cancel_standby(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+
+
+async def _promote_standby(db: aiosqlite.Connection, args: dict) -> dict:
+    cascade_id = int(args["cascade_id"])
+    worker_id = int(args["worker_id"])
+    summary = args.get("conversation_summary", "")
+    result = await cascade_svc.promote_standby(db, cascade_id=cascade_id, worker_id=worker_id, summary=summary)
+    if result["status"] == "confirmed":
+        await notifications_svc.fire_manager_notification(db, cascade_id, worker_id, filled=True)
+    return result
 
 
 async def _get_open_shifts(db: aiosqlite.Connection, args: dict) -> dict:
@@ -178,3 +214,15 @@ async def _create_open_shift(db: aiosqlite.Connection, args: dict) -> dict:
     }
 
 
+async def _send_onboarding_link(db: aiosqlite.Connection, args: dict) -> dict:
+    phone = str(args.get("phone", "")).strip()
+    kind = str(args.get("kind", "")).strip()
+    platform = args.get("platform")
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone is required")
+    if not kind:
+        raise HTTPException(status_code=400, detail="kind is required")
+    try:
+        return onboarding_svc.send_onboarding_link(phone=phone, kind=kind, platform=platform)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

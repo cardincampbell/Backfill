@@ -6,6 +6,8 @@ Handles:
   - Marking a shift as filled
   - Triggering the cascade when a vacancy is created
 """
+from __future__ import annotations
+
 import aiosqlite
 from typing import Optional
 
@@ -19,6 +21,7 @@ from app.db.queries import (
 )
 from app.models.audit import AuditAction
 from app.services import audit as audit_svc
+from app.services.outreach import hours_until_shift
 
 
 async def create_vacancy(
@@ -55,17 +58,28 @@ async def create_vacancy(
         details={"called_out_by": called_out_by_worker_id},
     )
 
-    cascade_id = await insert_cascade(db, shift_id)
+    outreach_mode = "broadcast" if hours_until_shift(shift) <= 4 else "cascade"
+    cascade_id = await insert_cascade(db, shift_id, outreach_mode=outreach_mode)
     await audit_svc.append(
         db,
         AuditAction.cascade_started,
         actor="system",
         entity_type="cascade",
         entity_id=cascade_id,
-        details={"shift_id": shift_id},
+        details={"shift_id": shift_id, "outreach_mode": outreach_mode},
     )
 
-    return {"id": cascade_id, "shift_id": shift_id, "status": "active", "current_tier": 1}
+    return {
+        "id": cascade_id,
+        "shift_id": shift_id,
+        "status": "active",
+        "outreach_mode": outreach_mode,
+        "current_tier": 1,
+        "current_batch": 0,
+        "current_position": 0,
+        "confirmed_worker_id": None,
+        "standby_queue": [],
+    }
 
 
 async def mark_filled(
@@ -109,10 +123,10 @@ async def mark_filled(
         details={"filled_by": filled_by_worker_id, "fill_tier": fill_tier},
     )
 
-    from app.services import scheduling as scheduling_svc
+    from app.services import sync_engine
 
     try:
-        await scheduling_svc.push_fill_update(db, shift_id)
+        await sync_engine.enqueue_writeback(db, shift_id=shift_id)
     except Exception:
         # Scheduler write-back is best-effort; the local Backfill record remains
         # authoritative even if the external platform update fails.

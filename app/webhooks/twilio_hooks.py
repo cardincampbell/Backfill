@@ -2,8 +2,9 @@
 Inbound SMS handling for worker replies.
 
 This makes outbound SMS offers actionable:
-- YES accepts the most recent pending offer for that worker
-- NO declines it and advances the cascade
+- YES claims the shift if still open, otherwise enters standby
+- NO declines the most recent offer
+- CANCEL drops a worker from standby
 - STOP revokes consent immediately
 """
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -54,7 +55,7 @@ async def inbound_sms(
 
     body = Body.strip().upper()
 
-    if body in {"STOP", "UNSUBSCRIBE", "QUIT", "CANCEL", "END"}:
+    if body in {"STOP", "UNSUBSCRIBE", "QUIT", "END"}:
         handled = await consent_svc.handle_stop_keyword(db, From)
         message = (
             "You've been unsubscribed from Backfill shift texts."
@@ -97,36 +98,53 @@ async def inbound_sms(
         return _twiml("Thanks for the message. Call 1-800-BACKFILL if you need help.")
 
     if body == "YES":
-        await cascade_svc.record_response(
+        result = await cascade_svc.claim_shift(
             db,
             cascade_id=attempt["cascade_id"],
             worker_id=attempt["worker_id"],
-            accepted=True,
             summary="Accepted by SMS",
         )
-        await notifications_svc.fire_manager_notification(db, attempt["cascade_id"], attempt["worker_id"], filled=True)
-        return _twiml("You're confirmed. We'll text any final details shortly.")
+        if result["status"] == "confirmed":
+            await notifications_svc.fire_manager_notification(db, attempt["cascade_id"], attempt["worker_id"], filled=True)
+            return _twiml("You're confirmed. We'll text any final details shortly.")
+        if result["status"] == "standby":
+            return _twiml(
+                f"That shift just got claimed, but you're on standby as #{result['standby_position']}. "
+                "Reply CANCEL anytime to drop off standby."
+            )
+        return _twiml("We already have your response recorded for this shift.")
 
     if body == "NO":
-        await cascade_svc.record_response(
+        await cascade_svc.decline_shift(
             db,
             cascade_id=attempt["cascade_id"],
             worker_id=attempt["worker_id"],
-            accepted=False,
             summary="Declined by SMS",
         )
         return _twiml("No problem. Thanks for the quick reply.")
 
-    return _twiml("Reply YES to take the shift, NO to pass, or STOP to opt out.")
+    if body == "CANCEL":
+        result = await cascade_svc.cancel_standby(
+            db,
+            cascade_id=attempt["cascade_id"],
+            worker_id=attempt["worker_id"],
+            summary="Standby cancelled by SMS",
+        )
+        if result["status"] == "standby_cancelled":
+            return _twiml("Got it. You're off standby for that shift.")
+        return _twiml("You're not currently on standby for an active Backfill shift.")
+
+    return _twiml("Reply YES to take the shift, NO to pass, CANCEL to leave standby, or STOP to opt out.")
 
 
 async def _find_latest_sms_attempt(db: aiosqlite.Connection, phone: str):
     async with db.execute(
-        """SELECT oa.cascade_id, oa.worker_id
+        """SELECT oa.cascade_id, oa.worker_id, oa.outcome
            FROM outreach_attempts oa
            JOIN workers w ON w.id = oa.worker_id
            JOIN cascades c ON c.id = oa.cascade_id
-           WHERE w.phone=? AND oa.channel='sms' AND c.status='active'
+           WHERE w.phone=? AND oa.channel='sms'
+             AND (c.status IN ('active', 'completed') OR oa.outcome='standby')
            ORDER BY oa.id DESC
            LIMIT 1""",
         (phone,),

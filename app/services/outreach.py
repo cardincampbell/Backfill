@@ -63,9 +63,10 @@ def build_initial_sms(worker: dict, shift: dict, restaurant: dict) -> str:
     extra = ""
     if requirements:
         extra = f" Req: {', '.join(requirements)}."
+    queue_note = " First yes gets the shift." if hours_until_shift(shift) <= URGENT_SHIFT_HOURS else ""
     return (
         f"Hi {worker['name']}, Backfill has an open shift for {restaurant['name']}: "
         f"{shift['role']} on {shift['date']} {shift['start_time']}-{shift['end_time']} "
-        f"@ ${shift['pay_rate']}/hr.{extra} "
+        f"@ ${shift['pay_rate']}/hr.{extra}{queue_note} "
         "Reply YES to take it or NO to pass. Reply STOP to opt out."
     )

@@ -2,6 +2,7 @@ import {
   AuditLog,
   Cascade,
   DashboardSummary,
+  RestaurantStatusResponse,
   Restaurant,
   Shift,
   ShiftStatusResponse,
@@ -33,6 +34,10 @@ export async function getDashboardSummary(): Promise<DashboardSummary | null> {
 
 export async function getRestaurants(): Promise<Restaurant[]> {
   return (await fetchJson<Restaurant[]>("/api/restaurants")) ?? [];
+}
+
+export async function getRestaurantStatus(restaurantId: number): Promise<RestaurantStatusResponse | null> {
+  return fetchJson<RestaurantStatusResponse>(`/api/restaurants/${restaurantId}/status`);
 }
 
 export async function getWorkers(restaurantId?: number): Promise<Worker[]> {

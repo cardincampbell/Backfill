@@ -2,6 +2,8 @@
 CRUD helpers for every table. All functions accept an open aiosqlite.Connection
 and return plain dicts (JSON-serializable lists are already decoded).
 """
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from typing import Any, Optional
@@ -13,12 +15,14 @@ _JSON_COLS: dict[str, list[str]] = {
     "restaurants":      ["preferred_agency_partners"],
     "workers":          ["roles", "certifications", "restaurant_assignments", "restaurants_worked"],
     "shifts":           ["requirements"],
+    "cascades":         ["standby_queue"],
     "agency_partners":  ["coverage_areas", "roles_supported", "certifications_supported"],
     "audit_log":        ["details"],
+    "integration_events": ["payload"],
 }
 
 _BOOL_COLS: dict[str, list[str]] = {
-    "restaurants": ["agency_supply_approved"],
+    "restaurants": ["agency_supply_approved", "writeback_enabled"],
     "cascades":    ["manager_approved_tier3"],
     "agency_partners": ["active"],
 }
@@ -64,10 +68,20 @@ async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
     cur = await db.execute(
         """INSERT INTO restaurants
            (name, address, manager_name, manager_phone, manager_email,
-            scheduling_platform, scheduling_platform_id, onboarding_info,
+           scheduling_platform, scheduling_platform_id, integration_status,
+            last_roster_sync_at, last_roster_sync_status,
+            last_schedule_sync_at, last_schedule_sync_status, last_sync_error,
+            integration_state, last_event_sync_at, last_rolling_sync_at, last_daily_sync_at, last_writeback_at,
+            writeback_enabled, writeback_subscription_tier,
+            onboarding_info,
             agency_supply_approved, preferred_agency_partners)
            VALUES (:name,:address,:manager_name,:manager_phone,:manager_email,
-                   :scheduling_platform,:scheduling_platform_id,:onboarding_info,
+                   :scheduling_platform,:scheduling_platform_id,:integration_status,
+                   :last_roster_sync_at,:last_roster_sync_status,
+                   :last_schedule_sync_at,:last_schedule_sync_status,:last_sync_error,
+                   :integration_state,:last_event_sync_at,:last_rolling_sync_at,:last_daily_sync_at,:last_writeback_at,
+                   :writeback_enabled,:writeback_subscription_tier,
+                   :onboarding_info,
                    :agency_supply_approved,:preferred_agency_partners)""",
         {
             "name": d.get("name"),
@@ -77,6 +91,19 @@ async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
             "manager_email": d.get("manager_email"),
             "scheduling_platform": d.get("scheduling_platform", "backfill_native"),
             "scheduling_platform_id": d.get("scheduling_platform_id"),
+            "integration_status": d.get("integration_status"),
+            "last_roster_sync_at": d.get("last_roster_sync_at"),
+            "last_roster_sync_status": d.get("last_roster_sync_status"),
+            "last_schedule_sync_at": d.get("last_schedule_sync_at"),
+            "last_schedule_sync_status": d.get("last_schedule_sync_status"),
+            "last_sync_error": d.get("last_sync_error"),
+            "integration_state": d.get("integration_state"),
+            "last_event_sync_at": d.get("last_event_sync_at"),
+            "last_rolling_sync_at": d.get("last_rolling_sync_at"),
+            "last_daily_sync_at": d.get("last_daily_sync_at"),
+            "last_writeback_at": d.get("last_writeback_at"),
+            "writeback_enabled": int(d.get("writeback_enabled", False)),
+            "writeback_subscription_tier": d.get("writeback_subscription_tier", "core"),
             "onboarding_info": d.get("onboarding_info"),
             "agency_supply_approved": int(d.get("agency_supply_approved", False)),
             "preferred_agency_partners": d.get("preferred_agency_partners", "[]"),
@@ -101,6 +128,19 @@ async def update_restaurant(db: aiosqlite.Connection, restaurant_id: int, data: 
         "manager_email",
         "scheduling_platform",
         "scheduling_platform_id",
+        "integration_status",
+        "last_roster_sync_at",
+        "last_roster_sync_status",
+        "last_schedule_sync_at",
+        "last_schedule_sync_status",
+        "last_sync_error",
+        "integration_state",
+        "last_event_sync_at",
+        "last_rolling_sync_at",
+        "last_daily_sync_at",
+        "last_writeback_at",
+        "writeback_enabled",
+        "writeback_subscription_tier",
         "onboarding_info",
         "agency_supply_approved",
         "preferred_agency_partners",
@@ -111,6 +151,8 @@ async def update_restaurant(db: aiosqlite.Connection, restaurant_id: int, data: 
     encoded = _encode_json("restaurants", updates)
     if "agency_supply_approved" in encoded:
         encoded["agency_supply_approved"] = int(bool(encoded["agency_supply_approved"]))
+    if "writeback_enabled" in encoded:
+        encoded["writeback_enabled"] = int(bool(encoded["writeback_enabled"]))
     cols = ", ".join(f"{key}=?" for key in encoded)
     await db.execute(
         f"UPDATE restaurants SET {cols} WHERE id=?",
@@ -301,8 +343,8 @@ async def get_worker_outreach_metrics(
         """
         SELECT
             COUNT(*) AS total_attempts,
-            SUM(CASE WHEN outcome IN ('accepted', 'declined', 'negotiating') THEN 1 ELSE 0 END) AS total_responses,
-            SUM(CASE WHEN outcome = 'accepted' THEN 1 ELSE 0 END) AS total_acceptances
+            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'declined', 'no_response', 'promoted', 'standby_expired') THEN 1 ELSE 0 END) AS total_responses,
+            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'promoted') THEN 1 ELSE 0 END) AS total_acceptances
         FROM outreach_attempts
         WHERE worker_id=?
         """,
@@ -481,22 +523,37 @@ async def get_active_cascade_for_shift(
     return _decode("cascades", row) if row else None
 
 
-async def insert_cascade(db: aiosqlite.Connection, shift_id: int) -> int:
+async def insert_cascade(
+    db: aiosqlite.Connection,
+    shift_id: int,
+    outreach_mode: str = "cascade",
+) -> int:
     cur = await db.execute(
-        "INSERT INTO cascades (shift_id) VALUES (?)", (shift_id,)
+        "INSERT INTO cascades (shift_id, outreach_mode) VALUES (?, ?)",
+        (shift_id, outreach_mode),
     )
     await db.commit()
     return cur.lastrowid
 
 
 async def update_cascade(db: aiosqlite.Connection, cascade_id: int, **kwargs: Any) -> None:
-    allowed = {"status", "current_tier", "current_position", "manager_approved_tier3"}
+    allowed = {
+        "status",
+        "outreach_mode",
+        "current_tier",
+        "current_batch",
+        "current_position",
+        "confirmed_worker_id",
+        "standby_queue",
+        "manager_approved_tier3",
+    }
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
-    cols = ", ".join(f"{k}=?" for k in updates)
+    encoded = _encode_json("cascades", updates)
+    cols = ", ".join(f"{k}=?" for k in encoded)
     await db.execute(
-        f"UPDATE cascades SET {cols} WHERE id=?", (*updates.values(), cascade_id)
+        f"UPDATE cascades SET {cols} WHERE id=?", (*encoded.values(), cascade_id)
     )
     await db.commit()
 
@@ -528,19 +585,50 @@ async def list_cascades(
 async def insert_outreach_attempt(db: aiosqlite.Connection, data: dict) -> int:
     cur = await db.execute(
         """INSERT INTO outreach_attempts
-           (cascade_id, worker_id, tier, channel, status, sent_at)
-           VALUES (?,?,?,?,?,?)""",
+           (cascade_id, worker_id, tier, channel, status, outcome, standby_position,
+            promoted_at, sent_at, responded_at, conversation_summary)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data["cascade_id"],
             data["worker_id"],
             data["tier"],
             data.get("channel", "sms"),
             data.get("status", "sent"),
+            data.get("outcome"),
+            data.get("standby_position"),
+            data.get("promoted_at"),
             data.get("sent_at", datetime.utcnow().isoformat()),
+            data.get("responded_at"),
+            data.get("conversation_summary"),
         ),
     )
     await db.commit()
     return cur.lastrowid
+
+
+async def update_outreach_attempt(
+    db: aiosqlite.Connection,
+    attempt_id: int,
+    **kwargs: Any,
+) -> None:
+    allowed = {
+        "status",
+        "outcome",
+        "standby_position",
+        "promoted_at",
+        "sent_at",
+        "responded_at",
+        "conversation_summary",
+    }
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE outreach_attempts SET {cols} WHERE id=?",
+        (*updates.values(), attempt_id),
+    )
+    await db.commit()
 
 
 async def update_outreach_outcome(
@@ -549,13 +637,14 @@ async def update_outreach_outcome(
     outcome: str,
     conversation_summary: Optional[str] = None,
 ) -> None:
-    await db.execute(
-        """UPDATE outreach_attempts
-           SET outcome=?, status='responded', responded_at=?, conversation_summary=?
-           WHERE id=?""",
-        (outcome, datetime.utcnow().isoformat(), conversation_summary, attempt_id),
+    await update_outreach_attempt(
+        db,
+        attempt_id,
+        outcome=outcome,
+        status="responded",
+        responded_at=datetime.utcnow().isoformat(),
+        conversation_summary=conversation_summary,
     )
-    await db.commit()
 
 
 async def list_outreach_attempts(
@@ -582,6 +671,299 @@ async def list_outreach_attempts(
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [dict(row) for row in rows]
+
+
+# ── integration events + sync jobs ───────────────────────────────────────────
+
+async def get_integration_event(db: aiosqlite.Connection, event_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM integration_events WHERE id=?", (event_id,)) as cur:
+        row = await cur.fetchone()
+    return _decode("integration_events", row) if row else None
+
+
+async def get_integration_event_by_source(
+    db: aiosqlite.Connection,
+    platform: str,
+    source_event_id: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM integration_events WHERE platform=? AND source_event_id=?",
+        (platform, source_event_id),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("integration_events", row) if row else None
+
+
+async def insert_integration_event(db: aiosqlite.Connection, data: dict) -> int:
+    platform = data["platform"]
+    source_event_id = data.get("source_event_id")
+    if source_event_id:
+        existing = await get_integration_event_by_source(db, platform, source_event_id)
+        if existing is not None:
+            return int(existing["id"])
+
+    encoded = _encode_json("integration_events", data)
+    cur = await db.execute(
+        """INSERT INTO integration_events
+           (platform, restaurant_id, source_event_id, event_type, event_scope, payload,
+            received_at, processed_at, status, error)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["platform"],
+            encoded.get("restaurant_id"),
+            encoded.get("source_event_id"),
+            encoded.get("event_type"),
+            encoded.get("event_scope"),
+            encoded.get("payload", "{}"),
+            encoded.get("received_at", datetime.utcnow().isoformat()),
+            encoded.get("processed_at"),
+            encoded.get("status", "received"),
+            encoded.get("error"),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_integration_event(db: aiosqlite.Connection, event_id: int, data: dict) -> None:
+    allowed = {"restaurant_id", "processed_at", "status", "error", "event_type", "event_scope", "payload"}
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("integration_events", updates)
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE integration_events SET {cols} WHERE id=?",
+        (*encoded.values(), event_id),
+    )
+    await db.commit()
+
+
+async def get_sync_job(db: aiosqlite.Connection, job_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM sync_jobs WHERE id=?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_sync_job_by_idempotency_key(
+    db: aiosqlite.Connection,
+    idempotency_key: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM sync_jobs WHERE idempotency_key=?",
+        (idempotency_key,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def insert_sync_job(db: aiosqlite.Connection, data: dict) -> int:
+    idempotency_key = data.get("idempotency_key")
+    if idempotency_key:
+        existing = await get_sync_job_by_idempotency_key(db, idempotency_key)
+        if existing is not None:
+            return int(existing["id"])
+
+    cur = await db.execute(
+        """INSERT INTO sync_jobs
+           (platform, restaurant_id, integration_event_id, job_type, priority, scope, scope_ref,
+            window_start, window_end, status, attempt_count, max_attempts, next_run_at,
+            started_at, completed_at, last_error, idempotency_key)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            data["platform"],
+            data.get("restaurant_id"),
+            data.get("integration_event_id"),
+            data["job_type"],
+            data.get("priority", 50),
+            data.get("scope"),
+            data.get("scope_ref"),
+            data.get("window_start"),
+            data.get("window_end"),
+            data.get("status", "queued"),
+            data.get("attempt_count", 0),
+            data.get("max_attempts", 3),
+            data.get("next_run_at", datetime.utcnow().isoformat()),
+            data.get("started_at"),
+            data.get("completed_at"),
+            data.get("last_error"),
+            idempotency_key,
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_sync_job(db: aiosqlite.Connection, job_id: int, data: dict) -> None:
+    allowed = {
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_run_at",
+        "started_at",
+        "completed_at",
+        "last_error",
+        "priority",
+        "window_start",
+        "window_end",
+        "scope",
+        "scope_ref",
+        "integration_event_id",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE sync_jobs SET {cols} WHERE id=?",
+        (*updates.values(), job_id),
+    )
+    await db.commit()
+
+
+async def list_sync_jobs(
+    db: aiosqlite.Connection,
+    *,
+    status: Optional[str] = None,
+    platform: Optional[str] = None,
+    restaurant_id: Optional[int] = None,
+    limit: int = 100,
+) -> list[dict]:
+    query = "SELECT * FROM sync_jobs"
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if platform is not None:
+        clauses.append("platform=?")
+        params.append(platform)
+    if restaurant_id is not None:
+        clauses.append("restaurant_id=?")
+        params.append(restaurant_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY priority ASC, next_run_at ASC, id ASC LIMIT ?"
+    params.append(limit)
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def claim_due_sync_jobs(
+    db: aiosqlite.Connection,
+    *,
+    platform: Optional[str] = None,
+    limit: int = 10,
+    now_iso: Optional[str] = None,
+) -> list[dict]:
+    now = now_iso or datetime.utcnow().isoformat()
+    query = """
+        SELECT id
+        FROM sync_jobs
+        WHERE status='queued' AND next_run_at<=?
+    """
+    params: list[Any] = [now]
+    if platform is not None:
+        query += " AND platform=?"
+        params.append(platform)
+    query += " ORDER BY priority ASC, next_run_at ASC, id ASC LIMIT ?"
+    params.append(limit)
+
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    job_ids = [int(row["id"]) for row in rows]
+
+    claimed: list[dict] = []
+    for job_id in job_ids:
+        job = await get_sync_job(db, job_id)
+        if job is None or job["status"] != "queued":
+            continue
+        await db.execute(
+            """UPDATE sync_jobs
+               SET status='running', started_at=?, attempt_count=attempt_count+1
+               WHERE id=? AND status='queued'""",
+            (now, job_id),
+        )
+        await db.commit()
+        refreshed = await get_sync_job(db, job_id)
+        if refreshed and refreshed["status"] == "running":
+            claimed.append(refreshed)
+    return claimed
+
+
+async def claim_sync_job(
+    db: aiosqlite.Connection,
+    job_id: int,
+    *,
+    now_iso: Optional[str] = None,
+) -> Optional[dict]:
+    now = now_iso or datetime.utcnow().isoformat()
+    await db.execute(
+        """UPDATE sync_jobs
+           SET status='running', started_at=?, attempt_count=attempt_count+1
+           WHERE id=? AND status='queued'""",
+        (now, job_id),
+    )
+    await db.commit()
+    job = await get_sync_job(db, job_id)
+    if job and job["status"] == "running":
+        return job
+    return None
+
+
+async def insert_sync_run(db: aiosqlite.Connection, data: dict) -> int:
+    cur = await db.execute(
+        """INSERT INTO sync_runs
+           (sync_job_id, attempt_number, started_at, completed_at, status,
+            created_count, updated_count, skipped_count, latency_ms, error)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (
+            data["sync_job_id"],
+            data["attempt_number"],
+            data["started_at"],
+            data.get("completed_at"),
+            data["status"],
+            data.get("created_count", 0),
+            data.get("updated_count", 0),
+            data.get("skipped_count", 0),
+            data.get("latency_ms"),
+            data.get("error"),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_sync_runs(db: aiosqlite.Connection, sync_job_id: int) -> list[dict]:
+    async with db.execute(
+        "SELECT * FROM sync_runs WHERE sync_job_id=? ORDER BY id DESC",
+        (sync_job_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def find_pending_sync_job_for_scope(
+    db: aiosqlite.Connection,
+    *,
+    restaurant_id: int,
+    job_type: str,
+    scope_ref: str,
+) -> Optional[dict]:
+    async with db.execute(
+        """SELECT *
+           FROM sync_jobs
+           WHERE restaurant_id=?
+             AND job_type=?
+             AND scope_ref=?
+             AND status IN ('queued', 'running')
+           ORDER BY priority ASC, next_run_at ASC, id ASC
+           LIMIT 1""",
+        (restaurant_id, job_type, scope_ref),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
 
 
 # ── audit log ─────────────────────────────────────────────────────────────────
@@ -653,6 +1035,111 @@ async def get_shift_status(db: aiosqlite.Connection, shift_id: int) -> Optional[
     }
 
 
+async def get_restaurant_status(
+    db: aiosqlite.Connection,
+    restaurant_id: int,
+    audit_limit: int = 12,
+) -> Optional[dict]:
+    restaurant = await get_restaurant(db, restaurant_id)
+    if restaurant is None:
+        return None
+
+    workers = await list_workers(db, restaurant_id=restaurant_id)
+    shifts = await list_shifts(db, restaurant_id=restaurant_id)
+    shift_ids = {shift["id"] for shift in shifts}
+    shift_by_id = {shift["id"]: shift for shift in shifts}
+    worker_by_id = {worker["id"]: worker for worker in workers}
+
+    cascades = [
+        cascade
+        for cascade in await list_cascades(db)
+        if cascade["shift_id"] in shift_ids
+    ]
+    relevant_cascades = [
+        cascade
+        for cascade in cascades
+        if cascade["status"] == "active"
+        or cascade.get("confirmed_worker_id")
+        or (cascade.get("standby_queue") or [])
+    ]
+
+    recent_shifts = sorted(
+        shifts,
+        key=lambda shift: (shift.get("date") or "", shift.get("start_time") or "", shift.get("id") or 0),
+        reverse=True,
+    )[:8]
+
+    active_cascades = []
+    for cascade in relevant_cascades:
+        shift = shift_by_id.get(cascade["shift_id"])
+        if shift is None:
+            continue
+        confirmed_worker_id = cascade.get("confirmed_worker_id")
+        confirmed_worker = worker_by_id.get(confirmed_worker_id) if confirmed_worker_id else None
+        active_cascades.append(
+            {
+                "id": cascade["id"],
+                "shift_id": shift["id"],
+                "shift_role": shift["role"],
+                "shift_date": shift["date"],
+                "shift_start_time": shift["start_time"],
+                "shift_status": shift["status"],
+                "status": cascade["status"],
+                "outreach_mode": cascade.get("outreach_mode"),
+                "current_tier": cascade.get("current_tier"),
+                "confirmed_worker_id": confirmed_worker_id,
+                "confirmed_worker_name": (
+                    confirmed_worker["name"] if confirmed_worker else (
+                        f"Worker #{confirmed_worker_id}" if confirmed_worker_id else None
+                    )
+                ),
+                "standby_depth": len(cascade.get("standby_queue") or []),
+            }
+        )
+
+    active_cascades.sort(
+        key=lambda cascade: (
+            cascade.get("shift_date") or "",
+            cascade.get("shift_start_time") or "",
+            cascade.get("id") or 0,
+        ),
+        reverse=True,
+    )
+
+    today = datetime.utcnow().date().isoformat()
+    worker_preview = workers[:8]
+    audit_rows = await list_audit_log(
+        db,
+        entity_type="restaurant",
+        entity_id=restaurant_id,
+        limit=audit_limit,
+    )
+    recent_sync_jobs = await list_sync_jobs(
+        db,
+        restaurant_id=restaurant_id,
+        limit=8,
+    )
+
+    return {
+        "restaurant": restaurant,
+        "metrics": {
+            "workers_total": len(workers),
+            "workers_sms_ready": sum(1 for worker in workers if worker.get("sms_consent_status") == "granted"),
+            "workers_voice_ready": sum(1 for worker in workers if worker.get("voice_consent_status") == "granted"),
+            "upcoming_shifts": sum(1 for shift in shifts if (shift.get("date") or "") >= today),
+            "shifts_vacant": sum(1 for shift in shifts if shift["status"] == "vacant"),
+            "shifts_filled": sum(1 for shift in shifts if shift["status"] == "filled"),
+            "active_cascades": sum(1 for cascade in cascades if cascade["status"] == "active"),
+            "workers_on_standby": sum(len(cascade.get("standby_queue") or []) for cascade in cascades),
+        },
+        "worker_preview": worker_preview,
+        "recent_shifts": recent_shifts,
+        "active_cascades": active_cascades[:8],
+        "recent_sync_jobs": recent_sync_jobs,
+        "recent_audit": audit_rows,
+    }
+
+
 async def get_dashboard_summary(db: aiosqlite.Connection, restaurant_id: Optional[int] = None) -> dict:
     shifts = await list_shifts(db, restaurant_id=restaurant_id)
     cascades = await list_cascades(db)
@@ -664,6 +1151,12 @@ async def get_dashboard_summary(db: aiosqlite.Connection, restaurant_id: Optiona
     workers = await list_workers(db, restaurant_id=restaurant_id)
 
     active_shift_ids = {cascade["shift_id"] for cascade in cascades if cascade["status"] == "active"}
+    broadcast_cascades_active = sum(
+        1
+        for cascade in cascades
+        if cascade["status"] == "active" and cascade.get("outreach_mode") == "broadcast"
+    )
+    workers_on_standby = sum(len(cascade.get("standby_queue") or []) for cascade in cascades)
     return {
         "restaurant_id": restaurant_id,
         "restaurants": len(await list_restaurants(db)) if restaurant_id is None else 1,
@@ -672,6 +1165,8 @@ async def get_dashboard_summary(db: aiosqlite.Connection, restaurant_id: Optiona
         "shifts_vacant": sum(1 for shift in shifts if shift["status"] == "vacant"),
         "shifts_filled": sum(1 for shift in shifts if shift["status"] == "filled"),
         "cascades_active": sum(1 for cascade in cascades if cascade["status"] == "active"),
+        "broadcast_cascades_active": broadcast_cascades_active,
+        "workers_on_standby": workers_on_standby,
         "active_shift_ids": sorted(active_shift_ids),
         "recent_shifts": shifts[:10],
     }

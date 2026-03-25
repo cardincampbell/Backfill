@@ -2,10 +2,12 @@
 REST API routes for Backfill Native Lite.
 Covers CRUD for restaurants, workers, and shifts, plus the backfill trigger.
 """
+from __future__ import annotations
+
 import csv
 import io
 from datetime import date, time, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 import aiosqlite
@@ -46,6 +48,19 @@ class RestaurantUpdate(BaseModel):
     manager_email: Optional[str] = None
     scheduling_platform: Optional[str] = None
     scheduling_platform_id: Optional[str] = None
+    integration_status: Optional[str] = None
+    last_roster_sync_at: Optional[str] = None
+    last_roster_sync_status: Optional[str] = None
+    last_schedule_sync_at: Optional[str] = None
+    last_schedule_sync_status: Optional[str] = None
+    last_sync_error: Optional[str] = None
+    integration_state: Optional[str] = None
+    last_event_sync_at: Optional[str] = None
+    last_rolling_sync_at: Optional[str] = None
+    last_daily_sync_at: Optional[str] = None
+    last_writeback_at: Optional[str] = None
+    writeback_enabled: Optional[bool] = None
+    writeback_subscription_tier: Optional[str] = None
     onboarding_info: Optional[str] = None
     agency_supply_approved: Optional[bool] = None
     preferred_agency_partners: Optional[list[int]] = None
@@ -108,6 +123,31 @@ class ShiftStatusResponse(BaseModel):
     outreach_attempts: list[dict]
 
 
+class RestaurantStatusResponse(BaseModel):
+    restaurant: dict
+    integration: dict
+    metrics: dict
+    worker_preview: list[dict]
+    recent_shifts: list[dict]
+    active_cascades: list[dict]
+    recent_sync_jobs: list[dict]
+    recent_audit: list[dict]
+
+
+class OnboardingLinkRequest(BaseModel):
+    phone: str
+    kind: str
+    platform: Optional[str] = None
+
+
+class OnboardingLinkResponse(BaseModel):
+    kind: str
+    platform: Optional[str] = None
+    path: str
+    url: str
+    message_sid: Optional[str] = None
+
+
 # ── restaurants ───────────────────────────────────────────────────────────────
 
 @router.post("/restaurants", response_model=Restaurant, status_code=201)
@@ -120,7 +160,7 @@ async def create_restaurant(
     return {**data, "id": rid}
 
 
-@router.get("/restaurants", response_model=list[Restaurant])
+@router.get("/restaurants", response_model=List[Restaurant])
 async def list_restaurants(db: aiosqlite.Connection = Depends(get_db)):
     return await queries.list_restaurants(db)
 
@@ -133,6 +173,20 @@ async def get_restaurant(
     if row is None:
         raise HTTPException(status_code=404, detail="Restaurant not found")
     return row
+
+
+@router.get("/restaurants/{restaurant_id}/status", response_model=RestaurantStatusResponse)
+async def get_restaurant_status(
+    restaurant_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import scheduling as scheduling_svc
+
+    payload = await queries.get_restaurant_status(db, restaurant_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    payload["integration"] = await scheduling_svc.get_integration_health(db, restaurant_id)
+    return payload
 
 
 @router.patch("/restaurants/{restaurant_id}", response_model=Restaurant)
@@ -184,6 +238,60 @@ async def sync_restaurant_schedule(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/restaurants/{restaurant_id}/connect-sync")
+async def connect_and_sync_restaurant(
+    restaurant_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import scheduling as scheduling_svc
+
+    restaurant = await queries.get_restaurant(db, restaurant_id)
+    if restaurant is None:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    try:
+        return await scheduling_svc.connect_and_sync_restaurant(db, restaurant_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/internal/sync/process-due")
+async def process_due_sync_jobs(
+    platform: Optional[str] = Query(default=None),
+    limit: int = Query(default=10, ge=1, le=100),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import sync_engine
+
+    return {
+        "platform": platform,
+        "results": await sync_engine.process_due_sync_jobs(db, platform=platform, limit=limit),
+    }
+
+
+@router.post("/internal/sync/rolling")
+async def queue_rolling_reconcile(
+    restaurant_id: Optional[int] = Query(default=None, ge=1),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import sync_engine
+
+    if restaurant_id is not None:
+        return await sync_engine.enqueue_rolling_reconcile(db, restaurant_id=restaurant_id)
+    return {"jobs": await sync_engine.enqueue_rolling_reconcile_for_due_restaurants(db)}
+
+
+@router.post("/internal/sync/daily")
+async def queue_daily_reconcile(
+    restaurant_id: Optional[int] = Query(default=None, ge=1),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import sync_engine
+
+    if restaurant_id is not None:
+        return await sync_engine.enqueue_daily_reconcile(db, restaurant_id=restaurant_id)
+    return {"jobs": await sync_engine.enqueue_daily_reconcile_for_due_restaurants(db)}
+
+
 # ── workers ───────────────────────────────────────────────────────────────────
 
 @router.post("/workers", response_model=Worker, status_code=201)
@@ -196,7 +304,7 @@ async def create_worker(
     return {**data, "id": wid, "total_shifts_filled": 0}
 
 
-@router.get("/workers", response_model=list[Worker])
+@router.get("/workers", response_model=List[Worker])
 async def list_workers(
     restaurant_id: Optional[int] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
@@ -337,7 +445,7 @@ async def create_shift(
     return {**data, "id": sid, "called_out_by": None, "filled_by": None, "fill_tier": None}
 
 
-@router.get("/shifts", response_model=list[Shift])
+@router.get("/shifts", response_model=List[Shift])
 async def list_shifts(
     restaurant_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
@@ -487,7 +595,7 @@ async def backfill_shift(
     )
 
 
-@router.get("/cascades", response_model=list[Cascade])
+@router.get("/cascades", response_model=List[Cascade])
 async def list_cascades(
     shift_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
@@ -560,6 +668,20 @@ async def dashboard_summary(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     return await queries.get_dashboard_summary(db, restaurant_id=restaurant_id)
+
+
+@router.post("/onboarding/link", response_model=OnboardingLinkResponse)
+async def create_onboarding_link(body: OnboardingLinkRequest):
+    from app.services import onboarding as onboarding_svc
+
+    try:
+        return onboarding_svc.send_onboarding_link(
+            phone=body.phone,
+            kind=body.kind,
+            platform=body.platform,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── reminder SMS ──────────────────────────────────────────────────────────────

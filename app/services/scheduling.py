@@ -6,7 +6,7 @@ write-back when a Backfill fill should be reflected into the source scheduler.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import aiosqlite
@@ -18,6 +18,137 @@ from app.integrations.homebase import HomebaseAdapter
 from app.integrations.native_lite import NativeLiteAdapter
 from app.integrations.seven_shifts import SevenShiftsAdapter
 from app.integrations.when_i_work import WhenIWorkAdapter
+
+
+def integration_mode_for_restaurant(restaurant: dict | None) -> str:
+    if not restaurant:
+        return "native"
+    value = restaurant.get("scheduling_platform") or "backfill_native"
+    if value in {"wheniwork", "homebase", "7shifts", "deputy"}:
+        if writeback_is_enabled(restaurant) and scheduler_supports_writeback(value):
+            return "companion_writeback"
+        return "companion"
+    return "native"
+
+
+def scheduler_supports_writeback(platform: str | None) -> bool:
+    value = platform or "backfill_native"
+    return value in {"7shifts", "deputy"}
+
+
+def writeback_is_enabled(restaurant: dict | None) -> bool:
+    if not restaurant:
+        return False
+    return bool(restaurant.get("writeback_enabled")) and scheduler_supports_writeback(
+        restaurant.get("scheduling_platform")
+    )
+
+
+async def get_integration_health(db: aiosqlite.Connection, restaurant_id: int) -> dict:
+    restaurant = await queries.get_restaurant(db, restaurant_id)
+    if restaurant is None:
+        raise ValueError(f"Restaurant {restaurant_id} not found")
+
+    platform = restaurant.get("scheduling_platform") or "backfill_native"
+    platform_id = restaurant.get("scheduling_platform_id")
+    mode = integration_mode_for_restaurant(restaurant)
+    writeback_supported = scheduler_supports_writeback(platform)
+    writeback_enabled = writeback_is_enabled(restaurant)
+
+    if platform == "backfill_native":
+        return {
+            "restaurant_id": restaurant_id,
+            "platform": platform,
+            "mode": mode,
+            "writable": False,
+            "writeback_supported": False,
+            "writeback_enabled": False,
+            "writeback_subscription_tier": restaurant.get("writeback_subscription_tier") or "core",
+            "status": restaurant.get("integration_status") or "native_lite",
+            "integration_state": restaurant.get("integration_state") or "healthy",
+            "reason": None,
+        }
+
+    try:
+        _adapter_for_restaurant(db, restaurant)
+        status = restaurant.get("integration_status") or "ready_to_sync"
+        reason = None
+    except RuntimeError as exc:
+        status = "credentials_missing"
+        reason = str(exc)
+
+    return {
+        "restaurant_id": restaurant_id,
+        "platform": platform,
+        "mode": mode,
+        "writable": writeback_enabled,
+        "writeback_supported": writeback_supported,
+        "writeback_enabled": writeback_enabled,
+        "writeback_subscription_tier": restaurant.get("writeback_subscription_tier") or "core",
+        "platform_id_present": bool(platform_id),
+        "status": status,
+        "integration_state": restaurant.get("integration_state") or "healthy",
+        "reason": reason,
+        "last_roster_sync_at": restaurant.get("last_roster_sync_at"),
+        "last_roster_sync_status": restaurant.get("last_roster_sync_status"),
+        "last_schedule_sync_at": restaurant.get("last_schedule_sync_at"),
+        "last_schedule_sync_status": restaurant.get("last_schedule_sync_status"),
+        "last_sync_error": restaurant.get("last_sync_error"),
+        "last_event_sync_at": restaurant.get("last_event_sync_at"),
+        "last_rolling_sync_at": restaurant.get("last_rolling_sync_at"),
+        "last_daily_sync_at": restaurant.get("last_daily_sync_at"),
+        "last_writeback_at": restaurant.get("last_writeback_at"),
+    }
+
+
+async def connect_and_sync_restaurant(db: aiosqlite.Connection, restaurant_id: int) -> dict:
+    health = await get_integration_health(db, restaurant_id)
+    if health["platform"] == "backfill_native":
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {"integration_status": "native_lite", "integration_state": "healthy", "last_sync_error": None},
+        )
+        return {
+            "restaurant_id": restaurant_id,
+            "platform": health["platform"],
+            "mode": health["mode"],
+            "status": "native_lite",
+            "roster_sync": None,
+            "schedule_sync": None,
+        }
+
+    if health["status"] == "credentials_missing":
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {"integration_status": "credentials_missing", "integration_state": "degraded", "last_sync_error": health["reason"]},
+        )
+        return {
+            "restaurant_id": restaurant_id,
+            "platform": health["platform"],
+            "mode": health["mode"],
+            "status": "credentials_missing",
+            "roster_sync": None,
+            "schedule_sync": None,
+            "error": health["reason"],
+        }
+
+    roster_result = await sync_roster(db, restaurant_id)
+    schedule_result = await sync_schedule(
+        db,
+        restaurant_id,
+        start_date=date.today(),
+        end_date=date.today() + timedelta(days=14),
+    )
+    return {
+        "restaurant_id": restaurant_id,
+        "platform": health["platform"],
+        "mode": health["mode"],
+        "status": "connected",
+        "roster_sync": roster_result,
+        "schedule_sync": schedule_result,
+    }
 
 
 def _clean_phone(phone: str | None) -> str:
@@ -70,9 +201,35 @@ async def sync_roster(db: aiosqlite.Connection, restaurant_id: int) -> dict:
     if restaurant is None:
         raise ValueError(f"Restaurant {restaurant_id} not found")
 
-    adapter = _adapter_for_restaurant(db, restaurant)
+    try:
+        adapter = _adapter_for_restaurant(db, restaurant)
+    except RuntimeError as exc:
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {
+                "integration_status": "credentials_missing",
+                "integration_state": "degraded",
+                "last_roster_sync_status": "failed",
+                "last_sync_error": str(exc),
+            },
+        )
+        raise
     platform = restaurant.get("scheduling_platform") or "backfill_native"
-    workers = await adapter.sync_roster(restaurant_id)
+    try:
+        workers = await adapter.sync_roster(restaurant_id)
+    except Exception as exc:
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {
+                "integration_status": "sync_failed",
+                "integration_state": "degraded",
+                "last_roster_sync_status": "failed",
+                "last_sync_error": str(exc),
+            },
+        )
+        raise
 
     created = 0
     updated = 0
@@ -120,6 +277,18 @@ async def sync_roster(db: aiosqlite.Connection, restaurant_id: int) -> dict:
         await queries.insert_worker(db, payload)
         created += 1
 
+    await queries.update_restaurant(
+        db,
+        restaurant_id,
+        {
+            "integration_status": "connected",
+            "integration_state": "healthy",
+            "last_roster_sync_at": datetime.utcnow().isoformat(),
+            "last_roster_sync_status": "ok",
+            "last_sync_error": None,
+        },
+    )
+
     return {
         "status": "ok",
         "restaurant_id": restaurant_id,
@@ -140,9 +309,35 @@ async def sync_schedule(
     if restaurant is None:
         raise ValueError(f"Restaurant {restaurant_id} not found")
 
-    adapter = _adapter_for_restaurant(db, restaurant)
+    try:
+        adapter = _adapter_for_restaurant(db, restaurant)
+    except RuntimeError as exc:
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {
+                "integration_status": "credentials_missing",
+                "integration_state": "degraded",
+                "last_schedule_sync_status": "failed",
+                "last_sync_error": str(exc),
+            },
+        )
+        raise
     source = restaurant.get("scheduling_platform") or "backfill_native"
-    shifts = await adapter.sync_schedule(restaurant_id, (start_date, end_date))
+    try:
+        shifts = await adapter.sync_schedule(restaurant_id, (start_date, end_date))
+    except Exception as exc:
+        await queries.update_restaurant(
+            db,
+            restaurant_id,
+            {
+                "integration_status": "sync_failed",
+                "integration_state": "degraded",
+                "last_schedule_sync_status": "failed",
+                "last_sync_error": str(exc),
+            },
+        )
+        raise
 
     created = 0
     updated = 0
@@ -181,6 +376,18 @@ async def sync_schedule(
         await queries.insert_shift(db, payload)
         created += 1
 
+    await queries.update_restaurant(
+        db,
+        restaurant_id,
+        {
+            "integration_status": "connected",
+            "integration_state": "healthy",
+            "last_schedule_sync_at": datetime.utcnow().isoformat(),
+            "last_schedule_sync_status": "ok",
+            "last_sync_error": None,
+        },
+    )
+
     return {
         "status": "ok",
         "restaurant_id": restaurant_id,
@@ -205,6 +412,10 @@ async def push_fill_update(db: aiosqlite.Connection, shift_id: int) -> dict:
     platform = restaurant.get("scheduling_platform") or "backfill_native"
     if platform in {"backfill_native", "homebase"}:
         return {"status": "skipped", "reason": f"{platform}_does_not_require_write_back"}
+    if not scheduler_supports_writeback(platform):
+        return {"status": "skipped", "reason": f"{platform}_write_back_not_supported"}
+    if not writeback_is_enabled(restaurant):
+        return {"status": "skipped", "reason": "writeback_disabled_for_restaurant"}
     if not shift.get("scheduling_platform_id"):
         return {"status": "skipped", "reason": "missing_external_shift_id"}
 

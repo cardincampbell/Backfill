@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Backfill",
-  description: "AI coordination layer for shift coverage."
+  description: "Autonomous coverage infrastructure for hourly labor."
 };
 
 export default function RootLayout({
@@ -24,14 +24,15 @@ export default function RootLayout({
             </Link>
             <nav className="nav">
               <Link href="/">Home</Link>
+              <Link href="/setup/connect">Setup</Link>
               <Link href="/dashboard">Dashboard</Link>
-              <Link href="/join">Worker Join</Link>
+              <Link href="/join">Join</Link>
               <Link href="/partners">Partners</Link>
             </nav>
           </header>
           {children}
           <footer className="footer">
-            <div>1-800-BACKFILL is the front door. The website exists to support what phone and text cannot do cleanly.</div>
+            <div>1-800-BACKFILL is the command surface. The website handles structured setup, uploads, and visibility.</div>
           </footer>
         </div>
       </body>
