@@ -4,13 +4,13 @@ import { notFound, redirect } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
 import { StatCard } from "@/components/stat-card";
-import { getRestaurantStatus } from "@/lib/api";
-import { sendOnboardingLink, updateRestaurant } from "@/lib/server-api";
+import { getLocationStatus } from "@/lib/api";
+import { sendOnboardingLink, updateLocation } from "@/lib/server-api";
 
 export const dynamic = "force-dynamic";
 
-type RestaurantDetailPageProps = {
-  params: Promise<{ restaurantId: string }>;
+type LocationDetailPageProps = {
+  params: Promise<{ locationId: string }>;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
@@ -43,23 +43,23 @@ function setupPathForPlatform(platform?: string | null): string {
   return "/setup/upload";
 }
 
-function detailPath(restaurantId: number, query?: string): string {
+function detailPath(locationId: number, query?: string): string {
   return query
-    ? `/dashboard/restaurants/${restaurantId}?${query}`
-    : `/dashboard/restaurants/${restaurantId}`;
+    ? `/dashboard/locations/${locationId}?${query}`
+    : `/dashboard/locations/${locationId}`;
 }
 
-async function runRestaurantAction(formData: FormData) {
+async function runLocationAction(formData: FormData) {
   "use server";
 
-  const restaurantId = Number(formData.get("restaurant_id"));
+  const locationId = Number(formData.get("location_id"));
   const action = String(formData.get("action") ?? "");
 
-  if (!Number.isInteger(restaurantId) || restaurantId <= 0) {
-    redirect("/dashboard?sync=error&message=Invalid+restaurant+id");
+  if (!Number.isInteger(locationId) || locationId <= 0) {
+    redirect("/dashboard?sync=error&message=Invalid+location+id");
   }
 
-  const destination = `/dashboard/restaurants/${restaurantId}`;
+  const destination = `/dashboard/locations/${locationId}`;
 
   try {
     if (action === "send_onboarding") {
@@ -68,14 +68,14 @@ async function runRestaurantAction(formData: FormData) {
       const platform = String(formData.get("platform") ?? "").trim() || undefined;
 
       if (!phone) {
-        redirect(detailPath(restaurantId, "action=error&detail=Missing+manager+phone+number"));
+        redirect(detailPath(locationId, "action=error&detail=Missing+primary+contact+phone+number"));
       }
 
       const result = await sendOnboardingLink({ phone, kind, platform });
       revalidatePath(destination);
       redirect(
         detailPath(
-          restaurantId,
+          locationId,
           `action=link_ok&detail=${encodeURIComponent(`Sent ${result.path} to ${phone}.`)}`
         )
       );
@@ -83,43 +83,43 @@ async function runRestaurantAction(formData: FormData) {
 
     if (action === "toggle_writeback") {
       const enabled = String(formData.get("enabled") ?? "").trim() === "true";
-      await updateRestaurant(restaurantId, {
+      await updateLocation(locationId, {
         writeback_enabled: enabled,
         writeback_subscription_tier: enabled ? "premium" : "core"
       });
       revalidatePath(destination);
       redirect(
         detailPath(
-          restaurantId,
+          locationId,
           `action=writeback_ok&detail=${encodeURIComponent(
             enabled
-              ? "Paid write-back enabled for this restaurant."
+              ? "Paid write-back enabled for this location."
               : "Write-back disabled. Native remains the execution ledger."
           )}`
         )
       );
     }
 
-    redirect(detailPath(restaurantId, "action=error&detail=Unsupported+restaurant+action"));
+    redirect(detailPath(locationId, "action=error&detail=Unsupported+location+action"));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Action failed";
-    redirect(detailPath(restaurantId, `action=error&detail=${encodeURIComponent(message)}`));
+    redirect(detailPath(locationId, `action=error&detail=${encodeURIComponent(message)}`));
   }
 }
 
-export default async function RestaurantDetailPage({
+export default async function LocationDetailPage({
   params,
   searchParams
-}: RestaurantDetailPageProps) {
-  const { restaurantId } = await params;
-  const numericRestaurantId = Number(restaurantId);
+}: LocationDetailPageProps) {
+  const { locationId } = await params;
+  const numericLocationId = Number(locationId);
   const query = searchParams ? await searchParams : {};
 
-  if (!Number.isInteger(numericRestaurantId) || numericRestaurantId <= 0) {
+  if (!Number.isInteger(numericLocationId) || numericLocationId <= 0) {
     notFound();
   }
 
-  const status = await getRestaurantStatus(numericRestaurantId);
+  const status = await getLocationStatus(numericLocationId);
 
   if (!status) {
     notFound();
@@ -127,8 +127,8 @@ export default async function RestaurantDetailPage({
 
   const action = typeof query.action === "string" ? query.action : "";
   const detail = typeof query.detail === "string" ? decodeURIComponent(query.detail) : "";
-  const setupKind = setupKindForPlatform(status.restaurant.scheduling_platform);
-  const setupPath = setupPathForPlatform(status.restaurant.scheduling_platform);
+  const setupKind = setupKindForPlatform(status.location.scheduling_platform);
+  const setupPath = setupPathForPlatform(status.location.scheduling_platform);
   const modeLabel = describeMode(status.integration.mode);
   const writebackEnabled = Boolean(status.integration.writeback_enabled);
   const writebackSupported = Boolean(status.integration.writeback_supported);
@@ -136,10 +136,10 @@ export default async function RestaurantDetailPage({
   return (
     <main className="section">
       <div className="page-head">
-        <span className="eyebrow">Restaurant Detail</span>
-        <h1>{status.restaurant.name}</h1>
+        <span className="eyebrow">Location Detail</span>
+        <h1>{status.location.name}</h1>
         <p>
-          {status.restaurant.address ?? "No address on file"} · {modeLabel} · {status.integration.platform}
+          {status.location.address ?? "No address on file"} · {status.location.vertical ?? "unspecified"} · {modeLabel} · {status.integration.platform}
         </p>
       </div>
 
@@ -147,7 +147,7 @@ export default async function RestaurantDetailPage({
         <section className="section">
           <div className="callout success-callout">
             <h3>Action completed</h3>
-            <p>{detail || "The restaurant action completed successfully."}</p>
+            <p>{detail || "The location action completed successfully."}</p>
           </div>
         </section>
       ) : null}
@@ -156,7 +156,7 @@ export default async function RestaurantDetailPage({
         <section className="section">
           <div className="callout error-callout">
             <h3>Action failed</h3>
-            <p>{detail || "The restaurant action did not complete."}</p>
+            <p>{detail || "The location action did not complete."}</p>
           </div>
         </section>
       ) : null}
@@ -181,7 +181,7 @@ export default async function RestaurantDetailPage({
             <p>Write-back support: <strong>{writebackSupported ? "Supported by platform" : "Not supported"}</strong></p>
             <p>Write-back status: <strong>{writebackEnabled ? "Enabled" : "Disabled"}</strong></p>
             <p>Plan: <strong>{status.integration.writeback_subscription_tier ?? "core"}</strong></p>
-            <p>External ID: <strong>{status.restaurant.scheduling_platform_id ?? "Not set"}</strong></p>
+            <p>External ID: <strong>{status.location.scheduling_platform_id ?? "Not set"}</strong></p>
             <p>Integration status: <strong>{status.integration.status}</strong></p>
             <p>Operational state: <strong>{status.integration.integration_state ?? "healthy"}</strong></p>
             <div className="table-meta">
@@ -199,8 +199,8 @@ export default async function RestaurantDetailPage({
                 Open setup flow
               </Link>
               {writebackSupported ? (
-                <form action={runRestaurantAction}>
-                  <input type="hidden" name="restaurant_id" value={status.restaurant.id} />
+                <form action={runLocationAction}>
+                  <input type="hidden" name="location_id" value={status.location.id} />
                   <input type="hidden" name="action" value="toggle_writeback" />
                   <input type="hidden" name="enabled" value={writebackEnabled ? "false" : "true"} />
                   <button className="button-secondary button-small" type="submit">
@@ -213,13 +213,13 @@ export default async function RestaurantDetailPage({
           </div>
 
           <div className="callout">
-            <h3>Manager handoff</h3>
-            <p>Manager: <strong>{status.restaurant.manager_name ?? "Unassigned"}</strong></p>
-            <p>Phone: <strong>{status.restaurant.manager_phone ?? "Missing"}</strong></p>
-            <p>Email: <strong>{status.restaurant.manager_email ?? "Missing"}</strong></p>
-            <p>Agency escalation: <strong>{status.restaurant.agency_supply_approved ? "Approved" : "Not approved"}</strong></p>
+            <h3>Primary contact handoff</h3>
+            <p>Primary contact: <strong>{status.location.manager_name ?? "Unassigned"}</strong></p>
+            <p>Phone: <strong>{status.location.manager_phone ?? "Missing"}</strong></p>
+            <p>Email: <strong>{status.location.manager_email ?? "Missing"}</strong></p>
+            <p>Agency escalation: <strong>{status.location.agency_supply_approved ? "Approved" : "Not approved"}</strong></p>
             <div className="table-meta">
-              <div>Onboarding notes: {status.restaurant.onboarding_info ?? "No notes yet."}</div>
+              <div>Onboarding notes: {status.location.onboarding_info ?? "No notes yet."}</div>
             </div>
             <div className="cta-row">
               <Link className="button-secondary button-small" href={setupPath}>
@@ -228,16 +228,16 @@ export default async function RestaurantDetailPage({
               <Link className="button-secondary button-small" href="/setup/add">
                 Manual add
               </Link>
-              {status.restaurant.manager_phone ? (
-                <form action={runRestaurantAction}>
-                  <input type="hidden" name="restaurant_id" value={status.restaurant.id} />
+              {status.location.manager_phone ? (
+                <form action={runLocationAction}>
+                  <input type="hidden" name="location_id" value={status.location.id} />
                   <input type="hidden" name="action" value="send_onboarding" />
-                  <input type="hidden" name="phone" value={status.restaurant.manager_phone} />
+                  <input type="hidden" name="phone" value={status.location.manager_phone} />
                   <input type="hidden" name="kind" value={setupKind} />
                   <input
                     type="hidden"
                     name="platform"
-                    value={status.restaurant.scheduling_platform ?? ""}
+                    value={status.location.scheduling_platform ?? ""}
                   />
                   <button className="button-secondary button-small" type="submit">Text setup link</button>
                 </form>
@@ -251,7 +251,7 @@ export default async function RestaurantDetailPage({
         <div className="section-head">
           <div>
             <h2>Coverage runs</h2>
-            <p className="muted">Restaurant-scoped coverage state instead of dashboard-wide row hunting.</p>
+            <p className="muted">Location-scoped coverage state instead of dashboard-wide row hunting.</p>
           </div>
         </div>
         {status.active_cascades.length ? (
@@ -286,7 +286,7 @@ export default async function RestaurantDetailPage({
             </table>
           </div>
         ) : (
-          <EmptyState title="No active coverage" body="This restaurant does not currently have live broadcast or cascade runs." />
+          <EmptyState title="No active coverage" body="This location does not currently have live broadcast or cascade runs." />
         )}
       </section>
 
@@ -365,7 +365,7 @@ export default async function RestaurantDetailPage({
         <div className="section-head">
           <div>
             <h2>Recent audit</h2>
-            <p className="muted">Restaurant-level audit and outcome events.</p>
+            <p className="muted">Location-level audit and outcome events.</p>
           </div>
         </div>
         {status.recent_audit.length ? (
@@ -390,7 +390,7 @@ export default async function RestaurantDetailPage({
             </table>
           </div>
         ) : (
-          <EmptyState title="No restaurant audit yet" body="Restaurant-level audit events will appear here as setup and coverage actions happen." />
+          <EmptyState title="No location audit yet" body="Location-level audit events will appear here as setup and coverage actions happen." />
         )}
       </section>
 
@@ -398,7 +398,7 @@ export default async function RestaurantDetailPage({
         <div className="section-head">
           <div>
             <h2>Recent shifts</h2>
-            <p className="muted">Latest scheduled, vacant, and filled shifts for this restaurant.</p>
+            <p className="muted">Latest scheduled, vacant, and filled shifts for this location.</p>
           </div>
         </div>
         {status.recent_shifts.length ? (
@@ -431,7 +431,7 @@ export default async function RestaurantDetailPage({
             </table>
           </div>
         ) : (
-          <EmptyState title="No shifts yet" body="Shifts for this restaurant will appear here once they are created or synced." />
+          <EmptyState title="No shifts yet" body="Shifts for this location will appear here once they are created or synced." />
         )}
       </section>
 

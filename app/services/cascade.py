@@ -3,7 +3,7 @@ Tiered cascade engine.
 
 Outreach policy:
 - Tier 1 targets internal staff ranked by priority.
-- Tier 2 targets alumni workers who have worked this restaurant before.
+- Tier 2 targets alumni workers who have worked this location before.
 - Only workers who match the shift role and certifications are contacted.
 - The worker who called out is never contacted for the same vacancy.
 - SMS is always the written offer when consent exists.
@@ -20,11 +20,11 @@ from app.db.queries import (
     get_cascade,
     update_cascade,
     update_outreach_attempt,
-    list_workers_for_restaurant,
-    list_workers_by_restaurants_worked,
+    list_workers_for_location,
+    list_workers_by_locations_worked,
     list_agency_requests,
     insert_outreach_attempt,
-    get_restaurant,
+    get_location,
 )
 from app.models.audit import AuditAction
 from app.services import agency_router
@@ -183,8 +183,8 @@ async def _eligible_tier1_workers(
     shift: dict,
     exclude_worker_id: Optional[int],
 ) -> list[dict]:
-    workers = await list_workers_for_restaurant(
-        db, shift["restaurant_id"], active_consent_only=False
+    workers = await list_workers_for_location(
+        db, shift["location_id"], active_consent_only=False
     )
     required_certs = set(shift.get("requirements") or [])
     eligible: list[dict] = []
@@ -209,10 +209,10 @@ async def _eligible_tier2_workers(
     shift: dict,
     exclude_worker_id: Optional[int],
 ) -> list[dict]:
-    # Query ALL workers whose restaurants_worked includes this restaurant —
-    # alumni may have a different primary restaurant_id so list_workers_for_restaurant
-    # would miss them.
-    workers = await list_workers_by_restaurants_worked(db, shift["restaurant_id"])
+    # Query all workers whose prior-work history includes this location.
+    # Alumni may have a different primary assignment, so the direct location
+    # roster query would miss them.
+    workers = await list_workers_by_locations_worked(db, shift["location_id"])
     required_certs = set(shift.get("requirements") or [])
     eligible: list[dict] = []
     for worker in workers:
@@ -250,7 +250,7 @@ async def _send_initial_outreach(
     tier: int,
     shift: dict,
 ) -> dict:
-    restaurant = await get_restaurant(db, shift["restaurant_id"])
+    location = await get_location(db, shift["location_id"])
     channels = outreach_svc.plan_initial_channels(shift, worker)
     if not channels:
         return {"attempt_ids": [], "channels": []}
@@ -270,7 +270,8 @@ async def _send_initial_outreach(
     if "sms" in channels:
         sms_sid = messaging.send_sms(
             worker["phone"],
-            outreach_svc.build_initial_sms(worker, shift, restaurant),
+            outreach_svc.build_initial_sms(worker, shift, location),
+            metadata=metadata,
         )
         attempt_id = await insert_outreach_attempt(
             db,
@@ -639,14 +640,14 @@ async def _mark_exhausted(
     tier: int,
 ) -> dict:
     cascade = await get_cascade(db, cascade_id)
-    restaurant = await get_restaurant(db, shift["restaurant_id"])
-    if tier >= 2 and restaurant and restaurant.get("agency_supply_approved"):
+    location = await get_location(db, shift["location_id"])
+    if tier >= 2 and location and location.get("agency_supply_approved"):
         await update_cascade(db, cascade_id, current_tier=3)
         if cascade and cascade.get("manager_approved_tier3"):
             return await agency_router.route_to_agencies(db, cascade_id=cascade_id, shift_id=shift["id"])
-        if restaurant.get("manager_phone"):
+        if location.get("manager_phone"):
             notifications.notify_cascade_exhausted(
-                manager_phone=restaurant["manager_phone"],
+                manager_phone=location["manager_phone"],
                 role=shift["role"],
                 date=shift["date"],
                 start_time=shift["start_time"],
@@ -656,7 +657,7 @@ async def _mark_exhausted(
                 AuditAction.manager_notified,
                 entity_type="shift",
                 entity_id=shift["id"],
-                details={"filled": False, "manager_phone": restaurant["manager_phone"], "tier3_approval_requested": True},
+                details={"filled": False, "manager_phone": location["manager_phone"], "tier3_approval_requested": True},
             )
         return {"status": "awaiting_tier3_approval", "cascade_id": cascade_id}
 
@@ -668,9 +669,9 @@ async def _mark_exhausted(
         entity_id=cascade_id,
         details={"shift_id": shift["id"], "final_tier": tier},
     )
-    if restaurant and restaurant.get("manager_phone"):
+    if location and location.get("manager_phone"):
         notifications.notify_cascade_exhausted(
-            manager_phone=restaurant["manager_phone"],
+            manager_phone=location["manager_phone"],
             role=shift["role"],
             date=shift["date"],
             start_time=shift["start_time"],
@@ -680,7 +681,7 @@ async def _mark_exhausted(
             AuditAction.manager_notified,
             entity_type="shift",
             entity_id=shift["id"],
-            details={"filled": False, "manager_phone": restaurant["manager_phone"]},
+            details={"filled": False, "manager_phone": location["manager_phone"]},
         )
     return {"status": "exhausted", "cascade_id": cascade_id}
 

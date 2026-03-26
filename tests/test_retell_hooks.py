@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from app.db.queries import get_cascade, get_shift, insert_restaurant, insert_shift, insert_worker
+from app.db.queries import get_cascade, get_shift, insert_location, insert_shift, insert_worker
 from app.services import cascade as cascade_svc
 from app.services.shift_manager import create_vacancy
 
@@ -18,7 +18,7 @@ async def test_retell_claim_shift_function_call_confirms_and_notifies(db, client
 
     monkeypatch.setattr("app.services.notifications.fire_manager_notification", _fake_notify)
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Retell Grill",
@@ -35,7 +35,7 @@ async def test_retell_claim_shift_function_call_confirms_and_notifies(db, client
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -48,7 +48,7 @@ async def test_retell_claim_shift_function_call_confirms_and_notifies(db, client
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -57,7 +57,7 @@ async def test_retell_claim_shift_function_call_confirms_and_notifies(db, client
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "role": "line_cook",
             "date": start.date().isoformat(),
             "start_time": start.strftime("%H:%M:%S"),
@@ -69,7 +69,7 @@ async def test_retell_claim_shift_function_call_confirms_and_notifies(db, client
         },
     )
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
@@ -103,14 +103,14 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
         notifications.append((cascade_id, worker_id, filled))
 
     monkeypatch.setattr("app.services.notifications.fire_manager_notification", _fake_notify)
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
 
     async def _fake_call(*, to_number, metadata, agent_id=None):
         return "CA123"
 
     monkeypatch.setattr("app.services.retell.create_phone_call", _fake_call)
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Retell Standby Grill",
@@ -127,7 +127,7 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -140,7 +140,7 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -153,7 +153,7 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 3,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -162,7 +162,7 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "role": "line_cook",
             "date": start.date().isoformat(),
             "start_time": start.strftime("%H:%M:%S"),
@@ -230,3 +230,43 @@ def test_retell_send_onboarding_link_function_call_returns_expected_path(client,
     assert payload["platform"] == "homebase"
     assert payload["path"] == "/setup/connect?platform=homebase"
     assert sent
+
+
+def test_retell_rejects_stale_restaurant_args_for_get_open_shifts(client):
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "get_open_shifts",
+            "args": {
+                "restaurant_id": 123,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["detail"]["message"] == "Invalid args for get_open_shifts"
+    assert payload["detail"]["errors"][0]["type"] == "extra_forbidden"
+
+
+def test_retell_rejects_missing_location_id_for_create_open_shift(client):
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "create_open_shift",
+            "args": {
+                "role": "line_cook",
+                "date": "2026-03-26",
+                "start_time": "09:00:00",
+                "end_time": "17:00:00",
+                "pay_rate": 22.0,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["detail"]["message"] == "Invalid args for create_open_shift"
+    assert payload["detail"]["errors"][0]["type"] == "missing"

@@ -38,7 +38,7 @@ export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) 
         <span className="eyebrow">Shift Detail</span>
         <h1>{status.shift.role} on {status.shift.date}</h1>
         <p>
-          {status.restaurant?.name ?? "Unknown restaurant"} · {status.shift.start_time} to {status.shift.end_time}
+          {status.location?.name ?? "Unknown location"} · {status.shift.start_time} to {status.shift.end_time}
         </p>
       </div>
 

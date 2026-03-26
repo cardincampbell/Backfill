@@ -17,14 +17,14 @@ export default async function HomePage() {
           <p className="lede">
             Workers call or text <strong>1-800-BACKFILL</strong>. Backfill identifies the gap,
             broadcasts to the fastest trusted replacement path, confirms coverage, and texts the
-            manager once the shift is handled.
+            site lead once the shift is handled.
           </p>
           <div className="cta-row">
             <Link className="button" href="/dashboard">
               View operations dashboard
             </Link>
             <Link className="button-secondary" href="/setup/connect">
-              Start restaurant setup
+              Start location setup
             </Link>
           </div>
         </div>
@@ -63,15 +63,16 @@ export default async function HomePage() {
         </div>
         <div className="feature-grid">
           <SectionCard title="Connect a scheduler">
-            <p>Route restaurants to 7shifts, Deputy, When I Work, or Homebase setup without turning the website into the product.</p>
+            <p>Route supported operators to 7shifts, Deputy, When I Work, or Homebase setup without turning the website into the product.</p>
+            <p>Current supported integrations are restaurant-heavy, but the core workflow stays location-based.</p>
             <p><Link className="text-link" href="/setup/connect">Open connect flow</Link></p>
           </SectionCard>
           <SectionCard title="Upload a roster">
-            <p>Handle CSV onboarding for restaurants that have structured data but no supported writeable scheduler.</p>
+            <p>Handle CSV onboarding for locations that have structured data but no supported writeable scheduler.</p>
             <p><Link className="text-link" href="/setup/upload">Open upload path</Link></p>
           </SectionCard>
           <SectionCard title="Add a team manually">
-            <p>Give no-software operators a fast path to get live with names, phone numbers, roles, and manager contacts.</p>
+            <p>Give no-software operators a fast path to get live with names, phone numbers, roles, and site contacts.</p>
             <p><Link className="text-link" href="/setup/add">Open manual setup</Link></p>
           </SectionCard>
           <SectionCard title="Complete worker details">
@@ -87,7 +88,7 @@ export default async function HomePage() {
             <h3>Manager experience</h3>
             <p>
               Coverage in progress. Then one text:
-              <strong> Shift filled.</strong> No routine coordination, no manager scramble.
+              <strong> Shift filled.</strong> No routine coordination, no site-lead scramble.
             </p>
           </div>
           {backendReachable ? (

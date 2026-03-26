@@ -77,7 +77,7 @@ async def test_seven_shifts_sync_and_writeback_normalize_payloads(monkeypatch):
 
     adapter = SevenShiftsAdapter(client_id="cid", client_secret="secret", company_id="company-123")
 
-    workers = await adapter.sync_roster(restaurant_id=9)
+    workers = await adapter.sync_roster(location_id=9)
     assert workers == [
         {
             "name": "James Cook",
@@ -85,14 +85,14 @@ async def test_seven_shifts_sync_and_writeback_normalize_payloads(monkeypatch):
             "email": "james@example.com",
             "source_id": "77",
             "roles": ["line_cook"],
-            "restaurant_id": 9,
+            "location_id": 9,
             "source": "7shifts",
             "sms_consent_status": "pending",
             "voice_consent_status": "pending",
         }
     ]
 
-    await adapter.sync_schedule(restaurant_id=9, date_range=("2026-03-25", "2026-03-27"))
+    await adapter.sync_schedule(location_id=9, date_range=("2026-03-25", "2026-03-27"))
     await adapter.push_fill(
         {"scheduling_platform_id": "shift-1"},
         {"source_id": "worker-1"},
@@ -136,10 +136,10 @@ async def test_deputy_sync_schedule_and_writeback_use_install_url(monkeypatch):
         install_url="https://demo.na.deputy.com",
     )
 
-    shifts = await adapter.sync_schedule(restaurant_id=4, date_range=("2026-03-25", "2026-03-27"))
+    shifts = await adapter.sync_schedule(location_id=4, date_range=("2026-03-25", "2026-03-27"))
     assert shifts == [
         {
-            "restaurant_id": 4,
+            "location_id": 4,
             "scheduling_platform_id": "88",
             "role": "line_cook",
             "date": "2026-03-25",
@@ -187,7 +187,7 @@ async def test_when_i_work_sync_and_conditional_writeback(monkeypatch):
     _install_fake_client(monkeypatch, when_i_work, responses, calls)
 
     adapter = WhenIWorkAdapter(api_token="wiw-token", account_id="acct-1", write_supported=True)
-    workers = await adapter.sync_roster(restaurant_id=5)
+    workers = await adapter.sync_roster(location_id=5)
     assert workers[0]["name"] == "Devon Lee"
     assert workers[0]["source_id"] == "101"
 
@@ -255,8 +255,8 @@ async def test_homebase_sync_roster_and_schedule_normalize_payloads(monkeypatch)
     _install_fake_client(monkeypatch, homebase, responses, calls)
 
     adapter = HomebaseAdapter(api_key="hb-key")
-    workers = await adapter.sync_roster(restaurant_id=12)
-    shifts = await adapter.sync_schedule(restaurant_id=12, date_range=("2026-03-25", "2026-03-26"))
+    workers = await adapter.sync_roster(location_id=12)
+    shifts = await adapter.sync_schedule(location_id=12, date_range=("2026-03-25", "2026-03-26"))
 
     assert workers[0]["name"] == "Ava Stone"
     assert workers[0]["source"] == "homebase"

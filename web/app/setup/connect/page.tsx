@@ -3,13 +3,13 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { SectionCard } from "@/components/section-card";
-import { connectAndSyncRestaurant, createRestaurant } from "@/lib/server-api";
+import { connectAndSyncLocation, createLocation } from "@/lib/server-api";
 
 const platforms = [
   {
     name: "7shifts",
     value: "7shifts",
-    body: "Preferred path when the restaurant already runs 7shifts. Connect once, import roster and schedule, and keep Backfill Native as the fill ledger."
+    body: "Preferred path when the customer location already runs 7shifts. Connect once, import roster and schedule, and keep Backfill Native as the fill ledger."
   },
   {
     name: "Deputy",
@@ -38,7 +38,7 @@ const platformConfig: Record<string, { headline: string; idLabel: string; idHint
   deputy: {
     headline: "Use Deputy for roster and schedule context while Backfill Native remains the operational source of truth for fills.",
     idLabel: "Deputy install URL",
-    idHint: "The current adapter expects the per-restaurant Deputy installation URL.",
+    idHint: "The current adapter expects the per-location Deputy installation URL.",
     mode: "Companion core, paid write-back optional"
   },
   wheniwork: {
@@ -62,11 +62,12 @@ type SetupConnectPageProps = {
 async function submitConnectSetup(formData: FormData) {
   "use server";
 
-  const restaurantName = String(formData.get("restaurant_name") ?? "").trim();
+  const locationName = String(formData.get("location_name") ?? "").trim();
+  const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const platform = String(formData.get("platform") ?? "").trim();
 
-  if (!restaurantName) {
-    redirect("/setup/connect?status=error&message=Restaurant+name+is+required");
+  if (!locationName) {
+    redirect("/setup/connect?status=error&message=Location+name+is+required");
   }
 
   if (!platform) {
@@ -74,8 +75,9 @@ async function submitConnectSetup(formData: FormData) {
   }
 
   try {
-    const restaurant = await createRestaurant({
-      name: restaurantName,
+    const location = await createLocation({
+      name: locationName,
+      vertical,
       address: String(formData.get("address") ?? "").trim() || undefined,
       manager_name: String(formData.get("manager_name") ?? "").trim() || undefined,
       manager_phone: String(formData.get("manager_phone") ?? "").trim() || undefined,
@@ -88,11 +90,11 @@ async function submitConnectSetup(formData: FormData) {
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
     });
 
-    const syncResult = await connectAndSyncRestaurant(restaurant.id);
+    const syncResult = await connectAndSyncLocation(location.id);
 
     revalidatePath("/dashboard");
     redirect(
-      `/setup/connect?status=created&restaurant_id=${restaurant.id}&platform=${encodeURIComponent(platform)}&sync=${encodeURIComponent(syncResult.status)}`
+      `/setup/connect?status=created&location_id=${location.id}&platform=${encodeURIComponent(platform)}&sync=${encodeURIComponent(syncResult.status)}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Connect setup failed";
@@ -105,18 +107,18 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
   const selectedPlatform = typeof params.platform === "string" ? params.platform : null;
   const status = typeof params.status === "string" ? params.status : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
-  const restaurantId = typeof params.restaurant_id === "string" ? params.restaurant_id : "";
+  const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const syncStatus = typeof params.sync === "string" ? decodeURIComponent(params.sync) : "";
   const config = platformConfig[selectedPlatform ?? "7shifts"] ?? platformConfig["7shifts"];
 
   return (
     <main className="section">
       <div className="page-head">
-        <span className="eyebrow">Restaurant Setup</span>
+        <span className="eyebrow">Location Setup</span>
         <h1>Connect the scheduler first when one exists.</h1>
         <p>
-          The phone call captures intent. This page handles structured setup for restaurants that already
-          manage schedules in software.
+          The phone call captures intent. This page handles structured setup for locations that already
+          manage schedules in software. Current supported integrations are strongest for shift-based operators.
         </p>
       </div>
 
@@ -125,7 +127,7 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
           <div className="callout success-callout">
             <h3>Integration path saved</h3>
             <p>
-              Restaurant ID <strong>{restaurantId}</strong> created with source platform{" "}
+              Location ID <strong>{locationId}</strong> created with source platform{" "}
               <strong>{selectedPlatform}</strong>. Sync status: <strong>{syncStatus || "created"}</strong>. Review the configuration in the{" "}
               <Link className="text-link" href="/dashboard">dashboard</Link>.
             </p>
@@ -150,7 +152,7 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
               Manager handoff is pre-routed to <strong>{selectedPlatform}</strong>. {config.headline}
             </p>
             <p><strong>{config.mode}</strong></p>
-            <p className="muted">Default setup is read-only companion mode. Paid write-back can be enabled per restaurant.</p>
+            <p className="muted">Default setup is read-only companion mode. Paid write-back can be enabled per location.</p>
           </div>
         </section>
       ) : null}
@@ -158,15 +160,26 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Create a connected restaurant record</h2>
+            <h2>Create a connected location record</h2>
             <p className="muted">This stores scheduler context while keeping Native Lite as the fill execution ledger.</p>
           </div>
         </div>
         <form className="setup-form" action={submitConnectSetup}>
           <div className="form-grid">
             <label className="field">
-              <span>Restaurant name</span>
-              <input name="restaurant_name" placeholder="Coastal Grill" required />
+              <span>Location name</span>
+              <input name="location_name" placeholder="Coastal Grill Downtown" required />
+            </label>
+            <label className="field">
+              <span>Vertical</span>
+              <select name="vertical" defaultValue="restaurant">
+                <option value="restaurant">restaurant</option>
+                <option value="healthcare">healthcare</option>
+                <option value="warehouse">warehouse</option>
+                <option value="retail">retail</option>
+                <option value="hospitality">hospitality</option>
+                <option value="other">other</option>
+              </select>
             </label>
             <label className="field">
               <span>Platform</span>
@@ -186,15 +199,15 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
               <input name="scheduling_platform_id" placeholder={config.idHint} />
             </label>
             <label className="field">
-              <span>Manager name</span>
-              <input name="manager_name" placeholder="Chef Mike" />
+              <span>Primary contact name</span>
+              <input name="manager_name" placeholder="Jordan Lee" />
             </label>
             <label className="field">
-              <span>Manager phone</span>
+              <span>Primary contact phone</span>
               <input name="manager_phone" placeholder="+13105550100" />
             </label>
             <label className="field">
-              <span>Manager email</span>
+              <span>Primary contact email</span>
               <input name="manager_email" placeholder="mike@coastalgrill.com" />
             </label>
             <label className="field field-span-2">
@@ -209,11 +222,11 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
               <span>Paid write-back</span>
               <label className="checkbox-inline">
                 <input name="writeback_enabled" type="checkbox" />
-                <span>Enable scheduler write-back for this restaurant now.</span>
+                <span>Enable scheduler write-back for this location now.</span>
               </label>
             </label>
           </div>
-          <button className="button" type="submit">Save connected restaurant</button>
+          <button className="button" type="submit">Save connected location</button>
         </form>
       </section>
 

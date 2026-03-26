@@ -5,7 +5,7 @@ Backfill pulls roster and schedule data for context.
 All fill operations run in the Native Lite companion layer —
 nothing writes back to Homebase (read-only API).
 
-Auth: API key per restaurant account (HOMEBASE_API_KEY)
+Auth: API key per location account (HOMEBASE_API_KEY)
 Docs: https://joinhomebase.com/api/
 
 Phase 1 — roster + schedule polling implemented.
@@ -39,7 +39,7 @@ class HomebaseAdapter(SchedulingAdapter):
             "Content-Type": "application/json",
         }
 
-    async def sync_roster(self, restaurant_id: int) -> list[dict]:
+    async def sync_roster(self, location_id: int) -> list[dict]:
         """Fetch employees from Homebase and return normalized worker dicts."""
         async with httpx.AsyncClient() as client:
             resp = await client.get(
@@ -57,14 +57,14 @@ class HomebaseAdapter(SchedulingAdapter):
                 "email": emp.get("email"),
                 "source_id": str(emp.get("id") or emp.get("employee_id") or ""),
                 "roles": [emp["job_title"]] if emp.get("job_title") else [],
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "source": "homebase",
                 "sms_consent_status": "pending",
                 "voice_consent_status": "pending",
             })
         return workers
 
-    async def sync_schedule(self, restaurant_id: int, date_range: tuple) -> list[dict]:
+    async def sync_schedule(self, location_id: int, date_range: tuple) -> list[dict]:
         """Fetch schedules from Homebase for a date window."""
         start, end = date_range
         async with httpx.AsyncClient() as client:
@@ -77,7 +77,7 @@ class HomebaseAdapter(SchedulingAdapter):
         shifts = []
         for s in resp.json().get("schedules", []):
             shifts.append({
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "scheduling_platform_id": str(s.get("id") or s.get("schedule_id") or ""),
                 "role": s.get("role", "unknown"),
                 "date": s.get("date", ""),

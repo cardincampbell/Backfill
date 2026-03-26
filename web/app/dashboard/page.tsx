@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/empty-state";
 import { StatCard } from "@/components/stat-card";
-import { getAuditLog, getCascades, getRestaurants, getShifts, getSupportSnapshot, getWorkers } from "@/lib/api";
+import { getAuditLog, getCascades, getLocations, getShifts, getSupportSnapshot, getWorkers } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +15,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     await searchParams;
   }
 
-  const [{ summary, backendReachable }, restaurants, shifts, audits, cascades, workers] = await Promise.all([
+  const [{ summary, backendReachable }, locations, shifts, audits, cascades, workers] = await Promise.all([
     getSupportSnapshot(),
-    getRestaurants(),
+    getLocations(),
     getShifts(),
     getAuditLog(),
     getCascades(),
@@ -34,7 +34,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     return (
       <main className="section">
         <div className="page-head">
-          <h1>Restaurant dashboard</h1>
+          <h1>Operations dashboard</h1>
           <p>Support-layer visibility for Native Lite operators.</p>
         </div>
         <EmptyState
@@ -49,11 +49,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     <main className="section">
       <div className="page-head">
         <span className="eyebrow">Native Lite</span>
-        <h1>Restaurant dashboard</h1>
-        <p>Active vacancies, cascade status, roster visibility, and recent operations.</p>
+        <h1>Operations dashboard</h1>
+        <p>Active vacancies, cascade status, roster visibility, and recent operations by location.</p>
       </div>
       <div className="stat-grid">
-        <StatCard label="Restaurants" value={summary.restaurants} />
+        <StatCard label="Locations" value={summary.locations} />
         <StatCard label="Workers" value={summary.workers} />
         <StatCard label="Vacant shifts" value={summary.shifts_vacant} />
         <StatCard label="Active cascades" value={summary.cascades_active} />
@@ -159,8 +159,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       <section className="section">
         <div className="two-up">
           <div className="panel">
-            <h3>Restaurants</h3>
-            {restaurants.length ? (
+            <h3>Locations</h3>
+            <p className="muted">Current account records and sync state for each customer location.</p>
+            {locations.length ? (
               <table>
                 <thead>
                   <tr>
@@ -171,34 +172,35 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   </tr>
                 </thead>
                 <tbody>
-                  {restaurants.slice(0, 8).map((restaurant) => (
-                    <tr key={restaurant.id}>
+                  {locations.slice(0, 8).map((location) => (
+                    <tr key={location.id}>
                       <td>
-                        <Link className="text-link" href={`/dashboard/restaurants/${restaurant.id}`}>
-                          {restaurant.name}
+                        <Link className="text-link" href={`/dashboard/locations/${location.id}`}>
+                          {location.name}
                         </Link>
                         <div className="table-meta">
-                          <div>{restaurant.manager_name ?? "Unassigned manager"}</div>
+                          <div>{location.manager_name ?? "Unassigned primary contact"}</div>
+                          <div>{location.vertical ?? "unspecified"}</div>
                         </div>
                       </td>
-                      <td>{restaurant.scheduling_platform ?? "backfill_native"}</td>
+                      <td>{location.scheduling_platform ?? "backfill_native"}</td>
                       <td>
-                          <span className="pill">{restaurant.integration_state ?? restaurant.integration_status ?? "not_started"}</span>
+                          <span className="pill">{location.integration_state ?? location.integration_status ?? "not_started"}</span>
                         <div className="table-meta">
-                          <div>Roster: {restaurant.last_roster_sync_status ?? "never"}</div>
-                          <div>Schedule: {restaurant.last_schedule_sync_status ?? "never"}</div>
-                          <div>Event reconcile: {restaurant.last_event_sync_at ?? "never"}</div>
-                          <div>Write-back: {restaurant.writeback_enabled ? "enabled" : "core read-only"}</div>
-                          {restaurant.last_sync_error ? <div>Error: {restaurant.last_sync_error}</div> : null}
+                          <div>Roster: {location.last_roster_sync_status ?? "never"}</div>
+                          <div>Schedule: {location.last_schedule_sync_status ?? "never"}</div>
+                          <div>Event reconcile: {location.last_event_sync_at ?? "never"}</div>
+                          <div>Write-back: {location.writeback_enabled ? "enabled" : "core read-only"}</div>
+                          {location.last_sync_error ? <div>Error: {location.last_sync_error}</div> : null}
                         </div>
                       </td>
                       <td>
                         <div className="action-stack">
-                          <Link className="button-secondary button-small" href={`/dashboard/restaurants/${restaurant.id}`}>
+                          <Link className="button-secondary button-small" href={`/dashboard/locations/${location.id}`}>
                             View details
                           </Link>
                           <span className="muted">
-                            {restaurant.scheduling_platform === "backfill_native"
+                            {location.scheduling_platform === "backfill_native"
                               ? "Native Lite only"
                               : "Auto-sync + queued reconcile"}
                           </span>
@@ -209,7 +211,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </tbody>
               </table>
             ) : (
-              <EmptyState title="No restaurants" body="Add a restaurant in Native Lite to begin using the dashboard." />
+              <EmptyState title="No locations" body="Add a customer location in Native Lite to begin using the dashboard." />
             )}
           </div>
 

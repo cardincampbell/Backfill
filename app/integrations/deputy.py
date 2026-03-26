@@ -16,7 +16,7 @@ class DeputyAdapter(SchedulingAdapter):
     """
     Full read+write integration with Deputy.
 
-    Each restaurant has its own Deputy installation URL (install_url).
+    Each location has its own Deputy installation URL (install_url).
     access_token is fetched via OAuth and cached until expiry.
 
     Roster sync   → GET /api/v1/resource/Employee
@@ -28,7 +28,7 @@ class DeputyAdapter(SchedulingAdapter):
     def __init__(self, client_id: str, client_secret: str, install_url: str):
         """
         client_id / client_secret: from DEPUTY_CLIENT_ID / DEPUTY_CLIENT_SECRET
-        install_url: per-restaurant Deputy installation (e.g. https://myco.na.deputy.com)
+        install_url: per-location Deputy installation (e.g. https://myco.na.deputy.com)
         """
         self.client_id = client_id
         self.client_secret = client_secret
@@ -56,7 +56,7 @@ class DeputyAdapter(SchedulingAdapter):
         token = await self._get_token()
         return {"Authorization": f"OAuth {token}", "Content-Type": "application/json"}
 
-    async def sync_roster(self, restaurant_id: int) -> list[dict]:
+    async def sync_roster(self, location_id: int) -> list[dict]:
         """Fetch all active employees from Deputy."""
         headers = await self._headers()
         async with httpx.AsyncClient() as client:
@@ -76,14 +76,14 @@ class DeputyAdapter(SchedulingAdapter):
                 "email": emp.get("Email"),
                 "source_id": str(emp.get("Id") or emp.get("id") or ""),
                 "roles": [emp["Role"]] if emp.get("Role") else [],
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "source": "deputy",
                 "sms_consent_status": "pending",
                 "voice_consent_status": "pending",
             })
         return workers
 
-    async def sync_schedule(self, restaurant_id: int, date_range: tuple) -> list[dict]:
+    async def sync_schedule(self, location_id: int, date_range: tuple) -> list[dict]:
         """Fetch roster entries (scheduled shifts) from Deputy."""
         start, end = date_range
         headers = await self._headers()
@@ -98,7 +98,7 @@ class DeputyAdapter(SchedulingAdapter):
         for r in resp.json():
             date_str = (r.get("Date") or "")[:10]
             shifts.append({
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "scheduling_platform_id": str(r.get("Id") or r.get("id") or ""),
                 "role": r.get("OperationalUnitName", "unknown"),
                 "date": date_str,

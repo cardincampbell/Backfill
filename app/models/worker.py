@@ -34,9 +34,9 @@ class WorkerCreate(BaseModel):
     roles: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     priority_rank: int = Field(default=1, ge=1, description="Lower = higher priority")
-    restaurant_id: Optional[int] = None
-    restaurant_assignments: list[dict] = Field(default_factory=list)
-    restaurants_worked: list[int] = Field(default_factory=list)
+    location_id: Optional[int] = None
+    location_assignments: list[dict] = Field(default_factory=list)
+    locations_worked: list[int] = Field(default_factory=list)
     source: WorkerSource = WorkerSource.csv_import
 
     # Consent — collected and logged from day one (TCPA / FCC 2024)

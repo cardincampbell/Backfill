@@ -1,6 +1,6 @@
 """
 REST API routes for Backfill Native Lite.
-Covers CRUD for restaurants, workers, and shifts, plus the backfill trigger.
+Covers CRUD for customer locations, workers, and shifts, plus the backfill trigger.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import aiosqlite
 
 from app.db.database import get_db
 from app.db import queries
-from app.models.restaurant import Restaurant, RestaurantCreate
+from app.models.location import Location, LocationCreate
 from app.models.worker import Worker, WorkerCreate
 from app.models.shift import Shift, ShiftCreate
 from app.models.cascade import Cascade
@@ -40,8 +40,9 @@ class BackfillResponse(BaseModel):
     message: str
 
 
-class RestaurantUpdate(BaseModel):
+class LocationUpdate(BaseModel):
     name: Optional[str] = None
+    vertical: Optional[str] = None
     address: Optional[str] = None
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = None
@@ -76,9 +77,9 @@ class WorkerUpdate(BaseModel):
     roles: Optional[list[str]] = None
     certifications: Optional[list[str]] = None
     priority_rank: Optional[int] = None
-    restaurant_id: Optional[int] = None
-    restaurant_assignments: Optional[list[dict]] = None
-    restaurants_worked: Optional[list[int]] = None
+    location_id: Optional[int] = None
+    location_assignments: Optional[list[dict]] = None
+    locations_worked: Optional[list[int]] = None
     source: Optional[str] = None
     sms_consent_status: Optional[str] = None
     voice_consent_status: Optional[str] = None
@@ -89,7 +90,7 @@ class WorkerUpdate(BaseModel):
 
 
 class ShiftUpdate(BaseModel):
-    restaurant_id: Optional[int] = None
+    location_id: Optional[int] = None
     scheduling_platform_id: Optional[str] = None
     role: Optional[str] = None
     date: Optional[date] = None
@@ -105,7 +106,7 @@ class ShiftUpdate(BaseModel):
 
 
 class ManagerShiftCreate(BaseModel):
-    restaurant_id: int
+    location_id: Optional[int] = None
     role: str
     date: date
     start_time: time
@@ -117,14 +118,14 @@ class ManagerShiftCreate(BaseModel):
 
 class ShiftStatusResponse(BaseModel):
     shift: dict
-    restaurant: Optional[dict] = None
+    location: Optional[dict] = None
     cascade: Optional[dict] = None
     filled_worker: Optional[dict] = None
     outreach_attempts: list[dict]
 
 
-class RestaurantStatusResponse(BaseModel):
-    restaurant: dict
+class LocationStatusResponse(BaseModel):
+    location: dict
     integration: dict
     metrics: dict
     worker_preview: list[dict]
@@ -147,109 +148,113 @@ class OnboardingLinkResponse(BaseModel):
     url: str
     message_sid: Optional[str] = None
 
-
-# ── restaurants ───────────────────────────────────────────────────────────────
-
-@router.post("/restaurants", response_model=Restaurant, status_code=201)
-async def create_restaurant(
-    body: RestaurantCreate, db: aiosqlite.Connection = Depends(get_db)
+@router.post("/locations", response_model=Location, status_code=201)
+async def create_location(
+    body: LocationCreate, db: aiosqlite.Connection = Depends(get_db)
 ):
     data = body.model_dump(mode="json")
-    rid = await queries.insert_restaurant(db, data)
-    await audit_svc.append(db, AuditAction.restaurant_created, entity_type="restaurant", entity_id=rid)
-    return {**data, "id": rid}
+    location_id = await queries.insert_location(db, data)
+    await audit_svc.append(
+        db,
+        AuditAction.location_created,
+        entity_type="location",
+        entity_id=location_id,
+    )
+    return {**data, "id": location_id}
 
 
-@router.get("/restaurants", response_model=List[Restaurant])
-async def list_restaurants(db: aiosqlite.Connection = Depends(get_db)):
-    return await queries.list_restaurants(db)
+@router.get("/locations", response_model=List[Location])
+async def list_locations(db: aiosqlite.Connection = Depends(get_db)):
+    return await queries.list_locations(db)
 
 
-@router.get("/restaurants/{restaurant_id}", response_model=Restaurant)
-async def get_restaurant(
-    restaurant_id: int, db: aiosqlite.Connection = Depends(get_db)
+@router.get("/locations/{location_id}", response_model=Location)
+async def get_location(
+    location_id: int, db: aiosqlite.Connection = Depends(get_db)
 ):
-    row = await queries.get_restaurant(db, restaurant_id)
+    row = await queries.get_location(db, location_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+        raise HTTPException(status_code=404, detail="Location not found")
     return row
 
 
-@router.get("/restaurants/{restaurant_id}/status", response_model=RestaurantStatusResponse)
-async def get_restaurant_status(
-    restaurant_id: int,
+@router.get("/locations/{location_id}/status", response_model=LocationStatusResponse)
+async def get_location_status(
+    location_id: int,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import scheduling as scheduling_svc
 
-    payload = await queries.get_restaurant_status(db, restaurant_id)
+    payload = await queries.get_location_status(db, location_id)
     if payload is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
-    payload["integration"] = await scheduling_svc.get_integration_health(db, restaurant_id)
+        raise HTTPException(status_code=404, detail="Location not found")
+    payload["integration"] = await scheduling_svc.get_integration_health(db, location_id)
     return payload
 
 
-@router.patch("/restaurants/{restaurant_id}", response_model=Restaurant)
-async def update_restaurant(
-    restaurant_id: int,
-    body: RestaurantUpdate,
+@router.patch("/locations/{location_id}", response_model=Location)
+async def update_location(
+    location_id: int,
+    body: LocationUpdate,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    row = await queries.get_restaurant(db, restaurant_id)
+    row = await queries.get_location(db, location_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
-    await queries.update_restaurant(db, restaurant_id, body.model_dump(mode="json", exclude_none=True))
-    return await queries.get_restaurant(db, restaurant_id)
+        raise HTTPException(status_code=404, detail="Location not found")
+    await queries.update_location(
+        db, location_id, body.model_dump(mode="json", exclude_none=True)
+    )
+    return await queries.get_location(db, location_id)
 
 
-@router.post("/restaurants/{restaurant_id}/sync-roster")
-async def sync_restaurant_roster(
-    restaurant_id: int,
+@router.post("/locations/{location_id}/sync-roster")
+async def sync_location_roster(
+    location_id: int,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import scheduling as scheduling_svc
 
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
     try:
-        return await scheduling_svc.sync_roster(db, restaurant_id)
+        return await scheduling_svc.sync_roster(db, location_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/restaurants/{restaurant_id}/sync-schedule")
-async def sync_restaurant_schedule(
-    restaurant_id: int,
+@router.post("/locations/{location_id}/sync-schedule")
+async def sync_location_schedule(
+    location_id: int,
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import scheduling as scheduling_svc
 
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
     effective_start = start_date or date.today()
     effective_end = end_date or (effective_start + timedelta(days=14))
     try:
-        return await scheduling_svc.sync_schedule(db, restaurant_id, effective_start, effective_end)
+        return await scheduling_svc.sync_schedule(db, location_id, effective_start, effective_end)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/restaurants/{restaurant_id}/connect-sync")
-async def connect_and_sync_restaurant(
-    restaurant_id: int,
+@router.post("/locations/{location_id}/connect-sync")
+async def connect_and_sync_location(
+    location_id: int,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import scheduling as scheduling_svc
 
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
     try:
-        return await scheduling_svc.connect_and_sync_restaurant(db, restaurant_id)
+        return await scheduling_svc.connect_and_sync_location(db, location_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -270,26 +275,30 @@ async def process_due_sync_jobs(
 
 @router.post("/internal/sync/rolling")
 async def queue_rolling_reconcile(
-    restaurant_id: Optional[int] = Query(default=None, ge=1),
+    location_id: Optional[int] = Query(default=None, ge=1),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import sync_engine
 
-    if restaurant_id is not None:
-        return await sync_engine.enqueue_rolling_reconcile(db, restaurant_id=restaurant_id)
-    return {"jobs": await sync_engine.enqueue_rolling_reconcile_for_due_restaurants(db)}
+    if location_id is not None:
+        return await sync_engine.enqueue_rolling_reconcile(
+            db, location_id=location_id
+        )
+    return {"jobs": await sync_engine.enqueue_rolling_reconcile_for_due_locations(db)}
 
 
 @router.post("/internal/sync/daily")
 async def queue_daily_reconcile(
-    restaurant_id: Optional[int] = Query(default=None, ge=1),
+    location_id: Optional[int] = Query(default=None, ge=1),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     from app.services import sync_engine
 
-    if restaurant_id is not None:
-        return await sync_engine.enqueue_daily_reconcile(db, restaurant_id=restaurant_id)
-    return {"jobs": await sync_engine.enqueue_daily_reconcile_for_due_restaurants(db)}
+    if location_id is not None:
+        return await sync_engine.enqueue_daily_reconcile(
+            db, location_id=location_id
+        )
+    return {"jobs": await sync_engine.enqueue_daily_reconcile_for_due_locations(db)}
 
 
 # ── workers ───────────────────────────────────────────────────────────────────
@@ -300,35 +309,44 @@ async def create_worker(
 ):
     data = body.model_dump(mode="json")
     wid = await queries.insert_worker(db, data)
-    await audit_svc.append(db, AuditAction.worker_created, entity_type="worker", entity_id=wid)
-    return {**data, "id": wid, "total_shifts_filled": 0}
+    await audit_svc.append(
+        db, AuditAction.worker_created, entity_type="worker", entity_id=wid
+    )
+    return {
+        **data,
+        "id": wid,
+        "total_shifts_filled": 0,
+    }
 
 
 @router.get("/workers", response_model=List[Worker])
 async def list_workers(
-    restaurant_id: Optional[int] = Query(default=None),
+    location_id: Optional[int] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    return await queries.list_workers(db, restaurant_id=restaurant_id)
+    return await queries.list_workers(db, location_id=location_id)
 
 
 @router.post("/workers/import-csv", status_code=201)
 async def import_workers_csv(
-    restaurant_id: int,
+    location_id: Optional[int] = Query(default=None),
     file: UploadFile = File(...),
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """
     Upload a CSV with columns: name, phone, role, priority_rank (optional).
-    Creates worker records for a restaurant — fastest onboarding path for
-    restaurants without scheduling software.
+    Creates worker records for a customer location — fastest onboarding path
+    for operators without scheduling software.
     """
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a .csv")
 
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if location_id is None:
+        raise HTTPException(status_code=400, detail="location_id is required")
+
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
 
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
@@ -357,7 +375,7 @@ async def import_workers_csv(
             "phone": phone,
             "roles": [role] if role else [],
             "priority_rank": priority,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "source": "csv_import",
         })
         created.append({"id": wid, "name": name, "phone": phone})
@@ -372,10 +390,10 @@ async def import_workers_csv(
 
 @router.get("/exports/workers")
 async def export_workers_csv(
-    restaurant_id: Optional[int] = Query(default=None),
+    location_id: Optional[int] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    workers = await queries.list_workers(db, restaurant_id=restaurant_id)
+    workers = await queries.list_workers(db, location_id=location_id)
     output = io.StringIO()
     writer = csv.DictWriter(
         output,
@@ -389,7 +407,7 @@ async def export_workers_csv(
             "roles",
             "certifications",
             "priority_rank",
-            "restaurant_id",
+            "location_id",
             "sms_consent_status",
             "voice_consent_status",
         ],
@@ -430,8 +448,12 @@ async def update_worker(
     row = await queries.get_worker(db, worker_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Worker not found")
-    await queries.update_worker(db, worker_id, body.model_dump(mode="json", exclude_none=True))
-    return await queries.get_worker(db, worker_id)
+    data = body.model_dump(mode="json", exclude_none=True)
+    await queries.update_worker(db, worker_id, data)
+    updated = await queries.get_worker(db, worker_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    return updated
 
 
 # ── shifts ────────────────────────────────────────────────────────────────────
@@ -442,16 +464,22 @@ async def create_shift(
 ):
     data = body.model_dump(mode="json")
     sid = await queries.insert_shift(db, data)
-    return {**data, "id": sid, "called_out_by": None, "filled_by": None, "fill_tier": None}
+    return {
+        **data,
+        "id": sid,
+        "called_out_by": None,
+        "filled_by": None,
+        "fill_tier": None,
+    }
 
 
 @router.get("/shifts", response_model=List[Shift])
 async def list_shifts(
-    restaurant_id: Optional[int] = Query(default=None),
+    location_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    return await queries.list_shifts(db, restaurant_id=restaurant_id, status=status)
+    return await queries.list_shifts(db, location_id=location_id, status=status)
 
 
 @router.post("/manager/shifts", response_model=Shift, status_code=201)
@@ -459,10 +487,14 @@ async def manager_create_shift(
     body: ManagerShiftCreate,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    restaurant = await queries.get_restaurant(db, body.restaurant_id)
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
     data = body.model_dump(mode="json")
+    location_id = data.get("location_id")
+    if location_id is None:
+        raise HTTPException(status_code=400, detail="location_id is required")
+
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
     start_backfill = data.pop("start_backfill", True)
     data["status"] = "vacant" if start_backfill else "scheduled"
     data["source_platform"] = "backfill_native"
@@ -472,25 +504,28 @@ async def manager_create_shift(
             db,
             shift_id=shift_id,
             called_out_by_worker_id=None,
-            actor=f"manager:{body.restaurant_id}",
+            actor=f"manager:{location_id}",
         )
         await cascade_svc.advance(db, cascade["id"])
-    return await queries.get_shift(db, shift_id)
+    shift = await queries.get_shift(db, shift_id)
+    if shift is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    return shift
 
 
 @router.get("/exports/shifts")
 async def export_shifts_csv(
-    restaurant_id: Optional[int] = Query(default=None),
+    location_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    shifts = await queries.list_shifts(db, restaurant_id=restaurant_id, status=status)
+    shifts = await queries.list_shifts(db, location_id=location_id, status=status)
     output = io.StringIO()
     writer = csv.DictWriter(
         output,
         fieldnames=[
             "id",
-            "restaurant_id",
+            "location_id",
             "role",
             "date",
             "start_time",
@@ -539,8 +574,12 @@ async def update_shift(
     row = await queries.get_shift(db, shift_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Shift not found")
-    await queries.update_shift(db, shift_id, body.model_dump(mode="json", exclude_none=True))
-    return await queries.get_shift(db, shift_id)
+    data = body.model_dump(mode="json", exclude_none=True)
+    await queries.update_shift(db, shift_id, data)
+    updated = await queries.get_shift(db, shift_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    return updated
 
 
 @router.get("/shifts/{shift_id}/status", response_model=ShiftStatusResponse)
@@ -635,11 +674,11 @@ async def approve_tier3(
     shift = await queries.get_shift(db, cascade["shift_id"])
     if shift is None:
         raise HTTPException(status_code=404, detail="Shift not found")
-    restaurant = await queries.get_restaurant(db, shift["restaurant_id"])
-    if restaurant is None:
-        raise HTTPException(status_code=404, detail="Restaurant not found")
-    if not restaurant.get("agency_supply_approved"):
-        raise HTTPException(status_code=400, detail="Restaurant is not approved for agency supply")
+    location = await queries.get_location(db, shift["location_id"])
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    if not location.get("agency_supply_approved"):
+        raise HTTPException(status_code=400, detail="Location is not approved for agency supply")
 
     await queries.update_cascade(
         db,
@@ -664,10 +703,10 @@ async def list_audit_log(
 
 @router.get("/dashboard")
 async def dashboard_summary(
-    restaurant_id: Optional[int] = Query(default=None),
+    location_id: Optional[int] = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    return await queries.get_dashboard_summary(db, restaurant_id=restaurant_id)
+    return await queries.get_dashboard_summary(db, location_id=location_id)
 
 
 @router.post("/onboarding/link", response_model=OnboardingLinkResponse)
@@ -712,8 +751,8 @@ async def send_shift_reminders(
             continue
         if worker.get("sms_consent_status") != "granted":
             continue
-        restaurant = await queries.get_restaurant(db, shift["restaurant_id"]) if shift.get("restaurant_id") else None
-        message = build_reminder_sms(worker, shift, restaurant)
+        location = await queries.get_location(db, shift["location_id"]) if shift.get("location_id") else None
+        message = build_reminder_sms(worker, shift, location)
         send_sms(worker["phone"], message)
         await queries.mark_reminder_sent(db, shift["id"])
         await audit_svc.append(

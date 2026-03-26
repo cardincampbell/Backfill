@@ -6,7 +6,7 @@ import pytest
 from app.db.queries import (
     get_cascade,
     get_shift,
-    insert_restaurant,
+    insert_location,
     insert_shift,
     insert_worker,
 )
@@ -14,8 +14,8 @@ from app.services import cascade as cascade_svc
 from app.services.shift_manager import create_vacancy
 
 
-async def _seed_restaurant(db):
-    return await insert_restaurant(
+async def _seed_location(db):
+    return await insert_location(
         db,
         {
             "name": "Taco Spot",
@@ -23,14 +23,14 @@ async def _seed_restaurant(db):
             "manager_phone": "+13105550100",
             "scheduling_platform": "backfill_native",
         },
-    )
+)
 
 
-def _shift_payload(restaurant_id: int, start_delta_hours: int, role: str = "line_cook"):
+def _shift_payload(location_id: int, start_delta_hours: int, role: str = "line_cook"):
     start = datetime.utcnow() + timedelta(hours=start_delta_hours)
     end = start + timedelta(hours=8)
     return {
-        "restaurant_id": restaurant_id,
+        "location_id": location_id,
         "role": role,
         "date": start.date().isoformat(),
         "start_time": start.strftime("%H:%M:%S"),
@@ -44,7 +44,7 @@ def _shift_payload(restaurant_id: int, start_delta_hours: int, role: str = "line
 
 @pytest.mark.asyncio
 async def test_cascade_reaches_best_eligible_worker_and_excludes_called_out_worker(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -53,7 +53,7 @@ async def test_cascade_reaches_best_eligible_worker_and_excludes_called_out_work
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -66,7 +66,7 @@ async def test_cascade_reaches_best_eligible_worker_and_excludes_called_out_work
             "roles": ["server"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -79,15 +79,15 @@ async def test_cascade_reaches_best_eligible_worker_and_excludes_called_out_work
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 3,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=12))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=12))
 
     sent_messages = []
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: sent_messages.append((to, body)) or "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: sent_messages.append((to, body, metadata)) or "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
@@ -100,7 +100,7 @@ async def test_cascade_reaches_best_eligible_worker_and_excludes_called_out_work
 
 @pytest.mark.asyncio
 async def test_urgent_shift_uses_sms_and_voice(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -109,7 +109,7 @@ async def test_urgent_shift_uses_sms_and_voice(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -122,17 +122,17 @@ async def test_urgent_shift_uses_sms_and_voice(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
             "preferred_channel": "both",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=1))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=1))
 
     sent_messages = []
     voice_calls = []
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: sent_messages.append((to, body)) or "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: sent_messages.append((to, body, metadata)) or "SM123")
     async def _fake_call(*, to_number, metadata, agent_id=None):
         voice_calls.append((to_number, metadata))
         return "CA123"
@@ -148,7 +148,7 @@ async def test_urgent_shift_uses_sms_and_voice(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -157,7 +157,7 @@ async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -170,7 +170,7 @@ async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -183,14 +183,14 @@ async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 3,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=1))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=1))
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
 
     async def _fake_call(*, to_number, metadata, agent_id=None):
         return "CA123"
@@ -220,7 +220,7 @@ async def test_broadcast_claim_confirms_first_yes_and_puts_second_yes_on_standby
 
 @pytest.mark.asyncio
 async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -229,7 +229,7 @@ async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -242,7 +242,7 @@ async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -255,14 +255,14 @@ async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 3,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=1))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=1))
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
 
     async def _fake_call(*, to_number, metadata, agent_id=None):
         return "CA123"
@@ -283,7 +283,7 @@ async def test_cancel_standby_removes_worker_from_queue(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cascade_exhausted_when_no_eligible_workers_and_manager_notified(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -292,12 +292,12 @@ async def test_cascade_exhausted_when_no_eligible_workers_and_manager_notified(d
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=8))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=8))
 
     notifications = []
     def _fake_exhausted(**kwargs):
@@ -316,7 +316,7 @@ async def test_cascade_exhausted_when_no_eligible_workers_and_manager_notified(d
 
 @pytest.mark.asyncio
 async def test_record_acceptance_marks_shift_filled(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -325,7 +325,7 @@ async def test_record_acceptance_marks_shift_filled(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -338,14 +338,14 @@ async def test_record_acceptance_marks_shift_filled(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=8))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=8))
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
@@ -360,7 +360,7 @@ async def test_record_acceptance_marks_shift_filled(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_vacancy_is_idempotent(db):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -369,12 +369,12 @@ async def test_create_vacancy_is_idempotent(db):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=8))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=8))
 
     cascade_one = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
     cascade_two = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
@@ -384,7 +384,7 @@ async def test_create_vacancy_is_idempotent(db):
 
 @pytest.mark.asyncio
 async def test_tier2_alumni_is_used_after_tier1_exhausts(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -393,7 +393,7 @@ async def test_tier2_alumni_is_used_after_tier1_exhausts(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -407,8 +407,8 @@ async def test_tier2_alumni_is_used_after_tier1_exhausts(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 10,
-            "restaurant_id": restaurant_id,
-            "restaurants_worked": [restaurant_id],
+            "location_id": location_id,
+            "locations_worked": [location_id],
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
             "show_up_rate": 0.99,
@@ -418,10 +418,10 @@ async def test_tier2_alumni_is_used_after_tier1_exhausts(db, monkeypatch):
             "total_shifts_filled": 7,
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=12))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=12))
 
     sent_messages = []
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: sent_messages.append((to, body)) or "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: sent_messages.append((to, body, metadata)) or "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")
@@ -435,7 +435,7 @@ async def test_tier2_alumni_is_used_after_tier1_exhausts(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_tier2_acceptance_marks_shift_filled_as_alumni(db, monkeypatch):
-    restaurant_id = await _seed_restaurant(db)
+    location_id = await _seed_location(db)
     caller_id = await insert_worker(
         db,
         {
@@ -444,7 +444,7 @@ async def test_tier2_acceptance_marks_shift_filled_as_alumni(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -458,16 +458,16 @@ async def test_tier2_acceptance_marks_shift_filled_as_alumni(db, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 10,
-            "restaurant_id": restaurant_id,
-            "restaurants_worked": [restaurant_id],
+            "location_id": location_id,
+            "locations_worked": [location_id],
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
             "show_up_rate": 0.99,
         },
     )
-    shift_id = await insert_shift(db, _shift_payload(restaurant_id, start_delta_hours=12))
+    shift_id = await insert_shift(db, _shift_payload(location_id, start_delta_hours=12))
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     cascade = await create_vacancy(db, shift_id, caller_id, actor=f"worker:{caller_id}")

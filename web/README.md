@@ -19,7 +19,7 @@ uploads, worker follow-up, and operations visibility.
 
 - `/setup/connect` for scheduler connection paths
 - `/setup/upload` for CSV roster upload
-- `/setup/add` for manual restaurant/team entry
+- `/setup/add` for manual location/team entry
 - `/join` for worker follow-up after consent capture
 - `/dashboard` for Native Lite operations visibility
 

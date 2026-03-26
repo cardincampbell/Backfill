@@ -2,7 +2,7 @@
 Agency partner routing.
 
 This is the Tier 3 fallback once internal staff and alumni are exhausted and
-the restaurant has approved external supply.
+the location has approved external supply.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import aiosqlite
 
 from app.db.queries import (
-    get_restaurant,
+    get_location,
     get_shift,
     insert_agency_request,
     list_agency_requests,
@@ -21,7 +21,7 @@ from app.services import audit as audit_svc
 from app.services.messaging import send_sms
 
 
-def _match_score(shift: dict, restaurant: dict, partner: dict) -> tuple:
+def _match_score(shift: dict, location: dict, partner: dict) -> tuple:
     required_certs = set(shift.get("requirements") or [])
     supported_certs = set(partner.get("certifications_supported") or [])
     cert_match = 1 if required_certs.issubset(supported_certs) else 0
@@ -29,10 +29,10 @@ def _match_score(shift: dict, restaurant: dict, partner: dict) -> tuple:
     supported_roles = set(partner.get("roles_supported") or [])
     role_match = 1 if shift["role"] in supported_roles else 0
 
-    address = (restaurant.get("address") or "").lower()
+    address = (location.get("address") or "").lower()
     coverage_match = 1 if any(area.lower() in address for area in partner.get("coverage_areas") or []) else 0
 
-    preferred_partners = set(restaurant.get("preferred_agency_partners") or [])
+    preferred_partners = set(location.get("preferred_agency_partners") or [])
     preferred = 1 if partner["id"] in preferred_partners else 0
     priority_sla = 1 if partner.get("sla_tier") == "priority" else 0
     fill_rate = float(partner.get("fill_rate") or 0)
@@ -49,11 +49,11 @@ def _match_score(shift: dict, restaurant: dict, partner: dict) -> tuple:
     )
 
 
-def _build_request_message(shift: dict, restaurant: dict) -> str:
+def _build_request_message(shift: dict, location: dict) -> str:
     requirements = ", ".join(shift.get("requirements") or []) or "none"
-    notes = restaurant.get("onboarding_info") or "none"
+    notes = location.get("onboarding_info") or "none"
     return (
-        f"Backfill request for {restaurant['name']}: "
+        f"Backfill request for {location['name']}: "
         f"{shift['role']} on {shift['date']} {shift['start_time']}-{shift['end_time']} "
         f"@ ${shift['pay_rate']}/hr. Requirements: {requirements}. "
         f"Notes: {notes}. Reply with accepted / declined / unavailable."
@@ -82,14 +82,14 @@ async def route_to_agencies(
     shift = await get_shift(db, shift_id)
     if shift is None:
         raise ValueError(f"Shift {shift_id} not found")
-    restaurant = await get_restaurant(db, shift["restaurant_id"])
-    if restaurant is None:
-        raise ValueError(f"Restaurant {shift['restaurant_id']} not found")
+    location = await get_location(db, shift["location_id"])
+    if location is None:
+        raise ValueError(f"Location {shift['location_id']} not found")
 
     partners = await list_agency_partners(db)
-    ranked = sorted(partners, key=lambda partner: _match_score(shift, restaurant, partner), reverse=True)
+    ranked = sorted(partners, key=lambda partner: _match_score(shift, location, partner), reverse=True)
 
-    body = _build_request_message(shift, restaurant)
+    body = _build_request_message(shift, location)
     requests: list[dict] = []
     for partner in ranked[:3]:
         deadline = datetime.utcnow() + timedelta(minutes=int(partner.get("avg_response_time_minutes") or 30))

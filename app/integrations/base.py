@@ -10,12 +10,12 @@ from abc import ABC, abstractmethod
 class SchedulingAdapter(ABC):
 
     @abstractmethod
-    async def sync_roster(self, restaurant_id: int) -> list[dict]:
+    async def sync_roster(self, location_id: int) -> list[dict]:
         """Return a list of worker dicts from the external platform."""
         ...
 
     @abstractmethod
-    async def sync_schedule(self, restaurant_id: int, date_range: tuple) -> list[dict]:
+    async def sync_schedule(self, location_id: int, date_range: tuple) -> list[dict]:
         """Return a list of shift dicts from the external platform."""
         ...
 

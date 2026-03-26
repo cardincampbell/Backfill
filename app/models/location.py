@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SchedulingPlatform(str, Enum):
@@ -13,8 +14,18 @@ class SchedulingPlatform(str, Enum):
     backfill_native = "backfill_native"
 
 
-class RestaurantCreate(BaseModel):
+class BusinessVertical(str, Enum):
+    restaurant = "restaurant"
+    healthcare = "healthcare"
+    warehouse = "warehouse"
+    retail = "retail"
+    hospitality = "hospitality"
+    other = "other"
+
+
+class LocationCreate(BaseModel):
     name: str
+    vertical: BusinessVertical = BusinessVertical.restaurant
     address: Optional[str] = None
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = Field(None, description="E.164 format")
@@ -38,13 +49,21 @@ class RestaurantCreate(BaseModel):
     writeback_enabled: bool = False
     writeback_subscription_tier: str = "core"
     onboarding_info: Optional[str] = Field(
-        None, description="Parking, dress code, who to report to, etc."
+        None, description="Site notes, arrival instructions, dress code, who to report to, etc."
     )
     agency_supply_approved: bool = False
     preferred_agency_partners: list[int] = Field(default_factory=list)
 
 
-class Restaurant(RestaurantCreate):
+class Location(LocationCreate):
     id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+__all__ = [
+    "BusinessVertical",
+    "SchedulingPlatform",
+    "LocationCreate",
+    "Location",
+]

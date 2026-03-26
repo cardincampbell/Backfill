@@ -8,13 +8,13 @@ export default function JoinPage() {
         <h1>Finish the details after consent is captured.</h1>
         <p>
           1-800-BACKFILL handles intent and action. This page handles the structured details that are easier
-          with a screen: certifications, preferences, and confirmed shift history.
+          with a screen: certifications, preferences, work areas, and confirmed shift history.
         </p>
       </div>
 
       <div className="three-up">
         <SectionCard title="1. Confirm profile">
-          <p>Name, phone, roles, work area, and preferred response channel.</p>
+          <p>Name, phone, roles, work area, location preferences, and preferred response channel.</p>
         </SectionCard>
         <SectionCard title="2. Add credentials">
           <p>Food handler, ServSafe, TIPS, and any role-specific certifications used for matching.</p>

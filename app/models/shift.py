@@ -30,7 +30,7 @@ class SourcePlatform(str, Enum):
 
 
 class ShiftCreate(BaseModel):
-    restaurant_id: Optional[int] = None
+    location_id: Optional[int] = None
     scheduling_platform_id: Optional[str] = None
     role: str
     date: date

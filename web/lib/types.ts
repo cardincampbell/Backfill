@@ -1,6 +1,7 @@
-export type Restaurant = {
+export type Location = {
   id: number;
   name: string;
+  vertical?: string | null;
   address?: string | null;
   manager_name?: string | null;
   manager_phone?: string | null;
@@ -35,7 +36,9 @@ export type Worker = {
   worker_type: string;
   preferred_channel: string;
   priority_rank: number;
-  restaurant_id?: number | null;
+  location_id?: number | null;
+  location_assignments?: Array<Record<string, unknown>>;
+  locations_worked?: number[];
   source?: string | null;
   source_id?: string | null;
   sms_consent_status: string;
@@ -49,7 +52,7 @@ export type Worker = {
 
 export type Shift = {
   id: number;
-  restaurant_id: number;
+  location_id?: number | null;
   role: string;
   date: string;
   start_time: string;
@@ -102,8 +105,8 @@ export type AuditLog = {
 };
 
 export type DashboardSummary = {
-  restaurant_id?: number | null;
-  restaurants: number;
+  location_id?: number | null;
+  locations: number;
   workers: number;
   shifts_total: number;
   shifts_vacant: number;
@@ -116,7 +119,7 @@ export type DashboardSummary = {
 };
 
 export type IntegrationHealth = {
-  restaurant_id: number;
+  location_id: number;
   platform: string;
   mode: string;
   writable: boolean;
@@ -141,7 +144,7 @@ export type IntegrationHealth = {
 export type SyncJob = {
   id: number;
   platform: string;
-  restaurant_id?: number | null;
+  location_id?: number | null;
   integration_event_id?: number | null;
   job_type: string;
   priority: number;
@@ -159,8 +162,8 @@ export type SyncJob = {
   idempotency_key?: string | null;
 };
 
-export type RestaurantStatusResponse = {
-  restaurant: Restaurant;
+export type LocationStatusResponse = {
+  location: Location;
   integration: IntegrationHealth;
   metrics: {
     workers_total: number;
@@ -194,7 +197,7 @@ export type RestaurantStatusResponse = {
 
 export type ShiftStatusResponse = {
   shift: Shift;
-  restaurant?: Restaurant | null;
+  location?: Location | null;
   cascade?: Cascade | null;
   filled_worker?: Worker | null;
   outreach_attempts: OutreachAttempt[];

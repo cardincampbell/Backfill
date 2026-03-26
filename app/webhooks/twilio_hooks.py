@@ -158,7 +158,7 @@ async def _find_latest_manager_cascade(db: aiosqlite.Connection, phone: str):
         """SELECT c.id AS cascade_id, s.id AS shift_id
            FROM cascades c
            JOIN shifts s ON s.id = c.shift_id
-           JOIN restaurants r ON r.id = s.restaurant_id
+           JOIN locations r ON r.id = s.location_id
            WHERE r.manager_phone=? AND c.status='active'
            ORDER BY c.id DESC
            LIMIT 1""",

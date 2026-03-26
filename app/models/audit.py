@@ -23,7 +23,7 @@ class AuditAction(str, Enum):
     agency_request_declined = "agency_request_declined"
     manager_notified = "manager_notified"
     worker_created = "worker_created"
-    restaurant_created = "restaurant_created"
+    location_created = "location_created"
     caller_lookup = "caller_lookup"
 
 

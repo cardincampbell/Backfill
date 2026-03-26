@@ -4,17 +4,18 @@ Register Retell AI agents with their function call schemas.
 
 Run once (or re-run to update) after setting RETELL_API_KEY in .env:
 
-    python scripts/setup_retell_agents.py
+    python3 scripts/setup_retell_agents.py
 
 Creates two agents:
   1. inbound_callout  — workers calling 1-800-BACKFILL to report absences
   2. outbound_t1t2    — AI calling workers to offer open shifts
+  3. sms_chat         — AI texting workers and managers on the same number
 
 Agent IDs are printed to stdout. Copy them into your .env:
   RETELL_AGENT_ID_INBOUND=<id>
   RETELL_AGENT_ID_OUTBOUND=<id>
+  RETELL_CHAT_AGENT_ID=<id>
 """
-import asyncio
 import os
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
+import httpx
 from retell import Retell  # type: ignore
 
 RETELL_API_KEY = os.environ.get("RETELL_API_KEY", "")
@@ -189,41 +191,14 @@ FUNCTION_SCHEMAS = [
         },
     },
     {
-        "name": "confirm_fill",
-        "description": "Backward-compatible alias for older agent configs. Prefer claim_shift or decline_shift for new agents.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active cascade for this shift.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who was offered the shift.",
-                },
-                "accepted": {
-                    "type": "boolean",
-                    "description": "True if the worker accepted, False if declined.",
-                },
-                "conversation_summary": {
-                    "type": "string",
-                    "description": "Brief summary of the conversation for the audit log.",
-                    "default": "",
-                },
-            },
-            "required": ["cascade_id", "worker_id", "accepted"],
-        },
-    },
-    {
         "name": "get_open_shifts",
-        "description": "Retrieve a list of currently open (vacant) shifts, optionally for a specific restaurant.",
+        "description": "Retrieve a list of currently open (vacant) shifts, optionally for a specific location.",
         "parameters": {
             "type": "object",
             "properties": {
-                "restaurant_id": {
+                "location_id": {
                     "type": "integer",
-                    "description": "Filter by restaurant ID (optional).",
+                    "description": "Filter by location ID (optional).",
                 }
             },
             "required": [],
@@ -249,13 +224,13 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "restaurant_id": {
+                "location_id": {
                     "type": "integer",
-                    "description": "ID of the restaurant that needs coverage.",
+                    "description": "ID of the location that needs coverage.",
                 },
                 "role": {
                     "type": "string",
-                    "description": "Role needed, e.g. 'line_cook', 'server', 'dishwasher'.",
+                    "description": "Role needed, e.g. 'line_cook', 'warehouse_picker', 'caregiver'.",
                 },
                 "date": {
                     "type": "string",
@@ -280,7 +255,7 @@ FUNCTION_SCHEMAS = [
                     "default": [],
                 },
             },
-            "required": ["restaurant_id", "role", "date", "start_time", "end_time", "pay_rate"],
+            "required": ["location_id", "role", "date", "start_time", "end_time", "pay_rate"],
         },
     },
     {
@@ -326,6 +301,25 @@ def _create_agent(client: Retell, name: str, prompt: str) -> dict:
     return agent
 
 
+def _create_chat_agent(client: Retell, name: str, prompt: str) -> dict:
+    payload = {
+        "response_engine": {
+            "type": "retell-llm",
+            "llm_id": _get_or_create_llm(client, name, prompt),
+        },
+        "agent_name": name,
+        "webhook_url": WEBHOOK_URL,
+    }
+    response = httpx.post(
+        "https://api.retellai.com/create-chat-agent",
+        headers={"Authorization": f"Bearer {RETELL_API_KEY}"},
+        json=payload,
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _get_or_create_llm(client: Retell, name: str, prompt: str) -> str:
     """Create a Retell LLM config with the given prompt and function schemas."""
     llm = client.llm.create(
@@ -365,10 +359,19 @@ def main():
     )
     print(f"  ✓ outbound agent_id: {outbound.agent_id}")
 
+    print("Creating SMS chat agent...")
+    sms_chat = _create_chat_agent(
+        client,
+        name="Backfill SMS Operations",
+        prompt=_load_prompt("sms_chat.txt"),
+    )
+    print(f"  ✓ sms chat agent_id: {sms_chat['agent_id']}")
+
     print()
     print("Add these to your .env:")
     print(f"  RETELL_AGENT_ID_INBOUND={inbound.agent_id}")
     print(f"  RETELL_AGENT_ID_OUTBOUND={outbound.agent_id}")
+    print(f"  RETELL_CHAT_AGENT_ID={sms_chat['agent_id']}")
 
 
 if __name__ == "__main__":

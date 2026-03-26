@@ -50,7 +50,7 @@ class SevenShiftsAdapter(SchedulingAdapter):
         token = await self._get_token()
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    async def sync_roster(self, restaurant_id: int) -> list[dict]:
+    async def sync_roster(self, location_id: int) -> list[dict]:
         """Pull employees from 7shifts and return normalized worker dicts."""
         headers = await self._headers()
         async with httpx.AsyncClient() as client:
@@ -68,14 +68,14 @@ class SevenShiftsAdapter(SchedulingAdapter):
                 "email": emp.get("email"),
                 "source_id": str(emp.get("id") or emp.get("user_id") or ""),
                 "roles": [emp["role"]] if emp.get("role") else [],
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "source": "7shifts",
                 "sms_consent_status": "pending",
                 "voice_consent_status": "pending",
             })
         return workers
 
-    async def sync_schedule(self, restaurant_id: int, date_range: tuple) -> list[dict]:
+    async def sync_schedule(self, location_id: int, date_range: tuple) -> list[dict]:
         """Pull shifts from 7shifts for a date window."""
         start, end = date_range
         headers = await self._headers()
@@ -89,7 +89,7 @@ class SevenShiftsAdapter(SchedulingAdapter):
         shifts = []
         for s in resp.json().get("data", []):
             shifts.append({
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "scheduling_platform_id": str(s.get("id") or s.get("shift_id") or ""),
                 "role": s.get("role_name", "unknown"),
                 "date": s.get("start", "")[:10],

@@ -42,7 +42,7 @@ class WhenIWorkAdapter(SchedulingAdapter):
             "Content-Type": "application/json",
         }
 
-    async def sync_roster(self, restaurant_id: int) -> list[dict]:
+    async def sync_roster(self, location_id: int) -> list[dict]:
         """Fetch all users (employees) from WIW."""
         async with httpx.AsyncClient() as client:
             resp = await client.get(
@@ -59,14 +59,14 @@ class WhenIWorkAdapter(SchedulingAdapter):
                 "email": u.get("email"),
                 "source_id": str(u.get("id") or u.get("user_id") or ""),
                 "roles": [u["role"]] if u.get("role") else [],
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "source": "wheniwork",
                 "sms_consent_status": "pending",
                 "voice_consent_status": "pending",
             })
         return workers
 
-    async def sync_schedule(self, restaurant_id: int, date_range: tuple) -> list[dict]:
+    async def sync_schedule(self, location_id: int, date_range: tuple) -> list[dict]:
         """Fetch scheduled shifts from WIW for a date window."""
         start, end = date_range
         async with httpx.AsyncClient() as client:
@@ -83,7 +83,7 @@ class WhenIWorkAdapter(SchedulingAdapter):
         shifts = []
         for s in resp.json().get("shifts", []):
             shifts.append({
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "scheduling_platform_id": str(s.get("id") or s.get("shift_id") or ""),
                 "role": s.get("position_name", "unknown"),
                 "date": (s.get("start_time") or "")[:10],

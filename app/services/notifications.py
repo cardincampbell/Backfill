@@ -1,5 +1,5 @@
 """
-Manager notification service.
+Location notification service.
 """
 from typing import Optional
 
@@ -54,7 +54,7 @@ async def fire_manager_notification(
     filled: bool,
 ) -> None:
     """Shared helper: notify manager of fill or exhaustion. Used by retell_hooks and twilio_hooks."""
-    from app.db.queries import get_cascade, get_shift, get_worker, get_restaurant
+    from app.db.queries import get_cascade, get_shift, get_worker, get_location
     from app.models.audit import AuditAction
     from app.services import audit as audit_svc
 
@@ -64,14 +64,14 @@ async def fire_manager_notification(
     shift = await get_shift(db, cascade["shift_id"])
     if not shift:
         return
-    restaurant = await get_restaurant(db, shift["restaurant_id"])
-    if not restaurant or not restaurant.get("manager_phone"):
+    location = await get_location(db, shift["location_id"])
+    if not location or not location.get("manager_phone"):
         return
 
     if filled:
         worker = await get_worker(db, worker_id)
         notify_shift_filled(
-            manager_phone=restaurant["manager_phone"],
+            manager_phone=location["manager_phone"],
             worker_name=worker["name"] if worker else "a worker",
             role=shift["role"],
             date=shift["date"],
@@ -80,7 +80,7 @@ async def fire_manager_notification(
         )
     else:
         notify_cascade_exhausted(
-            manager_phone=restaurant["manager_phone"],
+            manager_phone=location["manager_phone"],
             role=shift["role"],
             date=shift["date"],
             start_time=shift["start_time"],
@@ -91,5 +91,5 @@ async def fire_manager_notification(
         AuditAction.manager_notified,
         entity_type="shift",
         entity_id=shift["id"],
-        details={"filled": filled, "manager_phone": restaurant["manager_phone"]},
+        details={"filled": filled, "manager_phone": location["manager_phone"]},
     )

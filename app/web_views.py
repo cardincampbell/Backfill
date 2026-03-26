@@ -15,13 +15,13 @@ e = html_lib.escape  # short alias
 @router.get("/", response_class=HTMLResponse)
 async def home(db: aiosqlite.Connection = Depends(get_db)):
     summary = await queries.get_dashboard_summary(db)
-    restaurants = await queries.list_restaurants(db)
+    locations = await queries.list_locations(db)
     shifts = await queries.list_shifts(db)
     audits = await queries.list_audit_log(db, limit=10)
 
-    restaurant_rows = "".join(
+    location_rows = "".join(
         f"<tr><td>{r['id']}</td><td>{e(r['name'])}</td><td>{e(r.get('manager_name') or '')}</td><td>{e(r.get('scheduling_platform') or '')}</td></tr>"
-        for r in restaurants[:10]
+        for r in locations[:10]
     )
     shift_rows = "".join(
         f"<tr><td>{s['id']}</td><td>{e(s['role'])}</td><td>{e(str(s['date']))}</td><td>{e(s['status'])}</td><td>{e(s.get('fill_tier') or '')}</td></tr>"
@@ -51,14 +51,14 @@ async def home(db: aiosqlite.Connection = Depends(get_db)):
         <h1>Backfill Native Lite</h1>
         <p>Support-layer dashboard for roster, shifts, cascade status, and recent audit activity.</p>
         <div class="grid">
-          <div class="card"><strong>Restaurants</strong><div>{summary['restaurants']}</div></div>
+          <div class="card"><strong>Locations</strong><div>{summary['locations']}</div></div>
           <div class="card"><strong>Workers</strong><div>{summary['workers']}</div></div>
           <div class="card"><strong>Vacant Shifts</strong><div>{summary['shifts_vacant']}</div></div>
           <div class="card"><strong>Active Cascades</strong><div>{summary['cascades_active']}</div></div>
         </div>
         <div class="section">
-          <h2>Restaurants</h2>
-          <table><thead><tr><th>ID</th><th>Name</th><th>Manager</th><th>Platform</th></tr></thead><tbody>{restaurant_rows}</tbody></table>
+          <h2>Locations</h2>
+          <table><thead><tr><th>ID</th><th>Name</th><th>Manager</th><th>Platform</th></tr></thead><tbody>{location_rows}</tbody></table>
         </div>
         <div class="section">
           <h2>Recent Shifts</h2>

@@ -97,7 +97,7 @@ async def mark_filled(
         fill_tier=fill_tier,
     )
 
-    # Increment total_shifts_filled and append restaurant to restaurants_worked if new
+    # Increment total_shifts_filled and append the filled location to work history if new.
     await db.execute(
         "UPDATE workers SET total_shifts_filled = COALESCE(total_shifts_filled, 0) + 1 WHERE id=?",
         (filled_by_worker_id,),
@@ -105,14 +105,14 @@ async def mark_filled(
     await db.commit()
 
     shift = await get_shift(db, shift_id)
-    restaurant_id = shift["restaurant_id"] if shift else None
-    if restaurant_id is not None:
+    location_id = shift["location_id"] if shift else None
+    if location_id is not None:
         worker = await get_worker(db, filled_by_worker_id)
         if worker:
-            worked = list(worker.get("restaurants_worked") or [])
-            if restaurant_id not in worked:
-                worked.append(restaurant_id)
-                await update_worker(db, filled_by_worker_id, {"restaurants_worked": worked})
+            worked = list(worker.get("locations_worked") or [])
+            if location_id not in worked:
+                worked.append(location_id)
+                await update_worker(db, filled_by_worker_id, {"locations_worked": worked})
 
     await audit_svc.append(
         db,

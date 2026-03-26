@@ -77,13 +77,13 @@ async def _resolve_local_shift(
 
 async def _resolve_worker_id(
     db: aiosqlite.Connection,
-    restaurant_id: int,
+    location_id: int,
     body: dict[str, Any],
 ) -> Optional[int]:
     local_worker_id = _first_present(body, [("worker_id",), ("employee_id",), ("user_id",), ("data", "worker_id"), ("data", "employee_id"), ("data", "user_id")])
     if local_worker_id is not None:
         worker_text = str(local_worker_id)
-        worker = await queries.get_worker_by_source_id(db, worker_text, restaurant_id=restaurant_id)
+        worker = await queries.get_worker_by_source_id(db, worker_text, location_id=location_id)
         if worker is not None:
             return int(worker["id"])
         if worker_text.isdigit():
@@ -101,7 +101,7 @@ async def _create_vacancy_from_webhook(
     shift = await _resolve_local_shift(db, platform, body)
     if shift is None:
         return {"status": "queued_for_reconcile", "platform": platform}
-    caller_id = await _resolve_worker_id(db, shift["restaurant_id"], body)
+    caller_id = await _resolve_worker_id(db, shift["location_id"], body)
     cascade = await shift_manager.create_vacancy(
         db,
         shift_id=int(shift["id"]),
@@ -146,12 +146,12 @@ async def _queue_platform_event(
     process_now: bool = False,
 ) -> dict:
     shift = await _resolve_local_shift(db, platform, body)
-    restaurant_id = int(shift["restaurant_id"]) if shift else None
+    location_id = int(shift["location_id"]) if shift else None
     queued = await sync_engine.enqueue_event_reconcile(
         db,
         platform=platform,
         payload=body,
-        restaurant_id=restaurant_id,
+        location_id=location_id,
         event_type=event_type,
         event_scope=event_scope,
         scope_ref=scope_ref,

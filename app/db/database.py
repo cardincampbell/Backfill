@@ -18,12 +18,15 @@ async def get_db() -> aiosqlite.Connection:
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys=OFF")
+        await _migrate_location_schema(db)
         await db.execute("PRAGMA foreign_keys=ON")
 
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS restaurants (
+            CREATE TABLE IF NOT EXISTS locations (
                 id                        INTEGER PRIMARY KEY AUTOINCREMENT,
                 name                      TEXT NOT NULL,
+                vertical                  TEXT NOT NULL DEFAULT 'restaurant',
                 address                   TEXT,
                 manager_name              TEXT,
                 manager_phone             TEXT,
@@ -61,9 +64,9 @@ async def init_db():
                 roles                 TEXT NOT NULL DEFAULT '[]',
                 certifications        TEXT NOT NULL DEFAULT '[]',
                 priority_rank         INTEGER NOT NULL DEFAULT 1,
-                restaurant_id         INTEGER REFERENCES restaurants(id),
-                restaurant_assignments TEXT NOT NULL DEFAULT '[]',
-                restaurants_worked    TEXT NOT NULL DEFAULT '[]',
+                location_id           INTEGER REFERENCES locations(id),
+                location_assignments  TEXT NOT NULL DEFAULT '[]',
+                locations_worked      TEXT NOT NULL DEFAULT '[]',
                 source                TEXT NOT NULL DEFAULT 'csv_import',
                 response_rate         REAL,
                 acceptance_rate       REAL,
@@ -83,7 +86,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS shifts (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                restaurant_id   INTEGER REFERENCES restaurants(id),
+                location_id     INTEGER REFERENCES locations(id),
                 scheduling_platform_id TEXT,
                 role            TEXT NOT NULL,
                 date            TEXT NOT NULL,
@@ -181,7 +184,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS integration_events (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 platform        TEXT NOT NULL,
-                restaurant_id   INTEGER REFERENCES restaurants(id),
+                location_id     INTEGER REFERENCES locations(id),
                 source_event_id TEXT,
                 event_type      TEXT,
                 event_scope     TEXT,
@@ -200,7 +203,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS sync_jobs (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 platform             TEXT NOT NULL,
-                restaurant_id        INTEGER REFERENCES restaurants(id),
+                location_id          INTEGER REFERENCES locations(id),
                 integration_event_id INTEGER REFERENCES integration_events(id),
                 job_type             TEXT NOT NULL,
                 priority             INTEGER NOT NULL DEFAULT 50,
@@ -220,7 +223,7 @@ async def init_db():
         """)
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_sync_jobs_due
-            ON sync_jobs(status, next_run_at, priority, platform, restaurant_id)
+            ON sync_jobs(status, next_run_at, priority, platform, location_id)
         """)
         await db.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_jobs_idempotency
@@ -244,79 +247,85 @@ async def init_db():
 
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
+            "vertical",
+            "TEXT NOT NULL DEFAULT 'restaurant'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
             "integration_status",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_roster_sync_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_roster_sync_status",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_schedule_sync_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_schedule_sync_status",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_sync_error",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "integration_state",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_event_sync_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_rolling_sync_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_daily_sync_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "last_writeback_at",
             "TEXT",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "writeback_enabled",
             "INTEGER NOT NULL DEFAULT 0",
         )
         await _ensure_column(
             db,
-            "restaurants",
+            "locations",
             "writeback_subscription_tier",
             "TEXT NOT NULL DEFAULT 'core'",
         )
@@ -335,13 +344,13 @@ async def init_db():
         await _ensure_column(
             db,
             "workers",
-            "restaurant_assignments",
+            "location_assignments",
             "TEXT NOT NULL DEFAULT '[]'",
         )
         await _ensure_column(
             db,
             "workers",
-            "restaurants_worked",
+            "locations_worked",
             "TEXT NOT NULL DEFAULT '[]'",
         )
         await _ensure_column(
@@ -387,6 +396,7 @@ async def init_db():
             "TEXT",
         )
 
+        await _normalize_location_json_fields(db)
         await db.commit()
 
 
@@ -402,4 +412,63 @@ async def _ensure_column(
     if column_name not in existing:
         await db.execute(
             f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}"
+        )
+
+
+async def _table_exists(db: aiosqlite.Connection, table_name: str) -> bool:
+    async with db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _column_exists(
+    db: aiosqlite.Connection,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    if not await _table_exists(db, table_name):
+        return False
+    async with db.execute(f"PRAGMA table_info({table_name})") as cur:
+        rows = await cur.fetchall()
+    return any(row[1] == column_name for row in rows)
+
+
+async def _rename_column_if_needed(
+    db: aiosqlite.Connection,
+    table_name: str,
+    old_name: str,
+    new_name: str,
+) -> None:
+    if await _column_exists(db, table_name, old_name) and not await _column_exists(
+        db, table_name, new_name
+    ):
+        await db.execute(
+            f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}"
+        )
+
+
+async def _migrate_location_schema(db: aiosqlite.Connection) -> None:
+    if await _table_exists(db, "restaurants") and not await _table_exists(db, "locations"):
+        await db.execute("ALTER TABLE restaurants RENAME TO locations")
+
+    await _rename_column_if_needed(db, "workers", "restaurant_id", "location_id")
+    await _rename_column_if_needed(
+        db, "workers", "restaurant_assignments", "location_assignments"
+    )
+    await _rename_column_if_needed(db, "workers", "restaurants_worked", "locations_worked")
+    await _rename_column_if_needed(db, "shifts", "restaurant_id", "location_id")
+    await _rename_column_if_needed(db, "integration_events", "restaurant_id", "location_id")
+    await _rename_column_if_needed(db, "sync_jobs", "restaurant_id", "location_id")
+
+
+async def _normalize_location_json_fields(db: aiosqlite.Connection) -> None:
+    if await _column_exists(db, "workers", "location_assignments"):
+        await db.execute(
+            """
+            UPDATE workers
+            SET location_assignments = REPLACE(location_assignments, '"restaurant_id"', '"location_id"')
+            WHERE location_assignments LIKE '%"restaurant_id"%'
+            """
         )

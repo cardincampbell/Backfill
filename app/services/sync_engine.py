@@ -139,7 +139,7 @@ async def enqueue_sync_job(
     db: aiosqlite.Connection,
     *,
     platform: str,
-    restaurant_id: Optional[int],
+    location_id: Optional[int],
     job_type: str,
     integration_event_id: Optional[int] = None,
     scope: Optional[str] = None,
@@ -158,7 +158,7 @@ async def enqueue_sync_job(
         db,
         {
             "platform": platform,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "integration_event_id": integration_event_id,
             "job_type": job_type,
             "priority": job_priority(job_type),
@@ -178,7 +178,7 @@ async def enqueue_event_reconcile(
     *,
     platform: str,
     payload: dict,
-    restaurant_id: Optional[int],
+    location_id: Optional[int],
     event_type: Optional[str],
     event_scope: Optional[str],
     scope_ref: Optional[str],
@@ -188,7 +188,7 @@ async def enqueue_event_reconcile(
         db,
         {
             "platform": platform,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "source_event_id": source_event_id,
             "event_type": event_type,
             "event_scope": event_scope,
@@ -202,7 +202,7 @@ async def enqueue_event_reconcile(
     job_id = await enqueue_sync_job(
         db,
         platform=platform,
-        restaurant_id=restaurant_id,
+        location_id=location_id,
         integration_event_id=event_id,
         job_type="event_reconcile",
         scope=event_scope,
@@ -218,19 +218,19 @@ async def enqueue_event_reconcile(
 async def enqueue_rolling_reconcile(
     db: aiosqlite.Connection,
     *,
-    restaurant_id: int,
+    location_id: int,
 ) -> dict:
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise ValueError(f"Restaurant {restaurant_id} not found")
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise ValueError(f"Location {location_id} not found")
     job_id = await enqueue_sync_job(
         db,
-        platform=restaurant.get("scheduling_platform") or "backfill_native",
-        restaurant_id=restaurant_id,
+        platform=location.get("scheduling_platform") or "backfill_native",
+        location_id=location_id,
         job_type="rolling_reconcile",
-        scope="restaurant",
-        scope_ref=str(restaurant_id),
-        idempotency_key=f"rolling:{restaurant_id}:{datetime.utcnow().strftime('%Y%m%d%H%M')}",
+        scope="location",
+        scope_ref=str(location_id),
+        idempotency_key=f"rolling:{location_id}:{datetime.utcnow().strftime('%Y%m%d%H%M')}",
     )
     return await queries.get_sync_job(db, job_id)
 
@@ -238,21 +238,21 @@ async def enqueue_rolling_reconcile(
 async def enqueue_daily_reconcile(
     db: aiosqlite.Connection,
     *,
-    restaurant_id: int,
+    location_id: int,
     for_date: Optional[date] = None,
 ) -> dict:
-    restaurant = await queries.get_restaurant(db, restaurant_id)
-    if restaurant is None:
-        raise ValueError(f"Restaurant {restaurant_id} not found")
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise ValueError(f"Location {location_id} not found")
     run_date = for_date or date.today()
     job_id = await enqueue_sync_job(
         db,
-        platform=restaurant.get("scheduling_platform") or "backfill_native",
-        restaurant_id=restaurant_id,
+        platform=location.get("scheduling_platform") or "backfill_native",
+        location_id=location_id,
         job_type="daily_reconcile",
-        scope="restaurant",
-        scope_ref=str(restaurant_id),
-        idempotency_key=f"daily:{restaurant_id}:{run_date.isoformat()}",
+        scope="location",
+        scope_ref=str(location_id),
+        idempotency_key=f"daily:{location_id}:{run_date.isoformat()}",
     )
     return await queries.get_sync_job(db, job_id)
 
@@ -263,10 +263,10 @@ async def enqueue_daily_reconcile_for_all(
     for_date: Optional[date] = None,
 ) -> list[dict]:
     jobs = []
-    for restaurant in await queries.list_restaurants(db):
-        if (restaurant.get("scheduling_platform") or "backfill_native") == "backfill_native":
+    for location in await queries.list_locations(db):
+        if (location.get("scheduling_platform") or "backfill_native") == "backfill_native":
             continue
-        jobs.append(await enqueue_daily_reconcile(db, restaurant_id=int(restaurant["id"]), for_date=for_date))
+        jobs.append(await enqueue_daily_reconcile(db, location_id=int(location["id"]), for_date=for_date))
     return jobs
 
 
@@ -279,22 +279,22 @@ async def enqueue_writeback(
     if shift is None:
         raise ValueError(f"Shift {shift_id} not found")
 
-    restaurant_id = shift.get("restaurant_id")
-    if not restaurant_id:
-        return {"status": "skipped", "reason": "restaurant_not_found", "shift_id": shift_id}
+    location_id = shift.get("location_id")
+    if not location_id:
+        return {"status": "skipped", "reason": "location_not_found", "shift_id": shift_id}
 
-    restaurant = await queries.get_restaurant(db, int(restaurant_id))
-    if restaurant is None:
-        return {"status": "skipped", "reason": "restaurant_not_found", "shift_id": shift_id}
+    location = await queries.get_location(db, int(location_id))
+    if location is None:
+        return {"status": "skipped", "reason": "location_not_found", "shift_id": shift_id}
 
-    if not scheduling.writeback_is_enabled(restaurant):
+    if not scheduling.writeback_is_enabled(location):
         return {"status": "skipped", "reason": "writeback_disabled", "shift_id": shift_id}
 
-    platform = restaurant.get("scheduling_platform") or "backfill_native"
+    platform = location.get("scheduling_platform") or "backfill_native"
     next_run_at = _should_hold_writeback_until(shift).isoformat()
     existing = await queries.find_pending_sync_job_for_scope(
         db,
-        restaurant_id=int(restaurant_id),
+        location_id=int(location_id),
         job_type="writeback",
         scope_ref=str(shift_id),
     )
@@ -313,7 +313,7 @@ async def enqueue_writeback(
     job_id = await enqueue_sync_job(
         db,
         platform=platform,
-        restaurant_id=int(restaurant_id),
+        location_id=int(location_id),
         job_type="writeback",
         scope="shift",
         scope_ref=str(shift_id),
@@ -322,79 +322,79 @@ async def enqueue_writeback(
     return await queries.get_sync_job(db, job_id)
 
 
-async def enqueue_rolling_reconcile_for_due_restaurants(
+async def enqueue_rolling_reconcile_for_due_locations(
     db: aiosqlite.Connection,
     *,
     now: Optional[datetime] = None,
 ) -> list[dict]:
     current = now or datetime.utcnow()
     queued: list[dict] = []
-    for restaurant in await queries.list_restaurants(db):
-        platform = restaurant.get("scheduling_platform") or "backfill_native"
+    for location in await queries.list_locations(db):
+        platform = location.get("scheduling_platform") or "backfill_native"
         if platform == "backfill_native":
             continue
 
-        restaurant_id = int(restaurant["id"])
+        location_id = int(location["id"])
         open_rolling = await queries.find_pending_sync_job_for_scope(
             db,
-            restaurant_id=restaurant_id,
+            location_id=location_id,
             job_type="rolling_reconcile",
-            scope_ref=str(restaurant_id),
+            scope_ref=str(location_id),
         )
         if open_rolling is not None:
             continue
 
-        last_rolling = restaurant.get("last_rolling_sync_at")
+        last_rolling = location.get("last_rolling_sync_at")
         if _is_recent(last_rolling, now=current, window=ROLLING_RECONCILE_INTERVAL):
             continue
 
-        healthy = (restaurant.get("integration_state") or "healthy") == "healthy"
+        healthy = (location.get("integration_state") or "healthy") == "healthy"
         recent_event = _is_recent(
-            restaurant.get("last_event_sync_at"),
+            location.get("last_event_sync_at"),
             now=current,
             window=ROLLING_RECONCILE_INTERVAL,
         )
         recent_writeback = _is_recent(
-            restaurant.get("last_writeback_at"),
+            location.get("last_writeback_at"),
             now=current,
             window=ROLLING_RECONCILE_INTERVAL,
         )
         if healthy and (recent_event or recent_writeback):
             continue
 
-        queued.append(await enqueue_rolling_reconcile(db, restaurant_id=restaurant_id))
+        queued.append(await enqueue_rolling_reconcile(db, location_id=location_id))
     return queued
 
 
-async def enqueue_daily_reconcile_for_due_restaurants(
+async def enqueue_daily_reconcile_for_due_locations(
     db: aiosqlite.Connection,
     *,
     for_date: Optional[date] = None,
 ) -> list[dict]:
     run_date = for_date or date.today()
     queued: list[dict] = []
-    for restaurant in await queries.list_restaurants(db):
-        platform = restaurant.get("scheduling_platform") or "backfill_native"
+    for location in await queries.list_locations(db):
+        platform = location.get("scheduling_platform") or "backfill_native"
         if platform == "backfill_native":
             continue
 
-        restaurant_id = int(restaurant["id"])
+        location_id = int(location["id"])
         open_daily = await queries.find_pending_sync_job_for_scope(
             db,
-            restaurant_id=restaurant_id,
+            location_id=location_id,
             job_type="daily_reconcile",
-            scope_ref=str(restaurant_id),
+            scope_ref=str(location_id),
         )
         if open_daily is not None:
             continue
 
-        last_daily = restaurant.get("last_daily_sync_at")
+        last_daily = location.get("last_daily_sync_at")
         if last_daily:
             parsed = _coerce_datetime(last_daily)
             if parsed and parsed.date() >= run_date:
                 continue
 
-        queued.append(await enqueue_daily_reconcile(db, restaurant_id=restaurant_id, for_date=run_date))
+        queued.append(await enqueue_daily_reconcile(db, location_id=location_id, for_date=run_date))
     return queued
 
 
@@ -405,9 +405,9 @@ def _rollup_counts(results: list[dict]) -> tuple[int, int, int]:
     return created, updated, skipped
 
 
-async def _mark_restaurant_sync_state(
+async def _mark_location_sync_state(
     db: aiosqlite.Connection,
-    restaurant_id: int,
+    location_id: int,
     *,
     state: str,
     error: Optional[str] = None,
@@ -429,7 +429,7 @@ async def _mark_restaurant_sync_state(
         updates["last_daily_sync_at"] = now
     if writeback_stamp:
         updates["last_writeback_at"] = now
-    await queries.update_restaurant(db, restaurant_id, updates)
+    await queries.update_location(db, location_id, updates)
 
 
 async def process_sync_job(db: aiosqlite.Connection, job_id: int) -> dict:
@@ -451,15 +451,15 @@ async def process_sync_job(db: aiosqlite.Connection, job_id: int) -> dict:
     created = updated = skipped = 0
 
     try:
-        restaurant_id = job.get("restaurant_id")
-        restaurant = await queries.get_restaurant(db, int(restaurant_id)) if restaurant_id else None
-        platform = job.get("platform") or (restaurant.get("scheduling_platform") if restaurant else "backfill_native")
+        location_id = job.get("location_id")
+        location = await queries.get_location(db, int(location_id)) if location_id else None
+        platform = job.get("platform") or (location.get("scheduling_platform") if location else "backfill_native")
 
         if platform == "backfill_native":
-            if restaurant_id:
-                await _mark_restaurant_sync_state(
+            if location_id:
+                await _mark_location_sync_state(
                     db,
-                    int(restaurant_id),
+                    int(location_id),
                     state="healthy",
                     event_stamp=job["job_type"] == "event_reconcile",
                     rolling_stamp=job["job_type"] == "rolling_reconcile",
@@ -484,19 +484,19 @@ async def process_sync_job(db: aiosqlite.Connection, job_id: int) -> dict:
             )
             return {"status": "completed", "job_id": job_id, "platform": platform}
 
-        if restaurant is None:
-            raise ValueError(f"Restaurant {restaurant_id} not found")
+        if location is None:
+            raise ValueError(f"Location {location_id} not found")
 
         results: list[dict] = []
         if job["job_type"] in {"daily_reconcile", "connect_bootstrap", "repair_reconcile"}:
-            results.append(await scheduling.sync_roster(db, int(restaurant_id)))
+            results.append(await scheduling.sync_roster(db, int(location_id)))
 
         if job["job_type"] in {"event_reconcile", "rolling_reconcile", "daily_reconcile", "connect_bootstrap", "repair_reconcile"}:
             start_value = job.get("window_start")
             end_value = job.get("window_end")
             start_date = date.fromisoformat(start_value) if start_value else date.today()
             end_date = date.fromisoformat(end_value) if end_value else (date.today() + timedelta(days=14))
-            results.append(await scheduling.sync_schedule(db, int(restaurant_id), start_date, end_date))
+            results.append(await scheduling.sync_schedule(db, int(location_id), start_date, end_date))
 
         if job["job_type"] == "writeback":
             scope_ref = job.get("scope_ref")
@@ -516,9 +516,9 @@ async def process_sync_job(db: aiosqlite.Connection, job_id: int) -> dict:
                 int(job["integration_event_id"]),
                 {"status": "processed", "processed_at": completed_at.isoformat(), "error": None},
             )
-        await _mark_restaurant_sync_state(
+        await _mark_location_sync_state(
             db,
-            int(restaurant_id),
+            int(location_id),
             state="healthy",
             event_stamp=job["job_type"] == "event_reconcile",
             rolling_stamp=job["job_type"] == "rolling_reconcile",
@@ -571,10 +571,10 @@ async def process_sync_job(db: aiosqlite.Connection, job_id: int) -> dict:
                     "error": str(exc),
                 },
             )
-        if job.get("restaurant_id"):
-            await _mark_restaurant_sync_state(
+        if job.get("location_id"):
+            await _mark_location_sync_state(
                 db,
-                int(job["restaurant_id"]),
+                int(job["location_id"]),
                 state="degraded" if final_failure else "repairing",
                 error=str(exc),
             )

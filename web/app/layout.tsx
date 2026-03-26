@@ -32,7 +32,7 @@ export default function RootLayout({
           </header>
           {children}
           <footer className="footer">
-            <div>1-800-BACKFILL is the command surface. The website handles structured setup, uploads, and visibility.</div>
+            <div>1-800-BACKFILL is the command surface. The website handles structured setup, uploads, and location-level visibility.</div>
           </footer>
         </div>
       </body>

@@ -1,4 +1,5 @@
 import os
+from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,7 +18,16 @@ class Settings:
     retell_agent_id: str = os.environ.get("RETELL_AGENT_ID", "")
     retell_agent_id_inbound: str = os.environ.get("RETELL_AGENT_ID_INBOUND", "")
     retell_agent_id_outbound: str = os.environ.get("RETELL_AGENT_ID_OUTBOUND", "")
+    retell_chat_agent_id: str = os.environ.get("RETELL_CHAT_AGENT_ID", "")
+    retell_chat_agent_id_inbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_INBOUND", "")
+    retell_chat_agent_id_outbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_OUTBOUND", "")
     retell_from_number: str = os.environ.get("RETELL_FROM_NUMBER", "")
+    retell_sms_enabled: bool = os.environ.get("RETELL_SMS_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     # Twilio
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
@@ -27,6 +37,11 @@ class Settings:
     # Backend
     database_url: str = os.environ.get("DATABASE_URL", "backfill.db")
     backfill_webhook_url: str = os.environ.get("BACKFILL_WEBHOOK_URL", "")
+    backfill_allowed_origins: List[str] = [
+        value.strip()
+        for value in os.environ.get("BACKFILL_ALLOWED_ORIGINS", "").split(",")
+        if value.strip()
+    ]
 
     # 7shifts
     sevenshifts_client_id: str = os.environ.get("SEVENSHIFTS_CLIENT_ID", "")

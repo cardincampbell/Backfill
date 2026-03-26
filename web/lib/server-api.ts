@@ -10,8 +10,9 @@ async function parseError(response: Response): Promise<string> {
   }
 }
 
-export async function createRestaurant(input: {
+export async function createLocation(input: {
   name: string;
+  vertical?: string;
   address?: string;
   manager_name?: string;
   manager_phone?: string;
@@ -23,7 +24,7 @@ export async function createRestaurant(input: {
   writeback_subscription_tier?: string;
   onboarding_info?: string;
 }) {
-  const response = await fetch(`${API_BASE_URL}/api/restaurants`, {
+  const response = await fetch(`${API_BASE_URL}/api/locations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -37,8 +38,8 @@ export async function createRestaurant(input: {
   return (await response.json()) as { id: number; name: string };
 }
 
-export async function connectAndSyncRestaurant(restaurantId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/restaurants/${restaurantId}/connect-sync`, {
+export async function connectAndSyncLocation(locationId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/connect-sync`, {
     method: "POST",
     cache: "no-store"
   });
@@ -82,14 +83,14 @@ export async function sendOnboardingLink(input: {
   };
 }
 
-export async function updateRestaurant(
-  restaurantId: number,
+export async function updateLocation(
+  locationId: number,
   input: {
     writeback_enabled?: boolean;
     writeback_subscription_tier?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/api/restaurants/${restaurantId}`, {
+  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -103,8 +104,8 @@ export async function updateRestaurant(
   return (await response.json()) as { id: number; writeback_enabled?: boolean };
 }
 
-export async function syncRestaurantRoster(restaurantId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/restaurants/${restaurantId}/sync-roster`, {
+export async function syncLocationRoster(locationId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/sync-roster`, {
     method: "POST",
     cache: "no-store"
   });
@@ -122,8 +123,8 @@ export async function syncRestaurantRoster(restaurantId: number) {
   };
 }
 
-export async function syncRestaurantSchedule(restaurantId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/restaurants/${restaurantId}/sync-schedule`, {
+export async function syncLocationSchedule(locationId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/sync-schedule`, {
     method: "POST",
     cache: "no-store"
   });
@@ -145,7 +146,7 @@ export async function createWorker(input: {
   name: string;
   phone: string;
   email?: string;
-  restaurant_id: number;
+  location_id?: number;
   preferred_channel?: string;
   roles: string[];
   certifications: string[];
@@ -165,12 +166,12 @@ export async function createWorker(input: {
   return (await response.json()) as { id: number; name: string };
 }
 
-export async function importWorkersCsv(restaurantId: number, file: File) {
+export async function importWorkersCsvForLocation(locationId: number, file: File) {
   const formData = new FormData();
   formData.append("file", file);
 
   const response = await fetch(
-    `${API_BASE_URL}/api/workers/import-csv?restaurant_id=${restaurantId}`,
+    `${API_BASE_URL}/api/workers/import-csv?location_id=${locationId}`,
     {
       method: "POST",
       body: formData,

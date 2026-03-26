@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from app.config import settings
-from app.db.queries import get_shift, insert_restaurant, insert_shift, insert_worker, list_sync_jobs
+from app.db.queries import get_shift, insert_location, insert_shift, insert_worker, list_sync_jobs
 
 
 def _signed_json(secret: str, body: dict) -> tuple[str, str]:
@@ -22,7 +22,7 @@ def _signed_json(secret: str, body: dict) -> tuple[str, str]:
 async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
     monkeypatch.setattr(settings, "sevenshifts_webhook_secret", "seven-secret")
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Sync Taco",
@@ -40,7 +40,7 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "source_id": "worker-ext-1",
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
@@ -54,7 +54,7 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -63,7 +63,7 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "scheduling_platform_id": "shift-ext-1",
             "role": "line_cook",
             "date": start.date().isoformat(),
@@ -76,7 +76,7 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
         },
     )
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
     body = {
@@ -97,7 +97,7 @@ async def test_seven_shifts_webhook_creates_vacancy(db, client, monkeypatch):
     )
 
     shift = await get_shift(db, shift_id)
-    sync_jobs = await list_sync_jobs(db, restaurant_id=restaurant_id, limit=10)
+    sync_jobs = await list_sync_jobs(db, location_id=location_id, limit=10)
 
     assert response.status_code == 200
     assert response.json()["status"] == "vacancy_created"

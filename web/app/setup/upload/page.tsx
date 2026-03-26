@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { SectionCard } from "@/components/section-card";
-import { createRestaurant, importWorkersCsv } from "@/lib/server-api";
+import { createLocation, importWorkersCsvForLocation } from "@/lib/server-api";
 
 type SetupUploadPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -12,19 +12,21 @@ type SetupUploadPageProps = {
 async function submitCsvSetup(formData: FormData) {
   "use server";
 
-  const restaurantName = String(formData.get("restaurant_name") ?? "").trim();
+  const locationName = String(formData.get("location_name") ?? "").trim();
+  const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const file = formData.get("roster_file");
 
-  if (!restaurantName) {
-    redirect("/setup/upload?status=error&message=Restaurant+name+is+required");
+  if (!locationName) {
+    redirect("/setup/upload?status=error&message=Location+name+is+required");
   }
   if (!(file instanceof File) || !file.name) {
     redirect("/setup/upload?status=error&message=CSV+file+is+required");
   }
 
   try {
-    const restaurant = await createRestaurant({
-      name: restaurantName,
+    const location = await createLocation({
+      name: locationName,
+      vertical,
       address: String(formData.get("address") ?? "").trim() || undefined,
       manager_name: String(formData.get("manager_name") ?? "").trim() || undefined,
       manager_phone: String(formData.get("manager_phone") ?? "").trim() || undefined,
@@ -33,11 +35,11 @@ async function submitCsvSetup(formData: FormData) {
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
     });
 
-    const result = await importWorkersCsv(restaurant.id, file);
+    const result = await importWorkersCsvForLocation(location.id, file);
 
     revalidatePath("/dashboard");
     redirect(
-      `/setup/upload?status=created&restaurant_id=${restaurant.id}&created=${result.created}&skipped=${result.skipped}`
+      `/setup/upload?status=created&location_id=${location.id}&created=${result.created}&skipped=${result.skipped}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload failed";
@@ -48,7 +50,7 @@ async function submitCsvSetup(formData: FormData) {
 export default async function SetupUploadPage({ searchParams }: SetupUploadPageProps) {
   const params = searchParams ? await searchParams : {};
   const status = typeof params.status === "string" ? params.status : "";
-  const restaurantId = typeof params.restaurant_id === "string" ? params.restaurant_id : "";
+  const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const created = typeof params.created === "string" ? params.created : "";
   const skipped = typeof params.skipped === "string" ? params.skipped : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
@@ -59,7 +61,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
         <span className="eyebrow">CSV Intake</span>
         <h1>Upload the team list when the data already exists.</h1>
         <p>
-          This path is for restaurants without a supported writeable scheduler but with a spreadsheet or
+          This path is for locations without a supported writeable scheduler but with a spreadsheet or
           exported roster ready to go.
         </p>
       </div>
@@ -68,8 +70,8 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
         <SectionCard title="1. Upload roster data">
           <p>Start with names, phone numbers, roles, and certifications. Keep the import small and operational.</p>
         </SectionCard>
-        <SectionCard title="2. Verify manager contacts">
-          <p>Confirm the location, manager phone, and any onboarding notes the coverage engine needs later.</p>
+        <SectionCard title="2. Verify site contacts">
+          <p>Confirm the location, primary contact phone, and any onboarding notes the coverage engine needs later.</p>
         </SectionCard>
         <SectionCard title="3. Collect worker consent">
           <p>After import, text workers the Backfill disclosure so outreach consent is logged before live coverage starts.</p>
@@ -81,7 +83,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
           <div className="callout success-callout">
             <h3>Roster imported</h3>
             <p>
-              Restaurant ID <strong>{restaurantId}</strong> created. Imported <strong>{created}</strong> worker(s),
+              Location ID <strong>{locationId}</strong> created. Imported <strong>{created}</strong> worker(s),
               skipped <strong>{skipped}</strong>. Review the results in the{" "}
               <Link className="text-link" href="/dashboard">dashboard</Link>.
             </p>
@@ -101,30 +103,41 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Create the restaurant and import a CSV</h2>
+            <h2>Create the location and import a CSV</h2>
             <p className="muted">Expected CSV columns: <code>name,phone,role,priority_rank</code>.</p>
           </div>
         </div>
         <form className="setup-form" action={submitCsvSetup}>
           <div className="form-grid">
             <label className="field">
-              <span>Restaurant name</span>
-              <input name="restaurant_name" placeholder="Coastal Grill" required />
+              <span>Location name</span>
+              <input name="location_name" placeholder="Coastal Grill Downtown" required />
+            </label>
+            <label className="field">
+              <span>Vertical</span>
+              <select name="vertical" defaultValue="restaurant">
+                <option value="restaurant">restaurant</option>
+                <option value="healthcare">healthcare</option>
+                <option value="warehouse">warehouse</option>
+                <option value="retail">retail</option>
+                <option value="hospitality">hospitality</option>
+                <option value="other">other</option>
+              </select>
             </label>
             <label className="field">
               <span>Address</span>
               <input name="address" placeholder="123 Main St, Los Angeles, CA" />
             </label>
             <label className="field">
-              <span>Manager name</span>
-              <input name="manager_name" placeholder="Chef Mike" />
+              <span>Primary contact name</span>
+              <input name="manager_name" placeholder="Jordan Lee" />
             </label>
             <label className="field">
-              <span>Manager phone</span>
+              <span>Primary contact phone</span>
               <input name="manager_phone" placeholder="+13105550100" />
             </label>
             <label className="field">
-              <span>Manager email</span>
+              <span>Primary contact email</span>
               <input name="manager_email" placeholder="mike@coastalgrill.com" />
             </label>
             <label className="field">
@@ -140,7 +153,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
               />
             </label>
           </div>
-          <button className="button" type="submit">Create restaurant and import roster</button>
+          <button className="button" type="submit">Create location and import roster</button>
         </form>
       </section>
 
@@ -148,7 +161,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
         <div className="callout">
           <h3>Fallback path</h3>
           <p>
-            If the restaurant does not even have a spreadsheet, use{" "}
+            If the location does not even have a spreadsheet, use{" "}
             <Link className="text-link" href="/setup/add">manual team entry</Link>.
           </p>
         </div>

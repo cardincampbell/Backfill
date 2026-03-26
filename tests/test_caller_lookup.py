@@ -1,7 +1,7 @@
 """Tests for caller lookup service."""
 import pytest
 
-from app.db.queries import insert_restaurant, insert_worker
+from app.db.queries import insert_location, insert_worker
 from app.services.caller_lookup import lookup
 
 
@@ -13,7 +13,7 @@ async def test_lookup_known_worker(db):
             "name": "Maria",
             "phone": "+13105550101",
             "roles": ["line_cook"],
-            "restaurant_id": None,
+            "location_id": None,
         },
     )
 
@@ -26,7 +26,7 @@ async def test_lookup_known_worker(db):
 
 @pytest.mark.asyncio
 async def test_lookup_known_manager(db):
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Taco Spot",
@@ -40,7 +40,7 @@ async def test_lookup_known_manager(db):
 
     assert result["found"] is True
     assert result["caller_type"] == "manager"
-    assert result["record"]["id"] == restaurant_id
+    assert result["record"]["id"] == location_id
 
 
 @pytest.mark.asyncio

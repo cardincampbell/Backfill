@@ -2,8 +2,8 @@ import {
   AuditLog,
   Cascade,
   DashboardSummary,
-  RestaurantStatusResponse,
-  Restaurant,
+  Location,
+  LocationStatusResponse,
   Shift,
   ShiftStatusResponse,
   Worker
@@ -32,21 +32,21 @@ export async function getDashboardSummary(): Promise<DashboardSummary | null> {
   return fetchJson<DashboardSummary>("/api/dashboard");
 }
 
-export async function getRestaurants(): Promise<Restaurant[]> {
-  return (await fetchJson<Restaurant[]>("/api/restaurants")) ?? [];
+export async function getLocations(): Promise<Location[]> {
+  return (await fetchJson<Location[]>("/api/locations")) ?? [];
 }
 
-export async function getRestaurantStatus(restaurantId: number): Promise<RestaurantStatusResponse | null> {
-  return fetchJson<RestaurantStatusResponse>(`/api/restaurants/${restaurantId}/status`);
+export async function getLocationStatus(locationId: number): Promise<LocationStatusResponse | null> {
+  return fetchJson<LocationStatusResponse>(`/api/locations/${locationId}/status`);
 }
 
-export async function getWorkers(restaurantId?: number): Promise<Worker[]> {
-  const path = restaurantId ? `/api/workers?restaurant_id=${restaurantId}` : "/api/workers";
+export async function getWorkers(locationId?: number): Promise<Worker[]> {
+  const path = locationId ? `/api/workers?location_id=${locationId}` : "/api/workers";
   return (await fetchJson<Worker[]>(path)) ?? [];
 }
 
-export async function getShifts(restaurantId?: number): Promise<Shift[]> {
-  const path = restaurantId ? `/api/shifts?restaurant_id=${restaurantId}` : "/api/shifts";
+export async function getShifts(locationId?: number): Promise<Shift[]> {
+  const path = locationId ? `/api/shifts?location_id=${locationId}` : "/api/shifts";
   return (await fetchJson<Shift[]>(path)) ?? [];
 }
 
@@ -64,16 +64,16 @@ export async function getShiftStatus(shiftId: number): Promise<ShiftStatusRespon
 }
 
 export async function getSupportSnapshot() {
-  const [summary, restaurants, shifts, audits] = await Promise.all([
+  const [summary, locations, shifts, audits] = await Promise.all([
     getDashboardSummary(),
-    getRestaurants(),
+    getLocations(),
     getShifts(),
     getAuditLog()
   ]);
 
   return {
     summary,
-    restaurants,
+    locations,
     shifts,
     audits,
     backendReachable: summary !== null

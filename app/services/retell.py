@@ -3,6 +3,8 @@ Thin wrapper around the Retell SDK.
 All Retell API calls go through here so the rest of the app never imports retell directly.
 """
 from typing import Optional
+
+import httpx
 from retell import Retell
 from app.config import settings
 
@@ -16,6 +18,15 @@ def get_client() -> Retell:
             raise RuntimeError("RETELL_API_KEY is not set")
         _client = Retell(api_key=settings.retell_api_key)
     return _client
+
+
+def _default_chat_agent_id(agent_kind: str = "outbound") -> str:
+    default_agent_id = settings.retell_chat_agent_id
+    if agent_kind == "inbound":
+        return settings.retell_chat_agent_id_inbound or default_agent_id
+    if agent_kind == "outbound":
+        return settings.retell_chat_agent_id_outbound or default_agent_id
+    return default_agent_id
 
 
 async def create_phone_call(
@@ -46,3 +57,42 @@ async def create_phone_call(
         metadata=metadata,
     )
     return response.call_id
+
+
+def create_sms_chat(
+    to_number: str,
+    body: str,
+    metadata: Optional[dict] = None,
+    agent_id: Optional[str] = None,
+    agent_kind: str = "outbound",
+) -> str:
+    """Trigger an outbound Retell SMS chat. Returns the Retell chat_id."""
+    if not settings.retell_api_key:
+        raise RuntimeError("RETELL_API_KEY is not set")
+    if not settings.retell_from_number:
+        raise RuntimeError("RETELL_FROM_NUMBER is not set")
+
+    aid = agent_id or _default_chat_agent_id(agent_kind=agent_kind)
+    if not aid:
+        raise RuntimeError(
+            "Retell chat agent ID is not set. Configure RETELL_CHAT_AGENT_ID_OUTBOUND or RETELL_CHAT_AGENT_ID."
+        )
+
+    payload = {
+        "from_number": settings.retell_from_number,
+        "to_number": to_number,
+        "override_agent_id": aid,
+        "metadata": {
+            **(metadata or {}),
+            "system_message": body,
+        },
+    }
+    response = httpx.post(
+        "https://api.retellai.com/create-outbound-sms",
+        headers={"Authorization": f"Bearer {settings.retell_api_key}"},
+        json=payload,
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["chat_id"]

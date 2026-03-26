@@ -8,7 +8,7 @@ export default function PartnersPage() {
         <h1>Agency partner routing is part of the operating model.</h1>
         <p>
           Backfill does not run a labor marketplace. When internal and alumni coverage fail, the system routes
-          structured requests to partner agencies and keeps the restaurant in one workflow.
+          structured requests to partner agencies and keeps the operator in one workflow.
         </p>
       </div>
 

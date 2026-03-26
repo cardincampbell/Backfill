@@ -10,7 +10,7 @@ from app.db.queries import (
     get_cascade,
     get_shift,
     insert_agency_partner,
-    insert_restaurant,
+    insert_location,
     insert_shift,
     insert_worker,
     list_agency_requests,
@@ -29,7 +29,7 @@ def _signed_sms_headers(token: str, params: dict[str, str]) -> dict[str, str]:
 async def test_yes_reply_confirms_shift(db, client, monkeypatch):
     monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Taco Spot",
@@ -46,7 +46,7 @@ async def test_yes_reply_confirms_shift(db, client, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -59,7 +59,7 @@ async def test_yes_reply_confirms_shift(db, client, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -69,7 +69,7 @@ async def test_yes_reply_confirms_shift(db, client, monkeypatch):
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "role": "line_cook",
             "date": start.date().isoformat(),
             "start_time": start.strftime("%H:%M:%S"),
@@ -81,7 +81,7 @@ async def test_yes_reply_confirms_shift(db, client, monkeypatch):
         },
     )
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.agency_router.send_sms", lambda to, body: "SM123")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 
@@ -114,7 +114,7 @@ async def test_yes_reply_confirms_shift(db, client, monkeypatch):
 async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client, monkeypatch):
     monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Taco Spot",
@@ -131,7 +131,7 @@ async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client,
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -144,7 +144,7 @@ async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client,
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 2,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -157,7 +157,7 @@ async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client,
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 3,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -167,7 +167,7 @@ async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client,
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "role": "line_cook",
             "date": start.date().isoformat(),
             "start_time": start.strftime("%H:%M:%S"),
@@ -179,7 +179,7 @@ async def test_second_yes_reply_enters_standby_and_cancel_removes_it(db, client,
         },
     )
 
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.agency_router.send_sms", lambda to, body: "SM123")
 
     async def _fake_call(*, to_number, metadata, agent_id=None):
@@ -244,7 +244,7 @@ def test_invalid_twilio_signature_is_rejected(client, monkeypatch):
 async def test_manager_agency_reply_routes_tier3(db, client, monkeypatch):
     monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
 
-    restaurant_id = await insert_restaurant(
+    location_id = await insert_location(
         db,
         {
             "name": "Agency Taco Spot",
@@ -262,7 +262,7 @@ async def test_manager_agency_reply_routes_tier3(db, client, monkeypatch):
             "roles": ["line_cook"],
             "certifications": ["food_handler_card"],
             "priority_rank": 1,
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "sms_consent_status": "granted",
             "voice_consent_status": "granted",
         },
@@ -271,7 +271,7 @@ async def test_manager_agency_reply_routes_tier3(db, client, monkeypatch):
     shift_id = await insert_shift(
         db,
         {
-            "restaurant_id": restaurant_id,
+            "location_id": location_id,
             "role": "line_cook",
             "date": shift_start.date().isoformat(),
             "start_time": shift_start.strftime("%H:%M:%S"),
@@ -299,7 +299,7 @@ async def test_manager_agency_reply_routes_tier3(db, client, monkeypatch):
     )
 
     sent = []
-    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body: "SM123")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
     monkeypatch.setattr("app.services.agency_router.send_sms", lambda to, body: sent.append((to, body)) or "SM999")
     monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
 

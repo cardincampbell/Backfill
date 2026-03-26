@@ -12,8 +12,8 @@ import aiosqlite
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 _JSON_COLS: dict[str, list[str]] = {
-    "restaurants":      ["preferred_agency_partners"],
-    "workers":          ["roles", "certifications", "restaurant_assignments", "restaurants_worked"],
+    "locations":        ["preferred_agency_partners"],
+    "workers":          ["roles", "certifications", "location_assignments", "locations_worked"],
     "shifts":           ["requirements"],
     "cascades":         ["standby_queue"],
     "agency_partners":  ["coverage_areas", "roles_supported", "certifications_supported"],
@@ -22,13 +22,17 @@ _JSON_COLS: dict[str, list[str]] = {
 }
 
 _BOOL_COLS: dict[str, list[str]] = {
-    "restaurants": ["agency_supply_approved", "writeback_enabled"],
+    "locations": ["agency_supply_approved", "writeback_enabled"],
     "cascades":    ["manager_approved_tier3"],
     "agency_partners": ["active"],
 }
 
 
-def _decode(table: str, row: aiosqlite.Row) -> dict:
+def _normalize_write_aliases(data: dict) -> dict:
+    return dict(data)
+
+
+def _decode(table: str, row: aiosqlite.Row | dict) -> dict:
     data = dict(row)
     for col in _JSON_COLS.get(table, []):
         if col in data and isinstance(data[col], str):
@@ -40,34 +44,43 @@ def _decode(table: str, row: aiosqlite.Row) -> dict:
 
 
 def _encode_json(table: str, data: dict) -> dict:
-    data = dict(data)
+    data = _normalize_write_aliases(data)
     for col in _JSON_COLS.get(table, []):
         if col in data and not isinstance(data[col], str):
             data[col] = json.dumps(data[col])
     return data
 
 
-# ── restaurants ───────────────────────────────────────────────────────────────
+# ── locations ─────────────────────────────────────────────────────────────────
 
-async def get_restaurant(db: aiosqlite.Connection, restaurant_id: int) -> Optional[dict]:
-    async with db.execute("SELECT * FROM restaurants WHERE id=?", (restaurant_id,)) as cur:
+_LOCATION_TABLE = "locations"
+
+
+async def get_location(db: aiosqlite.Connection, location_id: int) -> Optional[dict]:
+    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} WHERE id=?", (location_id,)) as cur:
         row = await cur.fetchone()
-    return _decode("restaurants", row) if row else None
+    return _decode("locations", row) if row else None
 
 
-async def get_restaurant_by_name(db: aiosqlite.Connection, name: str) -> Optional[dict]:
+async def get_location_by_name(db: aiosqlite.Connection, name: str) -> Optional[dict]:
     async with db.execute(
-        "SELECT * FROM restaurants WHERE LOWER(name)=LOWER(?)", (name,)
+        f"SELECT * FROM {_LOCATION_TABLE} WHERE LOWER(name)=LOWER(?)", (name,)
     ) as cur:
         row = await cur.fetchone()
-    return _decode("restaurants", row) if row else None
+    return _decode("locations", row) if row else None
 
 
-async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
-    d = _encode_json("restaurants", data)
+async def get_location_by_contact_phone(db: aiosqlite.Connection, phone: str) -> Optional[dict]:
+    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} WHERE manager_phone=?", (phone,)) as cur:
+        row = await cur.fetchone()
+    return _decode("locations", row) if row else None
+
+
+async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
+    d = _encode_json("locations", data)
     cur = await db.execute(
-        """INSERT INTO restaurants
-           (name, address, manager_name, manager_phone, manager_email,
+        f"""INSERT INTO {_LOCATION_TABLE}
+           (name, vertical, address, manager_name, manager_phone, manager_email,
            scheduling_platform, scheduling_platform_id, integration_status,
             last_roster_sync_at, last_roster_sync_status,
             last_schedule_sync_at, last_schedule_sync_status, last_sync_error,
@@ -75,7 +88,7 @@ async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
             writeback_enabled, writeback_subscription_tier,
             onboarding_info,
             agency_supply_approved, preferred_agency_partners)
-           VALUES (:name,:address,:manager_name,:manager_phone,:manager_email,
+           VALUES (:name,:vertical,:address,:manager_name,:manager_phone,:manager_email,
                    :scheduling_platform,:scheduling_platform_id,:integration_status,
                    :last_roster_sync_at,:last_roster_sync_status,
                    :last_schedule_sync_at,:last_schedule_sync_status,:last_sync_error,
@@ -85,6 +98,7 @@ async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
                    :agency_supply_approved,:preferred_agency_partners)""",
         {
             "name": d.get("name"),
+            "vertical": d.get("vertical", "restaurant"),
             "address": d.get("address"),
             "manager_name": d.get("manager_name"),
             "manager_phone": d.get("manager_phone"),
@@ -113,15 +127,16 @@ async def insert_restaurant(db: aiosqlite.Connection, data: dict) -> int:
     return cur.lastrowid
 
 
-async def list_restaurants(db: aiosqlite.Connection) -> list[dict]:
-    async with db.execute("SELECT * FROM restaurants ORDER BY id ASC") as cur:
+async def list_locations(db: aiosqlite.Connection) -> list[dict]:
+    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} ORDER BY id ASC") as cur:
         rows = await cur.fetchall()
-    return [_decode("restaurants", row) for row in rows]
+    return [_decode("locations", row) for row in rows]
 
 
-async def update_restaurant(db: aiosqlite.Connection, restaurant_id: int, data: dict) -> None:
+async def update_location(db: aiosqlite.Connection, location_id: int, data: dict) -> None:
     allowed = {
         "name",
+        "vertical",
         "address",
         "manager_name",
         "manager_phone",
@@ -148,15 +163,15 @@ async def update_restaurant(db: aiosqlite.Connection, restaurant_id: int, data: 
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
         return
-    encoded = _encode_json("restaurants", updates)
+    encoded = _encode_json("locations", updates)
     if "agency_supply_approved" in encoded:
         encoded["agency_supply_approved"] = int(bool(encoded["agency_supply_approved"]))
     if "writeback_enabled" in encoded:
         encoded["writeback_enabled"] = int(bool(encoded["writeback_enabled"]))
     cols = ", ".join(f"{key}=?" for key in encoded)
     await db.execute(
-        f"UPDATE restaurants SET {cols} WHERE id=?",
-        (*encoded.values(), restaurant_id),
+        f"UPDATE {_LOCATION_TABLE} SET {cols} WHERE id=?",
+        (*encoded.values(), location_id),
     )
     await db.commit()
 
@@ -178,50 +193,50 @@ async def get_worker_by_phone(db: aiosqlite.Connection, phone: str) -> Optional[
 async def get_worker_by_source_id(
     db: aiosqlite.Connection,
     source_id: str,
-    restaurant_id: Optional[int] = None,
+    location_id: Optional[int] = None,
 ) -> Optional[dict]:
     query = "SELECT * FROM workers WHERE source_id=?"
     params: list[Any] = [source_id]
-    if restaurant_id is not None:
-        query += " AND restaurant_id=?"
-        params.append(restaurant_id)
+    if location_id is not None:
+        query += " AND location_id=?"
+        params.append(location_id)
     async with db.execute(query, params) as cur:
         row = await cur.fetchone()
     return _decode("workers", row) if row else None
 
 
-async def list_workers_for_restaurant(
-    db: aiosqlite.Connection, restaurant_id: int, active_consent_only: bool = True
+async def list_workers_for_location(
+    db: aiosqlite.Connection, location_id: int, active_consent_only: bool = True
 ) -> list[dict]:
-    query = "SELECT * FROM workers WHERE restaurant_id=?"
+    query = "SELECT * FROM workers WHERE location_id=?"
     if active_consent_only:
         query += " AND sms_consent_status='granted'"
     query += " ORDER BY priority_rank ASC"
-    async with db.execute(query, (restaurant_id,)) as cur:
+    async with db.execute(query, (location_id,)) as cur:
         rows = await cur.fetchall()
     return [_decode("workers", r) for r in rows]
 
 
-async def list_workers_by_restaurants_worked(
-    db: aiosqlite.Connection, restaurant_id: int
+async def list_workers_by_locations_worked(
+    db: aiosqlite.Connection, location_id: int
 ) -> list[dict]:
-    """Return all workers whose restaurants_worked JSON list contains restaurant_id."""
+    """Return all workers whose locations_worked JSON list contains the location id."""
     async with db.execute("SELECT * FROM workers ORDER BY priority_rank ASC, id ASC") as cur:
         rows = await cur.fetchall()
     result = []
     for row in rows:
         worker = _decode("workers", row)
-        if restaurant_id in (worker.get("restaurants_worked") or []):
+        if location_id in (worker.get("locations_worked") or []):
             result.append(worker)
     return result
 
 
-async def list_workers(db: aiosqlite.Connection, restaurant_id: Optional[int] = None) -> list[dict]:
+async def list_workers(db: aiosqlite.Connection, location_id: Optional[int] = None) -> list[dict]:
     query = "SELECT * FROM workers"
     params: list[Any] = []
-    if restaurant_id is not None:
-        query += " WHERE restaurant_id=?"
-        params.append(restaurant_id)
+    if location_id is not None:
+        query += " WHERE location_id=?"
+        params.append(location_id)
     query += " ORDER BY priority_rank ASC, id ASC"
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
@@ -230,32 +245,32 @@ async def list_workers(db: aiosqlite.Connection, restaurant_id: Optional[int] = 
 
 async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("workers", data)
-    restaurant_id = d.get("restaurant_id")
-    assignments = d.get("restaurant_assignments")
-    restaurants_worked = d.get("restaurants_worked")
+    location_id = d.get("location_id")
+    assignments = d.get("location_assignments")
+    locations_worked = d.get("locations_worked")
 
     if assignments is None:
         assignments = json.dumps([
             {
-                "restaurant_id": restaurant_id,
+                "location_id": location_id,
                 "priority_rank": d.get("priority_rank", 1),
                 "is_active": True,
                 "roles": json.loads(d.get("roles", "[]")),
             }
-        ]) if restaurant_id else "[]"
+        ]) if location_id else "[]"
 
-    if restaurants_worked is None:
-        restaurants_worked = json.dumps([restaurant_id]) if restaurant_id else "[]"
+    if locations_worked is None:
+        locations_worked = json.dumps([location_id]) if location_id else "[]"
 
     cur = await db.execute(
         """INSERT INTO workers
            (name, phone, email, worker_type, preferred_channel, roles, certifications,
-            priority_rank, restaurant_id, restaurant_assignments, restaurants_worked, source,
+            priority_rank, location_id, location_assignments, locations_worked, source,
             source_id,
             sms_consent_status, voice_consent_status, consent_text_version,
             consent_timestamp, consent_channel)
            VALUES (:name,:phone,:email,:worker_type,:preferred_channel,:roles,:certifications,
-                   :priority_rank,:restaurant_id,:restaurant_assignments,:restaurants_worked,:source,
+                   :priority_rank,:location_id,:location_assignments,:locations_worked,:source,
                    :source_id,
                    :sms_consent_status,:voice_consent_status,:consent_text_version,
                    :consent_timestamp,:consent_channel)""",
@@ -268,9 +283,9 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
             "roles": d.get("roles", "[]"),
             "certifications": d.get("certifications", "[]"),
             "priority_rank": d.get("priority_rank", 1),
-            "restaurant_id": restaurant_id,
-            "restaurant_assignments": assignments,
-            "restaurants_worked": restaurants_worked,
+            "location_id": location_id,
+            "location_assignments": assignments,
+            "locations_worked": locations_worked,
             "source": d.get("source", "csv_import"),
             "source_id": d.get("source_id"),
             "sms_consent_status": d.get("sms_consent_status", "pending"),
@@ -284,15 +299,19 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
     return cur.lastrowid
 
 
-async def get_restaurant_manager_by_shift(db: aiosqlite.Connection, shift_id: int) -> Optional[dict]:
+async def get_location_manager_by_shift(db: aiosqlite.Connection, shift_id: int) -> Optional[dict]:
     async with db.execute(
-        """SELECT r.* FROM restaurants r
-           JOIN shifts s ON s.restaurant_id = r.id
+        f"""SELECT r.* FROM {_LOCATION_TABLE} r
+           JOIN shifts s ON s.location_id = r.id
            WHERE s.id=?""",
         (shift_id,),
     ) as cur:
         row = await cur.fetchone()
-    return _decode("restaurants", row) if row else None
+    return _decode("locations", row) if row else None
+
+
+async def get_location_contact_by_shift(db: aiosqlite.Connection, shift_id: int) -> Optional[dict]:
+    return await get_location_manager_by_shift(db, shift_id)
 
 
 async def update_worker(db: aiosqlite.Connection, worker_id: int, data: dict) -> None:
@@ -305,9 +324,9 @@ async def update_worker(db: aiosqlite.Connection, worker_id: int, data: dict) ->
         "roles",
         "certifications",
         "priority_rank",
-        "restaurant_id",
-        "restaurant_assignments",
-        "restaurants_worked",
+        "location_id",
+        "location_assignments",
+        "locations_worked",
         "source",
         "source_id",
         "sms_consent_status",
@@ -401,12 +420,12 @@ async def insert_shift(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("shifts", data)
     cur = await db.execute(
         """INSERT INTO shifts
-           (restaurant_id, scheduling_platform_id, role, date, start_time, end_time, pay_rate,
+           (location_id, scheduling_platform_id, role, date, start_time, end_time, pay_rate,
             requirements, status, source_platform)
-           VALUES (:restaurant_id,:scheduling_platform_id,:role,:date,:start_time,:end_time,:pay_rate,
+           VALUES (:location_id,:scheduling_platform_id,:role,:date,:start_time,:end_time,:pay_rate,
                    :requirements,:status,:source_platform)""",
         {
-            "restaurant_id": d.get("restaurant_id"),
+            "location_id": d.get("location_id"),
             "scheduling_platform_id": d.get("scheduling_platform_id"),
             "role": d["role"],
             "date": str(d["date"]),
@@ -424,15 +443,15 @@ async def insert_shift(db: aiosqlite.Connection, data: dict) -> int:
 
 async def list_shifts(
     db: aiosqlite.Connection,
-    restaurant_id: Optional[int] = None,
+    location_id: Optional[int] = None,
     status: Optional[str] = None,
 ) -> list[dict]:
     query = "SELECT * FROM shifts"
     clauses: list[str] = []
     params: list[Any] = []
-    if restaurant_id is not None:
-        clauses.append("restaurant_id=?")
-        params.append(restaurant_id)
+    if location_id is not None:
+        clauses.append("location_id=?")
+        params.append(location_id)
     if status is not None:
         clauses.append("status=?")
         params.append(status)
@@ -459,7 +478,7 @@ async def get_shift_by_platform_id(
 
 async def update_shift(db: aiosqlite.Connection, shift_id: int, data: dict) -> None:
     allowed = {
-        "restaurant_id",
+        "location_id",
         "scheduling_platform_id",
         "role",
         "date",
@@ -705,12 +724,12 @@ async def insert_integration_event(db: aiosqlite.Connection, data: dict) -> int:
     encoded = _encode_json("integration_events", data)
     cur = await db.execute(
         """INSERT INTO integration_events
-           (platform, restaurant_id, source_event_id, event_type, event_scope, payload,
+           (platform, location_id, source_event_id, event_type, event_scope, payload,
             received_at, processed_at, status, error)
            VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (
             encoded["platform"],
-            encoded.get("restaurant_id"),
+            encoded.get("location_id"),
             encoded.get("source_event_id"),
             encoded.get("event_type"),
             encoded.get("event_scope"),
@@ -726,7 +745,7 @@ async def insert_integration_event(db: aiosqlite.Connection, data: dict) -> int:
 
 
 async def update_integration_event(db: aiosqlite.Connection, event_id: int, data: dict) -> None:
-    allowed = {"restaurant_id", "processed_at", "status", "error", "event_type", "event_scope", "payload"}
+    allowed = {"location_id", "processed_at", "status", "error", "event_type", "event_scope", "payload"}
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
         return
@@ -764,29 +783,30 @@ async def insert_sync_job(db: aiosqlite.Connection, data: dict) -> int:
         if existing is not None:
             return int(existing["id"])
 
+    normalized = _normalize_write_aliases(data)
     cur = await db.execute(
         """INSERT INTO sync_jobs
-           (platform, restaurant_id, integration_event_id, job_type, priority, scope, scope_ref,
+           (platform, location_id, integration_event_id, job_type, priority, scope, scope_ref,
             window_start, window_end, status, attempt_count, max_attempts, next_run_at,
             started_at, completed_at, last_error, idempotency_key)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            data["platform"],
-            data.get("restaurant_id"),
-            data.get("integration_event_id"),
-            data["job_type"],
-            data.get("priority", 50),
-            data.get("scope"),
-            data.get("scope_ref"),
-            data.get("window_start"),
-            data.get("window_end"),
-            data.get("status", "queued"),
-            data.get("attempt_count", 0),
-            data.get("max_attempts", 3),
-            data.get("next_run_at", datetime.utcnow().isoformat()),
-            data.get("started_at"),
-            data.get("completed_at"),
-            data.get("last_error"),
+            normalized["platform"],
+            normalized.get("location_id"),
+            normalized.get("integration_event_id"),
+            normalized["job_type"],
+            normalized.get("priority", 50),
+            normalized.get("scope"),
+            normalized.get("scope_ref"),
+            normalized.get("window_start"),
+            normalized.get("window_end"),
+            normalized.get("status", "queued"),
+            normalized.get("attempt_count", 0),
+            normalized.get("max_attempts", 3),
+            normalized.get("next_run_at", datetime.utcnow().isoformat()),
+            normalized.get("started_at"),
+            normalized.get("completed_at"),
+            normalized.get("last_error"),
             idempotency_key,
         ),
     )
@@ -826,7 +846,7 @@ async def list_sync_jobs(
     *,
     status: Optional[str] = None,
     platform: Optional[str] = None,
-    restaurant_id: Optional[int] = None,
+    location_id: Optional[int] = None,
     limit: int = 100,
 ) -> list[dict]:
     query = "SELECT * FROM sync_jobs"
@@ -838,9 +858,9 @@ async def list_sync_jobs(
     if platform is not None:
         clauses.append("platform=?")
         params.append(platform)
-    if restaurant_id is not None:
-        clauses.append("restaurant_id=?")
-        params.append(restaurant_id)
+    if location_id is not None:
+        clauses.append("location_id=?")
+        params.append(location_id)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY priority ASC, next_run_at ASC, id ASC LIMIT ?"
@@ -947,20 +967,20 @@ async def list_sync_runs(db: aiosqlite.Connection, sync_job_id: int) -> list[dic
 async def find_pending_sync_job_for_scope(
     db: aiosqlite.Connection,
     *,
-    restaurant_id: int,
+    location_id: int,
     job_type: str,
     scope_ref: str,
 ) -> Optional[dict]:
     async with db.execute(
         """SELECT *
            FROM sync_jobs
-           WHERE restaurant_id=?
+           WHERE location_id=?
              AND job_type=?
              AND scope_ref=?
              AND status IN ('queued', 'running')
            ORDER BY priority ASC, next_run_at ASC, id ASC
            LIMIT 1""",
-        (restaurant_id, job_type, scope_ref),
+        (location_id, job_type, scope_ref),
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None
@@ -1014,7 +1034,7 @@ async def get_shift_status(db: aiosqlite.Connection, shift_id: int) -> Optional[
     if shift is None:
         return None
 
-    restaurant = await get_restaurant(db, shift["restaurant_id"]) if shift.get("restaurant_id") else None
+    location = await get_location(db, shift["location_id"]) if shift.get("location_id") else None
     cascade = await get_active_cascade_for_shift(db, shift_id)
     if cascade is None:
         async with db.execute(
@@ -1028,24 +1048,24 @@ async def get_shift_status(db: aiosqlite.Connection, shift_id: int) -> Optional[
 
     return {
         "shift": shift,
-        "restaurant": restaurant,
+        "location": location,
         "cascade": cascade,
         "filled_worker": filled_worker,
         "outreach_attempts": attempts,
     }
 
 
-async def get_restaurant_status(
+async def get_location_status(
     db: aiosqlite.Connection,
-    restaurant_id: int,
+    location_id: int,
     audit_limit: int = 12,
 ) -> Optional[dict]:
-    restaurant = await get_restaurant(db, restaurant_id)
-    if restaurant is None:
+    location = await get_location(db, location_id)
+    if location is None:
         return None
 
-    workers = await list_workers(db, restaurant_id=restaurant_id)
-    shifts = await list_shifts(db, restaurant_id=restaurant_id)
+    workers = await list_workers(db, location_id=location_id)
+    shifts = await list_shifts(db, location_id=location_id)
     shift_ids = {shift["id"] for shift in shifts}
     shift_by_id = {shift["id"]: shift for shift in shifts}
     worker_by_id = {worker["id"]: worker for worker in workers}
@@ -1108,20 +1128,25 @@ async def get_restaurant_status(
 
     today = datetime.utcnow().date().isoformat()
     worker_preview = workers[:8]
-    audit_rows = await list_audit_log(
+    location_audit = await list_audit_log(
         db,
-        entity_type="restaurant",
-        entity_id=restaurant_id,
+        entity_type="location",
+        entity_id=location_id,
         limit=audit_limit,
     )
+    audit_rows = sorted(
+        location_audit,
+        key=lambda row: (row.get("timestamp") or "", row.get("id") or 0),
+        reverse=True,
+    )[:audit_limit]
     recent_sync_jobs = await list_sync_jobs(
         db,
-        restaurant_id=restaurant_id,
+        location_id=location_id,
         limit=8,
     )
 
     return {
-        "restaurant": restaurant,
+        "location": location,
         "metrics": {
             "workers_total": len(workers),
             "workers_sms_ready": sum(1 for worker in workers if worker.get("sms_consent_status") == "granted"),
@@ -1140,15 +1165,16 @@ async def get_restaurant_status(
     }
 
 
-async def get_dashboard_summary(db: aiosqlite.Connection, restaurant_id: Optional[int] = None) -> dict:
-    shifts = await list_shifts(db, restaurant_id=restaurant_id)
+async def get_dashboard_summary(db: aiosqlite.Connection, location_id: Optional[int] = None) -> dict:
+    shifts = await list_shifts(db, location_id=location_id)
     cascades = await list_cascades(db)
-    if restaurant_id is not None:
+    if location_id is not None:
         cascades = [
             cascade for cascade in cascades
             if any(shift["id"] == cascade["shift_id"] for shift in shifts)
         ]
-    workers = await list_workers(db, restaurant_id=restaurant_id)
+    workers = await list_workers(db, location_id=location_id)
+    total_locations = len(await list_locations(db)) if location_id is None else 1
 
     active_shift_ids = {cascade["shift_id"] for cascade in cascades if cascade["status"] == "active"}
     broadcast_cascades_active = sum(
@@ -1158,8 +1184,8 @@ async def get_dashboard_summary(db: aiosqlite.Connection, restaurant_id: Optiona
     )
     workers_on_standby = sum(len(cascade.get("standby_queue") or []) for cascade in cascades)
     return {
-        "restaurant_id": restaurant_id,
-        "restaurants": len(await list_restaurants(db)) if restaurant_id is None else 1,
+        "location_id": location_id,
+        "locations": total_locations,
         "workers": len(workers),
         "shifts_total": len(shifts),
         "shifts_vacant": sum(1 for shift in shifts if shift["status"] == "vacant"),
