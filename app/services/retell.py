@@ -95,7 +95,7 @@ def create_sms_chat(
         payload["override_agent_id"] = aid
 
     response = httpx.post(
-        "https://api.retellai.com/create-outbound-sms",
+        "https://api.retellai.com/create-sms-chat",
         headers={"Authorization": f"Bearer {settings.retell_api_key}"},
         json=payload,
         timeout=30.0,

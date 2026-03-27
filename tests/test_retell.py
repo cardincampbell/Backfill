@@ -122,7 +122,7 @@ def test_create_sms_chat_uses_outbound_chat_agent(monkeypatch):
     )
 
     assert chat_id == "chat_123"
-    assert captured["url"] == "https://api.retellai.com/create-outbound-sms"
+    assert captured["url"] == "https://api.retellai.com/create-sms-chat"
     assert captured["json"]["override_agent_id"] == "chat-outbound"
     assert captured["json"]["metadata"]["system_message"] == "hello"
     assert captured["json"]["metadata"]["cascade_id"] == 1
@@ -159,7 +159,7 @@ def test_create_sms_chat_falls_back_to_number_level_agent_binding(monkeypatch):
     )
 
     assert chat_id == "chat_456"
-    assert captured["url"] == "https://api.retellai.com/create-outbound-sms"
+    assert captured["url"] == "https://api.retellai.com/create-sms-chat"
     assert "override_agent_id" not in captured["json"]
     assert captured["json"]["metadata"]["system_message"] == "hello fallback"
     assert captured["json"]["metadata"]["source"] == "onboarding"
