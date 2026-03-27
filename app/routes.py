@@ -15,13 +15,15 @@ import aiosqlite
 from app.db.database import get_db
 from app.db import queries
 from app.models.location import Location, LocationCreate
+from app.models.organization import Organization, OrganizationCreate
 from app.models.worker import Worker, WorkerCreate
 from app.models.shift import Shift, ShiftCreate
 from app.models.cascade import Cascade
 from app.services import shift_manager, cascade as cascade_svc
+from app.services import retell_reconcile
 from app.models.audit import AuditAction
 from app.services import audit as audit_svc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -42,8 +44,11 @@ class BackfillResponse(BaseModel):
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
+    organization_id: Optional[int] = None
+    organization_name: Optional[str] = None
     vertical: Optional[str] = None
     address: Optional[str] = None
+    employee_count: Optional[int] = None
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = None
     manager_email: Optional[str] = None
@@ -122,6 +127,7 @@ class ShiftStatusResponse(BaseModel):
     cascade: Optional[dict] = None
     filled_worker: Optional[dict] = None
     outreach_attempts: list[dict]
+    retell_conversations: list[dict] = []
 
 
 class LocationStatusResponse(BaseModel):
@@ -148,11 +154,140 @@ class OnboardingLinkResponse(BaseModel):
     url: str
     message_sid: Optional[str] = None
 
+
+class SignupSessionResponse(BaseModel):
+    id: int
+    status: str
+    call_type: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    contact_email: Optional[str] = None
+    role_name: Optional[str] = None
+    business_name: Optional[str] = None
+    location_name: Optional[str] = None
+    vertical: Optional[str] = None
+    location_count: Optional[int] = None
+    employee_count: Optional[int] = None
+    address: Optional[str] = None
+    pain_point_summary: Optional[str] = None
+    urgency: Optional[str] = None
+    notes: Optional[str] = None
+    setup_kind: Optional[str] = None
+    scheduling_platform: Optional[str] = None
+    extracted_fields: dict = Field(default_factory=dict)
+    organization: Optional[dict] = None
+    location: Optional[dict] = None
+
+
+class SignupSessionCompleteRequest(BaseModel):
+    business_name: Optional[str] = None
+    location_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    contact_email: Optional[str] = None
+    vertical: Optional[str] = None
+    location_count: Optional[int] = None
+    employee_count: Optional[int] = None
+    address: Optional[str] = None
+    pain_point_summary: Optional[str] = None
+    urgency: Optional[str] = None
+    notes: Optional[str] = None
+    setup_kind: Optional[str] = None
+    scheduling_platform: Optional[str] = None
+
+
+class SignupSessionCompleteResponse(BaseModel):
+    status: str
+    organization: Optional[dict] = None
+    location: dict
+    next_path: str
+
+
+class RetellReconcileRequest(BaseModel):
+    call_id: Optional[str] = None
+    chat_id: Optional[str] = None
+    lookback_minutes: int = 20
+    limit: int = 50
+
+
+async def _resolve_organization_id(
+    db: aiosqlite.Connection,
+    *,
+    organization_id: Optional[int],
+    organization_name: Optional[str],
+    vertical: Optional[str],
+    contact_name: Optional[str],
+    contact_phone: Optional[str],
+    contact_email: Optional[str],
+) -> Optional[int]:
+    if organization_id is not None:
+        organization = await queries.get_organization(db, organization_id)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        return organization_id
+
+    normalized_name = (organization_name or "").strip()
+    if not normalized_name:
+        return None
+
+    existing = await queries.get_organization_by_name(db, normalized_name)
+    if existing is not None:
+        return int(existing["id"])
+
+    return await queries.insert_organization(
+        db,
+        {
+            "name": normalized_name,
+            "vertical": vertical,
+            "contact_name": contact_name,
+            "contact_phone": contact_phone,
+            "contact_email": contact_email,
+        },
+    )
+
+
+@router.post("/organizations", response_model=Organization, status_code=201)
+async def create_organization(
+    body: OrganizationCreate,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    existing = await queries.get_organization_by_name(db, body.name)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Organization already exists")
+    organization_id = await queries.insert_organization(db, body.model_dump(mode="json"))
+    return {**body.model_dump(mode="json"), "id": organization_id}
+
+
+@router.get("/organizations", response_model=List[Organization])
+async def list_organizations(db: aiosqlite.Connection = Depends(get_db)):
+    return await queries.list_organizations(db)
+
+
+@router.get("/organizations/{organization_id}", response_model=Organization)
+async def get_organization(
+    organization_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    row = await queries.get_organization(db, organization_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return row
+
 @router.post("/locations", response_model=Location, status_code=201)
 async def create_location(
     body: LocationCreate, db: aiosqlite.Connection = Depends(get_db)
 ):
     data = body.model_dump(mode="json")
+    data["organization_id"] = await _resolve_organization_id(
+        db,
+        organization_id=data.get("organization_id"),
+        organization_name=data.get("organization_name"),
+        vertical=data.get("vertical"),
+        contact_name=data.get("manager_name"),
+        contact_phone=data.get("manager_phone"),
+        contact_email=data.get("manager_email"),
+    )
+    data.pop("organization_name", None)
     location_id = await queries.insert_location(db, data)
     await audit_svc.append(
         db,
@@ -160,7 +295,9 @@ async def create_location(
         entity_type="location",
         entity_id=location_id,
     )
-    return {**data, "id": location_id}
+    created = await queries.get_location(db, location_id)
+    assert created is not None
+    return created
 
 
 @router.get("/locations", response_model=List[Location])
@@ -201,10 +338,36 @@ async def update_location(
     row = await queries.get_location(db, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Location not found")
-    await queries.update_location(
-        db, location_id, body.model_dump(mode="json", exclude_none=True)
-    )
+    payload = body.model_dump(mode="json", exclude_none=True)
+    if "organization_id" in payload or "organization_name" in payload:
+        payload["organization_id"] = await _resolve_organization_id(
+            db,
+            organization_id=payload.get("organization_id"),
+            organization_name=payload.get("organization_name"),
+            vertical=payload.get("vertical") or row.get("vertical"),
+            contact_name=payload.get("manager_name") or row.get("manager_name"),
+            contact_phone=payload.get("manager_phone") or row.get("manager_phone"),
+            contact_email=payload.get("manager_email") or row.get("manager_email"),
+        )
+        payload.pop("organization_name", None)
+    await queries.update_location(db, location_id, payload)
     return await queries.get_location(db, location_id)
+
+
+@router.post("/retell/reconcile")
+async def reconcile_retell_activity(
+    body: RetellReconcileRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    if body.call_id:
+        return await retell_reconcile.sync_call_by_id(db, body.call_id)
+    if body.chat_id:
+        return await retell_reconcile.sync_chat_by_id(db, body.chat_id)
+    return await retell_reconcile.sync_recent_activity(
+        db,
+        lookback_minutes=body.lookback_minutes,
+        limit=body.limit,
+    )
 
 
 @router.post("/locations/{location_id}/sync-roster")
@@ -721,6 +884,39 @@ async def create_onboarding_link(body: OnboardingLinkRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/onboarding/sessions/{token}", response_model=SignupSessionResponse)
+async def get_signup_session(
+    token: str,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import onboarding as onboarding_svc
+
+    session = await onboarding_svc.get_signup_session_by_token(db, token)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Onboarding session not found")
+    return session
+
+
+@router.post("/onboarding/sessions/{token}/complete", response_model=SignupSessionCompleteResponse)
+async def complete_signup_session(
+    token: str,
+    body: SignupSessionCompleteRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    from app.services import onboarding as onboarding_svc
+
+    try:
+        return await onboarding_svc.complete_signup_session(
+            db,
+            token,
+            body.model_dump(mode="json", exclude_none=True),
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 # ── reminder SMS ──────────────────────────────────────────────────────────────

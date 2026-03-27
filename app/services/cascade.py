@@ -11,10 +11,11 @@ Outreach policy:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import aiosqlite
 
+from app.config import settings
 from app.db.queries import (
     get_shift,
     get_cascade,
@@ -296,6 +297,7 @@ async def _send_initial_outreach(
                 "tier": tier,
                 "channel": "sms",
                 "message_sid": sms_sid,
+                "chat_id": sms_sid if settings.retell_sms_enabled and str(sms_sid).startswith("chat_") else None,
             },
         )
 
@@ -369,11 +371,16 @@ def _fill_tier_for_attempt(tier: int) -> str:
     return "tier2_alumni" if tier == 2 else "tier1_internal"
 
 
+def _shift_start_datetime(shift: dict) -> datetime:
+    return datetime.fromisoformat(f"{shift['date']}T{shift['start_time']}")
+
+
 async def claim_shift(
     db: aiosqlite.Connection,
     cascade_id: int,
     worker_id: int,
     summary: str = "",
+    eta_minutes: Optional[int] = None,
 ) -> dict:
     from app.services.shift_manager import mark_filled
 
@@ -428,6 +435,68 @@ async def claim_shift(
     if confirmed_worker_id == worker_id:
         return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
 
+    shift_start = _shift_start_datetime(shift)
+    latest_allowed_arrival = shift_start + timedelta(
+        minutes=settings.shift_late_arrival_grace_minutes
+    )
+    now_dt = datetime.utcnow()
+    if shift_start <= now_dt and eta_minutes is None:
+        for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
+            await update_outreach_attempt(
+                db,
+                attempt_id,
+                conversation_summary=summary,
+            )
+        return {
+            "status": "eta_required",
+            "worker_id": worker_id,
+            "shift_id": shift["id"],
+            "shift_start_at": shift_start.isoformat(),
+            "lateness_grace_minutes": settings.shift_late_arrival_grace_minutes,
+        }
+
+    arrival_dt = None
+    late_by_minutes = 0
+    if eta_minutes is not None:
+        arrival_dt = now_dt + timedelta(minutes=eta_minutes)
+        if arrival_dt > latest_allowed_arrival:
+            responded_at = datetime.utcnow().isoformat()
+            for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
+                await update_outreach_attempt(
+                    db,
+                    attempt_id,
+                    outcome="too_late",
+                    status="responded",
+                    responded_at=responded_at,
+                    conversation_summary=summary,
+                )
+            await audit_svc.append(
+                db,
+                AuditAction.outreach_response,
+                entity_type="cascade",
+                entity_id=cascade_id,
+                details={
+                    "worker_id": worker_id,
+                    "outcome": "too_late",
+                    "shift_id": shift["id"],
+                    "eta_minutes": eta_minutes,
+                    "latest_allowed_arrival": latest_allowed_arrival.isoformat(),
+                },
+            )
+            await _update_behavioral_scores(db, worker_id)
+            return {
+                "status": "too_late",
+                "worker_id": worker_id,
+                "shift_id": shift["id"],
+                "arrival_time": arrival_dt.isoformat(),
+                "latest_allowed_arrival": latest_allowed_arrival.isoformat(),
+                "lateness_grace_minutes": settings.shift_late_arrival_grace_minutes,
+            }
+        late_by_minutes = max(
+            0,
+            int((arrival_dt - shift_start).total_seconds() // 60),
+        )
+
     for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
         await update_outreach_attempt(
             db,
@@ -449,10 +518,22 @@ async def claim_shift(
         AuditAction.outreach_response,
         entity_type="cascade",
         entity_id=cascade_id,
-        details={"worker_id": worker_id, "outcome": "confirmed", "shift_id": shift["id"]},
+        details={
+            "worker_id": worker_id,
+            "outcome": "confirmed",
+            "shift_id": shift["id"],
+            "eta_minutes": eta_minutes,
+            "arrival_time": arrival_dt.isoformat() if arrival_dt else None,
+            "late_by_minutes": late_by_minutes,
+        },
     )
     await _update_behavioral_scores(db, worker_id)
-    return {"status": "confirmed", "worker_id": worker_id}
+    return {
+        "status": "confirmed",
+        "worker_id": worker_id,
+        "arrival_time": arrival_dt.isoformat() if arrival_dt else None,
+        "late_by_minutes": late_by_minutes,
+    }
 
 
 async def decline_shift(

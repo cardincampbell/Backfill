@@ -37,11 +37,36 @@ class Settings:
     # Backend
     database_url: str = os.environ.get("DATABASE_URL", "backfill.db")
     backfill_webhook_url: str = os.environ.get("BACKFILL_WEBHOOK_URL", "")
+    backfill_web_base_url: str = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
     backfill_allowed_origins: List[str] = [
         value.strip()
         for value in os.environ.get("BACKFILL_ALLOWED_ORIGINS", "").split(",")
         if value.strip()
     ]
+    shift_late_arrival_grace_minutes: int = int(
+        os.environ.get("SHIFT_LATE_ARRIVAL_GRACE_MINUTES", "15")
+    )
+    retell_reconcile_default_lookback_minutes: int = int(
+        os.environ.get("RETELL_RECONCILE_DEFAULT_LOOKBACK_MINUTES", "20")
+    )
+    retell_reconcile_overlap_minutes: int = int(
+        os.environ.get("RETELL_RECONCILE_OVERLAP_MINUTES", "5")
+    )
+    retell_reconcile_urgent_window_hours: int = int(
+        os.environ.get("RETELL_RECONCILE_URGENT_WINDOW_HOURS", "3")
+    )
+    retell_reconcile_targeted_lookback_minutes: int = int(
+        os.environ.get("RETELL_RECONCILE_TARGETED_LOOKBACK_MINUTES", "180")
+    )
+    retell_reconcile_failure_lookback_minutes: int = int(
+        os.environ.get("RETELL_RECONCILE_FAILURE_LOOKBACK_MINUTES", "60")
+    )
+    retell_webhook_stale_minutes: int = int(
+        os.environ.get("RETELL_WEBHOOK_STALE_MINUTES", "10")
+    )
+    retell_reconcile_drift_grace_minutes: int = int(
+        os.environ.get("RETELL_RECONCILE_DRIFT_GRACE_MINUTES", "3")
+    )
 
     # 7shifts
     sevenshifts_client_id: str = os.environ.get("SEVENSHIFTS_CLIENT_ID", "")

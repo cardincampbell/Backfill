@@ -23,11 +23,25 @@ async def init_db():
         await db.execute("PRAGMA foreign_keys=ON")
 
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS organizations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT NOT NULL UNIQUE,
+                vertical      TEXT,
+                contact_name  TEXT,
+                contact_phone TEXT,
+                contact_email TEXT,
+                location_count_estimate INTEGER
+            )
+        """)
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS locations (
                 id                        INTEGER PRIMARY KEY AUTOINCREMENT,
                 name                      TEXT NOT NULL,
+                organization_id           INTEGER REFERENCES organizations(id),
                 vertical                  TEXT NOT NULL DEFAULT 'restaurant',
                 address                   TEXT,
+                employee_count            INTEGER,
                 manager_name              TEXT,
                 manager_phone             TEXT,
                 manager_email             TEXT,
@@ -132,6 +146,94 @@ async def init_db():
                 responded_at         TEXT,
                 conversation_summary TEXT
             )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS retell_conversations (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id          TEXT NOT NULL UNIQUE,
+                conversation_type    TEXT NOT NULL,
+                event_type           TEXT,
+                direction            TEXT,
+                status               TEXT,
+                agent_id             TEXT,
+                location_id          INTEGER REFERENCES locations(id),
+                shift_id             INTEGER REFERENCES shifts(id),
+                cascade_id           INTEGER REFERENCES cascades(id),
+                worker_id            INTEGER REFERENCES workers(id),
+                phone_from           TEXT,
+                phone_to             TEXT,
+                disconnection_reason TEXT,
+                conversation_summary TEXT,
+                transcript_text      TEXT,
+                transcript_items     TEXT NOT NULL DEFAULT '[]',
+                analysis             TEXT NOT NULL DEFAULT '{}',
+                metadata             TEXT NOT NULL DEFAULT '{}',
+                raw_payload          TEXT NOT NULL DEFAULT '{}',
+                started_at           TEXT,
+                ended_at             TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_retell_conversations_shift
+            ON retell_conversations(shift_id, id DESC)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_retell_conversations_cascade
+            ON retell_conversations(cascade_id, id DESC)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_retell_conversations_worker
+            ON retell_conversations(worker_id, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS app_state (
+                key        TEXT PRIMARY KEY,
+                value      TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS onboarding_sessions (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash           TEXT NOT NULL UNIQUE,
+                source_conversation_id INTEGER REFERENCES retell_conversations(id),
+                source_external_id   TEXT UNIQUE,
+                organization_id      INTEGER REFERENCES organizations(id),
+                location_id          INTEGER REFERENCES locations(id),
+                status               TEXT NOT NULL DEFAULT 'pending',
+                call_type            TEXT,
+                contact_name         TEXT,
+                contact_phone        TEXT,
+                contact_email        TEXT,
+                role_name            TEXT,
+                business_name        TEXT,
+                location_name        TEXT,
+                vertical             TEXT,
+                location_count       INTEGER,
+                employee_count       INTEGER,
+                address              TEXT,
+                pain_point_summary   TEXT,
+                urgency              TEXT,
+                notes                TEXT,
+                setup_kind           TEXT,
+                scheduling_platform  TEXT,
+                extracted_fields     TEXT NOT NULL DEFAULT '{}',
+                sent_message_sid     TEXT,
+                sent_at              TEXT,
+                completed_at         TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_org
+            ON onboarding_sessions(organization_id, id DESC)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_location
+            ON onboarding_sessions(location_id, id DESC)
         """)
 
         await db.execute("""
@@ -245,6 +347,24 @@ async def init_db():
             )
         """)
 
+        await _ensure_column(
+            db,
+            "organizations",
+            "location_count_estimate",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "organization_id",
+            "INTEGER REFERENCES organizations(id)",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "employee_count",
+            "INTEGER",
+        )
         await _ensure_column(
             db,
             "locations",

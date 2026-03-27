@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { SectionCard } from "@/components/section-card";
-import { createLocation, importWorkersCsvForLocation } from "@/lib/server-api";
+import { createLocation, getLocation, importWorkersCsvForLocation, updateLocation } from "@/lib/server-api";
 
 type SetupUploadPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -12,7 +12,9 @@ type SetupUploadPageProps = {
 async function submitCsvSetup(formData: FormData) {
   "use server";
 
+  const existingLocationId = Number(formData.get("location_id") || 0) || undefined;
   const locationName = String(formData.get("location_name") ?? "").trim();
+  const organizationName = String(formData.get("organization_name") ?? "").trim();
   const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const file = formData.get("roster_file");
 
@@ -24,8 +26,9 @@ async function submitCsvSetup(formData: FormData) {
   }
 
   try {
-    const location = await createLocation({
+    const payload = {
       name: locationName,
+      organization_name: organizationName || undefined,
       vertical,
       address: String(formData.get("address") ?? "").trim() || undefined,
       manager_name: String(formData.get("manager_name") ?? "").trim() || undefined,
@@ -33,7 +36,10 @@ async function submitCsvSetup(formData: FormData) {
       manager_email: String(formData.get("manager_email") ?? "").trim() || undefined,
       scheduling_platform: "backfill_native",
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
-    });
+    };
+    const location = existingLocationId
+      ? await updateLocation(existingLocationId, payload)
+      : await createLocation(payload);
 
     const result = await importWorkersCsvForLocation(location.id, file);
 
@@ -49,11 +55,36 @@ async function submitCsvSetup(formData: FormData) {
 
 export default async function SetupUploadPage({ searchParams }: SetupUploadPageProps) {
   const params = searchParams ? await searchParams : {};
+  const resumeLocationId = typeof params.location_id === "string" ? Number(params.location_id) || 0 : 0;
   const status = typeof params.status === "string" ? params.status : "";
   const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const created = typeof params.created === "string" ? params.created : "";
   const skipped = typeof params.skipped === "string" ? params.skipped : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
+  const existingLocation = resumeLocationId ? await getLocation(resumeLocationId) : null;
+  const defaultLocationName = typeof params.location_name === "string" ? decodeURIComponent(params.location_name) : existingLocation?.name ?? "";
+  const defaultOrganizationName =
+    typeof params.organization_name === "string"
+      ? decodeURIComponent(params.organization_name)
+      : existingLocation?.organization_name ?? "";
+  const defaultVertical = typeof params.vertical === "string" ? params.vertical : existingLocation?.vertical ?? "restaurant";
+  const defaultAddress = typeof params.address === "string" ? decodeURIComponent(params.address) : existingLocation?.address ?? "";
+  const defaultManagerName =
+    typeof params.manager_name === "string"
+      ? decodeURIComponent(params.manager_name)
+      : existingLocation?.manager_name ?? "";
+  const defaultManagerPhone =
+    typeof params.manager_phone === "string"
+      ? decodeURIComponent(params.manager_phone)
+      : existingLocation?.manager_phone ?? "";
+  const defaultManagerEmail =
+    typeof params.manager_email === "string"
+      ? decodeURIComponent(params.manager_email)
+      : existingLocation?.manager_email ?? "";
+  const defaultOnboardingInfo =
+    typeof params.onboarding_info === "string"
+      ? decodeURIComponent(params.onboarding_info)
+      : existingLocation?.onboarding_info ?? "";
 
   return (
     <main className="section">
@@ -108,14 +139,19 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
           </div>
         </div>
         <form className="setup-form" action={submitCsvSetup}>
+          {resumeLocationId ? <input name="location_id" type="hidden" value={resumeLocationId} /> : null}
           <div className="form-grid">
             <label className="field">
+              <span>Business name</span>
+              <input name="organization_name" placeholder="Coastal Hospitality Group" defaultValue={defaultOrganizationName} />
+            </label>
+            <label className="field">
               <span>Location name</span>
-              <input name="location_name" placeholder="Coastal Grill Downtown" required />
+              <input name="location_name" placeholder="Coastal Grill Downtown" defaultValue={defaultLocationName} required />
             </label>
             <label className="field">
               <span>Vertical</span>
-              <select name="vertical" defaultValue="restaurant">
+              <select name="vertical" defaultValue={defaultVertical}>
                 <option value="restaurant">restaurant</option>
                 <option value="healthcare">healthcare</option>
                 <option value="warehouse">warehouse</option>
@@ -126,19 +162,19 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
             </label>
             <label className="field">
               <span>Address</span>
-              <input name="address" placeholder="123 Main St, Los Angeles, CA" />
+              <input name="address" placeholder="123 Main St, Los Angeles, CA" defaultValue={defaultAddress} />
             </label>
             <label className="field">
               <span>Primary contact name</span>
-              <input name="manager_name" placeholder="Jordan Lee" />
+              <input name="manager_name" placeholder="Jordan Lee" defaultValue={defaultManagerName} />
             </label>
             <label className="field">
               <span>Primary contact phone</span>
-              <input name="manager_phone" placeholder="+13105550100" />
+              <input name="manager_phone" placeholder="+13105550100" defaultValue={defaultManagerPhone} />
             </label>
             <label className="field">
               <span>Primary contact email</span>
-              <input name="manager_email" placeholder="mike@coastalgrill.com" />
+              <input name="manager_email" placeholder="mike@coastalgrill.com" defaultValue={defaultManagerEmail} />
             </label>
             <label className="field">
               <span>Roster CSV</span>
@@ -149,6 +185,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
               <textarea
                 name="onboarding_info"
                 rows={4}
+                defaultValue={defaultOnboardingInfo}
                 placeholder="Parking, arrival instructions, dress code, or reporting notes."
               />
             </label>

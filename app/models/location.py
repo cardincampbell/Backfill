@@ -25,8 +25,11 @@ class BusinessVertical(str, Enum):
 
 class LocationCreate(BaseModel):
     name: str
+    organization_id: Optional[int] = None
+    organization_name: Optional[str] = None
     vertical: BusinessVertical = BusinessVertical.restaurant
     address: Optional[str] = None
+    employee_count: Optional[int] = Field(default=None, ge=1)
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = Field(None, description="E.164 format")
     manager_email: Optional[str] = None

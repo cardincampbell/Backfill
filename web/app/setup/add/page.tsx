@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { SectionCard } from "@/components/section-card";
-import { createLocation, createWorker } from "@/lib/server-api";
+import { createLocation, createWorker, getLocation, updateLocation } from "@/lib/server-api";
 
 type SetupAddPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -12,7 +12,9 @@ type SetupAddPageProps = {
 async function submitManualSetup(formData: FormData) {
   "use server";
 
+  const existingLocationId = Number(formData.get("location_id") || 0) || undefined;
   const locationName = String(formData.get("location_name") ?? "").trim();
+  const organizationName = String(formData.get("organization_name") ?? "").trim();
   const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const workerName = String(formData.get("worker_name") ?? "").trim();
   const workerPhone = String(formData.get("worker_phone") ?? "").trim();
@@ -26,8 +28,9 @@ async function submitManualSetup(formData: FormData) {
   }
 
   try {
-    const location = await createLocation({
+    const payload = {
       name: locationName,
+      organization_name: organizationName || undefined,
       vertical,
       address: String(formData.get("address") ?? "").trim() || undefined,
       manager_name: String(formData.get("manager_name") ?? "").trim() || undefined,
@@ -35,7 +38,10 @@ async function submitManualSetup(formData: FormData) {
       manager_email: String(formData.get("manager_email") ?? "").trim() || undefined,
       scheduling_platform: "backfill_native",
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
-    });
+    };
+    const location = existingLocationId
+      ? await updateLocation(existingLocationId, payload)
+      : await createLocation(payload);
 
     const role = String(formData.get("worker_role") ?? "").trim();
     const certifications = String(formData.get("worker_certifications") ?? "")
@@ -64,9 +70,34 @@ async function submitManualSetup(formData: FormData) {
 
 export default async function SetupAddPage({ searchParams }: SetupAddPageProps) {
   const params = searchParams ? await searchParams : {};
+  const resumeLocationId = typeof params.location_id === "string" ? Number(params.location_id) || 0 : 0;
   const status = typeof params.status === "string" ? params.status : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
   const locationId = typeof params.location_id === "string" ? params.location_id : "";
+  const existingLocation = resumeLocationId ? await getLocation(resumeLocationId) : null;
+  const defaultLocationName = typeof params.location_name === "string" ? decodeURIComponent(params.location_name) : existingLocation?.name ?? "";
+  const defaultOrganizationName =
+    typeof params.organization_name === "string"
+      ? decodeURIComponent(params.organization_name)
+      : existingLocation?.organization_name ?? "";
+  const defaultVertical = typeof params.vertical === "string" ? params.vertical : existingLocation?.vertical ?? "restaurant";
+  const defaultAddress = typeof params.address === "string" ? decodeURIComponent(params.address) : existingLocation?.address ?? "";
+  const defaultManagerName =
+    typeof params.manager_name === "string"
+      ? decodeURIComponent(params.manager_name)
+      : existingLocation?.manager_name ?? "";
+  const defaultManagerPhone =
+    typeof params.manager_phone === "string"
+      ? decodeURIComponent(params.manager_phone)
+      : existingLocation?.manager_phone ?? "";
+  const defaultManagerEmail =
+    typeof params.manager_email === "string"
+      ? decodeURIComponent(params.manager_email)
+      : existingLocation?.manager_email ?? "";
+  const defaultOnboardingInfo =
+    typeof params.onboarding_info === "string"
+      ? decodeURIComponent(params.onboarding_info)
+      : existingLocation?.onboarding_info ?? "";
 
   return (
     <main className="section">
@@ -120,14 +151,19 @@ export default async function SetupAddPage({ searchParams }: SetupAddPageProps) 
           </div>
         </div>
         <form className="setup-form" action={submitManualSetup}>
+          {resumeLocationId ? <input name="location_id" type="hidden" value={resumeLocationId} /> : null}
           <div className="form-grid">
             <label className="field">
+              <span>Business name</span>
+              <input name="organization_name" placeholder="Coastal Hospitality Group" defaultValue={defaultOrganizationName} />
+            </label>
+            <label className="field">
               <span>Location name</span>
-              <input name="location_name" placeholder="Coastal Grill Downtown" required />
+              <input name="location_name" placeholder="Coastal Grill Downtown" defaultValue={defaultLocationName} required />
             </label>
             <label className="field">
               <span>Vertical</span>
-              <select name="vertical" defaultValue="restaurant">
+              <select name="vertical" defaultValue={defaultVertical}>
                 <option value="restaurant">restaurant</option>
                 <option value="healthcare">healthcare</option>
                 <option value="warehouse">warehouse</option>
@@ -138,19 +174,19 @@ export default async function SetupAddPage({ searchParams }: SetupAddPageProps) 
             </label>
             <label className="field">
               <span>Address</span>
-              <input name="address" placeholder="123 Main St, Los Angeles, CA" />
+              <input name="address" placeholder="123 Main St, Los Angeles, CA" defaultValue={defaultAddress} />
             </label>
             <label className="field">
               <span>Primary contact name</span>
-              <input name="manager_name" placeholder="Jordan Lee" />
+              <input name="manager_name" placeholder="Jordan Lee" defaultValue={defaultManagerName} />
             </label>
             <label className="field">
               <span>Primary contact phone</span>
-              <input name="manager_phone" placeholder="+13105550100" />
+              <input name="manager_phone" placeholder="+13105550100" defaultValue={defaultManagerPhone} />
             </label>
             <label className="field">
               <span>Primary contact email</span>
-              <input name="manager_email" placeholder="mike@coastalgrill.com" />
+              <input name="manager_email" placeholder="mike@coastalgrill.com" defaultValue={defaultManagerEmail} />
             </label>
             <label className="field">
               <span>Initial worker name</span>
@@ -185,6 +221,7 @@ export default async function SetupAddPage({ searchParams }: SetupAddPageProps) 
               <textarea
                 name="onboarding_info"
                 rows={4}
+                defaultValue={defaultOnboardingInfo}
                 placeholder="Parking, dress code, who to report to, special arrival notes."
               />
             </label>

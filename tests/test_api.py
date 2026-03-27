@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import re
 
 def _make_shift_payload(location_id: int, start_delta_hours: int = 12):
     start = datetime.utcnow() + timedelta(hours=start_delta_hours)
@@ -86,6 +87,74 @@ def test_onboarding_link_endpoint_sends_expected_setup_url(client, monkeypatch):
     assert payload["path"] == "/setup/connect?platform=deputy"
     assert payload["url"].endswith("/setup/connect?platform=deputy")
     assert sent
+
+
+def test_signup_session_api_loads_and_completes_from_retell_inbound_call(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM123")
+
+    webhook = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_signup_api_123",
+                "direction": "inbound",
+                "call_status": "ended",
+                "from_number": "+13105550199",
+                "to_number": "+14244992663",
+                "call_analysis": {
+                    "call_type": "business_inquiry",
+                    "caller_name": "Mina Patel",
+                    "business_name": "Pacific Clinics",
+                    "location_name": "Pacific Clinics West LA",
+                    "business_email": "mina@pacificclinics.com",
+                    "location_count": 5,
+                    "pain_point_summary": "Need faster same-day coverage for hourly support staff.",
+                    "urgency": "high",
+                },
+            },
+        },
+    )
+    assert webhook.status_code == 200
+    assert sent
+
+    match = re.search(r"/signup/([A-Za-z0-9_\-]+)", sent[0][1])
+    assert match is not None
+    token = match.group(1)
+
+    session = client.get(f"/api/onboarding/sessions/{token}")
+    assert session.status_code == 200
+    assert session.json()["business_name"] == "Pacific Clinics"
+    assert session.json()["contact_phone"] == "+13105550199"
+
+    completed = client.post(
+        f"/api/onboarding/sessions/{token}/complete",
+        json={
+            "business_name": "Pacific Clinics",
+            "location_name": "Pacific Clinics West LA",
+            "contact_name": "Mina Patel",
+            "contact_phone": "+13105550199",
+            "contact_email": "mina@pacificclinics.com",
+            "vertical": "healthcare",
+            "address": "123 Wilshire Blvd, Los Angeles, CA",
+            "employee_count": 42,
+            "location_count": 5,
+            "setup_kind": "manual_form",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+
+    assert completed.status_code == 200
+    payload = completed.json()
+    assert payload["status"] == "completed"
+    assert payload["location"]["name"] == "Pacific Clinics West LA"
+    assert payload["next_path"].startswith(f"/setup/add?location_id={payload['location']['id']}")
+
+    location = client.get(f"/api/locations/{payload['location']['id']}")
+    assert location.status_code == 200
+    assert location.json()["employee_count"] == 42
+    assert location.json()["manager_phone"] == "+13105550199"
 
 
 def test_connect_sync_endpoint_marks_native_lite_restaurant(client):
@@ -188,6 +257,7 @@ def test_location_alias_endpoints_work_with_generic_payloads(client):
         "/api/locations",
         json={
             "name": "South Bay Fulfillment",
+            "organization_name": "South Bay Ops",
             "vertical": "warehouse",
             "manager_name": "Jordan Lee",
             "manager_phone": "+13105550188",
@@ -197,6 +267,11 @@ def test_location_alias_endpoints_work_with_generic_payloads(client):
     assert created.status_code == 201
     location = created.json()
     assert location["vertical"] == "warehouse"
+    assert location["organization_name"] == "South Bay Ops"
+
+    organizations = client.get("/api/organizations")
+    assert organizations.status_code == 200
+    assert organizations.json()[0]["name"] == "South Bay Ops"
 
     fetched = client.get(f"/api/locations/{location['id']}")
     assert fetched.status_code == 200
@@ -257,6 +332,31 @@ def test_location_alias_endpoints_work_with_generic_payloads(client):
     assert dashboard.status_code == 200
     assert dashboard.json()["location_id"] == location["id"]
     assert dashboard.json()["locations"] == 1
+
+
+def test_retell_reconcile_endpoint_routes_to_recent_sync(client, monkeypatch):
+    async def _fake_sync(db, lookback_minutes=180, limit=50):
+        return {"status": "ok", "calls_synced": 2, "chats_synced": 1, "lookback_minutes": lookback_minutes}
+
+    monkeypatch.setattr("app.services.retell_reconcile.sync_recent_activity", _fake_sync)
+
+    response = client.post("/api/retell/reconcile", json={"lookback_minutes": 30, "limit": 5})
+
+    assert response.status_code == 200
+    assert response.json()["calls_synced"] == 2
+    assert response.json()["lookback_minutes"] == 30
+
+
+def test_retell_reconcile_endpoint_routes_to_specific_call(client, monkeypatch):
+    async def _fake_sync_call(db, call_id):
+        return {"status": "ok", "call_id": call_id, "conversation_id": 9}
+
+    monkeypatch.setattr("app.services.retell_reconcile.sync_call_by_id", _fake_sync_call)
+
+    response = client.post("/api/retell/reconcile", json={"call_id": "call_123"})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "call_id": "call_123", "conversation_id": 9}
 
 
 def test_manager_shift_creation_starts_backfill(client, monkeypatch):

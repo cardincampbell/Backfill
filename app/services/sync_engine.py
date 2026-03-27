@@ -245,6 +245,8 @@ async def enqueue_daily_reconcile(
     if location is None:
         raise ValueError(f"Location {location_id} not found")
     run_date = for_date or date.today()
+    window_reference = datetime.combine(run_date, datetime.min.time())
+    window_start, window_end = _window_for_job("daily_reconcile", reference=window_reference)
     job_id = await enqueue_sync_job(
         db,
         platform=location.get("scheduling_platform") or "backfill_native",
@@ -252,6 +254,8 @@ async def enqueue_daily_reconcile(
         job_type="daily_reconcile",
         scope="location",
         scope_ref=str(location_id),
+        window_start=window_start,
+        window_end=window_end,
         idempotency_key=f"daily:{location_id}:{run_date.isoformat()}",
     )
     return await queries.get_sync_job(db, job_id)

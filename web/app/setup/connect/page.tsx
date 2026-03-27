@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { SectionCard } from "@/components/section-card";
-import { connectAndSyncLocation, createLocation } from "@/lib/server-api";
+import { connectAndSyncLocation, createLocation, getLocation, updateLocation } from "@/lib/server-api";
 
 const platforms = [
   {
@@ -62,7 +62,9 @@ type SetupConnectPageProps = {
 async function submitConnectSetup(formData: FormData) {
   "use server";
 
+  const existingLocationId = Number(formData.get("location_id") || 0) || undefined;
   const locationName = String(formData.get("location_name") ?? "").trim();
+  const organizationName = String(formData.get("organization_name") ?? "").trim();
   const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const platform = String(formData.get("platform") ?? "").trim();
 
@@ -75,8 +77,9 @@ async function submitConnectSetup(formData: FormData) {
   }
 
   try {
-    const location = await createLocation({
+    const payload = {
       name: locationName,
+      organization_name: organizationName || undefined,
       vertical,
       address: String(formData.get("address") ?? "").trim() || undefined,
       manager_name: String(formData.get("manager_name") ?? "").trim() || undefined,
@@ -88,7 +91,10 @@ async function submitConnectSetup(formData: FormData) {
       writeback_enabled: formData.get("writeback_enabled") === "on",
       writeback_subscription_tier: formData.get("writeback_enabled") === "on" ? "premium" : "core",
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
-    });
+    };
+    const location = existingLocationId
+      ? await updateLocation(existingLocationId, payload)
+      : await createLocation(payload);
 
     const syncResult = await connectAndSyncLocation(location.id);
 
@@ -104,12 +110,42 @@ async function submitConnectSetup(formData: FormData) {
 
 export default async function SetupConnectPage({ searchParams }: SetupConnectPageProps) {
   const params = searchParams ? await searchParams : {};
+  const resumeLocationId = typeof params.location_id === "string" ? Number(params.location_id) || 0 : 0;
   const selectedPlatform = typeof params.platform === "string" ? params.platform : null;
   const status = typeof params.status === "string" ? params.status : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
   const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const syncStatus = typeof params.sync === "string" ? decodeURIComponent(params.sync) : "";
   const config = platformConfig[selectedPlatform ?? "7shifts"] ?? platformConfig["7shifts"];
+  const existingLocation = resumeLocationId ? await getLocation(resumeLocationId) : null;
+  const defaultLocationName = typeof params.location_name === "string" ? decodeURIComponent(params.location_name) : existingLocation?.name ?? "";
+  const defaultOrganizationName =
+    typeof params.organization_name === "string"
+      ? decodeURIComponent(params.organization_name)
+      : existingLocation?.organization_name ?? "";
+  const defaultVertical = typeof params.vertical === "string" ? params.vertical : existingLocation?.vertical ?? "restaurant";
+  const defaultAddress = typeof params.address === "string" ? decodeURIComponent(params.address) : existingLocation?.address ?? "";
+  const defaultManagerName =
+    typeof params.manager_name === "string"
+      ? decodeURIComponent(params.manager_name)
+      : existingLocation?.manager_name ?? "";
+  const defaultManagerPhone =
+    typeof params.manager_phone === "string"
+      ? decodeURIComponent(params.manager_phone)
+      : existingLocation?.manager_phone ?? "";
+  const defaultManagerEmail =
+    typeof params.manager_email === "string"
+      ? decodeURIComponent(params.manager_email)
+      : existingLocation?.manager_email ?? "";
+  const defaultOnboardingInfo =
+    typeof params.onboarding_info === "string"
+      ? decodeURIComponent(params.onboarding_info)
+      : existingLocation?.onboarding_info ?? "";
+  const defaultPlatformId =
+    typeof params.scheduling_platform_id === "string"
+      ? decodeURIComponent(params.scheduling_platform_id)
+      : existingLocation?.scheduling_platform_id ?? "";
+  const defaultWriteback = existingLocation?.writeback_enabled ?? false;
 
   return (
     <main className="section">
@@ -165,14 +201,19 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
           </div>
         </div>
         <form className="setup-form" action={submitConnectSetup}>
+          {resumeLocationId ? <input name="location_id" type="hidden" value={resumeLocationId} /> : null}
           <div className="form-grid">
             <label className="field">
+              <span>Business name</span>
+              <input name="organization_name" placeholder="Coastal Hospitality Group" defaultValue={defaultOrganizationName} />
+            </label>
+            <label className="field">
               <span>Location name</span>
-              <input name="location_name" placeholder="Coastal Grill Downtown" required />
+              <input name="location_name" placeholder="Coastal Grill Downtown" defaultValue={defaultLocationName} required />
             </label>
             <label className="field">
               <span>Vertical</span>
-              <select name="vertical" defaultValue="restaurant">
+              <select name="vertical" defaultValue={defaultVertical}>
                 <option value="restaurant">restaurant</option>
                 <option value="healthcare">healthcare</option>
                 <option value="warehouse">warehouse</option>
@@ -192,36 +233,37 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
             </label>
             <label className="field">
               <span>Address</span>
-              <input name="address" placeholder="123 Main St, Los Angeles, CA" />
+              <input name="address" placeholder="123 Main St, Los Angeles, CA" defaultValue={defaultAddress} />
             </label>
             <label className="field">
               <span>{config.idLabel}</span>
-              <input name="scheduling_platform_id" placeholder={config.idHint} />
+              <input name="scheduling_platform_id" placeholder={config.idHint} defaultValue={defaultPlatformId} />
             </label>
             <label className="field">
               <span>Primary contact name</span>
-              <input name="manager_name" placeholder="Jordan Lee" />
+              <input name="manager_name" placeholder="Jordan Lee" defaultValue={defaultManagerName} />
             </label>
             <label className="field">
               <span>Primary contact phone</span>
-              <input name="manager_phone" placeholder="+13105550100" />
+              <input name="manager_phone" placeholder="+13105550100" defaultValue={defaultManagerPhone} />
             </label>
             <label className="field">
               <span>Primary contact email</span>
-              <input name="manager_email" placeholder="mike@coastalgrill.com" />
+              <input name="manager_email" placeholder="mike@coastalgrill.com" defaultValue={defaultManagerEmail} />
             </label>
             <label className="field field-span-2">
               <span>Onboarding notes</span>
               <textarea
                 name="onboarding_info"
                 rows={4}
+                defaultValue={defaultOnboardingInfo}
                 placeholder="Connection notes, reporting instructions, or any special context for the location."
               />
             </label>
             <label className="field field-span-2 checkbox-field">
               <span>Paid write-back</span>
               <label className="checkbox-inline">
-                <input name="writeback_enabled" type="checkbox" />
+                <input name="writeback_enabled" type="checkbox" defaultChecked={defaultWriteback} />
                 <span>Enable scheduler write-back for this location now.</span>
               </label>
             </label>

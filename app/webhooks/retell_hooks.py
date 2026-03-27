@@ -13,6 +13,8 @@ from app.db.database import get_db
 from app.services import caller_lookup, consent as consent_svc, shift_manager, cascade as cascade_svc
 from app.services import notifications as notifications_svc
 from app.services import onboarding as onboarding_svc
+from app.services import retell_ingest
+from app.services import retell_reconcile
 
 router = APIRouter(prefix="/webhooks", tags=["retell-webhooks"])
 
@@ -40,6 +42,7 @@ class _ClaimShiftArgs(_FunctionArgs):
     cascade_id: int
     worker_id: int
     conversation_summary: str = ""
+    eta_minutes: Optional[int] = Field(default=None, ge=0)
 
 
 class _DeclineShiftArgs(_FunctionArgs):
@@ -65,6 +68,7 @@ class _ConfirmFillArgs(_FunctionArgs):
     worker_id: int
     accepted: bool
     conversation_summary: str = ""
+    eta_minutes: Optional[int] = Field(default=None, ge=0)
 
 
 class _GetOpenShiftsArgs(_FunctionArgs):
@@ -98,24 +102,44 @@ async def retell_webhook(
 ):
     body = await request.json()
     event = body.get("event")
+    try:
+        # ── call lifecycle events ─────────────────────────────────────────────
+        if event in {"call_started", "chat_started"}:
+            await retell_ingest.persist_retell_payload(db, body)
+            await retell_reconcile.mark_webhook_success(db, event=event or "unknown")
+            return {"status": "ok"}
 
-    # ── call lifecycle events ─────────────────────────────────────────────────
-    if event in {"call_started", "chat_started"}:
-        return {"status": "ok"}
+        if event in {"call_ended", "chat_ended"}:
+            await retell_ingest.persist_retell_payload(db, body)
+            await retell_reconcile.mark_webhook_success(db, event=event or "unknown")
+            return {"status": "ok"}
 
-    if event in {"call_ended", "chat_ended"}:
-        return {"status": "ok"}
+        if event in {"call_analyzed", "chat_analyzed"}:
+            conversation_id = await retell_ingest.persist_retell_payload(db, body)
+            if event == "call_analyzed" and conversation_id is not None:
+                conversation = await retell_ingest.get_persisted_conversation(db, conversation_id)
+                if conversation is not None:
+                    await onboarding_svc.maybe_send_post_call_signup(db, conversation)
+            await retell_reconcile.mark_webhook_success(db, event=event or "unknown")
+            return {"status": "ok"}
 
-    if event in {"call_analyzed", "chat_analyzed"}:
-        return {"status": "ok"}
+        # ── function calls from the agent ─────────────────────────────────────
+        if event == "function_call":
+            name = body.get("name")
+            args = body.get("args", {})
+            result = await _dispatch(db, name, args)
+            await retell_reconcile.mark_webhook_success(db, event=event or "unknown")
+            return result
 
-    # ── function calls from the agent ─────────────────────────────────────────
-    if event == "function_call":
-        name = body.get("name")
-        args = body.get("args", {})
-        return await _dispatch(db, name, args)
-
-    return {"status": "ignored", "event": event}
+        await retell_reconcile.mark_webhook_success(db, event=event or "unknown")
+        return {"status": "ignored", "event": event}
+    except Exception as exc:
+        await retell_reconcile.mark_webhook_failure(
+            db,
+            event=str(event or "unknown"),
+            error=str(exc),
+        )
+        raise
 
 
 # ── function call dispatcher ──────────────────────────────────────────────────
@@ -192,6 +216,7 @@ async def _confirm_fill(db: aiosqlite.Connection, args: _ConfirmFillArgs) -> dic
             cascade_id=args.cascade_id,
             worker_id=args.worker_id,
             summary=args.conversation_summary,
+            eta_minutes=args.eta_minutes,
         )
         if result["status"] == "confirmed":
             await notifications_svc.fire_manager_notification(
@@ -215,6 +240,7 @@ async def _claim_shift(db: aiosqlite.Connection, args: _ClaimShiftArgs) -> dict:
         cascade_id=args.cascade_id,
         worker_id=args.worker_id,
         summary=args.conversation_summary,
+        eta_minutes=args.eta_minutes,
     )
     if result["status"] == "confirmed":
         await notifications_svc.fire_manager_notification(

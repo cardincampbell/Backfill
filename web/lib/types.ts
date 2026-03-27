@@ -1,8 +1,11 @@
 export type Location = {
   id: number;
   name: string;
+  organization_id?: number | null;
+  organization_name?: string | null;
   vertical?: string | null;
   address?: string | null;
+  employee_count?: number | null;
   manager_name?: string | null;
   manager_phone?: string | null;
   manager_email?: string | null;
@@ -104,6 +107,30 @@ export type AuditLog = {
   details: Record<string, unknown>;
 };
 
+export type RetellConversation = {
+  id: number;
+  external_id: string;
+  conversation_type: string;
+  event_type?: string | null;
+  direction?: string | null;
+  status?: string | null;
+  agent_id?: string | null;
+  location_id?: number | null;
+  shift_id?: number | null;
+  cascade_id?: number | null;
+  worker_id?: number | null;
+  phone_from?: string | null;
+  phone_to?: string | null;
+  disconnection_reason?: string | null;
+  conversation_summary?: string | null;
+  transcript_text?: string | null;
+  transcript_items?: Array<Record<string, unknown>>;
+  analysis?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  started_at?: string | null;
+  ended_at?: string | null;
+};
+
 export type DashboardSummary = {
   location_id?: number | null;
   locations: number;
@@ -201,4 +228,5 @@ export type ShiftStatusResponse = {
   cascade?: Cascade | null;
   filled_worker?: Worker | null;
   outreach_attempts: OutreachAttempt[];
+  retell_conversations: RetellConversation[];
 };

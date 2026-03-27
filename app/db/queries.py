@@ -16,6 +16,8 @@ _JSON_COLS: dict[str, list[str]] = {
     "workers":          ["roles", "certifications", "location_assignments", "locations_worked"],
     "shifts":           ["requirements"],
     "cascades":         ["standby_queue"],
+    "retell_conversations": ["transcript_items", "analysis", "metadata", "raw_payload"],
+    "onboarding_sessions": ["extracted_fields"],
     "agency_partners":  ["coverage_areas", "roles_supported", "certifications_supported"],
     "audit_log":        ["details"],
     "integration_events": ["payload"],
@@ -54,24 +56,90 @@ def _encode_json(table: str, data: dict) -> dict:
 # ── locations ─────────────────────────────────────────────────────────────────
 
 _LOCATION_TABLE = "locations"
+_LOCATION_SELECT = f"""
+    SELECT l.*, o.name AS organization_name
+    FROM {_LOCATION_TABLE} l
+    LEFT JOIN organizations o ON o.id = l.organization_id
+"""
+
+
+# ── organizations ─────────────────────────────────────────────────────────────
+
+async def get_organization(db: aiosqlite.Connection, organization_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM organizations WHERE id=?", (organization_id,)) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_organization_by_name(db: aiosqlite.Connection, name: str) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM organizations WHERE LOWER(name)=LOWER(?)",
+        (name,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def insert_organization(db: aiosqlite.Connection, data: dict) -> int:
+    cur = await db.execute(
+        """INSERT INTO organizations
+           (name, vertical, contact_name, contact_phone, contact_email, location_count_estimate)
+           VALUES (?,?,?,?,?,?)""",
+        (
+            data["name"],
+            data.get("vertical"),
+            data.get("contact_name"),
+            data.get("contact_phone"),
+            data.get("contact_email"),
+            data.get("location_count_estimate"),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_organizations(db: aiosqlite.Connection) -> list[dict]:
+    async with db.execute("SELECT * FROM organizations ORDER BY name ASC, id ASC") as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def update_organization(db: aiosqlite.Connection, organization_id: int, data: dict) -> None:
+    allowed = {
+        "name",
+        "vertical",
+        "contact_name",
+        "contact_phone",
+        "contact_email",
+        "location_count_estimate",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE organizations SET {cols} WHERE id=?",
+        (*updates.values(), organization_id),
+    )
+    await db.commit()
 
 
 async def get_location(db: aiosqlite.Connection, location_id: int) -> Optional[dict]:
-    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} WHERE id=?", (location_id,)) as cur:
+    async with db.execute(f"{_LOCATION_SELECT} WHERE l.id=?", (location_id,)) as cur:
         row = await cur.fetchone()
     return _decode("locations", row) if row else None
 
 
 async def get_location_by_name(db: aiosqlite.Connection, name: str) -> Optional[dict]:
     async with db.execute(
-        f"SELECT * FROM {_LOCATION_TABLE} WHERE LOWER(name)=LOWER(?)", (name,)
+        f"{_LOCATION_SELECT} WHERE LOWER(l.name)=LOWER(?)", (name,)
     ) as cur:
         row = await cur.fetchone()
     return _decode("locations", row) if row else None
 
 
 async def get_location_by_contact_phone(db: aiosqlite.Connection, phone: str) -> Optional[dict]:
-    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} WHERE manager_phone=?", (phone,)) as cur:
+    async with db.execute(f"{_LOCATION_SELECT} WHERE l.manager_phone=?", (phone,)) as cur:
         row = await cur.fetchone()
     return _decode("locations", row) if row else None
 
@@ -80,7 +148,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("locations", data)
     cur = await db.execute(
         f"""INSERT INTO {_LOCATION_TABLE}
-           (name, vertical, address, manager_name, manager_phone, manager_email,
+           (name, organization_id, vertical, address, employee_count, manager_name, manager_phone, manager_email,
            scheduling_platform, scheduling_platform_id, integration_status,
             last_roster_sync_at, last_roster_sync_status,
             last_schedule_sync_at, last_schedule_sync_status, last_sync_error,
@@ -88,7 +156,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             writeback_enabled, writeback_subscription_tier,
             onboarding_info,
             agency_supply_approved, preferred_agency_partners)
-           VALUES (:name,:vertical,:address,:manager_name,:manager_phone,:manager_email,
+           VALUES (:name,:organization_id,:vertical,:address,:employee_count,:manager_name,:manager_phone,:manager_email,
                    :scheduling_platform,:scheduling_platform_id,:integration_status,
                    :last_roster_sync_at,:last_roster_sync_status,
                    :last_schedule_sync_at,:last_schedule_sync_status,:last_sync_error,
@@ -98,8 +166,10 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
                    :agency_supply_approved,:preferred_agency_partners)""",
         {
             "name": d.get("name"),
+            "organization_id": d.get("organization_id"),
             "vertical": d.get("vertical", "restaurant"),
             "address": d.get("address"),
+            "employee_count": d.get("employee_count"),
             "manager_name": d.get("manager_name"),
             "manager_phone": d.get("manager_phone"),
             "manager_email": d.get("manager_email"),
@@ -128,7 +198,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
 
 
 async def list_locations(db: aiosqlite.Connection) -> list[dict]:
-    async with db.execute(f"SELECT * FROM {_LOCATION_TABLE} ORDER BY id ASC") as cur:
+    async with db.execute(f"{_LOCATION_SELECT} ORDER BY l.id ASC") as cur:
         rows = await cur.fetchall()
     return [_decode("locations", row) for row in rows]
 
@@ -136,8 +206,10 @@ async def list_locations(db: aiosqlite.Connection) -> list[dict]:
 async def update_location(db: aiosqlite.Connection, location_id: int, data: dict) -> None:
     allowed = {
         "name",
+        "organization_id",
         "vertical",
         "address",
+        "employee_count",
         "manager_name",
         "manager_phone",
         "manager_email",
@@ -362,7 +434,7 @@ async def get_worker_outreach_metrics(
         """
         SELECT
             COUNT(*) AS total_attempts,
-            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'declined', 'no_response', 'promoted', 'standby_expired') THEN 1 ELSE 0 END) AS total_responses,
+            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'declined', 'no_response', 'promoted', 'standby_expired', 'too_late') THEN 1 ELSE 0 END) AS total_responses,
             SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'promoted') THEN 1 ELSE 0 END) AS total_acceptances
         FROM outreach_attempts
         WHERE worker_id=?
@@ -690,6 +762,317 @@ async def list_outreach_attempts(
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [dict(row) for row in rows]
+
+
+# ── retell conversations ──────────────────────────────────────────────────────
+
+async def get_retell_conversation_by_external_id(
+    db: aiosqlite.Connection,
+    external_id: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM retell_conversations WHERE external_id=?",
+        (external_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("retell_conversations", row) if row else None
+
+
+async def get_retell_conversation(
+    db: aiosqlite.Connection,
+    conversation_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM retell_conversations WHERE id=?",
+        (conversation_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("retell_conversations", row) if row else None
+
+
+async def upsert_retell_conversation(
+    db: aiosqlite.Connection,
+    data: dict,
+) -> int:
+    encoded = _encode_json("retell_conversations", data)
+    external_id = encoded["external_id"]
+    existing = await get_retell_conversation_by_external_id(db, external_id)
+    now = datetime.utcnow().isoformat()
+
+    if existing is None:
+        cur = await db.execute(
+            """INSERT INTO retell_conversations
+               (external_id, conversation_type, event_type, direction, status, agent_id,
+                location_id, shift_id, cascade_id, worker_id, phone_from, phone_to,
+                disconnection_reason, conversation_summary, transcript_text, transcript_items,
+                analysis, metadata, raw_payload, started_at, ended_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                external_id,
+                encoded["conversation_type"],
+                encoded.get("event_type"),
+                encoded.get("direction"),
+                encoded.get("status"),
+                encoded.get("agent_id"),
+                encoded.get("location_id"),
+                encoded.get("shift_id"),
+                encoded.get("cascade_id"),
+                encoded.get("worker_id"),
+                encoded.get("phone_from"),
+                encoded.get("phone_to"),
+                encoded.get("disconnection_reason"),
+                encoded.get("conversation_summary"),
+                encoded.get("transcript_text"),
+                encoded.get("transcript_items", "[]"),
+                encoded.get("analysis", "{}"),
+                encoded.get("metadata", "{}"),
+                encoded.get("raw_payload", "{}"),
+                encoded.get("started_at"),
+                encoded.get("ended_at"),
+                encoded.get("created_at", now),
+                encoded.get("updated_at", now),
+            ),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+    allowed = {
+        "conversation_type",
+        "event_type",
+        "direction",
+        "status",
+        "agent_id",
+        "location_id",
+        "shift_id",
+        "cascade_id",
+        "worker_id",
+        "phone_from",
+        "phone_to",
+        "disconnection_reason",
+        "conversation_summary",
+        "transcript_text",
+        "transcript_items",
+        "analysis",
+        "metadata",
+        "raw_payload",
+        "started_at",
+        "ended_at",
+    }
+    updates = {k: v for k, v in encoded.items() if k in allowed and v is not None}
+    updates["updated_at"] = now
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE retell_conversations SET {cols} WHERE external_id=?",
+        (*updates.values(), external_id),
+    )
+    await db.commit()
+    return int(existing["id"])
+
+
+async def list_retell_conversations(
+    db: aiosqlite.Connection,
+    shift_id: Optional[int] = None,
+    cascade_id: Optional[int] = None,
+    worker_id: Optional[int] = None,
+    limit: int = 50,
+) -> list[dict]:
+    query = "SELECT * FROM retell_conversations"
+    clauses: list[str] = []
+    params: list[Any] = []
+    if shift_id is not None:
+        clauses.append("shift_id=?")
+        params.append(shift_id)
+    if cascade_id is not None:
+        clauses.append("cascade_id=?")
+        params.append(cascade_id)
+    if worker_id is not None:
+        clauses.append("worker_id=?")
+        params.append(worker_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("retell_conversations", row) for row in rows]
+
+
+# ── onboarding sessions ───────────────────────────────────────────────────────
+
+async def get_onboarding_session(db: aiosqlite.Connection, session_id: int) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM onboarding_sessions WHERE id=?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("onboarding_sessions", row) if row else None
+
+
+async def get_onboarding_session_by_source_external_id(
+    db: aiosqlite.Connection,
+    source_external_id: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM onboarding_sessions WHERE source_external_id=?",
+        (source_external_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("onboarding_sessions", row) if row else None
+
+
+async def get_onboarding_session_by_token_hash(
+    db: aiosqlite.Connection,
+    token_hash: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM onboarding_sessions WHERE token_hash=?",
+        (token_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("onboarding_sessions", row) if row else None
+
+
+async def insert_onboarding_session(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("onboarding_sessions", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """INSERT INTO onboarding_sessions
+           (token_hash, source_conversation_id, source_external_id, organization_id, location_id,
+            status, call_type, contact_name, contact_phone, contact_email, role_name,
+            business_name, location_name, vertical, location_count, employee_count, address,
+            pain_point_summary, urgency, notes, setup_kind, scheduling_platform, extracted_fields,
+            sent_message_sid, sent_at, completed_at, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["token_hash"],
+            encoded.get("source_conversation_id"),
+            encoded.get("source_external_id"),
+            encoded.get("organization_id"),
+            encoded.get("location_id"),
+            encoded.get("status", "pending"),
+            encoded.get("call_type"),
+            encoded.get("contact_name"),
+            encoded.get("contact_phone"),
+            encoded.get("contact_email"),
+            encoded.get("role_name"),
+            encoded.get("business_name"),
+            encoded.get("location_name"),
+            encoded.get("vertical"),
+            encoded.get("location_count"),
+            encoded.get("employee_count"),
+            encoded.get("address"),
+            encoded.get("pain_point_summary"),
+            encoded.get("urgency"),
+            encoded.get("notes"),
+            encoded.get("setup_kind"),
+            encoded.get("scheduling_platform"),
+            encoded.get("extracted_fields", "{}"),
+            encoded.get("sent_message_sid"),
+            encoded.get("sent_at"),
+            encoded.get("completed_at"),
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_onboarding_session(
+    db: aiosqlite.Connection,
+    session_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "source_conversation_id",
+        "source_external_id",
+        "organization_id",
+        "location_id",
+        "status",
+        "call_type",
+        "contact_name",
+        "contact_phone",
+        "contact_email",
+        "role_name",
+        "business_name",
+        "location_name",
+        "vertical",
+        "location_count",
+        "employee_count",
+        "address",
+        "pain_point_summary",
+        "urgency",
+        "notes",
+        "setup_kind",
+        "scheduling_platform",
+        "extracted_fields",
+        "sent_message_sid",
+        "sent_at",
+        "completed_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("onboarding_sessions", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE onboarding_sessions SET {cols} WHERE id=?",
+        (*encoded.values(), session_id),
+    )
+    await db.commit()
+
+
+# ── app state + repair helpers ────────────────────────────────────────────────
+
+async def get_app_state(db: aiosqlite.Connection, key: str) -> Optional[str]:
+    async with db.execute("SELECT value FROM app_state WHERE key=?", (key,)) as cur:
+        row = await cur.fetchone()
+    return str(row["value"]) if row and row["value"] is not None else None
+
+
+async def set_app_state(db: aiosqlite.Connection, key: str, value: str) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        INSERT INTO app_state (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+        """,
+        (key, value, now),
+    )
+    await db.commit()
+
+
+async def list_recent_outreach_audit_entries(
+    db: aiosqlite.Connection,
+    *,
+    since: str,
+    shift_ids: Optional[set[int]] = None,
+    limit: int = 250,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM audit_log
+        WHERE action=?
+          AND timestamp >= ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        ("outreach_sent", since, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    entries: list[dict] = []
+    for row in rows:
+        decoded = _decode("audit_log", row)
+        details = decoded.get("details") or {}
+        shift_id = details.get("shift_id")
+        if shift_ids and shift_id not in shift_ids:
+            continue
+        entries.append(decoded)
+    return entries
 
 
 # ── integration events + sync jobs ───────────────────────────────────────────
@@ -1045,6 +1428,7 @@ async def get_shift_status(db: aiosqlite.Connection, shift_id: int) -> Optional[
         cascade = _decode("cascades", row) if row else None
     filled_worker = await get_worker(db, shift["filled_by"]) if shift.get("filled_by") else None
     attempts = await list_outreach_attempts(db, shift_id=shift_id)
+    conversations = await list_retell_conversations(db, shift_id=shift_id)
 
     return {
         "shift": shift,
@@ -1052,6 +1436,7 @@ async def get_shift_status(db: aiosqlite.Connection, shift_id: int) -> Optional[
         "cascade": cascade,
         "filled_worker": filled_worker,
         "outreach_attempts": attempts,
+        "retell_conversations": conversations,
     }
 
 

@@ -12,8 +12,11 @@ async function parseError(response: Response): Promise<string> {
 
 export async function createLocation(input: {
   name: string;
+  organization_id?: number;
+  organization_name?: string;
   vertical?: string;
   address?: string;
+  employee_count?: number;
   manager_name?: string;
   manager_phone?: string;
   manager_email?: string;
@@ -36,6 +39,35 @@ export async function createLocation(input: {
   }
 
   return (await response.json()) as { id: number; name: string };
+}
+
+export async function getLocation(locationId: number) {
+  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}`, {
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as {
+    id: number;
+    name: string;
+    organization_id?: number | null;
+    organization_name?: string | null;
+    vertical?: string | null;
+    address?: string | null;
+    employee_count?: number | null;
+    manager_name?: string | null;
+    manager_phone?: string | null;
+    manager_email?: string | null;
+    scheduling_platform?: string | null;
+    scheduling_platform_id?: string | null;
+    integration_status?: string | null;
+    writeback_enabled?: boolean;
+    writeback_subscription_tier?: string | null;
+    onboarding_info?: string | null;
+  };
 }
 
 export async function connectAndSyncLocation(locationId: number) {
@@ -83,9 +115,91 @@ export async function sendOnboardingLink(input: {
   };
 }
 
+export async function getSignupSession(token: string) {
+  const response = await fetch(`${API_BASE_URL}/api/onboarding/sessions/${token}`, {
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as {
+    id: number;
+    status: string;
+    call_type?: string | null;
+    contact_name?: string | null;
+    contact_phone?: string | null;
+    contact_email?: string | null;
+    role_name?: string | null;
+    business_name?: string | null;
+    location_name?: string | null;
+    vertical?: string | null;
+    location_count?: number | null;
+    employee_count?: number | null;
+    address?: string | null;
+    pain_point_summary?: string | null;
+    urgency?: string | null;
+    notes?: string | null;
+    setup_kind?: string | null;
+    scheduling_platform?: string | null;
+    extracted_fields: Record<string, unknown>;
+  };
+}
+
+export async function completeSignupSession(
+  token: string,
+  input: {
+    business_name: string;
+    location_name: string;
+    contact_name?: string;
+    contact_phone: string;
+    contact_email?: string;
+    vertical?: string;
+    location_count?: number;
+    employee_count?: number;
+    address?: string;
+    pain_point_summary?: string;
+    urgency?: string;
+    notes?: string;
+    setup_kind?: string;
+    scheduling_platform?: string;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/api/onboarding/sessions/${token}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as {
+    status: string;
+    location: { id: number; name: string };
+    next_path: string;
+  };
+}
+
 export async function updateLocation(
   locationId: number,
   input: {
+    name?: string;
+    organization_id?: number;
+    organization_name?: string;
+    vertical?: string;
+    address?: string;
+    employee_count?: number;
+    manager_name?: string;
+    manager_phone?: string;
+    manager_email?: string;
+    scheduling_platform?: string;
+    scheduling_platform_id?: string;
+    integration_status?: string;
+    onboarding_info?: string;
     writeback_enabled?: boolean;
     writeback_subscription_tier?: string;
   }
@@ -101,7 +215,13 @@ export async function updateLocation(
     throw new Error(await parseError(response));
   }
 
-  return (await response.json()) as { id: number; writeback_enabled?: boolean };
+  return (await response.json()) as {
+    id: number;
+    name?: string;
+    writeback_enabled?: boolean;
+    writeback_subscription_tier?: string | null;
+    scheduling_platform?: string | null;
+  };
 }
 
 export async function syncLocationRoster(locationId: number) {
