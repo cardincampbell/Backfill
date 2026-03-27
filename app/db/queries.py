@@ -984,6 +984,7 @@ async def update_onboarding_session(
     data: dict,
 ) -> None:
     allowed = {
+        "token_hash",
         "source_conversation_id",
         "source_external_id",
         "organization_id",

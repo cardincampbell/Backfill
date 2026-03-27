@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.config import settings
 from app.db.queries import (
     get_cascade,
     get_onboarding_session_by_source_external_id,
@@ -476,6 +477,126 @@ async def test_retell_inbound_business_call_uses_summary_fallback_for_signup_tex
     assert session["contact_phone"] == "+13105550999"
     assert sent
     assert "https://usebackfill.com/signup/" in sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_retell_inbound_business_call_accepts_new_business_inquiry_call_type(db, client, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM902")
+
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_new_business_inquiry_123",
+                "agent_id": "agent_inbound",
+                "direction": "inbound",
+                "call_status": "ended",
+                "from_number": "+13105550777",
+                "to_number": "+14244992663",
+                "call_analysis": {
+                    "call_type": "new_business_inquiry",
+                    "caller_name": "Taylor Kim",
+                    "business_name": "Northside Logistics",
+                    "business_email": "taylor@northside.example",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    session = await get_onboarding_session_by_source_external_id(db, "call_new_business_inquiry_123")
+    assert session is not None
+    assert session["contact_phone"] == "+13105550777"
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_retell_inbound_business_call_normalizes_callback_number_and_retries_unsent_session(
+    db,
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "retell_from_number", "+14244992663")
+    sent = []
+    fail_first = {"value": True}
+
+    def _fake_send_sms(to, body):
+        if fail_first["value"]:
+            fail_first["value"] = False
+            raise RuntimeError("temporary sms failure")
+        sent.append((to, body))
+        return "SM903"
+
+    monkeypatch.setattr("app.services.onboarding.send_sms", _fake_send_sms)
+
+    payload = {
+        "event": "call_analyzed",
+        "call": {
+            "call_id": "call_retry_signup_123",
+            "agent_id": "agent_inbound",
+            "call_status": "ended",
+            "from_number": "+16462065103",
+            "to_number": "+14244992663",
+            "call_analysis": {
+                "call_type": "new_business_inquiry",
+                "caller_name": "Carden Campbell",
+                "business_name": "Whole Foods",
+                "callback_number": "(646) 206-5103",
+                "business_email": "gm@wholefoods.example",
+            },
+        },
+    }
+
+    first = client.post("/webhooks/retell", json=payload)
+    assert first.status_code == 200
+
+    session = await get_onboarding_session_by_source_external_id(db, "call_retry_signup_123")
+    assert session is not None
+    assert session["contact_phone"] == "+16462065103"
+    assert session["sent_message_sid"] is None
+
+    second = client.post("/webhooks/retell", json=payload)
+    assert second.status_code == 200
+
+    session = await get_onboarding_session_by_source_external_id(db, "call_retry_signup_123")
+    assert session is not None
+    assert session["sent_message_sid"] == "SM903"
+    assert sent
+    assert sent[0][0] == "+16462065103"
+
+
+@pytest.mark.asyncio
+async def test_retell_inbound_business_call_infers_inbound_direction_from_phone_numbers(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "retell_from_number", "+14244992663")
+    sent = []
+    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM904")
+
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_infer_direction_123",
+                "agent_id": "agent_inbound",
+                "call_status": "ended",
+                "from_number": "+13105550888",
+                "to_number": "+14244992663",
+                "call_analysis": {
+                    "call_type": "new_business_inquiry",
+                    "business_name": "Bright Care",
+                    "business_email": "ops@brightcare.example",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    session = await get_onboarding_session_by_source_external_id(db, "call_infer_direction_123")
+    assert session is not None
+    assert session["contact_phone"] == "+13105550888"
+    assert sent
 
 
 @pytest.mark.asyncio

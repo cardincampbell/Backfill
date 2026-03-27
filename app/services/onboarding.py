@@ -6,6 +6,7 @@ The phone call captures intent and basics. Structured setup happens on the web.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import datetime
 from typing import Any, Optional
@@ -130,6 +131,38 @@ def _combined_text(*values: Any) -> str:
     return " ".join(parts)
 
 
+def _normalize_phone_e164(value: Any) -> Optional[str]:
+    text = _coerce_str(value)
+    if text is None:
+        return None
+    if text.startswith("+"):
+        digits = re.sub(r"\D", "", text)
+        return f"+{digits}" if digits else None
+
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+1{digits}"
+    return None
+
+
+def _conversation_direction(conversation: dict) -> Optional[str]:
+    direction = _coerce_str(conversation.get("direction"))
+    if direction:
+        return direction.lower()
+
+    phone_from = _normalize_phone_e164(conversation.get("phone_from"))
+    phone_to = _normalize_phone_e164(conversation.get("phone_to"))
+    retell_number = _normalize_phone_e164(settings.retell_from_number)
+    if retell_number:
+        if phone_to == retell_number:
+            return "inbound"
+        if phone_from == retell_number:
+            return "outbound"
+    return None
+
+
 def _analysis_sources(conversation: dict) -> list[dict[str, Any]]:
     analysis = conversation.get("analysis") or {}
     raw_payload = conversation.get("raw_payload") or {}
@@ -150,11 +183,17 @@ def _analysis_sources(conversation: dict) -> list[dict[str, Any]]:
 
 def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     sources = _analysis_sources(conversation)
+    direction = _conversation_direction(conversation)
     summary_text = _coerce_str(
         _pick_value(*sources, keys=("call_summary", "summary", "conversation_summary"))
     )
     transcript_text = _coerce_str(conversation.get("transcript_text") or conversation.get("transcript"))
-    phone = _coerce_str(conversation.get("phone_from") if conversation.get("direction") == "inbound" else conversation.get("phone_to"))
+    phone = _normalize_phone_e164(
+        conversation.get("phone_from") if direction == "inbound" else conversation.get("phone_to")
+    )
+    callback_phone = _normalize_phone_e164(
+        _pick_value(*sources, keys=("callback_number", "contact_phone"))
+    )
     platform = _normalize_platform(
         _pick_value(*sources, keys=("platform", "scheduling_platform", "scheduler", "integration_platform"))
     )
@@ -180,7 +219,7 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     return {
         "call_type": call_type,
         "contact_name": _coerce_str(_pick_value(*sources, keys=("caller_name", "contact_name", "reported_by_name"))),
-        "contact_phone": _coerce_str(_pick_value(*sources, keys=("callback_number", "contact_phone"))) or phone,
+        "contact_phone": callback_phone or phone,
         "contact_email": _coerce_str(_pick_value(*sources, keys=("business_email", "contact_email", "email"))),
         "role_name": role_name,
         "business_name": business_name,
@@ -195,7 +234,8 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
         "extracted_fields": {
             "call_type": call_type,
             "caller_name": _coerce_str(_pick_value(*sources, keys=("caller_name", "contact_name", "reported_by_name"))),
-            "callback_number": _coerce_str(_pick_value(*sources, keys=("callback_number", "contact_phone"))) or phone,
+            "callback_number": _coerce_str(_pick_value(*sources, keys=("callback_number", "contact_phone"))),
+            "normalized_callback_number": callback_phone,
             "business_name": business_name,
             "location_name": location_name,
             "role_name": role_name,
@@ -212,7 +252,7 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
 def _is_business_signup_candidate(conversation: dict, lead: dict[str, Any]) -> bool:
     if conversation.get("conversation_type") != "call":
         return False
-    if conversation.get("direction") != "inbound":
+    if _conversation_direction(conversation) != "inbound":
         return False
     if conversation.get("shift_id") or conversation.get("cascade_id"):
         return False
@@ -228,6 +268,7 @@ def _is_business_signup_candidate(conversation: dict, lead: dict[str, Any]) -> b
     }
     allowlist = {
         "business_inquiry",
+        "new_business_inquiry",
         "signup",
         "demo",
         "pricing",
@@ -344,6 +385,8 @@ async def maybe_send_post_call_signup(db: aiosqlite.Connection, conversation: di
         conversation["external_id"],
     )
     if existing is not None:
+        if not existing.get("sent_message_sid") and existing.get("status") == "pending":
+            return await _retry_pending_signup_session(db, existing)
         return existing
 
     lead = extract_lead_fields_from_conversation(conversation)
@@ -379,19 +422,75 @@ async def maybe_send_post_call_signup(db: aiosqlite.Connection, conversation: di
         f"Review what we captured and finish setup here: {url} "
         "Reply here if you want help."
     )
-    message_sid = send_sms(str(lead["contact_phone"]), message)
-    await queries.update_onboarding_session(
+    await _try_send_signup_session_sms(
         db,
-        session_id,
-        {
-            "sent_message_sid": message_sid,
-            "sent_at": datetime.utcnow().isoformat(),
-        },
+        session_id=session_id,
+        phone=str(lead["contact_phone"]),
+        message=message,
     )
     session = await queries.get_onboarding_session(db, session_id)
     assert session is not None
     session["signup_url"] = url
     return session
+
+
+async def _try_send_signup_session_sms(
+    db: aiosqlite.Connection,
+    *,
+    session_id: int,
+    phone: str,
+    message: str,
+) -> None:
+    normalized_phone = _normalize_phone_e164(phone)
+    if normalized_phone is None:
+        return
+    try:
+        message_sid = send_sms(normalized_phone, message)
+    except Exception:
+        return
+    await queries.update_onboarding_session(
+        db,
+        session_id,
+        {
+            "contact_phone": normalized_phone,
+            "sent_message_sid": message_sid,
+            "sent_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+
+async def _retry_pending_signup_session(
+    db: aiosqlite.Connection,
+    session: dict,
+) -> dict:
+    phone = _normalize_phone_e164(session.get("contact_phone"))
+    if phone is None:
+        return session
+    token, token_hash = _new_session_token()
+    url = f"{settings.backfill_web_base_url}/signup/{token}"
+    await queries.update_onboarding_session(
+        db,
+        int(session["id"]),
+        {
+            "token_hash": token_hash,
+            "contact_phone": phone,
+        },
+    )
+    message = (
+        "Thanks for calling Backfill. We’d love to help your team cover call-outs faster. "
+        f"Review what we captured and finish setup here: {url} "
+        "Reply here if you want help."
+    )
+    await _try_send_signup_session_sms(
+        db,
+        session_id=int(session["id"]),
+        phone=phone,
+        message=message,
+    )
+    refreshed = await queries.get_onboarding_session(db, int(session["id"]))
+    assert refreshed is not None
+    refreshed["signup_url"] = url
+    return refreshed
 
 
 async def get_signup_session_by_token(
