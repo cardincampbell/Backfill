@@ -128,6 +128,43 @@ def test_create_sms_chat_uses_outbound_chat_agent(monkeypatch):
     assert captured["json"]["metadata"]["cascade_id"] == 1
 
 
+def test_create_sms_chat_falls_back_to_number_level_agent_binding(monkeypatch):
+    captured = {}
+
+    def _fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"chat_id": "chat_456"}
+
+        return _Response()
+
+    monkeypatch.setattr(settings, "retell_api_key", "retell-secret")
+    monkeypatch.setattr(settings, "retell_from_number", "+13105550100")
+    monkeypatch.setattr(settings, "retell_chat_agent_id", "")
+    monkeypatch.setattr(settings, "retell_chat_agent_id_outbound", "")
+    monkeypatch.setattr(retell.httpx, "post", _fake_post)
+
+    chat_id = retell.create_sms_chat(
+        to_number="+13105550101",
+        body="hello fallback",
+        metadata={"source": "onboarding"},
+    )
+
+    assert chat_id == "chat_456"
+    assert captured["url"] == "https://api.retellai.com/create-outbound-sms"
+    assert "override_agent_id" not in captured["json"]
+    assert captured["json"]["metadata"]["system_message"] == "hello fallback"
+    assert captured["json"]["metadata"]["source"] == "onboarding"
+
+
 @pytest.mark.asyncio
 async def test_get_chat_and_list_chats_use_httpx(monkeypatch):
     captured = []

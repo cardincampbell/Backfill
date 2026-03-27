@@ -83,20 +83,17 @@ def create_sms_chat(
         raise RuntimeError("RETELL_FROM_NUMBER is not set")
 
     aid = agent_id or _default_chat_agent_id(agent_kind=agent_kind)
-    if not aid:
-        raise RuntimeError(
-            "Retell chat agent ID is not set. Configure RETELL_CHAT_AGENT_ID_OUTBOUND or RETELL_CHAT_AGENT_ID."
-        )
-
     payload = {
         "from_number": settings.retell_from_number,
         "to_number": to_number,
-        "override_agent_id": aid,
         "metadata": {
             **(metadata or {}),
             "system_message": body,
         },
     }
+    if aid:
+        payload["override_agent_id"] = aid
+
     response = httpx.post(
         "https://api.retellai.com/create-outbound-sms",
         headers={"Authorization": f"Bearer {settings.retell_api_key}"},
