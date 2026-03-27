@@ -125,6 +125,11 @@ def _coerce_str(value: Any) -> Optional[str]:
     return text or None
 
 
+def _combined_text(*values: Any) -> str:
+    parts = [str(value).strip() for value in values if isinstance(value, str) and value.strip()]
+    return " ".join(parts)
+
+
 def _analysis_sources(conversation: dict) -> list[dict[str, Any]]:
     analysis = conversation.get("analysis") or {}
     raw_payload = conversation.get("raw_payload") or {}
@@ -145,6 +150,10 @@ def _analysis_sources(conversation: dict) -> list[dict[str, Any]]:
 
 def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     sources = _analysis_sources(conversation)
+    summary_text = _coerce_str(
+        _pick_value(*sources, keys=("call_summary", "summary", "conversation_summary"))
+    )
+    transcript_text = _coerce_str(conversation.get("transcript_text") or conversation.get("transcript"))
     phone = _coerce_str(conversation.get("phone_from") if conversation.get("direction") == "inbound" else conversation.get("phone_to"))
     platform = _normalize_platform(
         _pick_value(*sources, keys=("platform", "scheduling_platform", "scheduler", "integration_platform"))
@@ -154,11 +163,13 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     business_name = _coerce_str(_pick_value(*sources, keys=("business_name", "company_name", "organization_name")))
     location_name = _coerce_str(_pick_value(*sources, keys=("location_name", "site_name", "store_name")))
     vertical = _coerce_str(_pick_value(*sources, keys=("vertical", "business_vertical")))
-    notes = _coerce_str(_pick_value(*sources, keys=("notes", "note", "freeform_notes")))
+    notes = _coerce_str(_pick_value(*sources, keys=("notes", "note", "freeform_notes"))) or summary_text
     urgency = _coerce_str(_pick_value(*sources, keys=("urgency", "priority")))
     pain_point_summary = _coerce_str(
-        _pick_value(*sources, keys=("pain_point_summary", "pain_points", "use_case", "problem_summary"))
+        _pick_value(*sources, keys=("pain_point_summary", "pain_points", "use_case", "problem_summary", "call_summary", "summary"))
     )
+    if pain_point_summary is None and transcript_text:
+        pain_point_summary = transcript_text
 
     setup_kind = "manual_form"
     if platform and platform != "backfill_native":
@@ -193,6 +204,7 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
             "pain_point_summary": pain_point_summary,
             "urgency": urgency,
             "notes": notes,
+            "summary_text": summary_text,
         },
     }
 
@@ -226,6 +238,36 @@ def _is_business_signup_candidate(conversation: dict, lead: dict[str, Any]) -> b
         return False
     if normalized_call_type in allowlist:
         return True
+
+    search_text = _combined_text(
+        lead.get("pain_point_summary"),
+        lead.get("notes"),
+        (conversation.get("analysis") or {}).get("call_summary"),
+        conversation.get("transcript_text"),
+        conversation.get("transcript"),
+    ).lower()
+
+    support_markers = (
+        "already use backfill",
+        "need support",
+        "support team",
+        "existing customer",
+    )
+    business_markers = (
+        "for business",
+        "using backfill",
+        "using the service",
+        "pricing",
+        "demo",
+        "covering shifts when someone calls out",
+        "last-minute shift gaps",
+        "handle call-outs",
+    )
+
+    if any(marker in search_text for marker in support_markers):
+        return False
+    if any(marker in search_text for marker in business_markers):
+        return bool(lead.get("contact_phone"))
 
     return bool(
         lead.get("contact_phone")
@@ -333,8 +375,9 @@ async def maybe_send_post_call_signup(db: aiosqlite.Connection, conversation: di
 
     url = f"{settings.backfill_web_base_url}/signup/{token}"
     message = (
-        "Backfill setup: review what we captured from your call and finish signup here: "
-        f"{url}"
+        "Thanks for calling Backfill. We’d love to help your team cover call-outs faster. "
+        f"Review what we captured and finish setup here: {url} "
+        "Reply here if you want help."
     )
     message_sid = send_sms(str(lead["contact_phone"]), message)
     await queries.update_onboarding_session(

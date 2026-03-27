@@ -341,3 +341,33 @@ async def test_sync_recent_activity_enters_repair_mode_after_webhook_failure(db,
     assert result["repair_mode_calls_synced"] == 1
     conversation = await queries.get_retell_conversation_by_external_id(db, "call_repair_1")
     assert conversation is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_call_by_id_creates_signup_session_for_inbound_business_call(db, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM902")
+
+    async def _fake_get_call(call_id):
+        return {
+            "call_id": call_id,
+            "direction": "inbound",
+            "call_status": "ended",
+            "from_number": "+13105550888",
+            "to_number": "+14244992663",
+            "transcript": "User: For business. User: We need help covering shifts when someone calls out.",
+            "call_analysis": {
+                "call_summary": "The caller contacted Backfill to discuss using the service for last-minute shift gaps.",
+                "custom_analysis_data": {},
+            },
+        }
+
+    monkeypatch.setattr(retell, "get_call", _fake_get_call)
+
+    result = await retell_reconcile.sync_call_by_id(db, "call_reconcile_business_1")
+
+    assert result["status"] == "ok"
+    session = await queries.get_onboarding_session_by_source_external_id(db, "call_reconcile_business_1")
+    assert session is not None
+    assert session["contact_phone"] == "+13105550888"
+    assert sent

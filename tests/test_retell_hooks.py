@@ -437,6 +437,48 @@ async def test_retell_inbound_business_call_creates_signup_session_and_texts_lin
 
 
 @pytest.mark.asyncio
+async def test_retell_inbound_business_call_uses_summary_fallback_for_signup_text(db, client, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM901")
+
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_business_summary_fallback",
+                "agent_id": "agent_inbound",
+                "direction": "inbound",
+                "call_status": "ended",
+                "from_number": "+13105550999",
+                "to_number": "+14244992663",
+                "transcript": (
+                    "Agent: Are you calling about using Backfill for a business?\n"
+                    "User: For business.\n"
+                    "User: I'm with Whole Foods.\n"
+                    "User: We need help covering shifts when someone calls out.\n"
+                ),
+                "call_analysis": {
+                    "call_successful": True,
+                    "call_summary": (
+                        "The caller contacted Backfill to discuss using the service for covering "
+                        "last-minute shift gaps when employees call out."
+                    ),
+                    "custom_analysis_data": {},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    session = await get_onboarding_session_by_source_external_id(db, "call_business_summary_fallback")
+    assert session is not None
+    assert session["contact_phone"] == "+13105550999"
+    assert sent
+    assert "https://usebackfill.com/signup/" in sent[0][1]
+
+
+@pytest.mark.asyncio
 async def test_retell_chat_analyzed_persists_text_exchange(db, client):
     location_id = await insert_location(
         db,

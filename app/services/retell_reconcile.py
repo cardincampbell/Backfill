@@ -6,6 +6,7 @@ import aiosqlite
 
 from app.config import settings
 from app.db import queries
+from app.services import onboarding as onboarding_svc
 from app.services import retell, retell_ingest
 
 STATE_KEY_LAST_RECONCILE_AT = "retell_last_successful_reconcile_at"
@@ -173,6 +174,10 @@ async def sync_call_by_id(db: aiosqlite.Connection, call_id: str) -> dict:
         db,
         {"event": "call_reconciled", "call": call},
     )
+    if conversation_id is not None:
+        conversation = await retell_ingest.get_persisted_conversation(db, conversation_id)
+        if conversation is not None:
+            await onboarding_svc.maybe_send_post_call_signup(db, conversation)
     return {"status": "ok", "call_id": call_id, "conversation_id": conversation_id}
 
 
@@ -221,7 +226,11 @@ async def sync_recent_activity(
         stamp = _conversation_timestamp(call)
         if stamp is not None and stamp < cutoff:
             continue
-        await retell_ingest.persist_retell_payload(db, {"event": "call_reconciled", "call": call})
+        conversation_id = await retell_ingest.persist_retell_payload(db, {"event": "call_reconciled", "call": call})
+        if conversation_id is not None:
+            conversation = await retell_ingest.get_persisted_conversation(db, conversation_id)
+            if conversation is not None:
+                await onboarding_svc.maybe_send_post_call_signup(db, conversation)
         synced_calls += 1
 
     for chat in await retell.list_chats(limit=limit):
