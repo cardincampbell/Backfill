@@ -35,10 +35,17 @@ def _normalize_write_aliases(data: dict) -> dict:
 
 
 def _decode(table: str, row: aiosqlite.Row | dict) -> dict:
+    import logging as _logging
+
     data = dict(row)
     for col in _JSON_COLS.get(table, []):
         if col in data and isinstance(data[col], str):
-            data[col] = json.loads(data[col])
+            try:
+                data[col] = json.loads(data[col])
+            except json.JSONDecodeError:
+                _logging.getLogger(__name__).warning(
+                    "Corrupt JSON in %s.%s — leaving as raw string", table, col
+                )
     for col in _BOOL_COLS.get(table, []):
         if col in data and data[col] is not None:
             data[col] = bool(data[col])

@@ -6,6 +6,7 @@ The phone call captures intent and basics. Structured setup happens on the web.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime
@@ -17,6 +18,8 @@ import aiosqlite
 from app.config import settings
 from app.db import queries
 from app.services.messaging import send_sms
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_platform(platform: Optional[str]) -> str:
@@ -443,10 +446,20 @@ async def _try_send_signup_session_sms(
 ) -> None:
     normalized_phone = _normalize_phone_e164(phone)
     if normalized_phone is None:
+        _logger.warning(
+            "Skipping onboarding SMS for session %s: could not normalize phone %r to E.164",
+            session_id,
+            phone,
+        )
         return
     try:
         message_sid = send_sms(normalized_phone, message)
     except Exception:
+        _logger.exception(
+            "Failed to send onboarding SMS to %s for session %s",
+            normalized_phone,
+            session_id,
+        )
         return
     await queries.update_onboarding_session(
         db,

@@ -130,4 +130,10 @@ async def mark_filled(
     except Exception:
         # Scheduler write-back is best-effort; the local Backfill record remains
         # authoritative even if the external platform update fails.
-        pass
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Failed to enqueue writeback for shift %s — external platform will not be updated",
+            shift_id,
+            exc_info=True,
+        )

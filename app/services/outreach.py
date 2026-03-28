@@ -16,7 +16,13 @@ URGENT_SHIFT_HOURS = 4
 
 
 def _parse_shift_start(shift: dict) -> datetime:
-    return datetime.fromisoformat(f"{shift['date']}T{shift['start_time']}")
+    try:
+        return datetime.fromisoformat(f"{shift['date']}T{shift['start_time']}")
+    except (ValueError, KeyError) as exc:
+        raise ValueError(
+            f"Shift {shift.get('id')} has invalid date/time: "
+            f"date={shift.get('date')!r} start_time={shift.get('start_time')!r}"
+        ) from exc
 
 
 def hours_until_shift(shift: dict, now: Optional[datetime] = None) -> float:

@@ -526,12 +526,12 @@ async def _ensure_column(
     column_name: str,
     column_def: str,
 ) -> None:
-    async with db.execute(f"PRAGMA table_info({table_name})") as cur:
+    async with db.execute(f'PRAGMA table_info("{table_name}")') as cur:
         rows = await cur.fetchall()
     existing = {row[1] for row in rows}
     if column_name not in existing:
         await db.execute(
-            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}"
+            f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_def}'
         )
 
 
@@ -550,7 +550,7 @@ async def _column_exists(
 ) -> bool:
     if not await _table_exists(db, table_name):
         return False
-    async with db.execute(f"PRAGMA table_info({table_name})") as cur:
+    async with db.execute(f'PRAGMA table_info("{table_name}")') as cur:
         rows = await cur.fetchall()
     return any(row[1] == column_name for row in rows)
 
@@ -565,7 +565,7 @@ async def _rename_column_if_needed(
         db, table_name, new_name
     ):
         await db.execute(
-            f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}"
+            f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_name}" TO "{new_name}"'
         )
 
 

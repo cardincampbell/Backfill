@@ -511,7 +511,10 @@ async def import_workers_csv(
     if location is None:
         raise HTTPException(status_code=404, detail="Location not found")
 
-    content = await file.read()
+    max_csv_bytes = 10 * 1024 * 1024
+    content = await file.read(max_csv_bytes + 1)
+    if len(content) > max_csv_bytes:
+        raise HTTPException(status_code=413, detail="CSV file exceeds 10 MB limit")
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
 
     created, skipped = [], []

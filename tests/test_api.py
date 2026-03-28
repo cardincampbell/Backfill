@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import re
 
+
 def _make_shift_payload(location_id: int, start_delta_hours: int = 12):
     start = datetime.utcnow() + timedelta(hours=start_delta_hours)
     end = start + timedelta(hours=8)
@@ -66,6 +67,27 @@ def test_native_lite_read_update_export_and_dashboard(client):
     assert "James" in workers_csv.json()["csv"]
     assert "line_cook" in shifts_csv.json()["csv"]
     assert client.get(f"/api/shifts/{shift['id']}/status").status_code == 200
+
+
+def test_import_workers_csv_rejects_files_over_10mb(client):
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "CSV Limit Shop",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550100",
+            "scheduling_platform": "backfill_native",
+        },
+    ).json()
+
+    oversized_csv = b"name,phone\n" + (b"a" * (10 * 1024 * 1024 + 1))
+    response = client.post(
+        f"/api/workers/import-csv?location_id={location['id']}",
+        files={"file": ("workers.csv", oversized_csv, "text/csv")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "CSV file exceeds 10 MB limit"
 
 
 def test_onboarding_link_endpoint_sends_expected_setup_url(client, monkeypatch):
