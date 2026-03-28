@@ -391,7 +391,10 @@ async def test_retell_call_analyzed_persists_transcript_and_updates_attempt_summ
 @pytest.mark.asyncio
 async def test_retell_inbound_business_call_creates_signup_session_and_texts_link(db, client, monkeypatch):
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM900")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM900",
+    )
 
     response = client.post(
         "/webhooks/retell",
@@ -435,12 +438,18 @@ async def test_retell_inbound_business_call_creates_signup_session_and_texts_lin
     assert session["status"] == "pending"
     assert sent
     assert "https://usebackfill.com/signup/" in sent[0][1]
+    assert "dynamic_variables" in sent[0][2]
+    assert sent[0][2]["dynamic_variables"]["business_name"] == "South Bay Ops"
+    assert "signup_url" in sent[0][2]["dynamic_variables"]
 
 
 @pytest.mark.asyncio
 async def test_retell_inbound_business_call_uses_summary_fallback_for_signup_text(db, client, monkeypatch):
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM901")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM901",
+    )
 
     response = client.post(
         "/webhooks/retell",
@@ -482,7 +491,10 @@ async def test_retell_inbound_business_call_uses_summary_fallback_for_signup_tex
 @pytest.mark.asyncio
 async def test_retell_inbound_business_call_accepts_new_business_inquiry_call_type(db, client, monkeypatch):
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM902")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM902",
+    )
 
     response = client.post(
         "/webhooks/retell",
@@ -522,11 +534,11 @@ async def test_retell_inbound_business_call_normalizes_callback_number_and_retri
     sent = []
     fail_first = {"value": True}
 
-    def _fake_send_sms(to, body):
+    def _fake_send_sms(to, body, **kwargs):
         if fail_first["value"]:
             fail_first["value"] = False
             raise RuntimeError("temporary sms failure")
-        sent.append((to, body))
+        sent.append((to, body, kwargs))
         return "SM903"
 
     monkeypatch.setattr("app.services.onboarding.send_sms", _fake_send_sms)
@@ -571,7 +583,10 @@ async def test_retell_inbound_business_call_normalizes_callback_number_and_retri
 async def test_retell_inbound_business_call_infers_inbound_direction_from_phone_numbers(db, client, monkeypatch):
     monkeypatch.setattr(settings, "retell_from_number", "+14244992663")
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM904")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM904",
+    )
 
     response = client.post(
         "/webhooks/retell",

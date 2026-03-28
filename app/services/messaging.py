@@ -31,11 +31,21 @@ def _get_twilio():
     return _twilio_client
 
 
-def send_sms(to: str, body: str, metadata: Optional[dict] = None) -> Optional[str]:
+def send_sms(
+    to: str,
+    body: str,
+    metadata: Optional[dict] = None,
+    dynamic_variables: Optional[dict] = None,
+) -> Optional[str]:
     if settings.retell_sms_enabled:
         from app.services import retell as retell_svc
 
-        return retell_svc.create_sms_chat(to_number=to, body=body, metadata=metadata)
+        return retell_svc.create_sms_chat(
+            to_number=to,
+            body=body,
+            metadata=metadata,
+            dynamic_variables=dynamic_variables,
+        )
 
     if not settings.twilio_account_sid or not settings.twilio_auth_token:
         logger.warning(

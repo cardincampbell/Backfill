@@ -73,6 +73,7 @@ def create_sms_chat(
     to_number: str,
     body: str,
     metadata: Optional[dict] = None,
+    dynamic_variables: Optional[dict] = None,
     agent_id: Optional[str] = None,
     agent_kind: str = "outbound",
 ) -> str:
@@ -88,9 +89,13 @@ def create_sms_chat(
         "to_number": to_number,
         "metadata": {
             **(metadata or {}),
-            "system_message": body,
         },
     }
+    merged_dynamic_variables = {
+        "initial_message": body,
+        **(dynamic_variables or {}),
+    }
+    payload["retell_llm_dynamic_variables"] = merged_dynamic_variables
     if aid:
         payload["override_agent_id"] = aid
 

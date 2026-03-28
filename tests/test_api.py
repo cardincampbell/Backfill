@@ -113,7 +113,10 @@ def test_onboarding_link_endpoint_sends_expected_setup_url(client, monkeypatch):
 
 def test_signup_session_api_loads_and_completes_from_retell_inbound_call(client, monkeypatch):
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM123")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM123",
+    )
 
     webhook = client.post(
         "/webhooks/retell",

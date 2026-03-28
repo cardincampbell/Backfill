@@ -119,13 +119,15 @@ def test_create_sms_chat_uses_outbound_chat_agent(monkeypatch):
         to_number="+13105550101",
         body="hello",
         metadata={"cascade_id": 1},
+        dynamic_variables={"signup_url": "https://usebackfill.com/signup/test"},
     )
 
     assert chat_id == "chat_123"
     assert captured["url"] == "https://api.retellai.com/create-sms-chat"
     assert captured["json"]["override_agent_id"] == "chat-outbound"
-    assert captured["json"]["metadata"]["system_message"] == "hello"
     assert captured["json"]["metadata"]["cascade_id"] == 1
+    assert captured["json"]["retell_llm_dynamic_variables"]["initial_message"] == "hello"
+    assert captured["json"]["retell_llm_dynamic_variables"]["signup_url"] == "https://usebackfill.com/signup/test"
 
 
 def test_create_sms_chat_falls_back_to_number_level_agent_binding(monkeypatch):
@@ -156,13 +158,15 @@ def test_create_sms_chat_falls_back_to_number_level_agent_binding(monkeypatch):
         to_number="+13105550101",
         body="hello fallback",
         metadata={"source": "onboarding"},
+        dynamic_variables={"business_name": "Whole Foods"},
     )
 
     assert chat_id == "chat_456"
     assert captured["url"] == "https://api.retellai.com/create-sms-chat"
     assert "override_agent_id" not in captured["json"]
-    assert captured["json"]["metadata"]["system_message"] == "hello fallback"
     assert captured["json"]["metadata"]["source"] == "onboarding"
+    assert captured["json"]["retell_llm_dynamic_variables"]["initial_message"] == "hello fallback"
+    assert captured["json"]["retell_llm_dynamic_variables"]["business_name"] == "Whole Foods"
 
 
 @pytest.mark.asyncio
@@ -383,7 +387,10 @@ async def test_sync_recent_activity_enters_repair_mode_after_webhook_failure(db,
 @pytest.mark.asyncio
 async def test_sync_call_by_id_creates_signup_session_for_inbound_business_call(db, monkeypatch):
     sent = []
-    monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM902")
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM902",
+    )
 
     async def _fake_get_call(call_id):
         return {

@@ -150,6 +150,31 @@ def _normalize_phone_e164(value: Any) -> Optional[str]:
     return None
 
 
+def _signup_sms_dynamic_variables(
+    *,
+    session: Optional[dict] = None,
+    lead: Optional[dict[str, Any]] = None,
+    signup_url: str,
+) -> dict[str, str]:
+    source = lead or session or {}
+    contact_name = _coerce_str(source.get("contact_name"))
+    first_name = None
+    if contact_name:
+        first_name = contact_name.split()[0]
+
+    variables = {
+        "customer_name": contact_name,
+        "first_name": first_name,
+        "business_name": _coerce_str(source.get("business_name")),
+        "role_name": _coerce_str(source.get("role_name")),
+        "signup_url": signup_url,
+        "from_number": _normalize_phone_e164(settings.retell_from_number or settings.backfill_phone_number),
+        "agent_name": "Backfill",
+        "submission_status": _coerce_str(source.get("submission_status")) or "captured_for_team",
+    }
+    return {key: value for key, value in variables.items() if value}
+
+
 def _conversation_direction(conversation: dict) -> Optional[str]:
     direction = _coerce_str(conversation.get("direction"))
     if direction:
@@ -430,6 +455,7 @@ async def maybe_send_post_call_signup(db: aiosqlite.Connection, conversation: di
         session_id=session_id,
         phone=str(lead["contact_phone"]),
         message=message,
+        dynamic_variables=_signup_sms_dynamic_variables(lead=lead, signup_url=url),
     )
     session = await queries.get_onboarding_session(db, session_id)
     assert session is not None
@@ -443,6 +469,7 @@ async def _try_send_signup_session_sms(
     session_id: int,
     phone: str,
     message: str,
+    dynamic_variables: Optional[dict[str, str]] = None,
 ) -> None:
     normalized_phone = _normalize_phone_e164(phone)
     if normalized_phone is None:
@@ -453,7 +480,11 @@ async def _try_send_signup_session_sms(
         )
         return
     try:
-        message_sid = send_sms(normalized_phone, message)
+        message_sid = send_sms(
+            normalized_phone,
+            message,
+            dynamic_variables=dynamic_variables,
+        )
     except Exception:
         _logger.exception(
             "Failed to send onboarding SMS to %s for session %s",
@@ -499,6 +530,7 @@ async def _retry_pending_signup_session(
         session_id=int(session["id"]),
         phone=phone,
         message=message,
+        dynamic_variables=_signup_sms_dynamic_variables(session=session, signup_url=url),
     )
     refreshed = await queries.get_onboarding_session(db, int(session["id"]))
     assert refreshed is not None
