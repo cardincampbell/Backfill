@@ -946,10 +946,10 @@ async def insert_onboarding_session(db: aiosqlite.Connection, data: dict) -> int
         """INSERT INTO onboarding_sessions
            (token_hash, source_conversation_id, source_external_id, organization_id, location_id,
             status, call_type, contact_name, contact_phone, contact_email, role_name,
-            business_name, location_name, vertical, location_count, employee_count, address,
+            business_name, location_name, vertical, location_count, lead_source, employee_count, address,
             pain_point_summary, urgency, notes, setup_kind, scheduling_platform, extracted_fields,
             sent_message_sid, sent_at, completed_at, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             encoded["token_hash"],
             encoded.get("source_conversation_id"),
@@ -966,6 +966,7 @@ async def insert_onboarding_session(db: aiosqlite.Connection, data: dict) -> int
             encoded.get("location_name"),
             encoded.get("vertical"),
             encoded.get("location_count"),
+            encoded.get("lead_source"),
             encoded.get("employee_count"),
             encoded.get("address"),
             encoded.get("pain_point_summary"),
@@ -1006,6 +1007,7 @@ async def update_onboarding_session(
         "location_name",
         "vertical",
         "location_count",
+        "lead_source",
         "employee_count",
         "address",
         "pain_point_summary",

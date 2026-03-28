@@ -416,6 +416,7 @@ async def test_retell_inbound_business_call_creates_signup_session_and_texts_lin
                     "role_name": "Operations Manager",
                     "business_email": "jordan@southbayops.com",
                     "location_count": 3,
+                    "lead_source": "referral",
                     "pain_point_summary": "Need faster call-out coverage across warehouse shifts.",
                     "urgency": "high",
                     "notes": "Interested in getting started this week.",
@@ -436,6 +437,7 @@ async def test_retell_inbound_business_call_creates_signup_session_and_texts_lin
     assert session["business_name"] == "South Bay Ops"
     assert session["setup_kind"] == "manual_form"
     assert session["status"] == "pending"
+    assert session["lead_source"] == "referral"
     assert sent
     assert "https://usebackfill.com/signup/" in sent[0][1]
     assert "dynamic_variables" in sent[0][2]
@@ -486,6 +488,94 @@ async def test_retell_inbound_business_call_uses_summary_fallback_for_signup_tex
     assert session["contact_phone"] == "+13105550999"
     assert sent
     assert "https://usebackfill.com/signup/" in sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_retell_inbound_business_call_prefills_from_summary_and_transcript(db, client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM905",
+    )
+
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_business_prefill_123",
+                "agent_id": "agent_inbound",
+                "direction": "inbound",
+                "call_status": "ended",
+                "from_number": "+16462065103",
+                "to_number": "+14244992663",
+                "transcript": (
+                    "User: My name is Carden, and I'm with Whole Foods.\n"
+                    "User: I am the general manager for about a hundred stores.\n"
+                    "User: My number is six four six two zero six five one zero three.\n"
+                ),
+                "call_analysis": {
+                    "call_type": "phone_call",
+                    "call_summary": (
+                        "The caller, Carden from Whole Foods, expressed interest in using Backfill. "
+                        "The agent gathered contact details and confirmed Carden's role managing about 100 stores."
+                    ),
+                    "custom_analysis_data": {},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    session = await get_onboarding_session_by_source_external_id(db, "call_business_prefill_123")
+    assert session is not None
+    assert session["call_type"] == "new_business_inquiry"
+    assert session["contact_name"] == "Carden"
+    assert session["business_name"] == "Whole Foods"
+    assert session["role_name"] == "general manager"
+    assert session["location_count"] == 100
+    assert session["contact_phone"] == "+16462065103"
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_retell_inbound_business_call_captures_lead_source_without_exposing_it_in_sms(
+    db,
+    client,
+    monkeypatch,
+):
+    sent = []
+    monkeypatch.setattr(
+        "app.services.onboarding.send_sms",
+        lambda to, body, **kwargs: sent.append((to, body, kwargs)) or "SM906",
+    )
+
+    response = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "call_analyzed",
+            "call": {
+                "call_id": "call_lead_source_123",
+                "direction": "inbound",
+                "call_status": "ended",
+                "from_number": "+13105550701",
+                "to_number": "+14244992663",
+                "call_analysis": {
+                    "call_type": "new_business_inquiry",
+                    "business_name": "Northstar Care",
+                    "caller_name": "Ari Fox",
+                    "lead_source": "podcast",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    session = await get_onboarding_session_by_source_external_id(db, "call_lead_source_123")
+    assert session is not None
+    assert session["lead_source"] == "podcast"
+    assert sent
+    assert "podcast" not in sent[0][1].lower()
 
 
 @pytest.mark.asyncio

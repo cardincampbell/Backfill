@@ -212,6 +212,7 @@ async def init_db():
                 location_name        TEXT,
                 vertical             TEXT,
                 location_count       INTEGER,
+                lead_source          TEXT,
                 employee_count       INTEGER,
                 address              TEXT,
                 pain_point_summary   TEXT,
@@ -502,6 +503,12 @@ async def init_db():
             "cascades",
             "standby_queue",
             "TEXT NOT NULL DEFAULT '[]'",
+        )
+        await _ensure_column(
+            db,
+            "onboarding_sessions",
+            "lead_source",
+            "TEXT",
         )
         await _ensure_column(
             db,

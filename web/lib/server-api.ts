@@ -154,10 +154,11 @@ export async function completeSignupSession(
   token: string,
   input: {
     business_name: string;
-    location_name: string;
+    location_name?: string;
     contact_name?: string;
     contact_phone: string;
     contact_email?: string;
+    role_name?: string;
     vertical?: string;
     location_count?: number;
     employee_count?: number;

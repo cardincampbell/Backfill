@@ -134,6 +134,47 @@ def _combined_text(*values: Any) -> str:
     return " ".join(parts)
 
 
+def _search_text(pattern: str, *texts: Optional[str], flags: int = re.IGNORECASE) -> Optional[str]:
+    for text in texts:
+        if not text:
+            continue
+        match = re.search(pattern, text, flags)
+        if match:
+            return _coerce_str(match.group(1))
+    return None
+
+
+def _infer_business_lead_fields(summary_text: Optional[str], transcript_text: Optional[str]) -> dict[str, Any]:
+    combined = _combined_text(summary_text, transcript_text)
+    return {
+        "contact_name": _search_text(
+            r"\bcaller,\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+from\s+",
+            summary_text,
+        ) or _search_text(
+            r"\bmy name is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)",
+            transcript_text,
+        ),
+        "business_name": _search_text(
+            r"\bfrom\s+([A-Z][A-Za-z0-9&'.\-]*(?:\s+[A-Z][A-Za-z0-9&'.\-]*){0,4})",
+            summary_text,
+            transcript_text,
+        ),
+        "role_name": _search_text(
+            r"\b(?:i am|i'm)\s+(?:the\s+)?(?!with\b)([A-Za-z][A-Za-z\s\-]{2,60}?)(?:\s+(?:for|at)\b|[.,]|$)",
+            transcript_text,
+        ) or _search_text(
+            r"\brole\s+([A-Za-z][A-Za-z\s\-]{2,60}?)(?:\s+(?:managing|overseeing)\b|[.,]|$)",
+            summary_text,
+        ),
+        "location_count": _coerce_int(
+            _search_text(
+                r"\b(\d{1,4})\s+(?:stores?|locations?)\b",
+                combined,
+            )
+        ),
+    }
+
+
 def _normalize_phone_e164(value: Any) -> Optional[str]:
     text = _coerce_str(value)
     if text is None:
@@ -230,6 +271,9 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     business_name = _coerce_str(_pick_value(*sources, keys=("business_name", "company_name", "organization_name")))
     location_name = _coerce_str(_pick_value(*sources, keys=("location_name", "site_name", "store_name")))
     vertical = _coerce_str(_pick_value(*sources, keys=("vertical", "business_vertical")))
+    lead_source = _coerce_str(
+        _pick_value(*sources, keys=("lead_source", "source", "attribution_source"))
+    )
     notes = _coerce_str(_pick_value(*sources, keys=("notes", "note", "freeform_notes"))) or summary_text
     urgency = _coerce_str(_pick_value(*sources, keys=("urgency", "priority")))
     pain_point_summary = _coerce_str(
@@ -237,6 +281,35 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
     )
     if pain_point_summary is None and transcript_text:
         pain_point_summary = transcript_text
+
+    inferred = _infer_business_lead_fields(summary_text, transcript_text)
+    contact_name = _coerce_str(
+        _pick_value(*sources, keys=("caller_name", "contact_name", "reported_by_name"))
+    ) or inferred["contact_name"]
+    business_name = business_name or inferred["business_name"]
+    role_name = role_name or inferred["role_name"]
+    location_count = _coerce_int(_pick_value(*sources, keys=("location_count", "num_locations")))
+    if location_count is None:
+        location_count = inferred["location_count"]
+
+    normalized_call_type = (call_type or "").strip().lower()
+    if normalized_call_type in {"", "phone_call", "general_inquiry"} and _combined_text(
+        summary_text,
+        transcript_text,
+    ):
+        business_markers = (
+            "using backfill",
+            "for a business",
+            "for business",
+            "last-minute shift gaps",
+            "call out",
+            "call-out",
+            "covering shifts",
+            "shift coverage",
+        )
+        text = _combined_text(summary_text, transcript_text).lower()
+        if any(marker in text for marker in business_markers):
+            call_type = "new_business_inquiry"
 
     setup_kind = "manual_form"
     if platform and platform != "backfill_native":
@@ -246,14 +319,15 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
 
     return {
         "call_type": call_type,
-        "contact_name": _coerce_str(_pick_value(*sources, keys=("caller_name", "contact_name", "reported_by_name"))),
+        "contact_name": contact_name,
         "contact_phone": callback_phone or phone,
         "contact_email": _coerce_str(_pick_value(*sources, keys=("business_email", "contact_email", "email"))),
         "role_name": role_name,
         "business_name": business_name,
         "location_name": location_name,
         "vertical": vertical or "other",
-        "location_count": _coerce_int(_pick_value(*sources, keys=("location_count", "num_locations"))),
+        "location_count": location_count,
+        "lead_source": lead_source,
         "pain_point_summary": pain_point_summary,
         "urgency": urgency,
         "notes": notes,
@@ -261,14 +335,15 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
         "scheduling_platform": platform or "backfill_native",
         "extracted_fields": {
             "call_type": call_type,
-            "caller_name": _coerce_str(_pick_value(*sources, keys=("caller_name", "contact_name", "reported_by_name"))),
+            "caller_name": contact_name,
             "callback_number": _coerce_str(_pick_value(*sources, keys=("callback_number", "contact_phone"))),
             "normalized_callback_number": callback_phone,
             "business_name": business_name,
             "location_name": location_name,
             "role_name": role_name,
             "business_email": _coerce_str(_pick_value(*sources, keys=("business_email", "contact_email", "email"))),
-            "location_count": _coerce_int(_pick_value(*sources, keys=("location_count", "num_locations"))),
+            "location_count": location_count,
+            "lead_source": lead_source,
             "pain_point_summary": pain_point_summary,
             "urgency": urgency,
             "notes": notes,
@@ -562,10 +637,17 @@ async def complete_signup_session(
         raise ValueError("Onboarding session not found")
 
     business_name = _coerce_str(data.get("business_name")) or session.get("business_name")
-    location_name = _coerce_str(data.get("location_name")) or session.get("location_name")
+    location_name = (
+        _coerce_str(data.get("location_name"))
+        or session.get("location_name")
+        or business_name
+    )
     contact_name = _coerce_str(data.get("contact_name")) or session.get("contact_name")
-    contact_phone = _coerce_str(data.get("contact_phone")) or session.get("contact_phone")
+    contact_phone = _normalize_phone_e164(data.get("contact_phone")) or _normalize_phone_e164(
+        session.get("contact_phone")
+    )
     contact_email = _coerce_str(data.get("contact_email")) or session.get("contact_email")
+    role_name = _coerce_str(data.get("role_name")) or session.get("role_name")
     vertical = _coerce_str(data.get("vertical")) or session.get("vertical") or "other"
     address = _coerce_str(data.get("address"))
     if not location_name:
@@ -623,8 +705,10 @@ async def complete_signup_session(
             "contact_name": contact_name,
             "contact_phone": contact_phone,
             "contact_email": contact_email,
+            "role_name": role_name,
             "vertical": vertical,
             "location_count": location_count,
+            "lead_source": session.get("lead_source"),
             "employee_count": employee_count,
             "address": address,
             "pain_point_summary": pain_point_summary,
@@ -644,10 +728,12 @@ async def complete_signup_session(
             "contact_name": contact_name,
             "contact_phone": contact_phone,
             "contact_email": contact_email,
+            "role_name": role_name,
             "business_name": business_name,
             "location_name": location_name,
             "vertical": vertical,
             "location_count": location_count,
+            "lead_source": session.get("lead_source"),
             "employee_count": employee_count,
             "address": address,
             "pain_point_summary": pain_point_summary,

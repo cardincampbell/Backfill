@@ -185,6 +185,7 @@ class SignupSessionCompleteRequest(BaseModel):
     contact_name: Optional[str] = None
     contact_phone: Optional[str] = None
     contact_email: Optional[str] = None
+    role_name: Optional[str] = None
     vertical: Optional[str] = None
     location_count: Optional[int] = None
     employee_count: Optional[int] = None

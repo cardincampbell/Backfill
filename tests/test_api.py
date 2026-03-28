@@ -152,21 +152,16 @@ def test_signup_session_api_loads_and_completes_from_retell_inbound_call(client,
     assert session.status_code == 200
     assert session.json()["business_name"] == "Pacific Clinics"
     assert session.json()["contact_phone"] == "+13105550199"
+    assert "lead_source" not in session.json()
 
     completed = client.post(
         f"/api/onboarding/sessions/{token}/complete",
         json={
             "business_name": "Pacific Clinics",
-            "location_name": "Pacific Clinics West LA",
             "contact_name": "Mina Patel",
             "contact_phone": "+13105550199",
             "contact_email": "mina@pacificclinics.com",
-            "vertical": "healthcare",
-            "address": "123 Wilshire Blvd, Los Angeles, CA",
-            "employee_count": 42,
             "location_count": 5,
-            "setup_kind": "manual_form",
-            "scheduling_platform": "backfill_native",
         },
     )
 
@@ -178,7 +173,7 @@ def test_signup_session_api_loads_and_completes_from_retell_inbound_call(client,
 
     location = client.get(f"/api/locations/{payload['location']['id']}")
     assert location.status_code == 200
-    assert location.json()["employee_count"] == 42
+    assert location.json()["employee_count"] is None
     assert location.json()["manager_phone"] == "+13105550199"
 
 
