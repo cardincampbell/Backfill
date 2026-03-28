@@ -1,5 +1,8 @@
 const API_BASE_URL =
-  process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
+  process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ??
+  (process.env.NODE_ENV === "production"
+    ? "https://api.usebackfill.com"
+    : "http://127.0.0.1:8000");
 
 async function parseError(response: Response): Promise<string> {
   try {
