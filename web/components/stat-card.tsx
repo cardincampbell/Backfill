@@ -9,7 +9,7 @@ export function StatCard({ label, value, hint }: StatCardProps) {
     <div className="metric">
       <div className="muted">{label}</div>
       <strong>{value}</strong>
-      {hint ? <div className="muted">{hint}</div> : null}
+      {hint ? <div className="muted" style={{ fontSize: "0.78rem", marginTop: 2 }}>{hint}</div> : null}
     </div>
   );
 }

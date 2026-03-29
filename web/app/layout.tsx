@@ -24,10 +24,11 @@ export default function RootLayout({
             </Link>
             <nav className="nav">
               <Link href="/">Home</Link>
-              <Link href="/setup/connect">Setup</Link>
               <Link href="/dashboard">Dashboard</Link>
+              <Link href="/schedule">Schedules</Link>
+              <Link href="/roster">Roster</Link>
+              <Link href="/setup/connect">Setup</Link>
               <Link href="/join">Join</Link>
-              <Link href="/partners">Partners</Link>
             </nav>
           </header>
           {children}

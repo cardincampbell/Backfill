@@ -58,8 +58,15 @@ async def init_db():
                 last_rolling_sync_at     TEXT,
                 last_daily_sync_at       TEXT,
                 last_writeback_at        TEXT,
+                last_manager_digest_sent_at TEXT,
                 writeback_enabled        INTEGER NOT NULL DEFAULT 0,
                 writeback_subscription_tier TEXT NOT NULL DEFAULT 'core',
+                backfill_shifts_enabled INTEGER NOT NULL DEFAULT 1,
+                backfill_shifts_launch_state TEXT NOT NULL DEFAULT 'enabled',
+                backfill_shifts_beta_eligible INTEGER NOT NULL DEFAULT 0,
+                coverage_requires_manager_approval INTEGER NOT NULL DEFAULT 0,
+                late_arrival_policy     TEXT NOT NULL DEFAULT 'wait',
+                missed_check_in_policy  TEXT NOT NULL DEFAULT 'start_coverage',
                 onboarding_info           TEXT,
                 agency_supply_approved    INTEGER NOT NULL DEFAULT 0,
                 preferred_agency_partners TEXT NOT NULL DEFAULT '[]'
@@ -106,12 +113,26 @@ async def init_db():
                 date            TEXT NOT NULL,
                 start_time      TEXT NOT NULL,
                 end_time        TEXT NOT NULL,
+                spans_midnight  INTEGER NOT NULL DEFAULT 0,
                 pay_rate        REAL NOT NULL,
                 requirements    TEXT NOT NULL DEFAULT '[]',
                 status          TEXT NOT NULL DEFAULT 'scheduled',
                 called_out_by   INTEGER REFERENCES workers(id),
                 filled_by       INTEGER REFERENCES workers(id),
                 fill_tier       TEXT,
+                escalated_from_worker_id INTEGER REFERENCES workers(id),
+                reminder_sent_at TEXT,
+                confirmation_requested_at TEXT,
+                worker_confirmed_at TEXT,
+                worker_declined_at TEXT,
+                confirmation_escalated_at TEXT,
+                check_in_requested_at TEXT,
+                checked_in_at TEXT,
+                late_reported_at TEXT,
+                late_eta_minutes INTEGER,
+                check_in_escalated_at TEXT,
+                attendance_action_state TEXT,
+                attendance_action_updated_at TEXT,
                 source_platform TEXT NOT NULL DEFAULT 'backfill_native'
             )
         """)
@@ -126,6 +147,8 @@ async def init_db():
                 current_batch         INTEGER NOT NULL DEFAULT 0,
                 current_position      INTEGER NOT NULL DEFAULT 0,
                 confirmed_worker_id   INTEGER REFERENCES workers(id),
+                pending_claim_worker_id INTEGER REFERENCES workers(id),
+                pending_claim_at      TEXT,
                 standby_queue         TEXT NOT NULL DEFAULT '[]',
                 manager_approved_tier3 INTEGER NOT NULL DEFAULT 0
             )
@@ -282,6 +305,84 @@ async def init_db():
                 details     TEXT NOT NULL DEFAULT '{}'
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_receipts (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                source               TEXT NOT NULL,
+                external_id          TEXT NOT NULL,
+                status               TEXT NOT NULL DEFAULT 'processing',
+                duplicate_count      INTEGER NOT NULL DEFAULT 0,
+                request_payload      TEXT NOT NULL DEFAULT '{}',
+                response_body        TEXT,
+                response_status_code INTEGER,
+                last_seen_at         TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_receipts_source_external
+            ON webhook_receipts(source, external_id)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS dashboard_access_requests (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone             TEXT NOT NULL,
+                organization_id   INTEGER REFERENCES organizations(id),
+                location_ids_json TEXT NOT NULL DEFAULT '[]',
+                token_hash        TEXT NOT NULL UNIQUE,
+                status            TEXT NOT NULL DEFAULT 'pending',
+                expires_at        TEXT NOT NULL,
+                used_at           TEXT,
+                requested_at      TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dashboard_access_requests_phone
+            ON dashboard_access_requests(phone, status, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS dashboard_sessions (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id        INTEGER REFERENCES organizations(id),
+                location_ids_json      TEXT NOT NULL DEFAULT '[]',
+                subject_phone          TEXT NOT NULL,
+                session_token_hash     TEXT NOT NULL UNIQUE,
+                access_request_id      INTEGER REFERENCES dashboard_access_requests(id),
+                status                 TEXT NOT NULL DEFAULT 'active',
+                expires_at             TEXT NOT NULL,
+                last_seen_at           TEXT,
+                created_at             TEXT NOT NULL,
+                updated_at             TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_org
+            ON dashboard_sessions(organization_id, status, id DESC)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_phone
+            ON dashboard_sessions(subject_phone, status, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS setup_access_tokens (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id     INTEGER NOT NULL REFERENCES locations(id),
+                token_hash      TEXT NOT NULL UNIQUE,
+                status          TEXT NOT NULL DEFAULT 'active',
+                source          TEXT,
+                expires_at      TEXT NOT NULL,
+                last_seen_at    TEXT,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_setup_access_tokens_location
+            ON setup_access_tokens(location_id, status, id DESC)
+        """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS integration_events (
@@ -346,6 +447,168 @@ async def init_db():
                 latency_ms    INTEGER,
                 error         TEXT
             )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ops_jobs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type        TEXT NOT NULL,
+                location_id     INTEGER REFERENCES locations(id),
+                priority        INTEGER NOT NULL DEFAULT 50,
+                payload_json    TEXT NOT NULL DEFAULT '{}',
+                status          TEXT NOT NULL DEFAULT 'queued',
+                attempt_count   INTEGER NOT NULL DEFAULT 0,
+                max_attempts    INTEGER NOT NULL DEFAULT 3,
+                next_run_at     TEXT NOT NULL,
+                started_at      TEXT,
+                completed_at    TEXT,
+                last_error      TEXT,
+                idempotency_key TEXT,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ops_jobs_due
+            ON ops_jobs(status, next_run_at, priority, location_id)
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_jobs_idempotency
+            ON ops_jobs(idempotency_key)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS schedules (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id              INTEGER NOT NULL REFERENCES locations(id),
+                week_start_date          TEXT NOT NULL,
+                week_end_date            TEXT NOT NULL,
+                lifecycle_state          TEXT NOT NULL DEFAULT 'draft',
+                current_version_id       INTEGER,
+                derived_from_schedule_id INTEGER REFERENCES schedules(id),
+                created_by               TEXT,
+                created_at               TEXT NOT NULL,
+                updated_at               TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_location_week
+            ON schedules(location_id, week_start_date)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS schedule_versions (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_id         INTEGER NOT NULL REFERENCES schedules(id),
+                version_number      INTEGER NOT NULL,
+                version_type        TEXT NOT NULL,
+                snapshot_json       TEXT NOT NULL DEFAULT '{}',
+                change_summary_json TEXT NOT NULL DEFAULT '{}',
+                published_at        TEXT,
+                published_by        TEXT,
+                created_at          TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_versions_schedule_version
+            ON schedule_versions(schedule_id, version_number)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS schedule_templates (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id        INTEGER NOT NULL REFERENCES locations(id),
+                name               TEXT NOT NULL,
+                description        TEXT,
+                source_schedule_id INTEGER REFERENCES schedules(id),
+                created_by         TEXT,
+                created_at         TEXT NOT NULL,
+                updated_at         TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_schedule_templates_location
+            ON schedule_templates(location_id, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS schedule_template_shifts (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id       INTEGER NOT NULL REFERENCES schedule_templates(id),
+                day_of_week       INTEGER NOT NULL,
+                role              TEXT NOT NULL,
+                start_time        TEXT NOT NULL,
+                end_time          TEXT NOT NULL,
+                spans_midnight    INTEGER NOT NULL DEFAULT 0,
+                pay_rate          REAL NOT NULL DEFAULT 0,
+                requirements      TEXT NOT NULL DEFAULT '[]',
+                shift_label       TEXT,
+                notes             TEXT,
+                worker_id         INTEGER REFERENCES workers(id),
+                assignment_status TEXT NOT NULL DEFAULT 'open',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_schedule_template_shifts_template
+            ON schedule_template_shifts(template_id, day_of_week, start_time, id)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS shift_assignments (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                shift_id          INTEGER NOT NULL REFERENCES shifts(id),
+                worker_id         INTEGER REFERENCES workers(id),
+                assignment_status TEXT NOT NULL DEFAULT 'open',
+                source            TEXT NOT NULL DEFAULT 'manual',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_assignments_shift
+            ON shift_assignments(shift_id)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_shift_assignments_worker
+            ON shift_assignments(worker_id, assignment_status)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS import_jobs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id  INTEGER NOT NULL REFERENCES locations(id),
+                import_type  TEXT NOT NULL,
+                filename     TEXT,
+                status       TEXT NOT NULL DEFAULT 'uploaded',
+                mapping_json TEXT NOT NULL DEFAULT '{}',
+                summary_json TEXT NOT NULL DEFAULT '{}',
+                columns_json TEXT NOT NULL DEFAULT '[]',
+                uploaded_csv TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_import_jobs_location_status
+            ON import_jobs(location_id, status, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS import_row_results (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_job_id      INTEGER NOT NULL REFERENCES import_jobs(id),
+                row_number         INTEGER NOT NULL,
+                entity_type        TEXT NOT NULL,
+                outcome            TEXT NOT NULL,
+                error_code         TEXT,
+                error_message      TEXT,
+                raw_payload        TEXT NOT NULL DEFAULT '{}',
+                normalized_payload TEXT,
+                resolution_action  TEXT,
+                resolved_at        TEXT,
+                resolved_by        TEXT,
+                committed_at       TEXT,
+                committed_entity_id INTEGER,
+                created_at         TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_import_row_results_job_row
+            ON import_row_results(import_job_id, row_number, id)
         """)
 
         await _ensure_column(
@@ -441,6 +704,12 @@ async def init_db():
         await _ensure_column(
             db,
             "locations",
+            "last_manager_digest_sent_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
             "writeback_enabled",
             "INTEGER NOT NULL DEFAULT 0",
         )
@@ -449,6 +718,54 @@ async def init_db():
             "locations",
             "writeback_subscription_tier",
             "TEXT NOT NULL DEFAULT 'core'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "backfill_shifts_enabled",
+            "INTEGER NOT NULL DEFAULT 1",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "backfill_shifts_launch_state",
+            "TEXT NOT NULL DEFAULT 'enabled'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "backfill_shifts_beta_eligible",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "coverage_requires_manager_approval",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "late_arrival_policy",
+            "TEXT NOT NULL DEFAULT 'wait'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "missed_check_in_policy",
+            "TEXT NOT NULL DEFAULT 'start_coverage'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "timezone",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "operating_mode",
+            "TEXT",
         )
         await _ensure_column(
             db,
@@ -476,8 +793,146 @@ async def init_db():
         )
         await _ensure_column(
             db,
+            "workers",
+            "first_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "workers",
+            "last_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "workers",
+            "employment_status",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "workers",
+            "max_hours_per_week",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
             "shifts",
             "reminder_sent_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "spans_midnight",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "schedule_id",
+            "INTEGER REFERENCES schedules(id)",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "shift_label",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "notes",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "published_state",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "escalated_from_worker_id",
+            "INTEGER REFERENCES workers(id)",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "confirmation_requested_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "worker_confirmed_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "worker_declined_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "confirmation_escalated_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "check_in_requested_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "checked_in_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "late_reported_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "late_eta_minutes",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "check_in_escalated_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "attendance_action_state",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "shifts",
+            "attendance_action_updated_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "webhook_receipts",
+            "duplicate_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "webhook_receipts",
+            "last_seen_at",
             "TEXT",
         )
         await _ensure_column(
@@ -497,6 +952,18 @@ async def init_db():
             "cascades",
             "confirmed_worker_id",
             "INTEGER REFERENCES workers(id)",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "pending_claim_worker_id",
+            "INTEGER REFERENCES workers(id)",
+        )
+        await _ensure_column(
+            db,
+            "cascades",
+            "pending_claim_at",
+            "TEXT",
         )
         await _ensure_column(
             db,
@@ -521,6 +988,36 @@ async def init_db():
             "outreach_attempts",
             "promoted_at",
             "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "import_row_results",
+            "resolution_action",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "import_row_results",
+            "resolved_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "import_row_results",
+            "resolved_by",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "import_row_results",
+            "committed_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "import_row_results",
+            "committed_entity_id",
+            "INTEGER",
         )
 
         await _normalize_location_json_fields(db)

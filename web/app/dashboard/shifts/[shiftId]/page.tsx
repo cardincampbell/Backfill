@@ -10,6 +10,45 @@ type ShiftDetailPageProps = {
   params: Promise<{ shiftId: string }>;
 };
 
+function formatTime(time: string): string {
+  const [h, m] = time.split(":");
+  const hour = parseInt(h, 10);
+  const suffix = hour >= 12 ? "pm" : "am";
+  const display = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+  return m === "00" ? `${display}${suffix}` : `${display}:${m}${suffix}`;
+}
+
+function formatDate(date: string): string {
+  const d = new Date(date + "T00:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+function statusColor(status: string): string {
+  if (status === "filled" || status === "confirmed") return "pill pill-success";
+  if (status === "vacant" || status === "open") return "pill pill-open";
+  if (status === "active") return "pill pill-published";
+  return "pill";
+}
+
+function outcomePill(outcome?: string | null): { label: string; className: string } {
+  if (!outcome) return { label: "Pending", className: "pill" };
+  if (outcome === "accepted" || outcome === "confirmed") return { label: outcome, className: "pill pill-success" };
+  if (outcome === "declined" || outcome === "no_response") return { label: outcome.replace("_", " "), className: "pill pill-failed" };
+  if (outcome === "standby") return { label: "Standby", className: "pill pill-warning" };
+  return { label: outcome, className: "pill" };
+}
+
+function timeAgo(iso?: string | null): string {
+  if (!iso) return "\u2014";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) {
   const { shiftId } = await params;
   const numericShiftId = Number(shiftId);
@@ -32,43 +71,57 @@ export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) 
     return workerNames.get(workerId) ?? `Worker #${workerId}`;
   });
 
+  const locationName = status.location?.name ?? "Unknown location";
+
   return (
     <main className="section">
       <div className="page-head">
         <span className="eyebrow">Shift Detail</span>
-        <h1>{status.shift.role} on {status.shift.date}</h1>
+        <h1>{status.shift.role}</h1>
         <p>
-          {status.location?.name ?? "Unknown location"} · {status.shift.start_time} to {status.shift.end_time}
+          {formatDate(status.shift.date)} · {formatTime(status.shift.start_time)}\u2013{formatTime(status.shift.end_time)} · {locationName}
         </p>
       </div>
 
-      <section className="section">
-        <div className="two-up">
-          <div className="callout">
-            <h3>Coverage state</h3>
-            <p>Status: <strong>{status.shift.status}</strong></p>
-            <p>Mode: <strong>{status.cascade?.outreach_mode ?? "n/a"}</strong></p>
-            <p>Tier: <strong>{status.cascade?.current_tier ?? "n/a"}</strong></p>
-          </div>
-          <div className="callout">
-            <h3>Confirmed worker</h3>
-            <p>
-              {status.filled_worker
-                ? `${status.filled_worker.name} (${status.shift.fill_tier ?? "unclassified"})`
-                : "Nobody confirmed yet"}
-            </p>
-            <p>
-              <Link className="text-link" href="/dashboard">Back to dashboard</Link>
-            </p>
+      {/* Key info cards */}
+      <div className="shift-detail-grid">
+        <div className="shift-detail-card">
+          <div className="shift-detail-card-label">Status</div>
+          <div className="shift-detail-card-value">
+            <span className={statusColor(status.shift.status)}>{status.shift.status}</span>
           </div>
         </div>
-      </section>
+        <div className="shift-detail-card">
+          <div className="shift-detail-card-label">Confirmed worker</div>
+          <div className="shift-detail-card-value">
+            {status.filled_worker ? (
+              <span style={{ fontWeight: 600 }}>{status.filled_worker.name}</span>
+            ) : (
+              <span style={{ color: "var(--muted)" }}>Nobody confirmed</span>
+            )}
+          </div>
+          {status.shift.fill_tier && (
+            <div className="shift-detail-card-hint">Fill tier: {status.shift.fill_tier}</div>
+          )}
+        </div>
+        <div className="shift-detail-card">
+          <div className="shift-detail-card-label">Outreach mode</div>
+          <div className="shift-detail-card-value">{status.cascade?.outreach_mode ?? "\u2014"}</div>
+        </div>
+        <div className="shift-detail-card">
+          <div className="shift-detail-card-label">Coverage tier</div>
+          <div className="shift-detail-card-value">
+            {status.cascade?.current_tier != null ? `Tier ${status.cascade.current_tier}` : "\u2014"}
+          </div>
+        </div>
+      </div>
 
+      {/* Standby queue */}
       <section className="section">
         <div className="section-head">
           <div>
             <h2>Standby queue</h2>
-            <p className="muted">Ordered backups for this shift if the confirmed worker drops out.</p>
+            <p className="muted">Ranked backup workers for this shift.</p>
           </div>
         </div>
         {standbyNames.length ? (
@@ -76,15 +129,17 @@ export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) 
             <table>
               <thead>
                 <tr>
-                  <th>Position</th>
+                  <th style={{ width: 80 }}>Position</th>
                   <th>Worker</th>
                 </tr>
               </thead>
               <tbody>
                 {standbyNames.map((name, index) => (
                   <tr key={`${name}-${index}`}>
-                    <td>#{index + 1}</td>
-                    <td>{name}</td>
+                    <td>
+                      <span className="pill" style={{ fontVariantNumeric: "tabular-nums" }}>#{index + 1}</span>
+                    </td>
+                    <td style={{ fontWeight: 500 }}>{name}</td>
                   </tr>
                 ))}
               </tbody>
@@ -95,11 +150,12 @@ export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) 
         )}
       </section>
 
+      {/* Outreach attempts */}
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Outreach attempts</h2>
-            <p className="muted">All outreach rows currently attached to this shift.</p>
+            <h2>Outreach</h2>
+            <p className="muted">All contact attempts for this shift.</p>
           </div>
         </div>
         {status.outreach_attempts.length ? (
@@ -113,27 +169,50 @@ export default async function ShiftDetailPage({ params }: ShiftDetailPageProps) 
                   <th>Outcome</th>
                   <th>Standby</th>
                   <th>Sent</th>
-                  <th>Responded</th>
+                  <th>Response</th>
                 </tr>
               </thead>
               <tbody>
-                {status.outreach_attempts.map((attempt) => (
-                  <tr key={attempt.id}>
-                    <td>{workerNames.get(attempt.worker_id) ?? `Worker #${attempt.worker_id}`}</td>
-                    <td>{attempt.channel}</td>
-                    <td>{attempt.status}</td>
-                    <td>{attempt.outcome ?? "pending"}</td>
-                    <td>{attempt.standby_position ? `#${attempt.standby_position}` : "-"}</td>
-                    <td>{attempt.sent_at ?? "-"}</td>
-                    <td>{attempt.responded_at ?? "-"}</td>
-                  </tr>
-                ))}
+                {status.outreach_attempts.map((attempt) => {
+                  const outcome = outcomePill(attempt.outcome);
+                  return (
+                    <tr key={attempt.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        {workerNames.get(attempt.worker_id) ?? `Worker #${attempt.worker_id}`}
+                      </td>
+                      <td>
+                        <span className="pill">{attempt.channel}</span>
+                      </td>
+                      <td>
+                        <span className="pill">{attempt.status}</span>
+                      </td>
+                      <td>
+                        <span className={outcome.className}>{outcome.label}</span>
+                      </td>
+                      <td style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {attempt.standby_position ? `#${attempt.standby_position}` : "\u2014"}
+                      </td>
+                      <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                        {timeAgo(attempt.sent_at)}
+                      </td>
+                      <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+                        {timeAgo(attempt.responded_at)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : (
-          <EmptyState title="No outreach yet" body="This shift does not have any recorded outreach attempts." />
+          <EmptyState title="No outreach yet" body="Outreach attempts will appear here once coverage starts." />
         )}
+      </section>
+
+      <section style={{ padding: "12px 0 36px" }}>
+        <Link className="text-link" href="/dashboard">
+          Back to dashboard
+        </Link>
       </section>
     </main>
   );

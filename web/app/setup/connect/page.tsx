@@ -63,17 +63,18 @@ async function submitConnectSetup(formData: FormData) {
   "use server";
 
   const existingLocationId = Number(formData.get("location_id") || 0) || undefined;
+  const setupToken = String(formData.get("setup_token") ?? "").trim() || undefined;
   const locationName = String(formData.get("location_name") ?? "").trim();
   const organizationName = String(formData.get("organization_name") ?? "").trim();
   const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const platform = String(formData.get("platform") ?? "").trim();
 
   if (!locationName) {
-    redirect("/setup/connect?status=error&message=Location+name+is+required");
+    redirect(`/setup/connect?status=error&message=Location+name+is+required${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
 
   if (!platform) {
-    redirect("/setup/connect?status=error&message=Platform+selection+is+required");
+    redirect(`/setup/connect?status=error&message=Platform+selection+is+required${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
 
   try {
@@ -93,23 +94,24 @@ async function submitConnectSetup(formData: FormData) {
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
     };
     const location = existingLocationId
-      ? await updateLocation(existingLocationId, payload)
-      : await createLocation(payload);
+      ? await updateLocation(existingLocationId, payload, { setupToken })
+      : await createLocation(payload, { setupToken });
 
-    const syncResult = await connectAndSyncLocation(location.id);
+    const syncResult = await connectAndSyncLocation(location.id, { setupToken });
 
     revalidatePath("/dashboard");
     redirect(
-      `/setup/connect?status=created&location_id=${location.id}&platform=${encodeURIComponent(platform)}&sync=${encodeURIComponent(syncResult.status)}`
+      `/setup/connect?status=created&location_id=${location.id}&platform=${encodeURIComponent(platform)}&sync=${encodeURIComponent(syncResult.status)}${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Connect setup failed";
-    redirect(`/setup/connect?status=error&message=${encodeURIComponent(message)}`);
+    redirect(`/setup/connect?status=error&message=${encodeURIComponent(message)}${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
 }
 
 export default async function SetupConnectPage({ searchParams }: SetupConnectPageProps) {
   const params = searchParams ? await searchParams : {};
+  const setupToken = typeof params.setup_token === "string" ? params.setup_token : "";
   const resumeLocationId = typeof params.location_id === "string" ? Number(params.location_id) || 0 : 0;
   const selectedPlatform = typeof params.platform === "string" ? params.platform : null;
   const status = typeof params.status === "string" ? params.status : "";
@@ -117,7 +119,9 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
   const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const syncStatus = typeof params.sync === "string" ? decodeURIComponent(params.sync) : "";
   const config = platformConfig[selectedPlatform ?? "7shifts"] ?? platformConfig["7shifts"];
-  const existingLocation = resumeLocationId ? await getLocation(resumeLocationId) : null;
+  const existingLocation = resumeLocationId
+    ? await getLocation(resumeLocationId, { setupToken: setupToken || undefined })
+    : null;
   const defaultLocationName = typeof params.location_name === "string" ? decodeURIComponent(params.location_name) : existingLocation?.name ?? "";
   const defaultOrganizationName =
     typeof params.organization_name === "string"
@@ -146,6 +150,14 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
       ? decodeURIComponent(params.scheduling_platform_id)
       : existingLocation?.scheduling_platform_id ?? "";
   const defaultWriteback = existingLocation?.writeback_enabled ?? false;
+  const baseLinkParams = new URLSearchParams();
+  if (resumeLocationId) {
+    baseLinkParams.set("location_id", String(resumeLocationId));
+  }
+  if (setupToken) {
+    baseLinkParams.set("setup_token", setupToken);
+  }
+  const uploadLinkSuffix = baseLinkParams.toString() ? `?${baseLinkParams.toString()}` : "";
 
   return (
     <main className="section">
@@ -202,6 +214,7 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
         </div>
         <form className="setup-form" action={submitConnectSetup}>
           {resumeLocationId ? <input name="location_id" type="hidden" value={resumeLocationId} /> : null}
+          {setupToken ? <input name="setup_token" type="hidden" value={setupToken} /> : null}
           <div className="form-grid">
             <label className="field">
               <span>Business name</span>
@@ -277,7 +290,14 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
           <SectionCard key={platform.name} title={platform.name}>
             <p>{platform.body}</p>
             <p>
-              <Link className="text-link" href={`/setup/connect?platform=${platform.value}`}>
+              <Link
+                className="text-link"
+                href={`/setup/connect?${(() => {
+                  const params = new URLSearchParams(baseLinkParams);
+                  params.set("platform", platform.value);
+                  return params.toString();
+                })()}`}
+              >
                 Open {platform.name} flow
               </Link>
             </p>
@@ -294,8 +314,8 @@ export default async function SetupConnectPage({ searchParams }: SetupConnectPag
           <div className="callout">
             <h3>No supported scheduler?</h3>
             <p>
-              Use <Link className="text-link" href="/setup/upload">CSV upload</Link> or{" "}
-              <Link className="text-link" href="/setup/add">manual team entry</Link>.
+              Use <Link className="text-link" href={`/setup/upload${uploadLinkSuffix}`}>CSV upload</Link> or{" "}
+              <Link className="text-link" href={`/setup/add${uploadLinkSuffix}`}>manual team entry</Link>.
             </p>
           </div>
         </div>

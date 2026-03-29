@@ -1,0 +1,2247 @@
+# Backfill Shifts — Engineering Package
+
+This is the execution package to share with other developers, but the plan below must be interpreted through the current repo architecture rather than as a greenfield build.
+
+## 1) Engineering Spec
+
+### Product intent
+
+Backfill Shifts is a lightweight, text-first scheduling and coverage operating mode for hourly-work businesses. It must work as a durable primary system for customers who never connect a third-party scheduler, while also supporting integration-first customers.
+
+### Current repo reality check
+
+Non-negotiable architectural facts from the current codebase:
+
+* Backfill already has a live FastAPI + SQLite + Next.js stack.
+* The core operational tables already exist: `organizations`, `locations`, `workers`, `shifts`, `cascades`, `outreach_attempts`, `audit_log`, `onboarding_sessions`, `retell_conversations`, `integration_events`, and `sync_jobs`.
+* There is already a real coverage engine. We should extend or evolve `cascades` / `outreach_attempts`, not build a second coverage system in parallel and try to reconcile them later.
+* The current app does not have a real business/user/auth/RBAC system. v1 should not assume signed-in multi-role manager accounts are already available.
+* Existing webhook surfaces are `/webhooks/retell` and `/webhooks/twilio/sms`. New messaging work should layer onto those endpoints and services.
+* The main missing scheduling primitives are durable schedule containers, version snapshots, and assigned-worker records. Those are the real first backend milestone.
+
+### Repo-aligned implementation recommendation
+
+Use the target model below as a logical end state, but the first implementation wave should:
+
+* reuse `organizations` instead of introducing a separate `businesses` table
+* extend `workers` rather than introducing a parallel `employees` table first
+* add `schedules`, `schedule_versions`, `shift_assignments`, `import_jobs`, and `import_row_results` before touching broader workforce-management objects
+* defer `users`, `user_location_roles`, and full auth/permissions unless they become a hard beta requirement
+* extend current `/api` routes and current webhook handlers instead of creating a second API surface from scratch
+
+### Core architectural principles
+
+* Text is the command surface.
+* Web is the exception surface.
+* Scheduling data must be durable and versioned.
+* Coverage outcomes must write back into the schedule.
+* Imported data is not disposable; it seeds the system of record.
+* Every action should be auditable.
+
+### Primary system modules
+
+1. Business & location management
+2. User & permission management
+3. Employee roster management
+4. Enrollment / consent state management
+5. Schedule engine
+6. Shift engine
+7. Import pipeline
+8. Messaging orchestration
+9. Coverage engine
+10. Audit & analytics
+
+---
+
+## 2) Target Domain Model / Schema
+
+This is a target logical model, not a literal “create all tables now” migration plan.
+
+### businesses
+
+* id
+* name
+* status
+* timezone_default
+* created_at
+* updated_at
+
+### locations
+
+* id
+* business_id
+* name
+* external_id
+* timezone
+* address_line_1
+* city
+* state
+* postal_code
+* is_active
+* created_at
+* updated_at
+
+### users
+
+* id
+* business_id
+* first_name
+* last_name
+* email
+* mobile_number
+* auth_provider
+* status
+* created_at
+* updated_at
+
+### user_location_roles
+
+* id
+* user_id
+* location_id
+* role_type (owner, manager, assistant_manager, read_only)
+* can_publish_schedule
+* can_manage_roster
+* can_manage_coverage
+* created_at
+* updated_at
+
+### employees
+
+* id
+* business_id
+* first_name
+* last_name
+* mobile_number
+* email
+* employee_external_id
+* primary_location_id
+* status (active, inactive, terminated, on_leave)
+* hire_date
+* notes
+* created_at
+* updated_at
+
+### employee_location_memberships
+
+* id
+* employee_id
+* location_id
+* is_primary
+* is_active
+* created_at
+* updated_at
+
+### roles
+
+* id
+* business_id
+* location_id nullable
+* name
+* code
+* is_active
+* created_at
+* updated_at
+
+### employee_role_eligibilities
+
+* id
+* employee_id
+* role_id
+* proficiency_level nullable
+* is_active
+* created_at
+* updated_at
+
+### employee_preferences
+
+* id
+* employee_id
+* max_hours_per_week nullable
+* preferred_hours_per_week nullable
+* min_rest_hours nullable
+* availability_mode (none, structured, inferred)
+* created_at
+* updated_at
+
+### employee_availability_rules
+
+* id
+* employee_id
+* weekday
+* start_time_local
+* end_time_local
+* availability_type (available, unavailable, preferred)
+* recurrence_pattern
+* effective_start_date
+* effective_end_date nullable
+* created_at
+* updated_at
+
+### employee_time_off
+
+* id
+* employee_id
+* start_datetime_local
+* end_datetime_local
+* status (requested, approved, denied)
+* source (manager, employee, import, integration)
+* created_at
+* updated_at
+
+### enrollment_statuses
+
+* id
+* employee_id
+* location_id
+* sms_status (not_invited, invited, opted_in, opted_out, blocked, unreachable)
+* email_status (unknown, invited, active, bounced, unsubscribed)
+* opt_in_source (keyword, qr, web, ivr, manager_assisted, integration)
+* opt_in_timestamp nullable
+* opt_out_timestamp nullable
+* last_help_timestamp nullable
+* consent_version nullable
+* created_at
+* updated_at
+
+### import_jobs
+
+* id
+* business_id
+* location_id
+* initiated_by_user_id
+* import_type (roster_only, shifts_only, combined)
+* source_type (csv, xlsx, manual)
+* filename
+* status (uploaded, mapping, validating, action_needed, completed, failed, partially_completed)
+* total_rows
+* successful_rows
+* failed_rows
+* mapping_profile_id nullable
+* created_at
+* updated_at
+
+### import_mapping_profiles
+
+* id
+* business_id
+* location_id
+* name
+* source_type
+* mapping_json
+* created_by_user_id
+* created_at
+* updated_at
+
+### import_row_results
+
+* id
+* import_job_id
+* row_number
+* entity_type (employee, shift)
+* outcome (success, warning, failed, skipped)
+* error_code nullable
+* error_message nullable
+* raw_payload_json
+* normalized_payload_json nullable
+* created_at
+
+### schedules
+
+* id
+* business_id
+* location_id
+* week_start_date
+* week_end_date
+* lifecycle_state (draft, published, amended, archived, recalled)
+* current_version_id
+* derived_from_schedule_id nullable
+* created_by_user_id
+* created_at
+* updated_at
+
+### schedule_versions
+
+* id
+* schedule_id
+* version_number
+* version_type (draft, publish_snapshot, amendment)
+* change_summary_json
+* published_at nullable
+* published_by_user_id nullable
+* created_at
+
+### shifts
+
+* id
+* schedule_version_id
+* location_id
+* role_id
+* shift_date_local
+* start_datetime_local
+* end_datetime_local
+* spans_midnight
+* timezone
+* notes nullable
+* status (draft, scheduled, published, open, at_risk, covered, cancelled)
+* source (import, copied, ai_draft, manual, integration)
+* created_at
+* updated_at
+
+### shift_assignments
+
+* id
+* shift_id
+* employee_id nullable
+* assignment_status (assigned, tentative, claimed, confirmed, removed)
+* source (import, draft_engine, manual, employee_claim, coverage_engine)
+* created_at
+* updated_at
+
+### schedule_change_events
+
+* id
+* schedule_id
+* schedule_version_id
+* shift_id nullable
+* event_type (published, amended, recalled, employee_changed, shift_opened, shift_filled, shift_cancelled)
+* actor_type (system, manager, assistant_manager, employee, integration)
+* actor_id nullable
+* payload_json
+* created_at
+
+### coverage_workflows
+
+* id
+* shift_id
+* originating_event_type (callout, open_shift, manager_created_open_shift)
+* state (pending, offering, awaiting_manager_approval, filled, escalated, failed, cancelled)
+* initiated_at
+* resolved_at nullable
+* resolution_type nullable
+* created_at
+* updated_at
+
+### shift_offers
+
+* id
+* coverage_workflow_id
+* shift_id
+* employee_id
+* offer_order
+* delivery_channel (sms, email)
+* offer_status (queued, sent, delivered, accepted, declined, expired, blocked)
+* sent_at nullable
+* responded_at nullable
+* created_at
+* updated_at
+
+### employee_messages
+
+* id
+* employee_id nullable
+* user_id nullable
+* location_id
+* channel (sms, email)
+* message_type (enrollment_invite, confirmation, weekly_schedule, amendment, callout_ack, offer, reminder, help, opt_out_confirmation)
+* template_key
+* body_snapshot
+* provider_message_id nullable
+* delivery_status
+* created_at
+* updated_at
+
+### audit_events
+
+* id
+* business_id
+* location_id nullable
+* actor_type
+* actor_id nullable
+* entity_type
+* entity_id
+* action
+* payload_json
+* created_at
+
+---
+
+## 3) State Machines
+
+### Schedule lifecycle
+
+#### Draft
+
+* Editable without employee notification.
+* Can be created from import, copy-last-week, recurring template, AI draft, or manual edits.
+* Allowed transitions:
+
+  * draft -> published
+  * draft -> archived
+  * draft -> recalled (invalid; recalled only applies to previously published schedules)
+
+#### Published
+
+* Current live schedule visible to employees.
+* Any material change creates an amendment record and a new version.
+* Allowed transitions:
+
+  * published -> amended
+  * published -> recalled
+  * published -> archived
+
+#### Amended
+
+* Live schedule with one or more approved changes after publish.
+* May receive additional amendment versions.
+* Allowed transitions:
+
+  * amended -> amended
+  * amended -> recalled
+  * amended -> archived
+
+#### Recalled
+
+* Previously published date range temporarily withdrawn for manager revision.
+* A recalled schedule is not a separate schedule; it is a live schedule temporarily pulled back.
+* Allowed transitions:
+
+  * recalled -> published
+  * recalled -> archived
+
+#### Archived
+
+* Historical record.
+* Read-only except audit/admin metadata.
+* No further operational transitions.
+
+### Shift lifecycle
+
+* draft -> scheduled -> published
+* published -> at_risk (callout received / issue detected)
+* at_risk -> open (manager confirmation or automatic rules)
+* open -> covered (accepted and assigned)
+* open -> escalated (no fill found)
+* covered -> amended notification path
+* any live state -> cancelled
+
+### Enrollment lifecycle
+
+* not_invited -> invited
+* invited -> opted_in
+* invited -> opted_out
+* opted_in -> opted_out
+* opted_out -> opted_in (via START/UNSTOP or fresh consent flow)
+* any state -> blocked / unreachable
+
+### Coverage workflow lifecycle
+
+* pending -> offering
+* offering -> awaiting_manager_approval
+* offering -> filled
+* offering -> escalated
+* awaiting_manager_approval -> filled
+* awaiting_manager_approval -> escalated
+* any active state -> cancelled
+
+---
+
+## 4) API Surface
+
+These are logical APIs. In v1, implementation should extend the current `/api` router and the existing `/webhooks/retell` and `/webhooks/twilio/sms` handlers rather than introduce a second parallel surface first.
+
+### Business / Location
+
+* POST /businesses
+* GET /businesses/:id
+* POST /businesses/:id/locations
+* PATCH /locations/:id
+* GET /locations/:id
+
+### Users / Permissions
+
+* POST /users/invite
+* GET /locations/:id/users
+* PATCH /user-location-roles/:id
+
+### Employees / Roster
+
+* POST /locations/:id/employees
+* GET /locations/:id/employees
+* GET /employees/:id
+* PATCH /employees/:id
+* POST /employees/:id/deactivate
+* POST /employees/:id/reactivate
+* POST /employees/:id/transfer
+* POST /employees/:id/roles
+* DELETE /employee-role-eligibilities/:id
+* POST /employees/:id/availability
+* POST /employees/:id/time-off
+
+### Enrollment / Consent
+
+* POST /locations/:id/enrollment-invites/generate
+* POST /enrollment/keyword
+* POST /enrollment/web-consent
+* POST /enrollment/ivr-consent
+* POST /enrollment/opt-out
+* POST /enrollment/opt-back-in
+* GET /employees/:id/enrollment-status
+
+### Import
+
+* POST /locations/:id/import-jobs
+* POST /import-jobs/:id/upload
+* POST /import-jobs/:id/mapping
+* POST /import-jobs/:id/validate
+* POST /import-jobs/:id/commit
+* GET /import-jobs/:id
+* GET /import-jobs/:id/errors
+* POST /import-jobs/:id/fix-row
+* POST /import-jobs/:id/ignore-row
+
+### Schedules
+
+* POST /locations/:id/schedules/create-from-import
+* POST /locations/:id/schedules/copy-last-week
+* POST /locations/:id/schedules/create-from-template
+* POST /locations/:id/schedules/ai-draft
+* GET /locations/:id/schedules/current
+* GET /schedules/:id
+* GET /schedules/:id/versions
+* POST /schedules/:id/publish
+* POST /schedules/:id/recall
+* POST /schedules/:id/archive
+* PATCH /schedules/:id
+
+### Shifts
+
+* POST /schedules/:id/shifts
+* PATCH /shifts/:id
+* DELETE /shifts/:id
+* POST /shifts/:id/assign
+* POST /shifts/:id/unassign
+* POST /shifts/:id/open
+* POST /shifts/:id/cancel
+
+### Coverage
+
+* POST /shifts/:id/callout
+* POST /shifts/:id/start-coverage
+* GET /coverage-workflows/:id
+* POST /coverage-workflows/:id/offers/send
+* POST /shift-offers/:id/accept
+* POST /shift-offers/:id/decline
+* POST /coverage-workflows/:id/approve-fill
+* POST /coverage-workflows/:id/escalate
+
+### Messaging / Webhooks
+
+* POST /webhooks/Retell/sms
+* POST /webhooks/Retell/status
+* POST /messages/send
+* GET /messages/:id
+
+### Analytics / Audit
+
+* GET /locations/:id/metrics
+* GET /audit-events
+
+---
+
+## 5) Draft Engine Rules (v1)
+
+### Inputs
+
+* prior published schedules
+* roster
+* location membership
+* role eligibility
+* employee status
+* approved time off
+* structured availability if present
+* max weekly hours if present
+* min rest hours if present
+* manager preferences if present
+
+### Constraints hierarchy
+
+1. Hard constraints
+
+   * employee active
+   * employee assigned to location or eligible there
+   * role eligible
+   * not on approved time off
+   * no overlapping assigned shifts
+2. Soft constraints
+
+   * preferred hours
+   * fairness distribution
+   * historical pattern consistency
+   * minimize overtime risk
+   * honor manager favorites / priority staff
+
+### Outputs
+
+* assigned shifts
+* open shifts
+* conflict summary
+* recommendation summary for SMS and web
+
+---
+
+## 6) Import Rules
+
+### Fatal import blockers
+
+* no valid date parsing for required shift rows
+* no valid start/end time parsing for majority of shift rows
+* missing required fields after mapping
+* corrupt file / unsupported file format
+
+### Warning-level issues
+
+* bad employee email
+* malformed phone number
+* unknown role value
+* unassigned employee name match failure
+* duplicate employee candidates
+* shift without assignee
+
+### Partial import behavior
+
+* successful rows commit
+* warning rows commit where safe
+* failed rows move to Action Needed queue
+* manager can publish only after required fatal issues are resolved for the relevant schedule window
+
+---
+
+## 7) Notification Rules
+
+### Publish
+
+* manager receives publish confirmation
+* opted-in employees receive weekly schedule summary
+
+### Amendment
+
+* only affected employees receive amendment notice
+* manager receives amendment confirmation
+
+### Callout
+
+* employee receives acknowledgment if eligible to receive SMS
+* manager receives alert if configured
+* coverage engine begins
+
+### Open shift
+
+* eligible opted-in employees receive shift offer
+* non-opted-in employees receive nothing from Backfill
+
+### Recall
+
+* managers notified
+* employees only notified if previously shared window materially changes after republish
+
+---
+
+## 8) SMS Command Grammar
+
+### Manager commands
+
+* APPROVE
+* REVIEW
+* FIX
+* COPY LAST WEEK
+* PUBLISH
+* HOLD
+* HELP
+* OPEN [shift_id]
+* ASSIGN [shift_id] [employee_name]
+* CANCEL [shift_id]
+
+### Employee commands
+
+* JOIN
+* YES
+* STOP
+* START
+* UNSTOP
+* HELP
+* CALL OUT
+* CANT MAKE IT
+* CLAIM [shift_id]
+* DECLINE [shift_id]
+* ?
+
+Natural-language fallback should parse common intent patterns:
+
+* “I can’t make my shift tonight”
+* “Can I take the Friday closer?”
+* “What am I working this week?”
+
+---
+
+## 9) Screen Requirements
+
+### Manager onboarding finish screen
+
+* Connect scheduler
+* Use Backfill Shifts
+* Upload CSV / Download template
+* Start small-team guided setup
+
+### Import mapping screen
+
+* source column list
+* destination field list
+* saved mapping profile selector
+* row preview
+* validation sidebar
+
+### Action Needed screen
+
+* grouped warnings/errors
+* inline fix controls
+* retry / ignore / download error CSV
+
+### Weekly schedule screen
+
+* compact week grid
+* unfilled shifts panel
+* conflict summary
+* publish / recall / archive actions
+* copy last week action
+
+### Coverage screen
+
+* at-risk shifts
+* active coverage workflows
+* offer status timeline
+* approve-fill / escalate actions
+
+### Roster screen
+
+* employee table
+* enrollment status
+* add/edit/deactivate
+* role eligibility
+* location assignment
+
+## 10) Non-Functional Requirements
+
+* timezone-safe storage and rendering
+* shifts spanning midnight must be supported
+* idempotent webhook handling
+* full audit trail for publish/amend/assignment events
+* role-based access checks on all mutating operations
+* message deduplication for repeated inbound webhook events
+* observability for import failures, SMS failures, and coverage failures
+
+---
+
+## 11) MVP Build Order
+
+### Sprint block 1
+
+* business/location/user scaffolding
+* roster CRUD
+* enrollment status model
+* import jobs and mapping
+
+### Sprint block 2
+
+* schedules, versions, shifts, assignments
+* copy last week
+* publish flow
+* basic weekly grid
+
+### Sprint block 3
+
+* Retell inbound/outbound webhooks
+* manager SMS approvals
+* employee schedule delivery
+* callout intake
+
+### Sprint block 4
+
+* coverage workflows and shift offers
+* amendment notifications
+* Action Needed import recovery
+* analytics / audit
+
+### Sprint block 5
+
+* AI draft v1
+* narrative SMS summaries
+* recurring pattern templates
+
+---
+
+# 12) SMS Flows
+
+## A. Manager onboarding -> Backfill Shifts activation
+
+### If no scheduler connected
+
+**SMS 1**
+Backfill: You’re all set to use Backfill Shifts for [Location]. We can import your team and this week’s schedule, then handle callouts and coverage from there. Reply CSV for upload help or SMALL TEAM for guided setup.
+
+**If CSV**
+Backfill: Upload your roster or schedule here: [link]. You can also download our template there.
+
+**If SMALL TEAM**
+Backfill: We’ll help you get started. First: how many employees are at this location?
+
+## B. Import complete -> publish prompt
+
+**SMS**
+Backfill: Your first draft for Apr 13–19 is ready. 18 of 20 shifts are assigned. 2 need review: 1 unfilled closer on Fri, 1 phone number missing for Maria. Reply APPROVE or tap to review: [link]
+
+## C. Weekly manager draft summary
+
+**SMS**
+Backfill: Your draft for Apr 20–26 is ready. 42 of 46 shifts are assigned. 3 need review: 1 overtime risk, 1 overlapping assignment, 1 unfilled opener. Reply APPROVE to publish or REVIEW to edit: [link]
+
+## D. Publish confirmation
+
+**SMS**
+Backfill: Published. Your team has been notified. 39 employees received their schedule. 4 still need to opt in to SMS.
+
+## E. Recall / amend
+
+**SMS**
+Backfill: Thursday’s schedule has 2 changes pending. Reply RECALL to pull it back for edits or tap to review: [link]
+
+---
+
+## F. Employee enrollment flow
+
+### Manager-led invitation assets
+
+Manager sends via existing trusted channel:
+“Starting this week we’re using Backfill for schedules, callouts, and open shifts. To enroll from your phone, text JOIN to [number] or scan this link: [link]”
+
+### Employee initiates
+
+Employee texts: JOIN
+
+### Confirmation
+
+Backfill for [Business]: You’re enrolled for schedule updates, shift offers, and callout routing for [Location]. Msg frequency varies. Reply STOP to unsubscribe. Reply HELP for help.
+
+---
+
+## G. Weekly employee schedule delivery
+
+**SMS**
+Backfill for [Business]: Your week is Mon 9–5, Wed 11–7, Fri 6–close. Reply ? for questions.
+
+## H. Employee callout
+
+Employee: I don’t feel well and can’t make my shift tonight.
+
+**If active enrollment**
+Backfill: Got it. We recorded your callout for tonight’s shift and are notifying the manager now.
+
+**If opted out but inbound allowed**
+Backfill internal behavior: record callout, notify manager, do not rely on outbound confirmation until re-enabled.
+
+## I. Open shift offer
+
+Backfill: Open shift available at [Location] Fri 6pm–close as Server. Reply CLAIM to take it.
+
+Employee: CLAIM
+
+**Auto-assign path**
+Backfill: You’re confirmed for Fri 6pm–close at [Location].
+
+**Manager-approval path**
+Backfill: Got it. We sent your claim to the manager for approval.
+
+### Manager approval
+
+Backfill: Jordan wants to claim Fri 6pm–close Server. Reply YES to approve or REVIEW for details.
+
+---
+
+## J. Opt-out / re-enrollment
+
+Employee: STOP
+
+Backfill: You’re unsubscribed and will no longer receive Backfill texts for this location. Reply START to resubscribe.
+
+Employee: START
+
+Backfill: You’re resubscribed to Backfill texts for [Location]. Msg frequency varies. Reply STOP to unsubscribe.
+
+---
+
+# 13) One-Page Narrative
+
+## Backfill Shifts: Why this can become the primary operating mode
+
+Most hourly businesses do not have a scheduling problem in the abstract. They have an operations problem: building next week’s schedule, getting it to the team, and surviving when the real world breaks it.
+
+That is why Backfill Shifts matters.
+
+Traditional schedulers ask managers to live inside a scheduling product. Backfill Shifts does the opposite. It makes scheduling the input to a more important job: keeping shifts covered. The system drafts the week, summarizes the exceptions by text, lets the manager approve or review, then handles callouts and open shifts using the same communication layer.
+
+This changes the center of gravity.
+
+For customers with an existing scheduler, Backfill can still connect to it. But for businesses using spreadsheets, whiteboards, or ad hoc texting, Backfill Shifts can become the operating mode itself. If the manager can publish next week by replying APPROVE, and if callouts route automatically without the manager opening a dashboard unless something unusual happens, then many customers will not feel the need to adopt a heavyweight scheduler at all.
+
+That is the wedge.
+
+Backfill Shifts is not trying to replace payroll, time clocks, HR, or every compliance rule under the sun. It is deliberately narrow. It focuses on the core loop that matters most to an hourly-work manager:
+
+1. get next week ready,
+2. notify the team,
+3. handle changes fast,
+4. fill gaps before service breaks.
+
+The product strategy follows directly from that loop.
+
+First, Backfill Shifts must have a durable data model. If the customer never connects Deputy or Homebase, Backfill’s roster, shift history, lifecycle states, and amendments become the operational source of truth.
+
+Second, recurring schedule reuse becomes retention. The product must make “copy last week and tweak” or “review the AI draft and approve” easier than rebuilding schedules from scratch.
+
+Third, text-first control becomes the differentiator. Existing products already support schedule creation, copying, publishing, and automation. Backfill’s advantage is not feature breadth; it is workflow compression. Managers do not need another heavy admin system if the AI handles the schedule and the coverage in one flow.
+
+That is why Backfill Shifts should be built as a primary-capable operating mode from day one.
+
+Not because every customer will use it that way.
+
+Because some of the best customers will.
+
+And if it works, Backfill stops being just a backfill tool.
+
+It becomes the lightweight operating system for hourly shift continuity.
+
+# 14) V1 Sprint Plan and Ticket Breakdown
+
+## Read this first: repo-aligned execution order
+
+The detailed sprint plan below was written as if the product were starting from zero. That is not the current repo. The actual execution order for this codebase should be:
+
+1. Extend the current operational ledger rather than replace it.
+   Codex owns the migration/API plan that adds schedule containers, schedule versions, shift assignments, and import job state on top of the existing `organizations` / `locations` / `workers` / `shifts` / `cascades` model.
+
+2. Freeze backend contracts before parallel UI work.
+   Claude should build against locked JSON examples for schedule summary, weekly grid payloads, import status/action-needed rows, and publish/amend deep links.
+
+3. Treat coverage as an extension of the existing cascade engine.
+   We should not build a new `coverage_workflows` engine first and leave `cascades` running beside it. Either evolve `cascades` into the new model or add a thin compatibility layer with a clear migration path.
+
+4. Defer auth and full RBAC.
+   There is no manager auth system in the repo today. Backfill Shifts v1 should use the current internal/admin access model plus manager phone identity, then layer true RBAC later if pilot requirements force it.
+
+5. Build in this order:
+   a. schema extension + API contracts
+   b. roster/import foundation
+   c. schedule lifecycle + assignments + weekly grid
+   d. publish/amend + employee delivery
+   e. inbound callout/open-shift writeback using the existing messaging/cascade stack
+
+## Revised Codex / Claude split for this repo
+
+### Codex — lead ownership
+
+* schema design and migrations on the current SQLite model
+* API contracts and route extensions under the existing `/api` surface
+* schedule lifecycle/versioning/assignment backend
+* import pipeline backend and row validation rules
+* webhook and SMS command handling on top of existing Twilio/Retell hooks
+* coverage integration and schedule writeback using the existing cascade engine
+
+### Claude Code — parallel product ownership
+
+* manager web surfaces in the existing Next.js app
+* upload/mapping/action-needed UI once contract shapes are frozen
+* weekly schedule grid and review/publish UI
+* roster/enrollment UI and manager-facing monitoring surfaces
+* deep-link UX from SMS into the correct web views
+
+## Explicit v1 deferrals
+
+Do not make these Sprint 0 or Sprint 1 blockers:
+
+* greenfield `businesses` / `users` / `user_location_roles` tables
+* auth gating and role-based route protection across the web app
+* a brand-new messaging stack separate from the current Twilio/Retell services
+* a second coverage engine running beside `cascades`
+
+## Team assignments
+
+### Codex — Lead Developer
+
+Primary ownership:
+
+* backend architecture and domain model
+* database schema and migrations
+* API design and contracts
+* schedule lifecycle, publish/amend/version logic
+* import pipeline backend
+* Retell integration, inbound parsing, outbound orchestration
+* coverage engine and schedule writeback
+* code review and merge authority on shared backend modules
+
+Secondary ownership:
+
+* technical design decisions
+* integration contracts for frontend consumers
+* release quality gates
+
+### Claude Code — Product Engineer
+
+Primary ownership:
+
+* manager web UI and frontend flows
+* import mapping UI and Action Needed experience
+* roster management UI
+* weekly schedule grid and review flows
+* coverage dashboard UI
+* manager-facing SMS copy integration points and deep-link UX
+* QA support, test plans, and edge-case walkthroughs across the end-to-end product
+
+Secondary ownership:
+
+* frontend-to-backend contract validation
+* analytics/event instrumentation in UI
+* product polish and exception-state UX
+
+## Parallelization rules
+
+* Codex defines the source-of-truth backend contracts first for each sprint block.
+* Claude Code builds against mocked responses or agreed JSON contracts while backend work proceeds.
+* Shared contracts must be frozen before UI implementation starts for a given sprint block.
+* No one edits the same migration, same route file, or same primary service in parallel.
+* UI can move in parallel with backend as long as response shapes are locked.
+* Messaging template text can be implemented by Claude Code, but Retell sending logic and inbound command handling belong to Codex.
+* Codex owns final merge on backend/domain modules. Claude Code owns final merge on frontend/UI modules.
+
+## Shared contract files to define before feature work
+
+These are the handoff artifacts that must exist before parallel work starts on each major area:
+
+* DB schema + migration plan
+* API request/response examples
+* enum/state definitions
+* webhook payload contract
+* frontend route map
+* deep-link format for SMS -> web transitions
+* audit event names
+* analytics event names
+
+## Contract freeze A: repo-aligned schema wave
+
+This is the concrete first backend wave for the current repo.
+
+### Reuse existing tables
+
+Do not replace these in v1:
+
+* `organizations`
+* `locations`
+* `workers`
+* `shifts`
+* `cascades`
+* `outreach_attempts`
+* `audit_log`
+
+### New tables to add first
+
+#### `schedules`
+
+Purpose:
+weekly container for a location schedule
+
+Proposed fields:
+
+* `id`
+* `location_id`
+* `week_start_date`
+* `week_end_date`
+* `lifecycle_state` (`draft`, `published`, `amended`, `archived`, `recalled`)
+* `current_version_id` nullable
+* `derived_from_schedule_id` nullable
+* `created_by`
+* `created_at`
+* `updated_at`
+
+#### `schedule_versions`
+
+Purpose:
+immutable snapshots and amendment metadata without breaking the existing live `shifts` references used by coverage
+
+Proposed fields:
+
+* `id`
+* `schedule_id`
+* `version_number`
+* `version_type` (`draft_snapshot`, `publish_snapshot`, `amendment_snapshot`)
+* `snapshot_json`
+* `change_summary_json`
+* `published_at` nullable
+* `published_by` nullable
+* `created_at`
+
+Repo note:
+Use `snapshot_json` for v1 so we do not need to duplicate all shift rows per version immediately.
+
+#### `shift_assignments`
+
+Purpose:
+stable assignment records for existing live `shifts`
+
+Proposed fields:
+
+* `id`
+* `shift_id`
+* `worker_id` nullable
+* `assignment_status` (`assigned`, `open`, `claimed`, `confirmed`, `removed`)
+* `source` (`import`, `copy_last_week`, `manual`, `claim`, `coverage_engine`)
+* `created_at`
+* `updated_at`
+
+#### `import_jobs`
+
+Purpose:
+track CSV import lifecycle
+
+Proposed fields:
+
+* `id`
+* `location_id`
+* `import_type` (`roster_only`, `shifts_only`, `combined`)
+* `filename`
+* `status` (`uploaded`, `mapping`, `validating`, `action_needed`, `completed`, `partially_completed`, `failed`)
+* `mapping_json` nullable
+* `summary_json` nullable
+* `created_at`
+* `updated_at`
+
+#### `import_row_results`
+
+Purpose:
+row-level warnings/errors/successes for Action Needed UI
+
+Proposed fields:
+
+* `id`
+* `import_job_id`
+* `row_number`
+* `entity_type` (`worker`, `shift`)
+* `outcome` (`success`, `warning`, `failed`, `skipped`)
+* `error_code` nullable
+* `error_message` nullable
+* `raw_payload`
+* `normalized_payload` nullable
+* `created_at`
+
+### Existing table changes to allow v1
+
+#### `shifts`
+
+Add:
+
+* `schedule_id` nullable
+* `shift_label` nullable
+* `notes` nullable
+* `published_state` nullable (`draft`, `published`, `amended`)
+
+Repo note:
+Keep current `status`, `called_out_by`, `filled_by`, and `fill_tier` because the existing coverage engine already depends on them.
+
+#### `locations`
+
+Add:
+
+* `timezone` nullable, default business/location timezone
+* `operating_mode` nullable (`integration`, `backfill_shifts`)
+
+#### `workers`
+
+Add only what v1 truly needs:
+
+* `first_name` nullable
+* `last_name` nullable
+* `employment_status` nullable (`active`, `inactive`, `terminated`)
+* `max_hours_per_week` nullable
+
+Repo note:
+Do not split `workers` into a new `employees` table in the first wave.
+
+## Contract freeze B: first API surface to lock before UI parallelization
+
+All routes below assume extension of the current FastAPI `/api` router.
+
+### 1. Create import job
+
+`POST /api/locations/{location_id}/import-jobs`
+
+Request:
+
+```json
+{
+  "import_type": "combined",
+  "filename": "week-1.csv"
+}
+```
+
+Response:
+
+```json
+{
+  "id": 12,
+  "location_id": 7,
+  "import_type": "combined",
+  "status": "uploaded",
+  "filename": "week-1.csv",
+  "summary": {
+    "total_rows": 0,
+    "worker_rows": 0,
+    "shift_rows": 0,
+    "success_rows": 0,
+    "warning_rows": 0,
+    "failed_rows": 0
+  }
+}
+```
+
+### 2. Upload and preview import
+
+`POST /api/import-jobs/{job_id}/upload`
+
+Multipart:
+`file=<csv>`
+
+Response:
+
+```json
+{
+  "id": 12,
+  "status": "mapping",
+  "columns": ["employee_name", "mobile", "role", "date", "start", "end"],
+  "preview_rows": [
+    {
+      "row_number": 2,
+      "values": {
+        "employee_name": "Maria Lopez",
+        "mobile": "+13105550111",
+        "role": "line_cook",
+        "date": "2026-04-13",
+        "start": "09:00",
+        "end": "17:00"
+      }
+    }
+  ]
+}
+```
+
+### 3. Save mapping and validate
+
+`POST /api/import-jobs/{job_id}/mapping`
+
+Request:
+
+```json
+{
+  "mapping": {
+    "employee_name": "worker_name",
+    "mobile": "phone",
+    "role": "role",
+    "date": "date",
+    "start": "start_time",
+    "end": "end_time"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "id": 12,
+  "status": "action_needed",
+  "summary": {
+    "total_rows": 40,
+    "worker_rows": 12,
+    "shift_rows": 28,
+    "success_rows": 33,
+    "warning_rows": 4,
+    "failed_rows": 3
+  },
+  "action_needed_count": 7
+}
+```
+
+### 4. List import row results
+
+`GET /api/import-jobs/{job_id}/rows`
+
+Response:
+
+```json
+{
+  "job": {
+    "id": 12,
+    "status": "action_needed"
+  },
+  "rows": [
+    {
+      "id": 81,
+      "row_number": 7,
+      "entity_type": "worker",
+      "outcome": "warning",
+      "error_code": "phone_malformed",
+      "error_message": "Phone number could not be normalized",
+      "raw_payload": {
+        "employee_name": "Maria Lopez",
+        "mobile": "3105550111"
+      },
+      "normalized_payload": null
+    }
+  ]
+}
+```
+
+### 5. Commit import
+
+`POST /api/import-jobs/{job_id}/commit`
+
+Response:
+
+```json
+{
+  "job_id": 12,
+  "status": "completed",
+  "created_workers": 12,
+  "updated_workers": 1,
+  "created_shifts": 28,
+  "schedule_id": 55,
+  "week_start_date": "2026-04-13"
+}
+```
+
+### 6. Get weekly schedule view payload
+
+`GET /api/locations/{location_id}/schedules/current?week_start=2026-04-13`
+
+Response:
+
+```json
+{
+  "schedule": {
+    "id": 55,
+    "location_id": 7,
+    "week_start_date": "2026-04-13",
+    "week_end_date": "2026-04-19",
+    "lifecycle_state": "draft",
+    "current_version_id": 102,
+    "derived_from_schedule_id": null
+  },
+  "summary": {
+    "filled_shifts": 18,
+    "open_shifts": 2,
+    "at_risk_shifts": 0,
+    "warning_count": 3
+  },
+  "shifts": [
+    {
+      "id": 901,
+      "schedule_id": 55,
+      "role": "line_cook",
+      "date": "2026-04-13",
+      "start_time": "09:00:00",
+      "end_time": "17:00:00",
+      "status": "scheduled",
+      "published_state": "draft",
+      "notes": null,
+      "assignment": {
+        "worker_id": 44,
+        "worker_name": "Maria Lopez",
+        "assignment_status": "assigned"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "type": "open_shift",
+      "shift_id": 905,
+      "message": "No assignee found for Fri closing shift"
+    }
+  ]
+}
+```
+
+### 7. Copy last week
+
+`POST /api/locations/{location_id}/schedules/copy-last-week`
+
+Request:
+
+```json
+{
+  "source_schedule_id": 55,
+  "target_week_start_date": "2026-04-20"
+}
+```
+
+Response:
+
+```json
+{
+  "schedule_id": 56,
+  "location_id": 7,
+  "week_start_date": "2026-04-20",
+  "lifecycle_state": "draft",
+  "copied_shift_count": 27,
+  "open_shift_count": 1,
+  "warning_count": 2
+}
+```
+
+### 8. Publish schedule
+
+`POST /api/schedules/{schedule_id}/publish`
+
+Response:
+
+```json
+{
+  "schedule_id": 55,
+  "lifecycle_state": "published",
+  "version_id": 103,
+  "published_at": "2026-04-10T18:22:11Z",
+  "delivery_summary": {
+    "eligible_workers": 19,
+    "sms_sent": 15,
+    "not_enrolled": 4
+  }
+}
+```
+
+### 9. Amend assignment
+
+`PATCH /api/shifts/{shift_id}/assignment`
+
+Request:
+
+```json
+{
+  "worker_id": 47,
+  "assignment_status": "assigned",
+  "notes": "Manager reassigned after callout"
+}
+```
+
+Response:
+
+```json
+{
+  "shift_id": 901,
+  "schedule_id": 55,
+  "assignment": {
+    "worker_id": 47,
+    "worker_name": "Jordan Smith",
+    "assignment_status": "assigned"
+  },
+  "schedule_lifecycle_state": "amended"
+}
+```
+
+### 10. Coverage deep-link payload
+
+`GET /api/locations/{location_id}/coverage?week_start=2026-04-13`
+
+Response:
+
+```json
+{
+  "location_id": 7,
+  "at_risk_shifts": [
+    {
+      "shift_id": 901,
+      "role": "line_cook",
+      "date": "2026-04-13",
+      "start_time": "09:00:00",
+      "current_status": "vacant",
+      "cascade_id": 210,
+      "coverage_status": "offering"
+    }
+  ]
+}
+```
+
+## Contract freeze C: deep-link format for SMS -> web
+
+Claude can safely build against this route format now:
+
+* Review schedule:
+  `/dashboard/locations/{location_id}?tab=schedule&week_start={YYYY-MM-DD}`
+* Open exact import Action Needed row:
+  `/dashboard/locations/{location_id}?tab=imports&job_id={job_id}&row={row_number}`
+* Open coverage state for one shift:
+  `/dashboard/locations/{location_id}?tab=coverage&shift_id={shift_id}`
+
+## Repository ownership boundaries
+
+### Codex-owned directories/files
+
+* backend domain models
+* migrations
+* API controllers/routes/handlers
+* service layer
+* Retell webhook handlers
+* messaging orchestration services
+* coverage engine services
+* schedule engine services
+* import processing pipeline
+
+### Claude Code-owned directories/files
+
+* onboarding finish UI
+* roster pages/components
+* import mapping UI
+* Action Needed UI
+* schedule grid/review UI
+* coverage dashboard UI
+* enrollment status UI
+* manager analytics/dashboard UI
+* frontend tests and end-to-end UX acceptance harnesses
+
+### Shared but sequential
+
+These areas require explicit sequencing and should not be edited in parallel without agreement:
+
+* types/shared enums
+* API client SDK or typed interfaces
+* route constants
+* analytics schema
+* message template variable names
+
+## Sprint assumptions
+
+* sprint length: 2 weeks
+* both developers work in parallel within each sprint block
+* goal of v1: a scheduler-less customer can onboard, import or create a first schedule, publish it, enroll employees, receive employee callouts, and run a basic open-shift coverage flow
+* explicit v1 cut line: no advanced AI scheduling optimization, no payroll, no time clock, no deep compliance engine, no full auth/RBAC program
+
+## V1 release criteria
+
+Backfill Shifts v1 is release-ready when all of the following are true:
+
+1. A manager can create a location and roster.
+2. A manager can upload a CSV and successfully import roster and/or shifts with recoverable errors.
+3. A manager can publish a schedule and later amend it.
+4. Employees can enroll and receive weekly schedule texts.
+5. Employees can call out by text.
+6. Managers can trigger or allow an open-shift flow that results in a shift being reassigned and written back into the schedule.
+7. Audit history exists for publish, amend, callout, offer, accept, and assignment events.
+
+Current-repo interpretation:
+
+* “manager” can mean the existing location manager contact plus current internal web access, not necessarily a full signed-in multi-user account system.
+* “coverage flow” must reconcile with the existing `cascades` / `outreach_attempts` system.
+
+---
+
+## Sprint 0 — Foundations / Technical Setup
+
+### Objective
+
+Establish contract definitions, migration strategy, and core domain conventions on top of the existing app before feature work begins.
+
+### Codex
+
+#### 0.1 Backend project scaffold
+
+Tickets:
+
+* Freeze the schema extension plan for schedules, schedule versions, shift assignments, import jobs, and import row results.
+* Define request/response examples for import, weekly schedule, publish, amend, and deep-link flows.
+* Add any missing migration helpers and seed workflow updates needed for the new tables.
+* Extend structured logging/audit conventions to the new schedule objects.
+
+Acceptance criteria:
+
+* App boots in all environments.
+* Migration workflow is repeatable on the current SQLite app.
+* New schedule entities have clear audit/event conventions.
+
+#### 0.2 Messaging / Retell groundwork
+
+Tickets:
+
+* Reuse the existing Retell/Twilio webhook endpoints and document the payload/command contracts for Backfill Shifts flows.
+* Add any missing idempotency guards for new publish/amend/enrollment message types.
+* Define outbound message adapter usage for schedule publish/amend/open-shift notifications.
+
+Acceptance criteria:
+
+* Inbound messages are saved once even if webhook retries.
+* Outbound send can be simulated in test/staging.
+
+#### 0.3 Observability and audit backbone
+
+Tickets:
+
+* Extend the existing `audit_log` backbone or introduce a compatible schedule-event layer without forking audit history into an unrelated system.
+* Add metrics events for import, publish, enroll, callout, offer, fill.
+
+Acceptance criteria:
+
+* Core entity mutations produce audit records.
+* Product metrics can be queried by location.
+
+### Claude Code
+
+#### 0.4 Frontend/web scaffold
+
+Tickets:
+
+* Extend the existing Next.js routes for Backfill Shifts roster/import/schedule/coverage surfaces.
+* Add shared layout for onboarding finish, roster, schedules, imports, and coverage views.
+* Stub navigation and empty states for all major surfaces.
+* Build mocked shells from frozen contract examples instead of assuming backend auth/user primitives.
+
+Acceptance criteria:
+
+* Placeholder pages exist for all primary v1 surfaces.
+* Frontend shells line up with the frozen backend contract examples.
+
+#### 0.5 Frontend observability hooks
+
+Tickets:
+
+* Add frontend analytics/event hooks for major manager actions.
+* Add error boundaries and empty/loading state conventions.
+
+Acceptance criteria:
+
+* UI surfaces can emit standardized analytics events.
+* All primary views have loading, empty, and error states.
+
+Dependencies:
+
+* none
+
+---
+
+## Sprint 1 — Business, Locations, Users, and Permissions
+
+### Objective
+
+Create the minimal location/manager operating foundation needed on the current `organizations` / `locations` model.
+
+### Codex
+
+#### 1.1 Business and location management APIs
+
+Tickets:
+
+* Extend the existing organization/location APIs with the additional Backfill Shifts metadata that is actually needed.
+* Support timezone per location.
+* Avoid parallel “businesses” CRUD unless the existing organization model proves insufficient.
+
+Acceptance criteria:
+
+* Manager can create/edit location metadata.
+* All schedules and messages resolve against location timezone.
+
+#### 1.2 User roles and permissions backend
+
+Tickets:
+
+* Decide whether pilot v1 can ship without full user-role tables.
+* If not, implement the thinnest possible manager/editor/read-only model after schedule contracts are already defined.
+
+Acceptance criteria:
+
+* Permission approach is explicitly chosen and documented instead of assumed.
+
+### Claude Code
+
+#### 1.3 Business, location, and role UI
+
+Tickets:
+
+* Build location settings pages on top of the existing web surfaces.
+* Do not assume full role assignment UI exists in the first parallel pass.
+* Keep UI contracts aligned with whichever minimal permission model backend actually chooses.
+
+Acceptance criteria:
+
+* Manager/admin can manage location metadata from the UI.
+
+#### 1.4 Onboarding completion fork
+
+Tickets:
+
+* Add “Connect scheduler” vs “Use Backfill Shifts” decision point at end of onboarding.
+* Store selected operating mode in the UI flow and hand off to backend.
+
+Acceptance criteria:
+
+* New customer can enter Backfill Shifts without integrating a scheduler.
+
+Dependencies:
+
+* Sprint 0 scaffold
+
+---
+
+## Sprint 2 — Roster CRUD and Enrollment State Model
+
+### Objective
+
+Create a durable employee roster and messaging eligibility layer.
+
+### Codex
+
+#### 2.1 Employee roster backend
+
+Tickets:
+
+* Create employee create/read/update/deactivate/reactivate APIs.
+* Support multi-location membership.
+* Support role eligibility assignment.
+* Create enrollment_statuses model and API.
+
+Acceptance criteria:
+
+* Manager can add a new hire manually.
+* Manager can deactivate a terminated employee without deleting history.
+* Employee can belong to more than one location.
+* Each employee has visible SMS enrollment state.
+
+#### 2.2 Invitation asset generation backend
+
+Tickets:
+
+* Generate employee enrollment keyword instructions.
+* Generate location-specific enrollment link / QR endpoint placeholder.
+
+Acceptance criteria:
+
+* UI can request ready-to-send employee invite assets.
+
+### Claude Code
+
+#### 2.3 Roster management UI
+
+Tickets:
+
+* Build employee table with search/filter.
+* Build add/edit/deactivate/reactivate flows.
+* Build role eligibility editor.
+* Build multi-location assignment UI.
+
+Acceptance criteria:
+
+* Manager can fully maintain the roster from the UI.
+
+#### 2.4 Enrollment status UI
+
+Tickets:
+
+* Display invited / opted_in / opted_out / blocked / unreachable states.
+* Add “copy invite text” action for manager.
+* Add QR/link access points in roster and onboarding completion surfaces.
+
+Acceptance criteria:
+
+* Manager can see who is message-eligible and copy invitation instructions.
+
+Dependencies:
+
+* Sprint 1 permissions
+
+---
+
+## Sprint 3 — Import Pipeline v1
+
+### Objective
+
+Let managers import roster and shift data with a recoverable, manager-friendly flow.
+
+### Codex
+
+#### 3.1 Import job lifecycle backend
+
+Tickets:
+
+* Create import job, mapping profile, and row result models.
+* Support CSV upload and file parsing.
+* Track import statuses: uploaded, mapping, validating, action_needed, completed, partially_completed, failed.
+
+Acceptance criteria:
+
+* Manager can upload a CSV and backend reflects import state progression.
+
+#### 3.2 Validation and commit pipeline
+
+Tickets:
+
+* Implement required-field validation.
+* Implement warning vs fatal error classification.
+* Commit valid employee rows into roster.
+* Commit valid shift rows into draft schedule.
+* Generate audit events from import.
+
+Acceptance criteria:
+
+* Successful import creates usable roster/schedule data.
+* Partial imports succeed when non-fatal issues exist.
+* Fatal structural issues prevent commit.
+
+### Claude Code
+
+#### 3.3 Field mapping UI
+
+Tickets:
+
+* Build column-to-field mapping interface.
+* Add saved mapping profiles per location.
+* Add row preview.
+
+Acceptance criteria:
+
+* Manager can map source columns and save mappings for reuse.
+
+#### 3.4 Action Needed queue UI
+
+Tickets:
+
+* Build Action Needed screen for failed/warning rows.
+* Allow inline fix, ignore, retry, or download failed rows.
+* Show progress and summary counts clearly.
+
+Acceptance criteria:
+
+* Manager can resolve import issues without restarting the upload.
+
+Dependencies:
+
+* Sprint 2 roster model
+* Contract freeze required: import status enums, row-result schema, mapping payload shape
+
+---
+
+## Sprint 4 — Schedule Core: Drafts, Versions, and Weekly Grid
+
+### Objective
+
+Establish Backfill Shifts as a durable scheduling system with lifecycle states and editable weekly views.
+
+### Codex
+
+#### 4.1 Schedule and version backend
+
+Tickets:
+
+* Implement schedules and schedule_versions tables.
+* Implement lifecycle states: draft, published, amended, recalled, archived.
+* Add derived_from_schedule_id for copied schedules.
+
+Acceptance criteria:
+
+* Every schedule has a current version and lifecycle state.
+* Publish can later create immutable version snapshot.
+
+#### 4.2 Shift and assignment backend
+
+Tickets:
+
+* Implement shifts and shift_assignments.
+* Support open shifts and assigned shifts.
+* Support shifts spanning midnight.
+* Create copy-last-week backend action.
+* Handle inactive/terminated employees on copy.
+
+Acceptance criteria:
+
+* Schedule can represent assigned, open, and at-risk shifts.
+* Overnight shifts store correctly.
+* Next week can be created from last published schedule.
+
+### Claude Code
+
+#### 4.3 Weekly schedule and review UI
+
+Tickets:
+
+* Build weekly schedule grid by location.
+* Build compact unfilled/conflict side panel.
+* Build shift detail drawer.
+* Add copy-last-week action in UI.
+
+Acceptance criteria:
+
+* Manager can visually inspect next week’s schedule.
+* Open and conflicting shifts are clearly surfaced.
+* Manager can create next week from the last published schedule from the UI.
+
+Dependencies:
+
+* Sprint 3 import writeback
+* Contract freeze required: lifecycle states, shift schema, weekly grid payload shape
+
+---
+
+## Sprint 5 — Publish, Amend, and Employee Schedule Delivery
+
+### Objective
+
+Make schedules operationally real by publishing them, amending them, and notifying employees.
+
+### Codex
+
+#### 5.1 Publish and amendment backend
+
+Tickets:
+
+* Create publish endpoint.
+* Freeze current draft into publish snapshot.
+* Allow shift-level edits on published schedules.
+* Record amendment version + schedule_change_event.
+* Add recall state for published schedule/date window.
+
+Acceptance criteria:
+
+* Manager can publish a schedule.
+* Published version is queryable historically.
+* Manager can change one or more published shifts.
+* System records what changed and who changed it.
+
+#### 5.2 Employee schedule delivery backend
+
+Tickets:
+
+* Create weekly schedule SMS template send path.
+* Send only to opted-in employees.
+* Queue failed/unreachable recipients for reporting.
+
+Acceptance criteria:
+
+* After publish, opted-in employees receive schedule summary.
+
+### Claude Code
+
+#### 5.3 Publish/amend UI
+
+Tickets:
+
+* Build publish flow in the UI.
+* Build amendment UX for published schedules.
+* Build recall UX and confirmations.
+* Show sent / not sent / not enrolled counts to manager.
+
+Acceptance criteria:
+
+* Manager can publish, amend, and recall from the UI.
+* Manager can understand downstream notification impact before confirming.
+
+Dependencies:
+
+* Sprint 4 schedule lifecycle
+* Sprint 2 enrollment states
+
+---
+
+## Sprint 6 — Manager SMS Command Surface
+
+### Objective
+
+Let managers operate core weekly workflows by text.
+
+### Codex
+
+#### 6.1 Manager SMS parser and command execution
+
+Tickets:
+
+* Implement manager command detection for APPROVE, REVIEW, COPY LAST WEEK, PUBLISH, HOLD, HELP.
+* Add natural-language fallback intent routing.
+* Wire APPROVE / PUBLISH to publish flow.
+* Wire REVIEW to deep-link generation.
+
+Acceptance criteria:
+
+* Known manager commands execute correctly.
+* Ambiguous text routes to safe clarification or help.
+* Manager can publish an exception-free schedule by text.
+
+### Claude Code
+
+#### 6.2 Draft summary and deep-link UX
+
+Tickets:
+
+* Implement draft-ready manager summary view assumptions in UI.
+* Ensure REVIEW deep links route to the correct schedule page and exact exception state.
+* Build lightweight manager help/command reference surface.
+
+Acceptance criteria:
+
+* Manager can jump from SMS to the exact web review surface.
+* Help/reference content matches implemented command surface.
+
+Dependencies:
+
+* Sprint 5 publish flow
+* Sprint 0 Retell groundwork
+
+---
+
+## Sprint 7 — Employee Enrollment and Inbound Messaging
+
+### Objective
+
+Enable employee self-enrollment and robust inbound operational messaging.
+
+### Codex
+
+#### 7.1 Enrollment keyword and consent backend
+
+Tickets:
+
+* Implement JOIN / START / UNSTOP / STOP / HELP keyword handling.
+* Record consent metadata and timestamps.
+* Send confirmation/opt-out confirmation/help responses.
+
+Acceptance criteria:
+
+* Employee can self-enroll and self-opt-out.
+* Enrollment transitions are auditable.
+
+#### 7.2 Employee intent parsing + callout routing backend
+
+Tickets:
+
+* Parse common phrases for callout intent.
+* Parse question / support intent.
+* Match inbound employee callout against upcoming shift(s).
+* Create at-risk/open candidate state.
+* Notify manager if needed.
+
+Acceptance criteria:
+
+* Common callout language is correctly recognized.
+* Employee callout creates shift event tied to the right shift in the majority of straightforward cases.
+
+### Claude Code
+
+#### 7.3 Enrollment and callout status UI
+
+Tickets:
+
+* Add manager-visible enrollment funnel/status reporting.
+* Add callout event views in schedule/coverage UI.
+* Add support/help empty states for unmatched inbound cases.
+
+Acceptance criteria:
+
+* Manager can see which employees are enrolled and which callouts need attention.
+
+Dependencies:
+
+* Sprint 2 enrollment model
+* Sprint 5 published schedules
+
+---
+
+## Sprint 8 — Coverage Engine v1
+
+### Objective
+
+Close the loop between callouts and replacement staffing.
+
+### Codex
+
+#### 8.1 Coverage workflow backend
+
+Tickets:
+
+* Implement coverage_workflows and shift_offers.
+* Support states: pending, offering, awaiting_manager_approval, filled, escalated, failed, cancelled.
+* Determine eligible employees by role, location, active status, and enrollment state.
+* Send open-shift offer SMS.
+* Capture CLAIM / DECLINE responses.
+* Support auto-assign or manager approval mode.
+* Update shift assignment and shift state when offer accepted/fill approved.
+* Emit amendment/change events if schedule already published.
+
+Acceptance criteria:
+
+* Every callout/open shift creates a trackable coverage workflow.
+* Offer pool excludes clearly ineligible employees.
+* Employee can claim an open shift by text.
+* Filled open shift appears in the live schedule and audit trail.
+
+### Claude Code
+
+#### 8.2 Coverage dashboard UI
+
+Tickets:
+
+* Build at-risk shifts list.
+* Build active coverage workflows list.
+* Build offer status timeline.
+* Build approve-fill / escalate actions.
+* Surface coverage results back in the schedule review UI.
+
+Acceptance criteria:
+
+* Manager can monitor and intervene in coverage flows from the web UI.
+* Coverage outcomes are visible in the schedule context.
+
+Dependencies:
+
+* Sprint 7 inbound employee messaging
+* Sprint 4 shift model
+
+---
+
+## Sprint 9 — QA Hardening, Analytics, and v1 Release Prep
+
+### Objective
+
+Prepare v1 for controlled launch.
+
+### Codex
+
+#### 9.1 Metrics and backend launch controls
+
+Tickets:
+
+* Expose publish, enrollment, callout, fill, and amendment metrics.
+* Add feature flags by business/location.
+* Add beta eligibility switches.
+* Harden webhook retry/idempotency behavior.
+
+Acceptance criteria:
+
+* Backfill Shifts can be rolled out to pilot customers selectively.
+* Core backend metrics are queryable by location.
+
+### Claude Code
+
+#### 9.2 QA / edge-case hardening and launch dashboard
+
+Tickets:
+
+* Test overnight shifts, timezone boundaries, duplicate employees, inactive employee copy-forward, partial imports, opt-out then inbound callout.
+* Add regression suite or structured manual test harness.
+* Build location-level metrics/dashboard views for pilot monitoring.
+
+Acceptance criteria:
+
+* Top edge cases are covered by automated or structured manual test plans.
+* Team can see first publish rate, second publish rate, opt-in rate, fill rate.
+
+Dependencies:
+
+* All prior feature-complete sprints
+
+---
+
+## Must-have tickets before beta
+
+### Codex must-have
+
+* schema extension on the existing organization/location/worker/shift ledger
+* employee roster APIs and enrollment status model
+* CSV import pipeline with Action Needed recovery backend
+* schedule lifecycle and versioning
+* shift and assignment models
+* copy last week backend
+* publish + amendment flow backend
+* employee schedule delivery backend
+* manager SMS approve/review backend
+* employee enrollment keyword flow
+* inbound callout handling
+* coverage flow extensions with shift claims and writeback on top of the current cascade engine
+* audit log extensions + metrics
+
+### Claude Code must-have
+
+* onboarding fork UI
+* roster CRUD UI
+* enrollment status UI and invite asset UI
+* import mapping UI
+* Action Needed UI
+* weekly schedule grid/review UI
+* publish/amend/recall UI
+* manager deep-link review UX
+* callout visibility UI
+* coverage dashboard UI
+* pilot metrics/monitoring UI
+
+## Nice-to-have, can slip after beta
+
+### Codex
+
+* AI draft generation
+* advanced natural-language manager command handling
+* recurring shift templates beyond copy-last-week
+* conversational small-team setup backend
+* advanced fairness optimization
+
+### Claude Code
+
+* narrative suggested fixes in manager UI
+* richer small-team guided setup UI
+* advanced analytics visualizations
+* polished employee help center surfaces
+
+## Biggest technical risks
+
+0. Building a parallel greenfield model beside the current app
+
+   * Mitigation: reuse current tables, routes, webhook surfaces, and coverage engine wherever possible; only add the new scheduling primitives we actually need.
+
+1. Inbound intent ambiguity
+
+   * Mitigation: safe fallback states, manager confirmation for unclear matches.
+2. Schedule version sprawl
+
+   * Mitigation: enforce clean version semantics and amendment snapshots.
+3. Enrollment/opt-out edge cases on toll-free SMS
+
+   * Mitigation: central messaging state machine and provider-level webhook logging.
+4. CSV messiness
+
+   * Mitigation: Action Needed queue, saved mappings, partial import.
+5. Overnight shifts and timezone bugs
+
+   * Mitigation: location-local storage rules plus UTC normalization strategy.
+
+## Recommended pilot success criteria
+
+* 80%+ of pilot customers publish first schedule within 24 hours of entering Backfill Shifts.
+* 60%+ publish a second schedule without re-import.
+* 70%+ of employee callouts are matched to the correct shift automatically.
+* 50%+ of manager weekly publishes can be completed from SMS without opening the web UI.
+* measurable open-shift fill rate improvement versus customer baseline.
+
+## Working agreement between Codex and Claude Code
+
+* Codex publishes API contracts before Claude Code begins a dependent UI surface.
+* Claude Code can stub/mock endpoints immediately after contract approval.
+* Any enum/state change requires explicit notice before merge.
+* Shared contract changes require both developers to acknowledge before implementation changes land.
+* Backend PRs that break response shapes cannot merge without frontend signoff.
+* Frontend PRs that assume unapproved response shapes cannot merge without backend signoff.
+* Daily handoff note should include: what changed, what contracts changed, blockers, and what is ready for the other developer.
+
+## Daily sync checklist
+
+1. What contracts were added or changed?
+2. What is ready for parallel pickup?
+3. What blockers need a same-day answer?
+4. What test cases were completed?
+5. What can safely merge today without conflict?

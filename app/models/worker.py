@@ -26,6 +26,8 @@ class WorkerSource(str, Enum):
 
 class WorkerCreate(BaseModel):
     name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: str = Field(description="E.164 format, e.g. +15551234567")
     email: Optional[str] = None
     source_id: Optional[str] = None
@@ -38,6 +40,11 @@ class WorkerCreate(BaseModel):
     location_assignments: list[dict] = Field(default_factory=list)
     locations_worked: list[int] = Field(default_factory=list)
     source: WorkerSource = WorkerSource.csv_import
+    employment_status: Optional[str] = Field(
+        default=None,
+        description="'active' | 'inactive' | 'terminated'",
+    )
+    max_hours_per_week: Optional[int] = Field(default=None, ge=1)
 
     # Consent — collected and logged from day one (TCPA / FCC 2024)
     sms_consent_status: ConsentStatus = ConsentStatus.pending

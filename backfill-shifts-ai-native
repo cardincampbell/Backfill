@@ -1,0 +1,1018 @@
+# Backfill Shifts — AI Re-Architecture Engineering Package
+
+## Document purpose
+
+This document assumes **Backfill Shifts already exists** as defined in the prior engineering package.
+
+This package describes how to **re-architect the existing product into an AI-native action system** where:
+
+* voice,
+* SMS,
+* and([docs.retellai.com](https://docs.retellai.com/build/single-multi-prompt/custom-function))all use the same underlying scheduling and coverage action layer.
+
+This is **not** a rewrite of the base product. It is a layered re-architecture that turns the existing product into an AI-powered operating system with channel-specific guardrails.
+
+---
+
+# 1) Strategic product decision
+
+## New product posture
+
+Backfill Shifts is no longer just:
+
+* a text-first scheduling UI,
+* plus callout automation,
+* plus a coverage engine.
+
+It becomes:
+
+**an AI-native scheduling and coverage action platform with multiple control surfaces.**
+
+Those control surfaces are:
+
+* Voice via Retell agents over the phone number
+* SMS via the same number and agent stack
+* Web via a native Backfill AI prompt layer built inside Backfill Shifts
+
+## Core principle
+
+The AI does not directly mutate schedules, roster state, or coverage state by improvisation.
+
+Instead, every request is translated into a **typed action plan** that runs through:
+
+1. intent detection
+2. entity resolution
+3. policy and permission checks
+4. confirmation rules
+5. execution against canonical APIs/services
+6. audit logging
+7. user-facing result communication
+
+The product is therefore re-centered around a **shared action orchestration layer** rather than around UI workflows alone.
+
+---
+
+# 2) Architectural shift
+
+## Previous architecture
+
+The existing product likely behaves roughly like this:
+
+* Web UI directly calls scheduling APIs
+* Retell voice flows call webhooks for callouts
+* SMS/phone behavior is somewhat workflow-specific
+* Manager actions are still modeled primarily as UI interactions
+
+## New architecture
+
+All three channels become clients of a common orchestration stack:
+
+### Channel surfaces
+
+* Retell Voice Agent
+* Retell SMS/Chat Agent on the business number
+* Native Web Prompt Window inside Backfill Shifts
+* Existing structured web UI
+
+### Shared AI/action stack
+
+* Intent Router
+* Entity Resolver
+* Action Planner
+* Risk/Confirmation Engine
+* Policy & Permissions Engine
+* Canonical Action Executor
+* Audit/Event Writer
+* Result Renderer
+
+### Existing domain services reused underneath
+
+* roster service
+* schedule service
+* shift service
+* publish/amend service
+* enrollment service
+* messaging service
+* coverage engine
+* analytics/audit service
+
+## Key rule
+
+**No channel talks directly to domain mutation services without going through the action orchestration rules when the request originated in natural language.**
+
+Structured UI interactions may still call canonical APIs directly.
+
+---
+
+# 3) Why the web prompt should be native instead of Retell
+
+## Decision
+
+The web AI layer should be built natively inside Backfill Shifts rather than using Retell for web chat.
+
+## Reasoning
+
+Retell is a strong fit for:
+
+* voice conversations,
+* phone-first interactions,
+* SMS/chat attached to the phone number,
+* agent function calling over webhooks.
+
+Your web experience has different requirements:
+
+* tight coupling to existing app state
+* direct access to visible schedule context
+* structured preview/diff rendering
+* side-by-side explanation and action confirmation
+* in-app auth, roles, and permissions
+* low-latency transitions between prompt results and UI state
+
+A native web prompt layer gives Backfill tighter control over:
+
+* action previews
+* entity disambiguation UX
+* multi-step confirmations
+* visual diffs
+* optimistic refreshes
+* context-aware prompt suggestions
+
+## Conclusion
+
+Use Retell for:
+
+* phone
+* SMS attached to the number
+* urgent operational conversations
+
+Use a native Backfill AI prompt window for:
+
+* in-app scheduling and coverage requests
+* complex edits
+* previews and visual changes
+* manager-centric productivity flows
+
+---
+
+# 4) Product operating model after re-architecture
+
+## One brain, multiple surfaces
+
+Backfill will operate as one shared action system with different channel-specific permissions and ergonomics.
+
+### Voice
+
+Best for:
+
+* employee callouts
+* quick manager status questions
+* urgent simple approvals
+* escalation requests
+
+### SMS
+
+Best for:
+
+* short operational schedule changes
+* publish/approve actions
+* simple shift creation/editing
+* status queries
+* open shift actions
+
+### Web AI prompt
+
+Best for:
+
+* complex schedule creation or edits
+* bulk changes
+* conflict resolution
+* previewing diffs
+* managerial planning requests
+
+### Structured web UI
+
+Best for:
+
+* manual fallback
+* deep review
+* visual schedule manipulation
+* roster maintenance
+* settings and rules configuration
+
+## Important strategic rule
+
+The phone number becomes the **operational remote control**, not the entire admin cockpit.
+
+The web app remains the **full workspace**, now with an AI prompt layer built into it.
+
+---
+
+# 5) Channel capability matrix
+
+## Voice — allowed actions
+
+### Green (auto-execute when high confidence)
+
+* employee callout reporting
+* manager asking “who is unfilled tomorrow?”
+* manager asking “publish the current draft” if there is only one valid draft
+* manager asking for schedule summary/status
+
+### Yellow (confirmation required)
+
+* remove an employee from a specific shift
+* open a specific shift
+* approve an identified employee claim
+* create a single shift when date/time/location/role are clear
+
+### Red (redirect to web prompt or structured UI)
+
+* bulk schedule rebuilds
+* recurring rule changes
+* multi-location edits
+* mass employee edits
+* anything with broad blast radius or ambiguous resolution
+
+## SMS — allowed actions
+
+### Green
+
+* publish schedule
+* copy last week
+* schedule summary requests
+* who is unfilled / what changed / what is at risk
+* create a simple shift when unambiguous
+* remove an employee from a specific shift when unambiguous
+* open a shift
+* approve or deny a fill
+
+### Yellow
+
+* shift swaps
+* move shifts across dates or locations
+* create multiple shifts in one instruction
+* reassignment where multiple employees or shifts match
+* send offers to all qualified workers
+
+### Red
+
+* bulk roster changes
+* policy/rule changes
+* major rewrites
+* anything that benefits from diff preview
+
+## Web AI prompt — allowed actions
+
+### Green
+
+* most single-entity schedule and shift edits
+* conflict explanations
+* generating draft schedules
+* filtering and summarizing schedule issues
+* approving recommended fixes
+
+### Yellow
+
+* multi-step schedule rewrites
+* staff redistribution across several shifts
+* edits with overtime or fairness tradeoffs
+* changes affecting many employees but still previewable
+
+### Red
+
+* permissions/billing/security changes
+* destructive account-level operations without explicit structured confirmation
+
+---
+
+# 6) New system components to introduce
+
+## 6.1 Intent Router
+
+### Purpose
+
+Accept natural-language requests from voice, SMS, or web prompt and classify them into one of:
+
+* query
+* command
+* workflow initiation
+* clarification response
+* confirmation response
+* cancellation
+
+### Responsibilities
+
+* classify user intent
+* determine target domain (schedule, shift, roster, coverage, publish, query)
+* pass request to resolver/planner
+
+## 6.2 Entity Resolver
+
+### Purpose
+
+Resolve names, shifts, dates, locations, roles, and schedule references from natural-language input.
+
+### Responsibilities
+
+* resolve employee names (“Randy”)
+* resolve date references (“tomorrow night”, “next Friday”)
+* resolve shift references (“the closing shift”, “Randy’s shift”)
+* resolve location references
+* detect ambiguity and produce candidates
+
+### Required outputs
+
+* exact match
+* ranked candidates
+* confidence score
+* clarification prompts if needed
+
+## 6.3 Action Planner
+
+### Purpose
+
+Translate resolved user request into a typed action plan.
+
+### Example
+
+User says:
+
+> “Create me a new shift with Randy off the schedule.”
+
+Planner output might be:
+
+* action A: remove Randy from shift_id=123
+* action B: mark shift open
+* action C: trigger coverage workflow
+* risk class: yellow
+* confirmation required: yes
+
+## 6.4 Risk and Confirmation Engine
+
+### Purpose
+
+Decide whether a request can:
+
+* auto-execute,
+* execute after confirmation,
+* or must redirect to web preview/manual review.
+
+### Inputs
+
+* action type
+* number of entities affected
+* ambiguity score
+* user role/permission
+* schedule lifecycle state
+* downstream blast radius
+
+## 6.5 Policy and Permissions Engine
+
+### Purpose
+
+Ensure natural-language requests do not bypass normal product permissions or business rules.
+
+### Responsibilities
+
+* validate actor role
+* check location scope
+* check publish rights
+* check whether action is allowed over channel
+* check whether action requires structured confirmation
+
+## 6.6 Canonical Action Executor
+
+### Purpose
+
+Execute approved action plans against existing domain services.
+
+### Key rule
+
+This layer must call the same services/APIs that the structured UI uses so AI actions and manual UI actions remain consistent.
+
+## 6.7 Result Renderer
+
+### Purpose
+
+Render the result appropriately by channel.
+
+### Examples
+
+* Voice: concise spoken confirmation
+* SMS: short summary with optional confirmation CTA
+* Web: detailed result card + diff + deep links
+
+---
+
+# 7) Action model
+
+## Typed action categories
+
+All natural-language actions should compile down into typed actions.
+
+### Query actions
+
+* get_schedule_summary
+* get_unfilled_shifts
+* get_shift_details
+* get_coverage_status
+* explain_conflict
+
+### Shift actions
+
+* create_shift
+* edit_shift
+* cancel_shift
+* open_shift
+* assign_shift
+* unassign_shift
+* move_shift
+
+### Schedule actions
+
+* create_schedule_from_last_week
+* create_schedule_from_template
+* generate_schedule_draft
+* publish_schedule
+* recall_schedule
+* archive_schedule
+* amend_schedule
+
+### Coverage actions
+
+* start_coverage
+* approve_fill
+* reject_fill
+* escalate_coverage
+
+### Roster actions
+
+* add_employee
+* deactivate_employee
+* transfer_employee
+* change_role_eligibility
+
+### Messaging actions
+
+* send_employee_invite
+* send_schedule_notification
+* resend_offer
+
+---
+
+# 8) New action execution contract
+
+## Standard action request shape
+
+Every action request should normalize into a structure like:
+
+* action_id
+* channel
+* actor_type
+* actor_id
+* location_scope
+* natural_language_input
+* resolved_entities
+* proposed_actions[]
+* risk_class
+* requires_confirmation
+* status
+* created_at
+
+## Standard action result shape
+
+* action_id
+* execution_status
+* completed_actions[]
+* failed_actions[]
+* clarification_needed
+* confirmation_needed
+* user_facing_summary
+* audit_event_ids[]
+* ui_diff_payload nullable
+
+---
+
+# 9) Conversation and action state management
+
+## Why this is needed
+
+Once voice/SMS/web prompt can all perform operations, Backfill needs temporary conversational state, not just domain state.
+
+## Introduce
+
+### action_sessions
+
+Fields:
+
+* id
+* channel
+* actor_type
+* actor_id
+* location_id
+* status (active, awaiting_clarification, awaiting_confirmation, completed, expired, cancelled)
+* latest_request_text
+* proposed_action_payload
+* expires_at
+* created_at
+* updated_at
+
+### clarification_prompts
+
+Fields:
+
+* id
+* action_session_id
+* prompt_type
+* candidate_payload
+* created_at
+
+### confirmation_prompts
+
+Fields:
+
+* id
+* action_session_id
+* confirmation_text
+* expires_at
+* created_at
+
+## Purpose
+
+This allows the product to ask:
+
+* “Do you mean Randy Lopez or Randy Moss?”
+* “I found one shift for Randy tonight from 6pm–close. Reply YES to remove him and open coverage.”
+* “This will change 6 shifts across 2 locations. Open in Backfill Shifts to review.”
+
+---
+
+# 10) Changes to existing domain services
+
+## Schedule service changes
+
+Must support:
+
+* preview mode for natural-language actions
+* diff generation before commit
+* batch action application
+* dry-run validation
+
+## Shift service changes
+
+Must support:
+
+* entity resolution lookups
+* shift candidate search by natural-language-friendly descriptors
+* safe mutation previews
+
+## Coverage engine changes
+
+Must support:
+
+* being invoked as part of a multi-step action plan
+* deferred start after confirmation
+* returning summary suitable for voice/SMS/web
+
+## Audit service changes
+
+Must support:
+
+* storing originating channel
+* storing original natural-language request
+* storing resolved action plan
+* storing confirmation/clarification path
+
+---
+
+# 11) Web product changes
+
+## Add a native AI prompt window
+
+This becomes a first-class surface inside Backfill Shifts.
+
+### Placement
+
+* global prompt bar in manager workspace
+* floating assistant panel or docked side panel
+* schedule page embedded prompt entry
+* coverage page embedded prompt entry
+
+### Core UX
+
+Manager types:
+
+> “Take Randy off Friday’s closing shift and open it up to everyone qualified.”
+
+Backfill returns:
+
+* interpreted action summary
+* affected entities
+* preview of exact changes
+* warnings or conflicts
+* Execute / Edit / Cancel buttons
+
+### Web prompt advantages
+
+* can show candidate matches
+* can show before/after diff
+* can show overtime/compliance warnings
+* can ask contextual follow-ups
+* can keep an action history visible
+
+## New web surfaces to add
+
+* AI prompt panel
+* action history feed
+* clarification modal
+* confirmation modal
+* diff preview component
+* suggested actions component
+* “convert this prompt into structured edit” fallback
+
+---
+
+# 12) SMS product changes
+
+## Introduce manager SMS as a true action surface
+
+Backfill’s number should allow managers to request scheduling changes directly by text.
+
+### Example supported requests
+
+* “Publish next week for Studio City.”
+* “Copy last week and remove Randy from Friday.”
+* “Create a host shift tomorrow 5 to 10.”
+* “Open the Friday closer.”
+* “Who is still unfilled?”
+* “Move Sarah from 4pm to 6pm on Friday.”
+
+## SMS rules
+
+* prefer one-shot actions
+* require explicit confirmation for yellow actions
+* redirect red actions to web
+* include deep links when visual review helps
+
+## New SMS behavior types
+
+* clarification reply
+* confirmation request
+* execution receipt
+* web handoff for complex changes
+
+---
+
+# 13) Voice product changes
+
+## Retell remains the phone surface
+
+Retell custom functions/webhooks should continue to be used for phone actions.
+
+## Expand voice beyond employee callouts — selectively
+
+Voice should support:
+
+* employee callouts
+* manager status questions
+* simple approval actions
+* simple shift operations with confirmation
+
+## Voice should not become the full admin surface
+
+Avoid using voice for:
+
+* bulk schedule rewrites
+* high-ambiguity shift operations without confirmation
+* major roster changes
+* deep multi-location management
+
+## Voice agent behavior requirement
+
+Retell should call the shared action orchestration endpoints, not bespoke callout-only endpoints, except where the endpoint is still a typed action endpoint under the same orchestration layer.
+
+---
+
+# 14) Retell integration changes
+
+## Existing likely flow
+
+Retell agent -> webhook -> callout handler -> coverage engine
+
+## New flow
+
+Retell agent -> action orchestration API -> planner/resolver/permissions -> canonical executor -> domain services
+
+## Required Retell-facing endpoints
+
+* /ai-actions/voice
+* /ai-actions/sms
+* /ai-actions/confirm
+* /ai-actions/clarify
+
+## Security requirement
+
+Retell webhook requests must be signature-verified before action execution. Existing Retell docs support request verification using the signature header. This is mandatory now that more destructive actions are allowed over the phone/SMS surface.
+
+---
+
+# 15) Suggested API additions
+
+## AI action entrypoints
+
+* POST /ai-actions/web
+* POST /ai-actions/voice
+* POST /ai-actions/sms
+* POST /ai-actions/:id/confirm
+* POST /ai-actions/:id/clarify
+* POST /ai-actions/:id/cancel
+* GET /ai-actions/:id
+
+## Resolution helpers
+
+* GET /entity-resolution/employees
+* GET /entity-resolution/shifts
+* GET /entity-resolution/schedules
+* GET /entity-resolution/locations
+
+## Preview helpers
+
+* POST /ai-previews/schedule-change
+* POST /ai-previews/shift-change
+* POST /ai-previews/coverage-change
+
+## Action history
+
+* GET /locations/:id/ai-action-history
+
+---
+
+# 16) Data model additions
+
+## ai_action_requests
+
+* id
+* channel (voice, sms, web)
+* actor_type
+* actor_id
+* location_id
+* original_text
+* parsed_intent
+* status (received, resolving, awaiting_clarification, awaiting_confirmation, approved, executed, failed, redirected, cancelled)
+* risk_class (green, yellow, red)
+* requires_confirmation
+* action_plan_json
+* result_summary
+* created_at
+* updated_at
+
+## ai_action_entities
+
+* id
+* ai_action_request_id
+* entity_type
+* entity_id nullable
+* raw_reference
+* confidence_score
+* resolution_status (matched, ambiguous, unresolved)
+* candidate_payload_json nullable
+
+## ai_action_events
+
+* id
+* ai_action_request_id
+* event_type (parsed, resolved, clarified, confirmed, executed, redirected, failed)
+* payload_json
+* created_at
+
+## action_sessions
+
+* id
+* ai_action_request_id
+* session_status
+* expires_at
+* created_at
+* updated_at
+
+---
+
+# 17) New UX rules for AI actions
+
+## Rule 1 — explain what will happen
+
+Before yellow or red actions, the system must restate the planned change.
+
+## Rule 2 — always show affected entities
+
+Manager should see:
+
+* which shift(s)
+* which employee(s)
+* which date(s)
+* which location(s)
+
+## Rule 3 — support undo where practical
+
+At minimum, amended schedule changes should be reversible through existing amendment/version mechanics.
+
+## Rule 4 — ambiguous requests never silently execute
+
+Any unresolved ambiguity must trigger clarification or redirect.
+
+## Rule 5 — natural language does not bypass permissioning
+
+The same role limits apply whether the user clicked a button or sent a prompt.
+
+---
+
+# 18) What changes in the existing engineering package
+
+## Existing sections that would need revision later
+
+If the original engineering package were updated, these sections would materially change:
+
+* architecture overview
+* API surface
+* message flows
+* state machines
+* permissions model
+* audit/events
+* sprint plan
+
+## But because this is a separate document
+
+Treat this document as the delta layer introducing:
+
+* AI orchestration
+* channel capability matrix
+* conversational state
+* action preview/confirmation model
+* Retell integration evolution
+* native web prompt surface
+
+---
+
+# 19) Implementation phases for this re-architecture
+
+## Phase A — Action orchestration foundation
+
+Build:
+
+* AI action request model
+* intent router
+* entity resolver
+* risk/confirmation engine
+* action execution contract
+* audit support for natural-language requests
+
+## Phase B — Web AI prompt
+
+Build:
+
+* native prompt window
+* diff preview UX
+* action result cards
+* clarification + confirmation UI
+* action history feed
+
+## Phase C — SMS manager action surface
+
+Build:
+
+* manager SMS parsing for green/yellow actions
+* clarification and confirmation flows by text
+* deep-link handoff for red actions
+
+## Phase D — Voice expansion via Retell
+
+Build:
+
+* shared voice action endpoints
+* manager voice status and simple action flows
+* confirmation patterns for voice
+* safe redirect logic for complex requests
+
+## Phase E — Optimization and trust
+
+Build:
+
+* better resolution ranking
+* better prompt suggestions
+* smarter diffs
+* better undo/revert handling
+* analytics on AI action success, correction rate, and handoff rate
+
+---
+
+# 20) Team impact / ownership shift
+
+If this re-architecture is approved, the engineering split changes.
+
+## Codex should own
+
+* AI action orchestration backend
+* entity resolver
+* policy/permissions integration
+* action executor
+* Retell-facing action endpoints
+* audit and session models
+* canonical preview/diff services
+
+## Claude Code should own
+
+* native web AI prompt experience
+* prompt result UI
+* clarification and confirmation UI
+* action history feed
+* deep-link UX from SMS
+* redirection and fallback UX when actions move from SMS/voice to web
+
+This is still parallelizable, but contracts become even more important.
+
+---
+
+# 21) Key risks introduced by this new direction
+
+## Risk 1 — wrong action execution from ambiguous language
+
+Mitigation:
+
+* entity confidence thresholds
+* clarification flow
+* yellow/red gating
+* preview-first behavior
+
+## Risk 2 — trust collapse if AI actions feel opaque
+
+Mitigation:
+
+* always explain planned changes
+* show diffs
+* preserve amendment history
+* expose action history
+
+## Risk 3 — channel inconsistency
+
+Mitigation:
+
+* one shared action engine
+* one risk classification model
+* channel-specific renderer only
+
+## Risk 4 — Retell webhook misuse / spoofing
+
+Mitigation:
+
+* signature verification
+* auth-bound manager identity mapping
+* strict endpoint gating
+
+## Risk 5 — overextending the phone number surface
+
+Mitigation:
+
+* keep voice narrower than SMS
+* keep SMS narrower than web prompt
+* maintain redirection path to web for complex actions
+
+---
+
+# 22) Success metrics for the AI-native layer
+
+## Trust and usability
+
+* % of AI actions executed without manual correction
+* % of yellow actions confirmed successfully
+* % of AI requests needing clarification
+* % of red actions successfully handed off to web
+
+## Efficiency
+
+* % of manager schedule actions completed via AI prompt or SMS instead of manual UI navigation
+* median time from request to completed action
+* reduction in click depth for common manager tasks
+
+## Product adoption
+
+* % of active managers using AI prompt or SMS actions weekly
+* % of publish/amend actions initiated conversationally
+* % of coverage actions initiated conversationally
+
+---
+
+# 23) Final recommendation
+
+Backfill should adopt an **AI-native, shared-action architecture**.
+
+That means:
+
+* keep Retell on phone and SMS,
+* build your own native web AI prompt layer,
+* use one common action orchestration system underneath,
+* and enforce channel-specific guardrails so each surface only does what it handles well.
+
+This is the cleanest way to evolve the existing Backfill Shifts product without throwing away the work already defined in the original engineering package.
+
+It preserves the structured UI,
+adds a powerful AI control layer,
+and turns the phone number into a real operational remote control without making it the entire admin product.

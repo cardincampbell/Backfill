@@ -1,7 +1,5 @@
 import Link from "next/link";
 
-import { EmptyState } from "@/components/empty-state";
-import { SectionCard } from "@/components/section-card";
 import { StatCard } from "@/components/stat-card";
 import { getSupportSnapshot } from "@/lib/api";
 
@@ -12,42 +10,41 @@ export default async function HomePage() {
     <main>
       <section className="hero">
         <div className="hero-copy">
-          <span className="eyebrow">Autonomous Coverage Engine</span>
-          <h1>Autonomous coverage infrastructure for hourly labor.</h1>
+          <span className="eyebrow">Backfill Shifts</span>
+          <h1>Coverage infrastructure for hourly labor.</h1>
           <p className="lede">
-            Workers call or text <strong>1-800-BACKFILL</strong>. Backfill identifies the gap,
-            broadcasts to the fastest trusted replacement path, confirms coverage, and texts the
-            site lead once the shift is handled.
+            Workers call or text. Backfill identifies the gap, finds the fastest replacement,
+            confirms coverage, and notifies the site lead. One text: <strong>Shift filled.</strong>
           </p>
-          <div className="cta-row">
+          <div className="cta-row" style={{ marginTop: 24 }}>
             <Link className="button" href="/dashboard">
-              View operations dashboard
+              Open dashboard
             </Link>
             <Link className="button-secondary" href="/setup/connect">
-              Start location setup
+              Connect a scheduler
             </Link>
           </div>
         </div>
         <div className="hero-grid">
           <StatCard
             label="Active cascades"
-            value={summary?.cascades_active ?? "Offline"}
-            hint="Live coverage events from the backend"
+            value={summary?.cascades_active ?? "\u2014"}
+            hint="Live coverage events"
           />
           <StatCard
             label="Vacant shifts"
-            value={summary?.shifts_vacant ?? "Offline"}
-            hint="Open coverage gaps in Native Lite"
+            value={summary?.shifts_vacant ?? "\u2014"}
+            hint="Open coverage gaps"
           />
           <StatCard
-            label="Filled shifts"
-            value={summary?.shifts_filled ?? "Offline"}
-            hint="Confirmed coverage outcomes"
+            label="Filled"
+            value={summary?.shifts_filled ?? "\u2014"}
+            hint="Confirmed outcomes"
           />
           <StatCard
-            label="Workers tracked"
-            value={summary?.workers ?? "Offline"}
-            hint="Internal staff and alumni records"
+            label="Workers"
+            value={summary?.workers ?? "\u2014"}
+            hint="Tracked across locations"
           />
         </div>
       </section>
@@ -55,53 +52,61 @@ export default async function HomePage() {
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Structured surfaces</h2>
+            <h2>Get started</h2>
             <p className="muted">
-              The phone starts everything. These pages handle the structured work that does not belong in a call.
+              Choose a setup path based on how this location manages scheduling today.
             </p>
           </div>
         </div>
         <div className="feature-grid">
-          <SectionCard title="Connect a scheduler">
-            <p>Route supported operators to 7shifts, Deputy, When I Work, or Homebase setup without turning the website into the product.</p>
-            <p>Current supported integrations are restaurant-heavy, but the core workflow stays location-based.</p>
-            <p><Link className="text-link" href="/setup/connect">Open connect flow</Link></p>
-          </SectionCard>
-          <SectionCard title="Upload a roster">
-            <p>Handle CSV onboarding for locations that have structured data but no supported writeable scheduler.</p>
-            <p><Link className="text-link" href="/setup/upload">Open upload path</Link></p>
-          </SectionCard>
-          <SectionCard title="Add a team manually">
-            <p>Give no-software operators a fast path to get live with names, phone numbers, roles, and site contacts.</p>
-            <p><Link className="text-link" href="/setup/add">Open manual setup</Link></p>
-          </SectionCard>
-          <SectionCard title="Complete worker details">
-            <p>Use the follow-up pages for certifications, preferences, and confirmed shifts after consent is collected by phone or text.</p>
-            <p><Link className="text-link" href="/join">Open worker profile flow</Link></p>
-          </SectionCard>
+          <Link href="/setup/connect" className="feature-card">
+            <div className="feature-card-icon">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2v6m0 0v6m0-6h6m-6 0H4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </div>
+            <div className="feature-card-title">Connect scheduler</div>
+            <div className="feature-card-desc">Link 7shifts, Deputy, When I Work, or Homebase for automatic roster and schedule sync.</div>
+          </Link>
+          <Link href="/setup/upload" className="feature-card">
+            <div className="feature-card-icon">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 14v2a2 2 0 002 2h10a2 2 0 002-2v-2M10 3v10m0-10L7 6m3-3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </div>
+            <div className="feature-card-title">Upload CSV</div>
+            <div className="feature-card-desc">Import your roster and schedule from a spreadsheet to get operational fast.</div>
+          </Link>
+          <Link href="/setup/add" className="feature-card">
+            <div className="feature-card-icon">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 5h12M4 10h8M4 15h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </div>
+            <div className="feature-card-title">Manual setup</div>
+            <div className="feature-card-desc">Enter location and team details by hand when there is no scheduler or CSV ready yet.</div>
+          </Link>
+          <Link href="/join" className="feature-card">
+            <div className="feature-card-icon">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="7" r="3" stroke="currentColor" strokeWidth="1.5"/><path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </div>
+            <div className="feature-card-title">Worker profile</div>
+            <div className="feature-card-desc">Complete certifications, preferences, and confirmed shifts after enrollment.</div>
+          </Link>
         </div>
       </section>
 
       <section className="section">
         <div className="two-up">
           <div className="callout">
-            <h3>Manager experience</h3>
-            <p>
-              Coverage in progress. Then one text:
-              <strong> Shift filled.</strong> No routine coordination, no site-lead scramble.
+            <h3>For managers</h3>
+            <p style={{ color: "var(--muted)", margin: 0 }}>
+              Coverage runs in the background. You get one text when it is done:
+              <strong style={{ color: "var(--text)" }}> Shift filled.</strong> No routine coordination.
             </p>
           </div>
-          {backendReachable ? (
-            <div className="callout">
-              <h3>Backend status</h3>
-              <p>The Next app is reading live FastAPI data server-side so setup, dashboard, and status surfaces stay tied to the operating ledger.</p>
-            </div>
-          ) : (
-            <EmptyState
-              title="Backend unavailable"
-              body="Set BACKFILL_API_BASE_URL in Vercel or your local .env.local so the web app can reach the FastAPI service."
-            />
-          )}
+          <div className="callout">
+            <h3>System status</h3>
+            <p style={{ color: "var(--muted)", margin: 0 }}>
+              {backendReachable
+                ? "API connected. Dashboard data is live."
+                : "API offline. Configure BACKFILL_API_BASE_URL to connect."}
+            </p>
+          </div>
         </div>
       </section>
     </main>

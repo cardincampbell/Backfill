@@ -49,8 +49,29 @@ class LocationCreate(BaseModel):
     last_rolling_sync_at: Optional[str] = None
     last_daily_sync_at: Optional[str] = None
     last_writeback_at: Optional[str] = None
+    last_manager_digest_sent_at: Optional[str] = None
     writeback_enabled: bool = False
     writeback_subscription_tier: str = "core"
+    backfill_shifts_enabled: bool = True
+    backfill_shifts_launch_state: str = Field(
+        default="enabled",
+        description="'disabled' | 'pilot' | 'enabled'",
+    )
+    backfill_shifts_beta_eligible: bool = False
+    coverage_requires_manager_approval: bool = False
+    late_arrival_policy: str = Field(
+        default="wait",
+        description="'wait' | 'manager_action' | 'start_coverage'",
+    )
+    missed_check_in_policy: str = Field(
+        default="start_coverage",
+        description="'manager_action' | 'start_coverage'",
+    )
+    timezone: Optional[str] = None
+    operating_mode: Optional[str] = Field(
+        default=None,
+        description="'integration' | 'backfill_shifts'",
+    )
     onboarding_info: Optional[str] = Field(
         None, description="Site notes, arrival instructions, dress code, who to report to, etc."
     )

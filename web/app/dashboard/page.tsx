@@ -10,6 +10,26 @@ type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function cascadeStatusPill(status: string): string {
+  if (status === "active") return "pill pill-published";
+  if (status === "completed") return "pill pill-success";
+  if (status === "failed" || status === "expired") return "pill pill-failed";
+  return "pill";
+}
+
+function shiftStatusPill(status: string): string {
+  if (status === "filled" || status === "confirmed") return "pill pill-success";
+  if (status === "vacant" || status === "open") return "pill pill-open";
+  return "pill";
+}
+
+function syncHealthPill(state?: string | null): { label: string; className: string } {
+  if (state === "healthy" || state === "connected") return { label: state, className: "pill pill-success" };
+  if (state === "degraded" || state === "stale") return { label: state, className: "pill pill-warning" };
+  if (state === "failed" || state === "disconnected") return { label: state, className: "pill pill-failed" };
+  return { label: state ?? "not started", className: "pill" };
+}
+
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   if (searchParams) {
     await searchParams;
@@ -34,12 +54,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     return (
       <main className="section">
         <div className="page-head">
-          <h1>Operations dashboard</h1>
-          <p>Support-layer visibility for Native Lite operators.</p>
+          <span className="eyebrow">Dashboard</span>
+          <h1>Operations</h1>
         </div>
         <EmptyState
-          title="No backend connection"
-          body="This page expects a reachable FastAPI backend. Configure BACKFILL_API_BASE_URL for local or Vercel deployments."
+          title="Backend unavailable"
+          body="Configure BACKFILL_API_BASE_URL to connect the dashboard to the API service."
         />
       </main>
     );
@@ -48,24 +68,25 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   return (
     <main className="section">
       <div className="page-head">
-        <span className="eyebrow">Native Lite</span>
-        <h1>Operations dashboard</h1>
-        <p>Active vacancies, cascade status, roster visibility, and recent operations by location.</p>
+        <span className="eyebrow">Dashboard</span>
+        <h1>Operations</h1>
       </div>
+
       <div className="stat-grid">
         <StatCard label="Locations" value={summary.locations} />
         <StatCard label="Workers" value={summary.workers} />
         <StatCard label="Vacant shifts" value={summary.shifts_vacant} />
         <StatCard label="Active cascades" value={summary.cascades_active} />
-        <StatCard label="Broadcast live" value={summary.broadcast_cascades_active} />
-        <StatCard label="Workers on standby" value={summary.workers_on_standby} />
+        <StatCard label="Broadcasting" value={summary.broadcast_cascades_active} />
+        <StatCard label="On standby" value={summary.workers_on_standby} />
       </div>
 
+      {/* Coverage engine */}
       <section className="section">
         <div className="section-head">
           <div>
             <h2>Coverage engine</h2>
-            <p className="muted">Mode, tier, confirmed worker, and standby depth for the most recent coverage runs.</p>
+            <p className="muted">Active and recent coverage runs.</p>
           </div>
         </div>
         {coverageRows.length ? (
@@ -85,12 +106,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 {coverageRows.map((cascade) => {
                   const shift = shiftsById.get(cascade.shift_id);
                   const confirmedName = cascade.confirmed_worker_id
-                    ? workerNames.get(cascade.confirmed_worker_id) ?? `Worker #${cascade.confirmed_worker_id}`
-                    : "None yet";
+                    ? workerNames.get(cascade.confirmed_worker_id) ?? `#${cascade.confirmed_worker_id}`
+                    : "\u2014";
 
                   return (
                     <tr key={cascade.id}>
-                      <td>
+                      <td style={{ fontWeight: 500 }}>
                         {shift ? (
                           <Link className="text-link" href={`/dashboard/shifts/${shift.id}`}>
                             {shift.role} · {shift.date}
@@ -99,11 +120,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                           `Shift #${cascade.shift_id}`
                         )}
                       </td>
-                      <td>{cascade.outreach_mode}</td>
-                      <td>Tier {cascade.current_tier}</td>
-                      <td><span className="pill">{cascade.status}</span></td>
-                      <td>{confirmedName}</td>
-                      <td>{cascade.standby_queue?.length ?? 0}</td>
+                      <td><span className="pill">{cascade.outreach_mode}</span></td>
+                      <td style={{ fontVariantNumeric: "tabular-nums" }}>Tier {cascade.current_tier}</td>
+                      <td><span className={cascadeStatusPill(cascade.status)}>{cascade.status}</span></td>
+                      <td style={{ fontWeight: 500 }}>{confirmedName}</td>
+                      <td style={{ fontVariantNumeric: "tabular-nums" }}>{cascade.standby_queue?.length ?? 0}</td>
                     </tr>
                   );
                 })}
@@ -111,15 +132,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </table>
           </div>
         ) : (
-          <EmptyState title="No coverage runs yet" body="Once a shift goes vacant, broadcast and standby state will appear here." />
+          <EmptyState title="No coverage runs" body="Coverage state will appear here when shifts go vacant." />
         )}
       </section>
 
+      {/* Recent shifts */}
       <section className="section">
         <div className="section-head">
           <div>
             <h2>Recent shifts</h2>
-            <p className="muted">Pulled from the FastAPI shift and dashboard endpoints.</p>
+            <p className="muted">Latest shift records across all locations.</p>
           </div>
         </div>
         {shifts.length ? (
@@ -137,110 +159,115 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               <tbody>
                 {shifts.slice(0, 12).map((shift) => (
                   <tr key={shift.id}>
-                    <td>
+                    <td style={{ fontVariantNumeric: "tabular-nums" }}>
                       <Link className="text-link" href={`/dashboard/shifts/${shift.id}`}>
                         {shift.id}
                       </Link>
                     </td>
-                    <td>{shift.role}</td>
+                    <td style={{ fontWeight: 500 }}>{shift.role}</td>
                     <td>{shift.date}</td>
-                    <td><span className="pill">{shift.status}</span></td>
-                    <td>{shift.fill_tier ?? "Not filled yet"}</td>
+                    <td><span className={shiftStatusPill(shift.status)}>{shift.status}</span></td>
+                    <td>{shift.fill_tier ?? "\u2014"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <EmptyState title="No shifts yet" body="Create shifts through the API or phone flow and they will appear here." />
+          <EmptyState title="No shifts yet" body="Shifts appear here once created or synced." />
         )}
       </section>
 
+      {/* Locations + Audit */}
       <section className="section">
-        <div className="two-up">
-          <div className="panel">
-            <h3>Locations</h3>
-            <p className="muted">Current account records and sync state for each customer location.</p>
-            {locations.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Platform</th>
-                    <th>Sync health</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {locations.slice(0, 8).map((location) => (
-                    <tr key={location.id}>
-                      <td>
-                        <Link className="text-link" href={`/dashboard/locations/${location.id}`}>
-                          {location.name}
-                        </Link>
-                        <div className="table-meta">
-                          <div>{location.manager_name ?? "Unassigned primary contact"}</div>
-                          <div>{location.vertical ?? "unspecified"}</div>
-                        </div>
-                      </td>
-                      <td>{location.scheduling_platform ?? "backfill_native"}</td>
-                      <td>
-                          <span className="pill">{location.integration_state ?? location.integration_status ?? "not_started"}</span>
-                        <div className="table-meta">
-                          <div>Roster: {location.last_roster_sync_status ?? "never"}</div>
-                          <div>Schedule: {location.last_schedule_sync_status ?? "never"}</div>
-                          <div>Event reconcile: {location.last_event_sync_at ?? "never"}</div>
-                          <div>Write-back: {location.writeback_enabled ? "enabled" : "core read-only"}</div>
-                          {location.last_sync_error ? <div>Error: {location.last_sync_error}</div> : null}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="action-stack">
-                          <Link className="button-secondary button-small" href={`/dashboard/locations/${location.id}`}>
-                            View details
-                          </Link>
-                          <span className="muted">
-                            {location.scheduling_platform === "backfill_native"
-                              ? "Native Lite only"
-                              : "Auto-sync + queued reconcile"}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState title="No locations" body="Add a customer location in Native Lite to begin using the dashboard." />
-            )}
-          </div>
-
-          <div className="panel">
-            <h3>Recent audit log</h3>
-            {audits.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Action</th>
-                    <th>Entity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {audits.slice(0, 8).map((audit) => (
-                    <tr key={audit.id}>
-                      <td>{audit.timestamp}</td>
-                      <td>{audit.action}</td>
-                      <td>{audit.entity_type ?? "system"} #{audit.entity_id ?? "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState title="No audit history" body="Audit rows appear here as shifts, vacancies, and outreach attempts occur." />
-            )}
+        <div className="section-head">
+          <div>
+            <h2>Locations</h2>
+            <p className="muted">Customer locations and integration health.</p>
           </div>
         </div>
+        {locations.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Location</th>
+                  <th>Platform</th>
+                  <th>Health</th>
+                  <th>Write-back</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {locations.slice(0, 10).map((location) => {
+                  const health = syncHealthPill(location.integration_state ?? location.integration_status);
+                  return (
+                    <tr key={location.id}>
+                      <td>
+                        <Link className="text-link" href={`/dashboard/locations/${location.id}`} style={{ fontWeight: 600 }}>
+                          {location.name}
+                        </Link>
+                        <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: 2 }}>
+                          {location.manager_name ?? "No primary contact"} · {location.vertical ?? "unspecified"}
+                        </div>
+                      </td>
+                      <td><span className="pill">{location.scheduling_platform ?? "native"}</span></td>
+                      <td><span className={health.className}>{health.label}</span></td>
+                      <td style={{ color: "var(--muted)" }}>
+                        {location.writeback_enabled ? "Enabled" : "Off"}
+                      </td>
+                      <td>
+                        <Link className="button-secondary button-small" href={`/dashboard/locations/${location.id}`}>
+                          View
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="No locations" body="Add a customer location to get started." />
+        )}
+      </section>
+
+      {/* Audit log */}
+      <section className="section">
+        <div className="section-head">
+          <div>
+            <h2>Audit log</h2>
+            <p className="muted">Recent system events.</p>
+          </div>
+        </div>
+        {audits.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                  <th>Entity</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audits.slice(0, 8).map((audit) => (
+                  <tr key={audit.id}>
+                    <td style={{ color: "var(--muted)", fontSize: "0.82rem", fontVariantNumeric: "tabular-nums" }}>
+                      {audit.timestamp}
+                    </td>
+                    <td><span className="pill">{audit.action}</span></td>
+                    <td style={{ color: "var(--muted)" }}>
+                      {audit.entity_type ?? "system"}{audit.entity_id ? ` #${audit.entity_id}` : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState title="No audit history" body="Events appear as operations happen." />
+        )}
       </section>
     </main>
   );

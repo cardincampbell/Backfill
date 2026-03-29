@@ -19,6 +19,7 @@ from app.config import settings
 from app.db.queries import (
     get_shift,
     get_cascade,
+    get_shift_assignment,
     update_cascade,
     update_outreach_attempt,
     list_workers_for_location,
@@ -26,16 +27,35 @@ from app.db.queries import (
     list_agency_requests,
     insert_outreach_attempt,
     get_location,
+    get_worker,
+    reserve_cascade_confirmation,
+    reserve_cascade_pending_claim,
+    approve_cascade_pending_claim,
+    clear_cascade_pending_claim,
 )
 from app.models.audit import AuditAction
 from app.services import agency_router
 from app.services import audit as audit_svc
-from app.services import messaging
 from app.services import notifications
 from app.services import outreach as outreach_svc
-from app.services import retell as retell_svc
+from app.services import outreach_jobs
 
 BROADCAST_BATCH_SIZE = 5
+
+
+async def _excluded_worker_for_shift(
+    db: aiosqlite.Connection,
+    shift: dict,
+) -> Optional[int]:
+    if shift.get("called_out_by") is not None:
+        return int(shift["called_out_by"])
+    if shift.get("escalated_from_worker_id") is not None:
+        return int(shift["escalated_from_worker_id"])
+    if shift.get("confirmation_escalated_at"):
+        assignment = await get_shift_assignment(db, int(shift["id"]))
+        if assignment and assignment.get("worker_id") is not None:
+            return int(assignment["worker_id"])
+    return None
 
 
 async def advance(
@@ -56,13 +76,14 @@ async def advance(
     shift = await get_shift(db, cascade["shift_id"])
     tier = cascade["current_tier"]
     mode = cascade.get("outreach_mode") or "cascade"
+    exclude_worker_id = await _excluded_worker_for_shift(db, shift)
 
     if tier in {1, 2}:
         workers = await _eligible_workers_for_tier(
             db,
             tier=tier,
             shift=shift,
-            exclude_worker_id=shift.get("called_out_by"),
+            exclude_worker_id=exclude_worker_id,
         )
         if _tier_is_exhausted(cascade, workers):
             if tier == 1:
@@ -255,25 +276,9 @@ async def _send_initial_outreach(
     channels = outreach_svc.plan_initial_channels(shift, worker)
     if not channels:
         return {"attempt_ids": [], "channels": []}
-
-    metadata = {
-        "cascade_id": cascade_id,
-        "worker_id": worker["id"],
-        "shift_id": shift["id"],
-        "role": shift["role"],
-        "date": shift["date"],
-        "start_time": shift["start_time"],
-        "end_time": shift["end_time"],
-        "pay_rate": shift["pay_rate"],
-    }
     attempt_ids: list[int] = []
 
     if "sms" in channels:
-        sms_sid = messaging.send_sms(
-            worker["phone"],
-            outreach_svc.build_initial_sms(worker, shift, location),
-            metadata=metadata,
-        )
         attempt_id = await insert_outreach_attempt(
             db,
             {
@@ -281,31 +286,23 @@ async def _send_initial_outreach(
                 "worker_id": worker["id"],
                 "tier": tier,
                 "channel": "sms",
-                "status": "sent",
-                "sent_at": datetime.utcnow().isoformat(),
+                "status": "queued",
+                "sent_at": None,
             },
         )
         attempt_ids.append(attempt_id)
-        await audit_svc.append(
+        await outreach_jobs.queue_outreach_delivery(
             db,
-            AuditAction.outreach_sent,
-            entity_type="outreach_attempt",
-            entity_id=attempt_id,
-            details={
-                "worker_id": worker["id"],
-                "shift_id": shift["id"],
-                "tier": tier,
-                "channel": "sms",
-                "message_sid": sms_sid,
-                "chat_id": sms_sid if settings.retell_sms_enabled and str(sms_sid).startswith("chat_") else None,
-            },
+            attempt_id=attempt_id,
+            cascade_id=cascade_id,
+            shift_id=int(shift["id"]),
+            worker_id=int(worker["id"]),
+            tier=int(tier),
+            channel="sms",
+            location_id=int(shift["location_id"]) if shift.get("location_id") else None,
         )
 
     if "voice" in channels:
-        call_id = await retell_svc.create_phone_call(
-            to_number=worker["phone"],
-            metadata=metadata,
-        )
         attempt_id = await insert_outreach_attempt(
             db,
             {
@@ -313,23 +310,20 @@ async def _send_initial_outreach(
                 "worker_id": worker["id"],
                 "tier": tier,
                 "channel": "voice",
-                "status": "sent",
-                "sent_at": datetime.utcnow().isoformat(),
+                "status": "queued",
+                "sent_at": None,
             },
         )
         attempt_ids.append(attempt_id)
-        await audit_svc.append(
+        await outreach_jobs.queue_outreach_delivery(
             db,
-            AuditAction.outreach_sent,
-            entity_type="outreach_attempt",
-            entity_id=attempt_id,
-            details={
-                "worker_id": worker["id"],
-                "shift_id": shift["id"],
-                "tier": tier,
-                "channel": "voice",
-                "call_id": call_id,
-            },
+            attempt_id=attempt_id,
+            cascade_id=cascade_id,
+            shift_id=int(shift["id"]),
+            worker_id=int(worker["id"]),
+            tier=int(tier),
+            channel="voice",
+            location_id=int(shift["location_id"]) if shift.get("location_id") else None,
         )
 
     return {"attempt_ids": attempt_ids, "channels": channels}
@@ -367,6 +361,188 @@ async def _attempt_ids_for_worker(
     return [row["id"] for row in rows]
 
 
+async def _put_worker_on_standby(
+    db: aiosqlite.Connection,
+    *,
+    cascade_id: int,
+    cascade: dict,
+    shift: dict,
+    worker_id: int,
+    summary: str,
+    responded_at: str,
+) -> dict:
+    standby_queue = list(cascade.get("standby_queue") or [])
+    if worker_id in standby_queue:
+        return {
+            "status": "standby",
+            "worker_id": worker_id,
+            "standby_position": standby_queue.index(worker_id) + 1,
+            "idempotent": True,
+        }
+
+    standby_position = len(standby_queue) + 1
+    standby_queue.append(worker_id)
+    await update_cascade(db, cascade_id, standby_queue=standby_queue)
+    for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
+        await update_outreach_attempt(
+            db,
+            attempt_id,
+            outcome="standby",
+            status="responded",
+            standby_position=standby_position,
+            responded_at=responded_at,
+            conversation_summary=summary,
+        )
+    await audit_svc.append(
+        db,
+        AuditAction.outreach_response,
+        entity_type="cascade",
+        entity_id=cascade_id,
+        details={
+            "worker_id": worker_id,
+            "outcome": "standby",
+            "shift_id": shift["id"],
+            "standby_position": standby_position,
+        },
+    )
+    await _update_behavioral_scores(db, worker_id)
+    return {"status": "standby", "worker_id": worker_id, "standby_position": standby_position}
+
+
+async def _location_requires_manager_approval(
+    db: aiosqlite.Connection,
+    shift: dict,
+) -> tuple[bool, dict | None]:
+    location = await get_location(db, shift["location_id"])
+    return bool(location and location.get("coverage_requires_manager_approval")), location
+
+
+async def _mark_attempts_for_worker(
+    db: aiosqlite.Connection,
+    *,
+    cascade_id: int,
+    worker_id: int,
+    outcome: str,
+    responded_at: str,
+    summary: str,
+    standby_position: Optional[int] = None,
+    promoted_at: Optional[str] = None,
+) -> None:
+    for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
+        await update_outreach_attempt(
+            db,
+            attempt_id,
+            outcome=outcome,
+            status="responded",
+            standby_position=standby_position,
+            promoted_at=promoted_at,
+            responded_at=responded_at,
+            conversation_summary=summary,
+        )
+
+
+async def _hold_claim_for_manager_approval(
+    db: aiosqlite.Connection,
+    *,
+    cascade_id: int,
+    cascade: dict,
+    shift: dict,
+    worker_id: int,
+    summary: str,
+    responded_at: str,
+    eta_minutes: Optional[int],
+    arrival_dt: Optional[datetime],
+    late_by_minutes: int,
+    standby_queue: Optional[list[int]] = None,
+    notify_worker: bool = False,
+) -> dict:
+    reserved = await reserve_cascade_pending_claim(
+        db,
+        cascade_id,
+        worker_id,
+        pending_claim_at=responded_at,
+        standby_queue=standby_queue,
+    )
+    if not reserved:
+        refreshed_cascade = await get_cascade(db, cascade_id) or cascade
+        refreshed_shift = await get_shift(db, cascade["shift_id"]) or shift
+        if refreshed_cascade.get("confirmed_worker_id") == worker_id:
+            return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
+        if refreshed_cascade.get("pending_claim_worker_id") == worker_id:
+            return {
+                "status": "awaiting_manager_approval",
+                "worker_id": worker_id,
+                "claimed_at": refreshed_cascade.get("pending_claim_at"),
+                "idempotent": True,
+            }
+        if refreshed_cascade.get("confirmed_worker_id") or refreshed_cascade.get("pending_claim_worker_id"):
+            return await _put_worker_on_standby(
+                db,
+                cascade_id=cascade_id,
+                cascade=refreshed_cascade,
+                shift=refreshed_shift,
+                worker_id=worker_id,
+                summary=summary,
+                responded_at=responded_at,
+            )
+        return {
+            "status": refreshed_cascade.get("status") or "active",
+            "worker_id": worker_id,
+            "cascade_id": cascade_id,
+        }
+
+    await _mark_attempts_for_worker(
+        db,
+        cascade_id=cascade_id,
+        worker_id=worker_id,
+        outcome="claimed_pending_manager",
+        responded_at=responded_at,
+        standby_position=None,
+        summary=summary,
+    )
+    location = await get_location(db, shift["location_id"])
+    worker = await get_worker(db, worker_id)
+    vacancy_kind = outreach_svc.vacancy_kind(shift)
+    if location and worker:
+        await notifications.queue_manager_claim_approval_requested_notification(
+            db,
+            location_id=int(location["id"]),
+            shift_id=int(shift["id"]),
+            worker_id=int(worker["id"]),
+            cascade_id=cascade_id,
+        )
+        if notify_worker and worker.get("phone"):
+            await notifications.queue_worker_claim_pending_approval_notification(
+                db,
+                shift_id=int(shift["id"]),
+                worker_id=int(worker["id"]),
+                location_id=int(location["id"]),
+            )
+
+    await audit_svc.append(
+        db,
+        AuditAction.outreach_response,
+        entity_type="cascade",
+        entity_id=cascade_id,
+        details={
+            "worker_id": worker_id,
+            "outcome": "claimed_pending_manager",
+            "shift_id": shift["id"],
+            "eta_minutes": eta_minutes,
+            "arrival_time": arrival_dt.isoformat() if arrival_dt else None,
+            "late_by_minutes": late_by_minutes,
+        },
+    )
+    await _update_behavioral_scores(db, worker_id)
+    return {
+        "status": "awaiting_manager_approval",
+        "worker_id": worker_id,
+        "claimed_at": responded_at,
+        "arrival_time": arrival_dt.isoformat() if arrival_dt else None,
+        "late_by_minutes": late_by_minutes,
+    }
+
+
 def _fill_tier_for_attempt(tier: int) -> str:
     return "tier2_alumni" if tier == 2 else "tier1_internal"
 
@@ -395,45 +571,45 @@ async def claim_shift(
     attempt = await _latest_attempt_for_worker(db, cascade_id, worker_id)
     if attempt is None:
         raise ValueError(f"No outreach attempt found for worker {worker_id} in cascade {cascade_id}")
+    if attempt.get("outcome") == "manager_declined":
+        return {"status": "manager_declined", "worker_id": worker_id, "idempotent": True}
 
     now = datetime.utcnow().isoformat()
     confirmed_worker_id = cascade.get("confirmed_worker_id") or shift.get("filled_by")
+    pending_claim_worker_id = cascade.get("pending_claim_worker_id")
 
     if confirmed_worker_id and confirmed_worker_id != worker_id:
-        standby_queue = list(cascade.get("standby_queue") or [])
-        if worker_id in standby_queue:
-            return {
-                "status": "standby",
-                "worker_id": worker_id,
-                "standby_position": standby_queue.index(worker_id) + 1,
-                "idempotent": True,
-            }
-
-        standby_position = len(standby_queue) + 1
-        standby_queue.append(worker_id)
-        await update_cascade(db, cascade_id, standby_queue=standby_queue)
-        for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
-            await update_outreach_attempt(
-                db,
-                attempt_id,
-                outcome="standby",
-                status="responded",
-                standby_position=standby_position,
-                responded_at=now,
-                conversation_summary=summary,
-            )
-        await audit_svc.append(
+        return await _put_worker_on_standby(
             db,
-            AuditAction.outreach_response,
-            entity_type="cascade",
-            entity_id=cascade_id,
-            details={"worker_id": worker_id, "outcome": "standby", "shift_id": shift["id"], "standby_position": standby_position},
+            cascade_id=cascade_id,
+            cascade=cascade,
+            shift=shift,
+            worker_id=worker_id,
+            summary=summary,
+            responded_at=now,
         )
-        await _update_behavioral_scores(db, worker_id)
-        return {"status": "standby", "worker_id": worker_id, "standby_position": standby_position}
 
     if confirmed_worker_id == worker_id:
         return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
+
+    if pending_claim_worker_id and pending_claim_worker_id != worker_id:
+        return await _put_worker_on_standby(
+            db,
+            cascade_id=cascade_id,
+            cascade=cascade,
+            shift=shift,
+            worker_id=worker_id,
+            summary=summary,
+            responded_at=now,
+        )
+
+    if pending_claim_worker_id == worker_id:
+        return {
+            "status": "awaiting_manager_approval",
+            "worker_id": worker_id,
+            "claimed_at": cascade.get("pending_claim_at"),
+            "idempotent": True,
+        }
 
     shift_start = _shift_start_datetime(shift)
     latest_allowed_arrival = shift_start + timedelta(
@@ -497,6 +673,46 @@ async def claim_shift(
             int((arrival_dt - shift_start).total_seconds() // 60),
         )
 
+    requires_manager_approval, _ = await _location_requires_manager_approval(db, shift)
+    if requires_manager_approval:
+        return await _hold_claim_for_manager_approval(
+            db,
+            cascade_id=cascade_id,
+            cascade=cascade,
+            shift=shift,
+            worker_id=worker_id,
+            summary=summary,
+            responded_at=now,
+            eta_minutes=eta_minutes,
+            arrival_dt=arrival_dt,
+            late_by_minutes=late_by_minutes,
+        )
+
+    won_confirmation = await reserve_cascade_confirmation(db, cascade_id, worker_id)
+    if not won_confirmation:
+        refreshed_cascade = await get_cascade(db, cascade_id) or cascade
+        refreshed_shift = await get_shift(db, cascade["shift_id"]) or shift
+        refreshed_confirmed_worker_id = (
+            refreshed_cascade.get("confirmed_worker_id") or refreshed_shift.get("filled_by")
+        )
+        if refreshed_confirmed_worker_id == worker_id:
+            return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
+        if refreshed_confirmed_worker_id:
+            return await _put_worker_on_standby(
+                db,
+                cascade_id=cascade_id,
+                cascade=refreshed_cascade,
+                shift=refreshed_shift,
+                worker_id=worker_id,
+                summary=summary,
+                responded_at=now,
+            )
+        return {
+            "status": refreshed_cascade.get("status") or "active",
+            "worker_id": worker_id,
+            "cascade_id": cascade_id,
+        }
+
     for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
         await update_outreach_attempt(
             db,
@@ -512,7 +728,7 @@ async def claim_shift(
         filled_by_worker_id=worker_id,
         fill_tier=_fill_tier_for_attempt(attempt["tier"]),
     )
-    await update_cascade(db, cascade_id, status="completed", confirmed_worker_id=worker_id)
+    await update_cascade(db, cascade_id, status="completed")
     await audit_svc.append(
         db,
         AuditAction.outreach_response,
@@ -536,6 +752,277 @@ async def claim_shift(
     }
 
 
+async def _activate_next_candidate_after_claim_release(
+    db: aiosqlite.Connection,
+    *,
+    cascade_id: int,
+    cascade: dict,
+    shift: dict,
+) -> dict:
+    standby_queue = list(cascade.get("standby_queue") or [])
+    if standby_queue:
+        next_worker_id = standby_queue[0]
+        remaining = standby_queue[1:]
+        requires_manager_approval, _ = await _location_requires_manager_approval(db, shift)
+        if requires_manager_approval:
+            result = await _hold_claim_for_manager_approval(
+                db,
+                cascade_id=cascade_id,
+                cascade=cascade,
+                shift=shift,
+                worker_id=next_worker_id,
+                summary="Promoted from standby for manager approval",
+                responded_at=datetime.utcnow().isoformat(),
+                eta_minutes=None,
+                arrival_dt=None,
+                late_by_minutes=0,
+                standby_queue=remaining,
+                notify_worker=True,
+            )
+            if result["status"] == "awaiting_manager_approval":
+                await _resequence_standby_positions(db, cascade_id, remaining)
+            return result
+        return await promote_standby(
+            db,
+            cascade_id=cascade_id,
+            worker_id=next_worker_id,
+            summary="Promoted from standby after earlier claim fell through",
+        )
+
+    if (cascade.get("outreach_mode") or "cascade") == "cascade" and cascade["status"] == "active":
+        return await advance(db, cascade_id)
+    if cascade["status"] == "active" and await _broadcast_batch_fully_resolved(db, cascade_id):
+        return await advance(db, cascade_id)
+    return {"status": "coverage_continues", "cascade_id": cascade_id}
+
+
+async def _release_pending_claim(
+    db: aiosqlite.Connection,
+    *,
+    cascade_id: int,
+    cascade: dict,
+    shift: dict,
+    worker_id: int,
+    summary: str,
+    declined_by_manager: bool,
+) -> dict:
+    cleared = await clear_cascade_pending_claim(db, cascade_id, worker_id=worker_id)
+    if not cleared:
+        refreshed_cascade = await get_cascade(db, cascade_id) or cascade
+        if refreshed_cascade.get("confirmed_worker_id") == worker_id:
+            return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
+        if refreshed_cascade.get("pending_claim_worker_id") == worker_id:
+            return {
+                "status": "awaiting_manager_approval",
+                "worker_id": worker_id,
+                "claimed_at": refreshed_cascade.get("pending_claim_at"),
+                "idempotent": True,
+            }
+        return {"status": "claim_not_pending", "worker_id": worker_id}
+
+    now = datetime.utcnow().isoformat()
+    outcome = "manager_declined" if declined_by_manager else "declined"
+    await _mark_attempts_for_worker(
+        db,
+        cascade_id=cascade_id,
+        worker_id=worker_id,
+        outcome=outcome,
+        responded_at=now,
+        summary=summary,
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.outreach_response,
+        entity_type="cascade",
+        entity_id=cascade_id,
+        details={
+            "worker_id": worker_id,
+            "outcome": outcome,
+            "shift_id": shift["id"],
+        },
+    )
+    worker = await get_worker(db, worker_id)
+    if declined_by_manager and worker and worker.get("phone"):
+        await notifications.queue_worker_claim_denied_notification(
+            db,
+            shift_id=int(shift["id"]),
+            worker_id=int(worker["id"]),
+            location_id=int(shift["location_id"]) if shift.get("location_id") else None,
+        )
+    await _update_behavioral_scores(db, worker_id)
+    refreshed_cascade = await get_cascade(db, cascade_id) or cascade
+    next_result = await _activate_next_candidate_after_claim_release(
+        db,
+        cascade_id=cascade_id,
+        cascade=refreshed_cascade,
+        shift=shift,
+    )
+    return {
+        "status": "declined_by_manager" if declined_by_manager else "declined",
+        "worker_id": worker_id,
+        "next_result": next_result,
+    }
+
+
+async def approve_pending_claim(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    summary: str = "Approved by manager",
+) -> dict:
+    from app.services.shift_manager import mark_filled
+
+    cascade = await get_cascade(db, cascade_id)
+    if cascade is None:
+        raise ValueError(f"Cascade {cascade_id} not found")
+
+    shift = await get_shift(db, cascade["shift_id"])
+    if shift is None:
+        raise ValueError(f"Shift {cascade['shift_id']} not found")
+
+    worker_id = cascade.get("pending_claim_worker_id")
+    if worker_id is None:
+        if cascade.get("confirmed_worker_id"):
+            return {
+                "status": "confirmed",
+                "worker_id": cascade["confirmed_worker_id"],
+                "idempotent": True,
+            }
+        return {"status": "no_pending_claim", "cascade_id": cascade_id}
+
+    attempt = await _latest_attempt_for_worker(db, cascade_id, int(worker_id))
+    if attempt is None:
+        raise ValueError(f"No outreach attempt found for worker {worker_id} in cascade {cascade_id}")
+
+    approved = await approve_cascade_pending_claim(db, cascade_id, int(worker_id))
+    if not approved:
+        refreshed_cascade = await get_cascade(db, cascade_id) or cascade
+        if refreshed_cascade.get("confirmed_worker_id") == worker_id:
+            return {"status": "confirmed", "worker_id": worker_id, "idempotent": True}
+        if refreshed_cascade.get("pending_claim_worker_id") == worker_id:
+            return {
+                "status": "awaiting_manager_approval",
+                "worker_id": worker_id,
+                "claimed_at": refreshed_cascade.get("pending_claim_at"),
+                "idempotent": True,
+            }
+        return {"status": refreshed_cascade.get("status") or "active", "cascade_id": cascade_id}
+
+    now = datetime.utcnow().isoformat()
+    await _mark_attempts_for_worker(
+        db,
+        cascade_id=cascade_id,
+        worker_id=int(worker_id),
+        outcome="confirmed",
+        responded_at=now,
+        summary=summary,
+    )
+    await mark_filled(
+        db,
+        shift_id=shift["id"],
+        filled_by_worker_id=int(worker_id),
+        fill_tier=_fill_tier_for_attempt(int(attempt["tier"])),
+        actor="manager",
+    )
+    await update_cascade(db, cascade_id, status="completed")
+    await audit_svc.append(
+        db,
+        AuditAction.outreach_response,
+        entity_type="cascade",
+        entity_id=cascade_id,
+        details={
+            "worker_id": int(worker_id),
+            "outcome": "confirmed",
+            "shift_id": shift["id"],
+            "manager_approved": True,
+        },
+    )
+    worker = await get_worker(db, int(worker_id))
+    if worker and worker.get("phone"):
+        await notifications.queue_worker_claim_approved_notification(
+            db,
+            shift_id=int(shift["id"]),
+            worker_id=int(worker["id"]),
+            location_id=int(shift["location_id"]) if shift.get("location_id") else None,
+        )
+    await _update_behavioral_scores(db, int(worker_id))
+    return {"status": "confirmed", "worker_id": int(worker_id), "manager_approved": True}
+
+
+async def decline_pending_claim(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    summary: str = "Declined by manager",
+) -> dict:
+    cascade = await get_cascade(db, cascade_id)
+    if cascade is None:
+        raise ValueError(f"Cascade {cascade_id} not found")
+
+    shift = await get_shift(db, cascade["shift_id"])
+    if shift is None:
+        raise ValueError(f"Shift {cascade['shift_id']} not found")
+
+    worker_id = cascade.get("pending_claim_worker_id")
+    if worker_id is None:
+        if cascade.get("confirmed_worker_id"):
+            return {
+                "status": "confirmed",
+                "worker_id": cascade["confirmed_worker_id"],
+                "idempotent": True,
+            }
+        return {"status": "no_pending_claim", "cascade_id": cascade_id}
+
+    return await _release_pending_claim(
+        db,
+        cascade_id=cascade_id,
+        cascade=cascade,
+        shift=shift,
+        worker_id=int(worker_id),
+        summary=summary,
+        declined_by_manager=True,
+    )
+
+
+async def approve_agency_routing(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    summary: str = "Approved agency routing",
+) -> dict:
+    cascade = await get_cascade(db, cascade_id)
+    if cascade is None:
+        raise ValueError(f"Cascade {cascade_id} not found")
+
+    shift = await get_shift(db, cascade["shift_id"])
+    if shift is None:
+        raise ValueError(f"Shift {cascade['shift_id']} not found")
+
+    if cascade.get("manager_approved_tier3"):
+        requests = await list_agency_requests(db, cascade_id=cascade_id)
+        if requests:
+            return {"status": "agency_routed", "cascade_id": cascade_id, "requests": requests, "idempotent": True}
+
+    await update_cascade(
+        db,
+        cascade_id,
+        manager_approved_tier3=True,
+        current_tier=3,
+        status="active",
+    )
+    result = await agency_router.route_to_agencies(db, cascade_id=cascade_id, shift_id=shift["id"])
+    await audit_svc.append(
+        db,
+        AuditAction.manager_notified,
+        entity_type="cascade",
+        entity_id=cascade_id,
+        details={
+            "event": "agency_routing_approved",
+            "shift_id": shift["id"],
+            "summary": summary,
+            "request_count": len(result.get("requests") or []),
+        },
+    )
+    return result
+
+
 async def decline_shift(
     db: aiosqlite.Connection,
     cascade_id: int,
@@ -550,6 +1037,17 @@ async def decline_shift(
     attempt = await _latest_attempt_for_worker(db, cascade_id, worker_id)
     if attempt is None:
         raise ValueError(f"No outreach attempt found for worker {worker_id} in cascade {cascade_id}")
+
+    if cascade.get("pending_claim_worker_id") == worker_id:
+        return await _release_pending_claim(
+            db,
+            cascade_id=cascade_id,
+            cascade=cascade,
+            shift=shift,
+            worker_id=worker_id,
+            summary=summary,
+            declined_by_manager=False,
+        )
 
     for attempt_id in await _attempt_ids_for_worker(db, cascade_id, worker_id):
         await update_outreach_attempt(
@@ -680,6 +1178,8 @@ async def _broadcast_batch_fully_resolved(
         return False
     if cascade.get("confirmed_worker_id"):
         return False
+    if cascade.get("pending_claim_worker_id"):
+        return False
 
     async with db.execute(
         """SELECT worker_id, status, outcome
@@ -700,7 +1200,7 @@ async def _broadcast_batch_fully_resolved(
         return False
 
     unresolved_statuses = {"pending", "sent", "delivered"}
-    terminal_outcomes = {"declined", "no_response", "standby_expired"}
+    terminal_outcomes = {"declined", "manager_declined", "no_response", "standby_expired"}
     positive_outcomes = {"confirmed", "standby", "promoted"}
 
     for attempt in latest_by_worker.values():
@@ -727,11 +1227,12 @@ async def _mark_exhausted(
         if cascade and cascade.get("manager_approved_tier3"):
             return await agency_router.route_to_agencies(db, cascade_id=cascade_id, shift_id=shift["id"])
         if location.get("manager_phone"):
-            notifications.notify_cascade_exhausted(
-                manager_phone=location["manager_phone"],
-                role=shift["role"],
-                date=shift["date"],
-                start_time=shift["start_time"],
+            await notifications.queue_manager_notification(
+                db,
+                cascade_id=int(cascade_id),
+                worker_id=0,
+                filled=False,
+                location_id=int(location["id"]),
             )
             await audit_svc.append(
                 db,
@@ -751,11 +1252,12 @@ async def _mark_exhausted(
         details={"shift_id": shift["id"], "final_tier": tier},
     )
     if location and location.get("manager_phone"):
-        notifications.notify_cascade_exhausted(
-            manager_phone=location["manager_phone"],
-            role=shift["role"],
-            date=shift["date"],
-            start_time=shift["start_time"],
+        await notifications.queue_manager_notification(
+            db,
+            cascade_id=int(cascade_id),
+            worker_id=0,
+            filled=False,
+            location_id=int(location["id"]),
         )
         await audit_svc.append(
             db,

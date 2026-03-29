@@ -38,6 +38,26 @@ class Settings:
     database_url: str = os.environ.get("DATABASE_URL", "backfill.db")
     backfill_webhook_url: str = os.environ.get("BACKFILL_WEBHOOK_URL", "")
     backfill_web_base_url: str = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
+    backfill_internal_api_key: str = os.environ.get("BACKFILL_INTERNAL_API_KEY", "")
+    backfill_dashboard_session_ttl_hours: int = int(
+        os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "24")
+    )
+    backfill_dashboard_access_request_ttl_minutes: int = int(
+        os.environ.get("BACKFILL_DASHBOARD_ACCESS_REQUEST_TTL_MINUTES", "20")
+    )
+    backfill_setup_access_ttl_hours: int = int(
+        os.environ.get("BACKFILL_SETUP_ACCESS_TTL_HOURS", "72")
+    )
+    backfill_ops_worker_enabled: bool = os.environ.get(
+        "BACKFILL_OPS_WORKER_ENABLED",
+        "1",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    backfill_ops_worker_poll_seconds: float = float(
+        os.environ.get("BACKFILL_OPS_WORKER_POLL_SECONDS", "5")
+    )
+    backfill_ops_worker_batch_limit: int = int(
+        os.environ.get("BACKFILL_OPS_WORKER_BATCH_LIMIT", "20")
+    )
     backfill_allowed_origins: List[str] = [
         value.strip()
         for value in os.environ.get("BACKFILL_ALLOWED_ORIGINS", "").split(",")

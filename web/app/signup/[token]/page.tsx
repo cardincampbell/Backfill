@@ -74,14 +74,19 @@ export default async function SignupPage({ params, searchParams }: SignupPagePro
     );
   }
 
+  const isIntegrationPath = session.setup_kind === "integration";
+  const nextStepLabel = isIntegrationPath
+    ? `connect ${session.scheduling_platform ?? "your scheduler"}`
+    : "start Backfill Shifts";
+
   return (
     <main className="section">
       <div className="page-head">
-        <span className="eyebrow">Call Follow-Up</span>
-        <h1>Confirm what Backfill captured from your call.</h1>
+        <span className="eyebrow">Onboarding Handoff</span>
+        <h1>Confirm what Backfill captured, then continue setup.</h1>
         <p>
-          Correct anything the agent got wrong. We&apos;ll collect the rest of your setup details on
-          the next step.
+          Most setup happens by phone or text. This page is just the confirmation step before you{" "}
+          <strong>{nextStepLabel}</strong>.
         </p>
       </div>
 
@@ -90,8 +95,10 @@ export default async function SignupPage({ params, searchParams }: SignupPagePro
           <div className="callout success-callout">
             <h3>Signup saved</h3>
             <p>
-              Location <strong>{locationId}</strong> is now in Backfill. Continue in the{" "}
-              <Link className="text-link" href={nextPath || "/dashboard"}>dashboard</Link>.
+              Location <strong>{locationId}</strong> is now in Backfill. Continue to{" "}
+              <Link className="text-link" href={nextPath || "/dashboard"}>
+                {isIntegrationPath ? "scheduler setup" : "Backfill Shifts"}
+              </Link>.
             </p>
           </div>
         </section>
@@ -157,11 +164,14 @@ export default async function SignupPage({ params, searchParams }: SignupPagePro
           </div>
           <SectionCard title="What happens next">
             <p>
-              After you confirm these details, Backfill will take you into the next setup step to
-              finish connecting your first location.
+              After you confirm these details, Backfill will take you straight into{" "}
+              {isIntegrationPath ? "scheduler connection" : "Backfill Shifts setup"} for your first
+              location.
             </p>
           </SectionCard>
-          <button className="button" type="submit">Confirm and continue</button>
+          <button className="button" type="submit">
+            {isIntegrationPath ? "Confirm and connect scheduler" : "Confirm and start Backfill Shifts"}
+          </button>
         </form>
       </section>
     </main>

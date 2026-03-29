@@ -13,11 +13,13 @@ from typing import Optional
 
 from app.db.queries import (
     get_shift,
+    get_shift_assignment,
     get_worker,
     update_shift_status,
     update_worker,
     insert_cascade,
     get_active_cascade_for_shift,
+    upsert_shift_assignment,
 )
 from app.models.audit import AuditAction
 from app.services import audit as audit_svc
@@ -47,6 +49,11 @@ async def create_vacancy(
         shift_id=shift_id,
         status="vacant",
         called_out_by=called_out_by_worker_id,
+    )
+    await _sync_schedule_assignment_for_vacancy(
+        db,
+        shift=shift,
+        called_out_by_worker_id=called_out_by_worker_id,
     )
 
     await audit_svc.append(
@@ -89,12 +96,22 @@ async def mark_filled(
     fill_tier: str,
     actor: str = "system",
 ) -> None:
+    shift = await get_shift(db, shift_id)
+    if shift is None:
+        raise ValueError(f"Shift {shift_id} not found")
+
     await update_shift_status(
         db,
         shift_id=shift_id,
         status="filled",
         filled_by=filled_by_worker_id,
         fill_tier=fill_tier,
+        called_out_by=shift.get("called_out_by"),
+    )
+    await _sync_schedule_assignment_for_fill(
+        db,
+        shift=shift,
+        filled_by_worker_id=filled_by_worker_id,
     )
 
     # Increment total_shifts_filled and append the filled location to work history if new.
@@ -104,7 +121,6 @@ async def mark_filled(
     )
     await db.commit()
 
-    shift = await get_shift(db, shift_id)
     location_id = shift["location_id"] if shift else None
     if location_id is not None:
         worker = await get_worker(db, filled_by_worker_id)
@@ -137,3 +153,50 @@ async def mark_filled(
             shift_id,
             exc_info=True,
         )
+
+
+async def _sync_schedule_assignment_for_vacancy(
+    db: aiosqlite.Connection,
+    *,
+    shift: dict,
+    called_out_by_worker_id: Optional[int],
+) -> None:
+    assignment = await get_shift_assignment(db, int(shift["id"]))
+    if assignment is None and not shift.get("schedule_id"):
+        return
+
+    worker_id = assignment.get("worker_id") if assignment else None
+    assignment_status = assignment.get("assignment_status") if assignment else None
+    if worker_id is None and assignment_status == "open":
+        return
+
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": int(shift["id"]),
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "coverage_engine" if called_out_by_worker_id is not None else (assignment.get("source") if assignment else "manual"),
+        },
+    )
+
+
+async def _sync_schedule_assignment_for_fill(
+    db: aiosqlite.Connection,
+    *,
+    shift: dict,
+    filled_by_worker_id: int,
+) -> None:
+    assignment = await get_shift_assignment(db, int(shift["id"]))
+    if assignment is None and not shift.get("schedule_id"):
+        return
+
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": int(shift["id"]),
+            "worker_id": filled_by_worker_id,
+            "assignment_status": "confirmed",
+            "source": "coverage_engine",
+        },
+    )

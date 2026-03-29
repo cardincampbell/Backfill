@@ -221,6 +221,15 @@ async def test_retell_promote_standby_function_call_confirms_next_worker(db, cli
 def test_retell_send_onboarding_link_function_call_returns_expected_path(client, monkeypatch):
     sent = []
     monkeypatch.setattr("app.services.onboarding.send_sms", lambda to, body: sent.append((to, body)) or "SM123")
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "Retell Onboarding Location",
+            "manager_name": "Sam Lead",
+            "manager_phone": "+13105550100",
+            "scheduling_platform": "homebase",
+        },
+    ).json()
 
     response = client.post(
         "/webhooks/retell",
@@ -230,6 +239,7 @@ def test_retell_send_onboarding_link_function_call_returns_expected_path(client,
             "args": {
                 "phone": "+13105550100",
                 "kind": "integration",
+                "location_id": location["id"],
                 "platform": "Homebase",
             },
         },
@@ -238,7 +248,8 @@ def test_retell_send_onboarding_link_function_call_returns_expected_path(client,
     assert response.status_code == 200
     payload = response.json()
     assert payload["platform"] == "homebase"
-    assert payload["path"] == "/setup/connect?platform=homebase"
+    assert payload["path"].startswith(f"/setup/connect?location_id={location['id']}")
+    assert "setup_token=bfsetup_" in payload["path"]
     assert sent
 
 
@@ -435,7 +446,7 @@ async def test_retell_inbound_business_call_creates_signup_session_and_texts_lin
     assert session["organization_id"] == organization["id"]
     assert session["contact_phone"] == "+13105550177"
     assert session["business_name"] == "South Bay Ops"
-    assert session["setup_kind"] == "manual_form"
+    assert session["setup_kind"] == "csv_upload"
     assert session["status"] == "pending"
     assert session["lead_source"] == "referral"
     assert sent

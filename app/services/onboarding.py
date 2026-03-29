@@ -9,7 +9,7 @@ import hashlib
 import logging
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -37,10 +37,10 @@ def _normalize_platform(platform: Optional[str]) -> str:
 
 
 def _normalize_kind(kind: Optional[str]) -> str:
-    route_kind = (kind or "manual_form").strip().lower()
+    route_kind = (kind or "csv_upload").strip().lower()
     if route_kind in {"integration", "csv_upload", "manual_form"}:
         return route_kind
-    return "manual_form"
+    return "csv_upload"
 
 
 def build_onboarding_path(kind: str, platform: Optional[str] = None) -> str:
@@ -63,30 +63,95 @@ def build_setup_resume_path(
     kind: str,
     location_id: int,
     platform: Optional[str],
+    from_signup: bool = True,
+    setup_token: Optional[str] = None,
 ) -> str:
-    path = build_onboarding_path(kind, platform=platform)
-    params = {"location_id": location_id, "from_signup": "1"}
     normalized_platform = _normalize_platform(platform)
+    path = (
+        "/setup/connect"
+        if normalized_platform and kind == "integration"
+        else build_onboarding_path(kind, platform=platform)
+    )
+    params = {"location_id": location_id}
+    if from_signup:
+        params["from_signup"] = "1"
     if normalized_platform and kind == "integration":
         params["platform"] = normalized_platform
-    return f"{path}?{urlencode(params)}"
+    if setup_token:
+        params["setup_token"] = setup_token
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}{urlencode(params)}"
 
 
 def build_onboarding_url(kind: str, platform: Optional[str] = None) -> str:
     return f"{settings.backfill_web_base_url}{build_onboarding_path(kind, platform=platform)}"
 
 
-def send_onboarding_link(phone: str, kind: str, platform: Optional[str] = None) -> dict:
-    path = build_onboarding_path(kind, platform=platform)
-    url = f"{settings.backfill_web_base_url}{path}"
-    message = (
-        f"Backfill setup: use this link to continue onboarding: {url} "
-        "Reply here if you need help."
+async def issue_setup_access_token(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int,
+    source: str,
+) -> str:
+    raw_token = _new_raw_token("bfsetup")
+    await queries.insert_setup_access_token(
+        db,
+        {
+            "location_id": location_id,
+            "token_hash": _token_hash(raw_token),
+            "source": source,
+            "expires_at": (
+                datetime.utcnow()
+                + timedelta(hours=settings.backfill_setup_access_ttl_hours)
+            ).isoformat()
+        },
     )
+    return raw_token
+
+
+async def send_onboarding_link(
+    db: aiosqlite.Connection,
+    phone: str,
+    kind: str,
+    *,
+    location_id: int,
+    platform: Optional[str] = None,
+) -> dict:
+    setup_token = await issue_setup_access_token(
+        db,
+        location_id=location_id,
+        source="dashboard_onboarding_link",
+    )
+    path = build_setup_resume_path(
+        kind=kind,
+        location_id=location_id,
+        platform=platform,
+        from_signup=False,
+        setup_token=setup_token,
+    )
+    url = f"{settings.backfill_web_base_url}{path}"
+    normalized_kind = _normalize_kind(kind)
+    normalized_platform = _normalize_platform(platform)
+    if normalized_kind == "integration":
+        platform_name = normalized_platform or "your scheduler"
+        message = (
+            f"Backfill setup: use this link to connect {platform_name} and finish setup: {url} "
+            "Reply here if you need help."
+        )
+    elif normalized_kind == "manual_form":
+        message = (
+            f"Backfill setup: use this link to add your first team members by hand: {url} "
+            "Reply here if you need help."
+        )
+    else:
+        message = (
+            f"Backfill Shifts: use this link to upload your team and get your schedule layer started: {url} "
+            "Reply here if you need help."
+        )
     message_sid = send_sms(phone, message)
     return {
-        "kind": _normalize_kind(kind),
-        "platform": _normalize_platform(platform) or None,
+        "kind": normalized_kind,
+        "platform": normalized_platform or None,
         "path": path,
         "url": url,
         "message_sid": message_sid,
@@ -95,6 +160,10 @@ def send_onboarding_link(phone: str, kind: str, platform: Optional[str] = None) 
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _new_raw_token(prefix: str) -> str:
+    return f"{prefix}_{secrets.token_urlsafe(24)}"
 
 
 def _new_session_token() -> tuple[str, str]:
@@ -311,7 +380,7 @@ def extract_lead_fields_from_conversation(conversation: dict) -> dict[str, Any]:
         if any(marker in text for marker in business_markers):
             call_type = "new_business_inquiry"
 
-    setup_kind = "manual_form"
+    setup_kind = "csv_upload"
     if platform and platform != "backfill_native":
         setup_kind = "integration"
     elif _coerce_str(_pick_value(*sources, keys=("setup_kind", "onboarding_kind", "kind"))) == "csv_upload":
@@ -649,16 +718,24 @@ async def complete_signup_session(
     contact_email = _coerce_str(data.get("contact_email")) or session.get("contact_email")
     role_name = _coerce_str(data.get("role_name")) or session.get("role_name")
     vertical = _coerce_str(data.get("vertical")) or session.get("vertical") or "other"
-    address = _coerce_str(data.get("address"))
+    address = _coerce_str(data.get("address")) or session.get("address")
     if not location_name:
         raise ValueError("Location name is required")
     if not contact_phone:
         raise ValueError("Primary contact phone is required")
 
     location_count = _coerce_int(data.get("location_count")) or session.get("location_count")
-    employee_count = _coerce_int(data.get("employee_count"))
-    scheduling_platform = _normalize_platform(data.get("scheduling_platform")) or "backfill_native"
-    setup_kind = _normalize_kind(data.get("setup_kind"))
+    employee_count = _coerce_int(data.get("employee_count")) or session.get("employee_count")
+    scheduling_platform = (
+        _normalize_platform(data.get("scheduling_platform"))
+        or _normalize_platform(session.get("scheduling_platform"))
+        or "backfill_native"
+    )
+    setup_kind = (
+        _normalize_kind(data.get("setup_kind"))
+        if data.get("setup_kind") not in (None, "")
+        else _normalize_kind(session.get("setup_kind"))
+    )
     notes = _coerce_str(data.get("notes")) or session.get("notes")
     pain_point_summary = _coerce_str(data.get("pain_point_summary")) or session.get("pain_point_summary")
     urgency = _coerce_str(data.get("urgency")) or session.get("urgency")
@@ -748,10 +825,16 @@ async def complete_signup_session(
     location = await queries.get_location(db, location_id)
     assert location is not None
     organization = await queries.get_organization(db, organization_id) if organization_id else None
+    setup_token = await issue_setup_access_token(
+        db,
+        location_id=location_id,
+        source="signup_complete",
+    )
     next_path = build_setup_resume_path(
         kind=setup_kind,
         location_id=location_id,
         platform=scheduling_platform,
+        setup_token=setup_token,
     )
     return {
         "status": "completed",

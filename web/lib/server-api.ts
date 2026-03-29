@@ -1,3 +1,5 @@
+import { apiFetch } from "./api/client";
+
 const API_BASE_URL =
   process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ??
   (process.env.NODE_ENV === "production"
@@ -11,6 +13,19 @@ async function parseError(response: Response): Promise<string> {
   } catch {
     return `Request failed with status ${response.status}`;
   }
+}
+
+function withSetupHeaders(
+  setupToken?: string,
+  headers?: HeadersInit
+): HeadersInit | undefined {
+  if (!setupToken) {
+    return headers;
+  }
+  return {
+    ...(headers ?? {}),
+    "X-Backfill-Setup-Token": setupToken,
+  };
 }
 
 export async function createLocation(input: {
@@ -29,10 +44,10 @@ export async function createLocation(input: {
   writeback_enabled?: boolean;
   writeback_subscription_tier?: string;
   onboarding_info?: string;
-}) {
-  const response = await fetch(`${API_BASE_URL}/api/locations`, {
+}, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withSetupHeaders(options?.setupToken, { "Content-Type": "application/json" }),
     body: JSON.stringify(input),
     cache: "no-store"
   });
@@ -44,8 +59,9 @@ export async function createLocation(input: {
   return (await response.json()) as { id: number; name: string };
 }
 
-export async function getLocation(locationId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}`, {
+export async function getLocation(locationId: number, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations/${locationId}`, {
+    headers: withSetupHeaders(options?.setupToken),
     cache: "no-store"
   });
 
@@ -73,9 +89,10 @@ export async function getLocation(locationId: number) {
   };
 }
 
-export async function connectAndSyncLocation(locationId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/connect-sync`, {
+export async function connectAndSyncLocation(locationId: number, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations/${locationId}/connect-sync`, {
     method: "POST",
+    headers: withSetupHeaders(options?.setupToken),
     cache: "no-store"
   });
 
@@ -96,9 +113,10 @@ export async function connectAndSyncLocation(locationId: number) {
 export async function sendOnboardingLink(input: {
   phone: string;
   kind: string;
+  location_id: number;
   platform?: string;
 }) {
-  const response = await fetch(`${API_BASE_URL}/api/onboarding/link`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/onboarding/link`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -119,7 +137,7 @@ export async function sendOnboardingLink(input: {
 }
 
 export async function getSignupSession(token: string) {
-  const response = await fetch(`${API_BASE_URL}/api/onboarding/sessions/${token}`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/onboarding/sessions/${token}`, {
     cache: "no-store"
   });
 
@@ -170,7 +188,7 @@ export async function completeSignupSession(
     scheduling_platform?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/api/onboarding/sessions/${token}/complete`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/onboarding/sessions/${token}/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -206,11 +224,12 @@ export async function updateLocation(
     onboarding_info?: string;
     writeback_enabled?: boolean;
     writeback_subscription_tier?: string;
-  }
+  },
+  options?: { setupToken?: string }
 ) {
-  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}`, {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations/${locationId}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: withSetupHeaders(options?.setupToken, { "Content-Type": "application/json" }),
     body: JSON.stringify(input),
     cache: "no-store"
   });
@@ -228,9 +247,10 @@ export async function updateLocation(
   };
 }
 
-export async function syncLocationRoster(locationId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/sync-roster`, {
+export async function syncLocationRoster(locationId: number, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations/${locationId}/sync-roster`, {
     method: "POST",
+    headers: withSetupHeaders(options?.setupToken),
     cache: "no-store"
   });
 
@@ -247,9 +267,10 @@ export async function syncLocationRoster(locationId: number) {
   };
 }
 
-export async function syncLocationSchedule(locationId: number) {
-  const response = await fetch(`${API_BASE_URL}/api/locations/${locationId}/sync-schedule`, {
+export async function syncLocationSchedule(locationId: number, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations/${locationId}/sync-schedule`, {
     method: "POST",
+    headers: withSetupHeaders(options?.setupToken),
     cache: "no-store"
   });
 
@@ -275,10 +296,10 @@ export async function createWorker(input: {
   roles: string[];
   certifications: string[];
   source?: string;
-}) {
-  const response = await fetch(`${API_BASE_URL}/api/workers`, {
+}, options?: { setupToken?: string }) {
+  const response = await apiFetch(`${API_BASE_URL}/api/workers`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withSetupHeaders(options?.setupToken, { "Content-Type": "application/json" }),
     body: JSON.stringify(input),
     cache: "no-store"
   });
@@ -290,14 +311,19 @@ export async function createWorker(input: {
   return (await response.json()) as { id: number; name: string };
 }
 
-export async function importWorkersCsvForLocation(locationId: number, file: File) {
+export async function importWorkersCsvForLocation(
+  locationId: number,
+  file: File,
+  options?: { setupToken?: string }
+) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(
+  const response = await apiFetch(
     `${API_BASE_URL}/api/workers/import-csv?location_id=${locationId}`,
     {
       method: "POST",
+      headers: withSetupHeaders(options?.setupToken),
       body: formData,
       cache: "no-store"
     }

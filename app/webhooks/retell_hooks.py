@@ -13,10 +13,15 @@ from app.db.database import get_db
 from app.services import caller_lookup, consent as consent_svc, shift_manager, cascade as cascade_svc
 from app.services import notifications as notifications_svc
 from app.services import onboarding as onboarding_svc
+from app.services import rate_limit
 from app.services import retell_ingest
 from app.services import retell_reconcile
 
-router = APIRouter(prefix="/webhooks", tags=["retell-webhooks"])
+router = APIRouter(
+    prefix="/webhooks",
+    tags=["retell-webhooks"],
+    dependencies=[Depends(rate_limit.limit_by_request_key("retell_webhook", limit=240, window_seconds=60))],
+)
 
 
 class _FunctionArgs(BaseModel):
@@ -92,6 +97,7 @@ class _CreateOpenShiftArgs(_FunctionArgs):
 class _SendOnboardingLinkArgs(_FunctionArgs):
     phone: str = Field(min_length=1)
     kind: str = Field(min_length=1)
+    location_id: int
     platform: Optional[str] = None
 
 
@@ -219,8 +225,11 @@ async def _confirm_fill(db: aiosqlite.Connection, args: _ConfirmFillArgs) -> dic
             eta_minutes=args.eta_minutes,
         )
         if result["status"] == "confirmed":
-            await notifications_svc.fire_manager_notification(
-                db, args.cascade_id, args.worker_id, filled=True
+            await notifications_svc.queue_manager_notification(
+                db,
+                cascade_id=int(args.cascade_id),
+                worker_id=int(args.worker_id),
+                filled=True,
             )
             return {"status": "shift_filled", "worker_id": args.worker_id}
         return result
@@ -243,8 +252,11 @@ async def _claim_shift(db: aiosqlite.Connection, args: _ClaimShiftArgs) -> dict:
         eta_minutes=args.eta_minutes,
     )
     if result["status"] == "confirmed":
-        await notifications_svc.fire_manager_notification(
-            db, args.cascade_id, args.worker_id, filled=True
+        await notifications_svc.queue_manager_notification(
+            db,
+            cascade_id=int(args.cascade_id),
+            worker_id=int(args.worker_id),
+            filled=True,
         )
     return result
 
@@ -275,8 +287,11 @@ async def _promote_standby(db: aiosqlite.Connection, args: _PromoteStandbyArgs) 
         summary=args.conversation_summary,
     )
     if result["status"] == "confirmed":
-        await notifications_svc.fire_manager_notification(
-            db, args.cascade_id, args.worker_id, filled=True
+        await notifications_svc.queue_manager_notification(
+            db,
+            cascade_id=int(args.cascade_id),
+            worker_id=int(args.worker_id),
+            filled=True,
         )
     return result
 
@@ -335,9 +350,11 @@ async def _create_open_shift(db: aiosqlite.Connection, args: _CreateOpenShiftArg
 
 async def _send_onboarding_link(db: aiosqlite.Connection, args: _SendOnboardingLinkArgs) -> dict:
     try:
-        return onboarding_svc.send_onboarding_link(
+        return await onboarding_svc.send_onboarding_link(
+            db,
             phone=args.phone,
             kind=args.kind,
+            location_id=args.location_id,
             platform=args.platform,
         )
     except ValueError as exc:

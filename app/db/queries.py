@@ -16,15 +16,31 @@ _JSON_COLS: dict[str, list[str]] = {
     "workers":          ["roles", "certifications", "location_assignments", "locations_worked"],
     "shifts":           ["requirements"],
     "cascades":         ["standby_queue"],
+    "schedule_versions": ["snapshot_json", "change_summary_json"],
+    "schedule_template_shifts": ["requirements"],
+    "import_jobs":      ["mapping_json", "summary_json", "columns_json"],
+    "import_row_results": ["raw_payload", "normalized_payload"],
     "retell_conversations": ["transcript_items", "analysis", "metadata", "raw_payload"],
     "onboarding_sessions": ["extracted_fields"],
     "agency_partners":  ["coverage_areas", "roles_supported", "certifications_supported"],
     "audit_log":        ["details"],
     "integration_events": ["payload"],
+    "webhook_receipts": ["request_payload"],
+    "dashboard_access_requests": ["location_ids_json"],
+    "dashboard_sessions": ["location_ids_json"],
+    "ops_jobs": ["payload_json"],
 }
 
 _BOOL_COLS: dict[str, list[str]] = {
-    "locations": ["agency_supply_approved", "writeback_enabled"],
+    "locations": [
+        "agency_supply_approved",
+        "writeback_enabled",
+        "backfill_shifts_enabled",
+        "backfill_shifts_beta_eligible",
+        "coverage_requires_manager_approval",
+    ],
+    "shifts": ["spans_midnight"],
+    "schedule_template_shifts": ["spans_midnight"],
     "cascades":    ["manager_approved_tier3"],
     "agency_partners": ["active"],
 }
@@ -60,6 +76,16 @@ def _encode_json(table: str, data: dict) -> dict:
     return data
 
 
+def _split_name_parts(full_name: str | None) -> tuple[Optional[str], Optional[str]]:
+    text = (full_name or "").strip()
+    if not text:
+        return None, None
+    parts = text.split()
+    first_name = parts[0]
+    last_name = " ".join(parts[1:]) or None
+    return first_name, last_name
+
+
 # ── locations ─────────────────────────────────────────────────────────────────
 
 _LOCATION_TABLE = "locations"
@@ -85,6 +111,18 @@ async def get_organization_by_name(db: aiosqlite.Connection, name: str) -> Optio
     ) as cur:
         row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def list_organizations_by_contact_phone(
+    db: aiosqlite.Connection,
+    phone: str,
+) -> list[dict]:
+    async with db.execute(
+        "SELECT * FROM organizations WHERE contact_phone=? ORDER BY id DESC",
+        (phone,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
 
 
 async def insert_organization(db: aiosqlite.Connection, data: dict) -> int:
@@ -151,6 +189,15 @@ async def get_location_by_contact_phone(db: aiosqlite.Connection, phone: str) ->
     return _decode("locations", row) if row else None
 
 
+async def list_locations_by_contact_phone(db: aiosqlite.Connection, phone: str) -> list[dict]:
+    async with db.execute(
+        f"{_LOCATION_SELECT} WHERE l.manager_phone=? ORDER BY l.id DESC",
+        (phone,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("locations", row) for row in rows]
+
+
 async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("locations", data)
     cur = await db.execute(
@@ -160,7 +207,11 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             last_roster_sync_at, last_roster_sync_status,
             last_schedule_sync_at, last_schedule_sync_status, last_sync_error,
             integration_state, last_event_sync_at, last_rolling_sync_at, last_daily_sync_at, last_writeback_at,
-            writeback_enabled, writeback_subscription_tier,
+           last_manager_digest_sent_at,
+            writeback_enabled, writeback_subscription_tier, backfill_shifts_enabled,
+            backfill_shifts_launch_state, backfill_shifts_beta_eligible,
+            coverage_requires_manager_approval,
+            late_arrival_policy, missed_check_in_policy, timezone, operating_mode,
             onboarding_info,
             agency_supply_approved, preferred_agency_partners)
            VALUES (:name,:organization_id,:vertical,:address,:employee_count,:manager_name,:manager_phone,:manager_email,
@@ -168,7 +219,10 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
                    :last_roster_sync_at,:last_roster_sync_status,
                    :last_schedule_sync_at,:last_schedule_sync_status,:last_sync_error,
                    :integration_state,:last_event_sync_at,:last_rolling_sync_at,:last_daily_sync_at,:last_writeback_at,
-                   :writeback_enabled,:writeback_subscription_tier,
+                   :last_manager_digest_sent_at,
+                   :writeback_enabled,:writeback_subscription_tier,:backfill_shifts_enabled,
+                   :backfill_shifts_launch_state,:backfill_shifts_beta_eligible,:coverage_requires_manager_approval,
+                   :late_arrival_policy,:missed_check_in_policy,:timezone,:operating_mode,
                    :onboarding_info,
                    :agency_supply_approved,:preferred_agency_partners)""",
         {
@@ -193,8 +247,17 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             "last_rolling_sync_at": d.get("last_rolling_sync_at"),
             "last_daily_sync_at": d.get("last_daily_sync_at"),
             "last_writeback_at": d.get("last_writeback_at"),
+            "last_manager_digest_sent_at": d.get("last_manager_digest_sent_at"),
             "writeback_enabled": int(d.get("writeback_enabled", False)),
             "writeback_subscription_tier": d.get("writeback_subscription_tier", "core"),
+            "backfill_shifts_enabled": int(d.get("backfill_shifts_enabled", True)),
+            "backfill_shifts_launch_state": d.get("backfill_shifts_launch_state", "enabled"),
+            "backfill_shifts_beta_eligible": int(d.get("backfill_shifts_beta_eligible", False)),
+            "coverage_requires_manager_approval": int(d.get("coverage_requires_manager_approval", False)),
+            "late_arrival_policy": d.get("late_arrival_policy", "wait"),
+            "missed_check_in_policy": d.get("missed_check_in_policy", "start_coverage"),
+            "timezone": d.get("timezone"),
+            "operating_mode": d.get("operating_mode"),
             "onboarding_info": d.get("onboarding_info"),
             "agency_supply_approved": int(d.get("agency_supply_approved", False)),
             "preferred_agency_partners": d.get("preferred_agency_partners", "[]"),
@@ -233,8 +296,17 @@ async def update_location(db: aiosqlite.Connection, location_id: int, data: dict
         "last_rolling_sync_at",
         "last_daily_sync_at",
         "last_writeback_at",
+        "last_manager_digest_sent_at",
         "writeback_enabled",
         "writeback_subscription_tier",
+        "backfill_shifts_enabled",
+        "backfill_shifts_launch_state",
+        "backfill_shifts_beta_eligible",
+        "coverage_requires_manager_approval",
+        "late_arrival_policy",
+        "missed_check_in_policy",
+        "timezone",
+        "operating_mode",
         "onboarding_info",
         "agency_supply_approved",
         "preferred_agency_partners",
@@ -247,6 +319,12 @@ async def update_location(db: aiosqlite.Connection, location_id: int, data: dict
         encoded["agency_supply_approved"] = int(bool(encoded["agency_supply_approved"]))
     if "writeback_enabled" in encoded:
         encoded["writeback_enabled"] = int(bool(encoded["writeback_enabled"]))
+    if "backfill_shifts_enabled" in encoded:
+        encoded["backfill_shifts_enabled"] = int(bool(encoded["backfill_shifts_enabled"]))
+    if "backfill_shifts_beta_eligible" in encoded:
+        encoded["backfill_shifts_beta_eligible"] = int(bool(encoded["backfill_shifts_beta_eligible"]))
+    if "coverage_requires_manager_approval" in encoded:
+        encoded["coverage_requires_manager_approval"] = int(bool(encoded["coverage_requires_manager_approval"]))
     cols = ", ".join(f"{key}=?" for key in encoded)
     await db.execute(
         f"UPDATE {_LOCATION_TABLE} SET {cols} WHERE id=?",
@@ -287,9 +365,12 @@ async def get_worker_by_source_id(
 async def list_workers_for_location(
     db: aiosqlite.Connection, location_id: int, active_consent_only: bool = True
 ) -> list[dict]:
-    query = "SELECT * FROM workers WHERE location_id=?"
+    query = (
+        "SELECT * FROM workers WHERE location_id=? "
+        "AND (employment_status IS NULL OR employment_status='active')"
+    )
     if active_consent_only:
-        query += " AND sms_consent_status='granted'"
+        query += " AND (sms_consent_status='granted' OR voice_consent_status='granted')"
     query += " ORDER BY priority_rank ASC"
     async with db.execute(query, (location_id,)) as cur:
         rows = await cur.fetchall()
@@ -305,6 +386,8 @@ async def list_workers_by_locations_worked(
     result = []
     for row in rows:
         worker = _decode("workers", row)
+        if worker.get("employment_status") in {"inactive", "terminated"}:
+            continue
         if location_id in (worker.get("locations_worked") or []):
             result.append(worker)
     return result
@@ -324,6 +407,11 @@ async def list_workers(db: aiosqlite.Connection, location_id: Optional[int] = No
 
 async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("workers", data)
+    name = d["name"]
+    first_name = d.get("first_name")
+    last_name = d.get("last_name")
+    if not first_name and not last_name:
+        first_name, last_name = _split_name_parts(name)
     location_id = d.get("location_id")
     assignments = d.get("location_assignments")
     locations_worked = d.get("locations_worked")
@@ -343,18 +431,20 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
 
     cur = await db.execute(
         """INSERT INTO workers
-           (name, phone, email, worker_type, preferred_channel, roles, certifications,
+           (name, first_name, last_name, phone, email, worker_type, preferred_channel, roles, certifications,
             priority_rank, location_id, location_assignments, locations_worked, source,
-            source_id,
+            source_id, employment_status, max_hours_per_week,
             sms_consent_status, voice_consent_status, consent_text_version,
             consent_timestamp, consent_channel)
-           VALUES (:name,:phone,:email,:worker_type,:preferred_channel,:roles,:certifications,
+           VALUES (:name,:first_name,:last_name,:phone,:email,:worker_type,:preferred_channel,:roles,:certifications,
                    :priority_rank,:location_id,:location_assignments,:locations_worked,:source,
-                   :source_id,
+                   :source_id,:employment_status,:max_hours_per_week,
                    :sms_consent_status,:voice_consent_status,:consent_text_version,
                    :consent_timestamp,:consent_channel)""",
         {
-            "name": d["name"],
+            "name": name,
+            "first_name": first_name,
+            "last_name": last_name,
             "phone": d["phone"],
             "email": d.get("email"),
             "worker_type": d.get("worker_type", "internal"),
@@ -367,6 +457,8 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
             "locations_worked": locations_worked,
             "source": d.get("source", "csv_import"),
             "source_id": d.get("source_id"),
+            "employment_status": d.get("employment_status") or "active",
+            "max_hours_per_week": d.get("max_hours_per_week"),
             "sms_consent_status": d.get("sms_consent_status", "pending"),
             "voice_consent_status": d.get("voice_consent_status", "pending"),
             "consent_text_version": d.get("consent_text_version"),
@@ -396,6 +488,8 @@ async def get_location_contact_by_shift(db: aiosqlite.Connection, shift_id: int)
 async def update_worker(db: aiosqlite.Connection, worker_id: int, data: dict) -> None:
     allowed = {
         "name",
+        "first_name",
+        "last_name",
         "phone",
         "email",
         "worker_type",
@@ -408,6 +502,8 @@ async def update_worker(db: aiosqlite.Connection, worker_id: int, data: dict) ->
         "locations_worked",
         "source",
         "source_id",
+        "employment_status",
+        "max_hours_per_week",
         "sms_consent_status",
         "voice_consent_status",
         "consent_text_version",
@@ -441,8 +537,8 @@ async def get_worker_outreach_metrics(
         """
         SELECT
             COUNT(*) AS total_attempts,
-            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'declined', 'no_response', 'promoted', 'standby_expired', 'too_late') THEN 1 ELSE 0 END) AS total_responses,
-            SUM(CASE WHEN outcome IN ('confirmed', 'standby', 'promoted') THEN 1 ELSE 0 END) AS total_acceptances
+            SUM(CASE WHEN outcome IN ('claimed_pending_manager', 'confirmed', 'standby', 'declined', 'manager_declined', 'no_response', 'promoted', 'standby_expired', 'too_late') THEN 1 ELSE 0 END) AS total_responses,
+            SUM(CASE WHEN outcome IN ('claimed_pending_manager', 'confirmed', 'standby', 'manager_declined', 'promoted') THEN 1 ELSE 0 END) AS total_acceptances
         FROM outreach_attempts
         WHERE worker_id=?
         """,
@@ -499,21 +595,45 @@ async def insert_shift(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("shifts", data)
     cur = await db.execute(
         """INSERT INTO shifts
-           (location_id, scheduling_platform_id, role, date, start_time, end_time, pay_rate,
-            requirements, status, source_platform)
-           VALUES (:location_id,:scheduling_platform_id,:role,:date,:start_time,:end_time,:pay_rate,
-                   :requirements,:status,:source_platform)""",
+           (location_id, schedule_id, scheduling_platform_id, role, date, start_time, end_time, spans_midnight, pay_rate,
+            requirements, status, source_platform, shift_label, notes, published_state, escalated_from_worker_id, reminder_sent_at,
+            confirmation_requested_at, worker_confirmed_at, worker_declined_at, confirmation_escalated_at,
+            check_in_requested_at, checked_in_at, late_reported_at, late_eta_minutes, check_in_escalated_at,
+            attendance_action_state, attendance_action_updated_at)
+           VALUES (:location_id,:schedule_id,:scheduling_platform_id,:role,:date,:start_time,:end_time,:spans_midnight,:pay_rate,
+                   :requirements,:status,:source_platform,:shift_label,:notes,:published_state,:escalated_from_worker_id,:reminder_sent_at,
+                   :confirmation_requested_at,:worker_confirmed_at,:worker_declined_at,:confirmation_escalated_at,
+                   :check_in_requested_at,:checked_in_at,:late_reported_at,:late_eta_minutes,:check_in_escalated_at,
+                   :attendance_action_state,:attendance_action_updated_at)""",
         {
             "location_id": d.get("location_id"),
+            "schedule_id": d.get("schedule_id"),
             "scheduling_platform_id": d.get("scheduling_platform_id"),
             "role": d["role"],
             "date": str(d["date"]),
             "start_time": str(d["start_time"]),
             "end_time": str(d["end_time"]),
-            "pay_rate": d["pay_rate"],
+            "spans_midnight": int(bool(d.get("spans_midnight", False))),
+            "pay_rate": d.get("pay_rate", 0.0),
             "requirements": d.get("requirements", "[]"),
             "status": d.get("status", "scheduled"),
             "source_platform": d.get("source_platform", "backfill_native"),
+            "shift_label": d.get("shift_label"),
+            "notes": d.get("notes"),
+            "published_state": d.get("published_state"),
+            "escalated_from_worker_id": d.get("escalated_from_worker_id"),
+            "reminder_sent_at": d.get("reminder_sent_at"),
+            "confirmation_requested_at": d.get("confirmation_requested_at"),
+            "worker_confirmed_at": d.get("worker_confirmed_at"),
+            "worker_declined_at": d.get("worker_declined_at"),
+            "confirmation_escalated_at": d.get("confirmation_escalated_at"),
+            "check_in_requested_at": d.get("check_in_requested_at"),
+            "checked_in_at": d.get("checked_in_at"),
+            "late_reported_at": d.get("late_reported_at"),
+            "late_eta_minutes": d.get("late_eta_minutes"),
+            "check_in_escalated_at": d.get("check_in_escalated_at"),
+            "attendance_action_state": d.get("attendance_action_state"),
+            "attendance_action_updated_at": d.get("attendance_action_updated_at"),
         },
     )
     await db.commit()
@@ -524,6 +644,7 @@ async def list_shifts(
     db: aiosqlite.Connection,
     location_id: Optional[int] = None,
     status: Optional[str] = None,
+    schedule_id: Optional[int] = None,
 ) -> list[dict]:
     query = "SELECT * FROM shifts"
     clauses: list[str] = []
@@ -531,6 +652,9 @@ async def list_shifts(
     if location_id is not None:
         clauses.append("location_id=?")
         params.append(location_id)
+    if schedule_id is not None:
+        clauses.append("schedule_id=?")
+        params.append(schedule_id)
     if status is not None:
         clauses.append("status=?")
         params.append(status)
@@ -558,18 +682,36 @@ async def get_shift_by_platform_id(
 async def update_shift(db: aiosqlite.Connection, shift_id: int, data: dict) -> None:
     allowed = {
         "location_id",
+        "schedule_id",
         "scheduling_platform_id",
         "role",
         "date",
         "start_time",
         "end_time",
+        "spans_midnight",
         "pay_rate",
         "requirements",
         "status",
         "called_out_by",
         "filled_by",
         "fill_tier",
+        "escalated_from_worker_id",
         "source_platform",
+        "shift_label",
+        "notes",
+        "published_state",
+        "reminder_sent_at",
+        "confirmation_requested_at",
+        "worker_confirmed_at",
+        "worker_declined_at",
+        "confirmation_escalated_at",
+        "check_in_requested_at",
+        "checked_in_at",
+        "late_reported_at",
+        "late_eta_minutes",
+        "check_in_escalated_at",
+        "attendance_action_state",
+        "attendance_action_updated_at",
     }
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
@@ -579,6 +721,8 @@ async def update_shift(db: aiosqlite.Connection, shift_id: int, data: dict) -> N
         key: str(value) if key in {"date", "start_time", "end_time"} and value is not None else value
         for key, value in encoded.items()
     }
+    if "spans_midnight" in normalized:
+        normalized["spans_midnight"] = int(bool(normalized["spans_midnight"]))
     cols = ", ".join(f"{key}=?" for key in normalized)
     await db.execute(
         f"UPDATE shifts SET {cols} WHERE id=?",
@@ -601,6 +745,671 @@ async def update_shift_status(
         (status, filled_by, fill_tier, called_out_by, shift_id),
     )
     await db.commit()
+
+
+async def delete_shift(db: aiosqlite.Connection, shift_id: int) -> None:
+    await db.execute("DELETE FROM shifts WHERE id=?", (shift_id,))
+    await db.commit()
+
+
+# ── schedules ─────────────────────────────────────────────────────────────────
+
+async def get_schedule(db: aiosqlite.Connection, schedule_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM schedules WHERE id=?", (schedule_id,)) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_schedule_by_location_week(
+    db: aiosqlite.Connection,
+    location_id: int,
+    week_start_date: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM schedules WHERE location_id=? AND week_start_date=?",
+        (location_id, week_start_date),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_latest_schedule_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM schedules WHERE location_id=? ORDER BY week_start_date DESC, id DESC LIMIT 1",
+        (location_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_schedules_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM schedules
+        WHERE location_id=?
+        ORDER BY week_start_date DESC, id DESC
+        """,
+        (location_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def insert_schedule(db: aiosqlite.Connection, data: dict) -> int:
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """INSERT INTO schedules
+           (location_id, week_start_date, week_end_date, lifecycle_state, current_version_id,
+            derived_from_schedule_id, created_by, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            data["location_id"],
+            data["week_start_date"],
+            data["week_end_date"],
+            data.get("lifecycle_state", "draft"),
+            data.get("current_version_id"),
+            data.get("derived_from_schedule_id"),
+            data.get("created_by"),
+            data.get("created_at", now),
+            data.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_schedule(db: aiosqlite.Connection, schedule_id: int, data: dict) -> None:
+    allowed = {
+        "week_start_date",
+        "week_end_date",
+        "lifecycle_state",
+        "current_version_id",
+        "derived_from_schedule_id",
+        "created_by",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    if "updated_at" not in updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE schedules SET {cols} WHERE id=?",
+        (*updates.values(), schedule_id),
+    )
+    await db.commit()
+
+
+async def insert_schedule_version(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("schedule_versions", data)
+    cur = await db.execute(
+        """INSERT INTO schedule_versions
+           (schedule_id, version_number, version_type, snapshot_json, change_summary_json,
+            published_at, published_by, created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            encoded["schedule_id"],
+            encoded["version_number"],
+            encoded["version_type"],
+            encoded.get("snapshot_json", "{}"),
+            encoded.get("change_summary_json", "{}"),
+            encoded.get("published_at"),
+            encoded.get("published_by"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_schedule_versions(
+    db: aiosqlite.Connection,
+    schedule_id: int,
+) -> list[dict]:
+    async with db.execute(
+        "SELECT * FROM schedule_versions WHERE schedule_id=? ORDER BY version_number ASC, id ASC",
+        (schedule_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("schedule_versions", row) for row in rows]
+
+
+async def get_schedule_version(
+    db: aiosqlite.Connection,
+    version_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM schedule_versions WHERE id=?",
+        (version_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("schedule_versions", row) if row else None
+
+
+async def get_next_schedule_version_number(
+    db: aiosqlite.Connection,
+    schedule_id: int,
+) -> int:
+    async with db.execute(
+        "SELECT COALESCE(MAX(version_number), 0) AS max_version FROM schedule_versions WHERE schedule_id=?",
+        (schedule_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return int((row["max_version"] if row else 0) or 0) + 1
+
+
+# ── schedule templates ────────────────────────────────────────────────────────
+
+async def get_schedule_template(
+    db: aiosqlite.Connection,
+    template_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM schedule_templates WHERE id=?",
+        (template_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_schedule_template_shift(
+    db: aiosqlite.Connection,
+    template_shift_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT sts.*, w.name AS worker_name, w.phone AS worker_phone
+        FROM schedule_template_shifts sts
+        LEFT JOIN workers w ON w.id = sts.worker_id
+        WHERE sts.id=?
+        """,
+        (template_shift_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("schedule_template_shifts", row) if row else None
+
+
+async def list_schedule_templates_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM schedule_templates
+        WHERE location_id=?
+        ORDER BY updated_at DESC, id DESC
+        """,
+        (location_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def insert_schedule_template(db: aiosqlite.Connection, data: dict) -> int:
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO schedule_templates
+        (location_id, name, description, source_schedule_id, created_by, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            data["location_id"],
+            data["name"],
+            data.get("description"),
+            data.get("source_schedule_id"),
+            data.get("created_by"),
+            data.get("created_at", now),
+            data.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_schedule_template(db: aiosqlite.Connection, template_id: int, data: dict) -> None:
+    allowed = {
+        "name",
+        "description",
+        "source_schedule_id",
+        "created_by",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    if "updated_at" not in updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE schedule_templates SET {cols} WHERE id=?",
+        (*updates.values(), template_id),
+    )
+    await db.commit()
+
+
+async def delete_schedule_template(
+    db: aiosqlite.Connection,
+    template_id: int,
+) -> None:
+    await db.execute("DELETE FROM schedule_templates WHERE id=?", (template_id,))
+    await db.commit()
+
+
+async def delete_schedule_template_shifts(
+    db: aiosqlite.Connection,
+    template_id: int,
+) -> None:
+    await db.execute(
+        "DELETE FROM schedule_template_shifts WHERE template_id=?",
+        (template_id,),
+    )
+    await db.commit()
+
+
+async def insert_schedule_template_shift(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("schedule_template_shifts", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO schedule_template_shifts
+        (template_id, day_of_week, role, start_time, end_time, spans_midnight, pay_rate,
+         requirements, shift_label, notes, worker_id, assignment_status, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            encoded["template_id"],
+            encoded["day_of_week"],
+            encoded["role"],
+            str(encoded["start_time"]),
+            str(encoded["end_time"]),
+            int(bool(encoded.get("spans_midnight", False))),
+            encoded.get("pay_rate", 0.0),
+            encoded.get("requirements", "[]"),
+            encoded.get("shift_label"),
+            encoded.get("notes"),
+            encoded.get("worker_id"),
+            encoded.get("assignment_status", "open"),
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_schedule_template_shift(
+    db: aiosqlite.Connection,
+    template_shift_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "day_of_week",
+        "role",
+        "start_time",
+        "end_time",
+        "spans_midnight",
+        "pay_rate",
+        "requirements",
+        "shift_label",
+        "notes",
+        "worker_id",
+        "assignment_status",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    if "updated_at" not in updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+    encoded = _encode_json("schedule_template_shifts", updates)
+    normalized = {}
+    for key, value in encoded.items():
+        if key in {"start_time", "end_time"} and value is not None:
+            normalized[key] = str(value)
+        elif key == "spans_midnight":
+            normalized[key] = int(bool(value))
+        else:
+            normalized[key] = value
+    cols = ", ".join(f"{key}=?" for key in normalized)
+    await db.execute(
+        f"UPDATE schedule_template_shifts SET {cols} WHERE id=?",
+        (*normalized.values(), template_shift_id),
+    )
+    await db.commit()
+
+
+async def list_schedule_template_shifts(
+    db: aiosqlite.Connection,
+    template_id: int,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT sts.*, w.name AS worker_name, w.phone AS worker_phone
+        FROM schedule_template_shifts sts
+        LEFT JOIN workers w ON w.id = sts.worker_id
+        WHERE sts.template_id=?
+        ORDER BY sts.day_of_week ASC, sts.start_time ASC, sts.id ASC
+        """,
+        (template_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("schedule_template_shifts", row) for row in rows]
+
+
+async def delete_schedule_template_shift_by_id(
+    db: aiosqlite.Connection,
+    template_shift_id: int,
+) -> None:
+    await db.execute("DELETE FROM schedule_template_shifts WHERE id=?", (template_shift_id,))
+    await db.commit()
+
+
+# ── shift assignments ────────────────────────────────────────────────────────
+
+async def get_shift_assignment(
+    db: aiosqlite.Connection,
+    shift_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM shift_assignments WHERE shift_id=?",
+        (shift_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_shift_assignment_with_worker(
+    db: aiosqlite.Connection,
+    shift_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT sa.*, w.name AS worker_name, w.phone AS worker_phone
+        FROM shift_assignments sa
+        LEFT JOIN workers w ON w.id = sa.worker_id
+        WHERE sa.shift_id=?
+        """,
+        (shift_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_shift_assignments_for_schedule(
+    db: aiosqlite.Connection,
+    schedule_id: int,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT sa.*, s.schedule_id, w.name AS worker_name, w.phone AS worker_phone
+        FROM shift_assignments sa
+        JOIN shifts s ON s.id = sa.shift_id
+        LEFT JOIN workers w ON w.id = sa.worker_id
+        WHERE s.schedule_id=?
+        ORDER BY sa.shift_id ASC
+        """,
+        (schedule_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def list_assigned_schedule_shifts_for_worker(
+    db: aiosqlite.Connection,
+    worker_id: int,
+    *,
+    published_only: bool = False,
+) -> list[dict]:
+    query = """
+        SELECT
+            s.*,
+            sa.assignment_status,
+            sc.week_start_date,
+            sc.lifecycle_state,
+            l.name AS location_name,
+            o.name AS organization_name
+        FROM shift_assignments sa
+        JOIN shifts s ON s.id = sa.shift_id
+        LEFT JOIN schedules sc ON sc.id = s.schedule_id
+        LEFT JOIN locations l ON l.id = s.location_id
+        LEFT JOIN organizations o ON o.id = l.organization_id
+        WHERE sa.worker_id=?
+          AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+    """
+    params: list[object] = [worker_id]
+    if published_only:
+        query += " AND s.published_state IN ('published', 'amended')"
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("shifts", row) for row in rows]
+
+
+async def upsert_shift_assignment(db: aiosqlite.Connection, data: dict) -> int:
+    existing = await get_shift_assignment(db, data["shift_id"])
+    now = datetime.utcnow().isoformat()
+    if existing is None:
+        cur = await db.execute(
+            """INSERT INTO shift_assignments
+               (shift_id, worker_id, assignment_status, source, created_at, updated_at)
+               VALUES (?,?,?,?,?,?)""",
+            (
+                data["shift_id"],
+                data.get("worker_id"),
+                data.get("assignment_status", "open"),
+                data.get("source", "manual"),
+                data.get("created_at", now),
+                data.get("updated_at", now),
+            ),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+    assignment_changed = (
+        existing.get("worker_id") != data.get("worker_id")
+        or existing.get("assignment_status") != data.get("assignment_status", existing.get("assignment_status", "open"))
+    )
+    await db.execute(
+        """UPDATE shift_assignments
+           SET worker_id=?, assignment_status=?, source=?, updated_at=?
+           WHERE shift_id=?""",
+        (
+            data.get("worker_id"),
+            data.get("assignment_status", existing.get("assignment_status", "open")),
+            data.get("source", existing.get("source", "manual")),
+            data.get("updated_at", now),
+            data["shift_id"],
+        ),
+    )
+    if assignment_changed:
+        await db.execute(
+            """UPDATE shifts
+               SET confirmation_requested_at=NULL,
+                   worker_confirmed_at=NULL,
+                   worker_declined_at=NULL,
+                   check_in_requested_at=NULL,
+                   checked_in_at=NULL,
+                   late_reported_at=NULL,
+                   late_eta_minutes=NULL,
+                   attendance_action_state=NULL,
+                   attendance_action_updated_at=NULL
+               WHERE id=?""",
+            (data["shift_id"],),
+        )
+    await db.commit()
+    return int(existing["id"])
+
+
+async def delete_shift_assignment(db: aiosqlite.Connection, shift_id: int) -> None:
+    await db.execute("DELETE FROM shift_assignments WHERE shift_id=?", (shift_id,))
+    await db.commit()
+
+
+# ── import jobs ───────────────────────────────────────────────────────────────
+
+async def insert_import_job(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("import_jobs", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """INSERT INTO import_jobs
+           (location_id, import_type, filename, status, mapping_json, summary_json, columns_json,
+            uploaded_csv, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["location_id"],
+            encoded["import_type"],
+            encoded.get("filename"),
+            encoded.get("status", "uploaded"),
+            encoded.get("mapping_json", "{}"),
+            encoded.get("summary_json", "{}"),
+            encoded.get("columns_json", "[]"),
+            encoded.get("uploaded_csv"),
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_import_job(db: aiosqlite.Connection, job_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM import_jobs WHERE id=?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    return _decode("import_jobs", row) if row else None
+
+
+async def get_latest_import_job_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM import_jobs WHERE location_id=? ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (location_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("import_jobs", row) if row else None
+
+
+async def get_import_row_result(
+    db: aiosqlite.Connection,
+    row_id: int,
+) -> Optional[dict]:
+    async with db.execute("SELECT * FROM import_row_results WHERE id=?", (row_id,)) as cur:
+        row = await cur.fetchone()
+    return _decode("import_row_results", row) if row else None
+
+
+async def update_import_job(db: aiosqlite.Connection, job_id: int, data: dict) -> None:
+    allowed = {
+        "filename",
+        "status",
+        "mapping_json",
+        "summary_json",
+        "columns_json",
+        "uploaded_csv",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    if "updated_at" not in updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+    encoded = _encode_json("import_jobs", updates)
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE import_jobs SET {cols} WHERE id=?",
+        (*encoded.values(), job_id),
+    )
+    await db.commit()
+
+
+async def clear_import_row_results(db: aiosqlite.Connection, job_id: int) -> None:
+    await db.execute("DELETE FROM import_row_results WHERE import_job_id=?", (job_id,))
+    await db.commit()
+
+
+async def insert_import_row_result(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("import_row_results", data)
+    cur = await db.execute(
+        """INSERT INTO import_row_results
+           (import_job_id, row_number, entity_type, outcome, error_code, error_message,
+            raw_payload, normalized_payload, resolution_action, resolved_at, resolved_by,
+            committed_at, committed_entity_id, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["import_job_id"],
+            encoded["row_number"],
+            encoded["entity_type"],
+            encoded["outcome"],
+            encoded.get("error_code"),
+            encoded.get("error_message"),
+            encoded.get("raw_payload", "{}"),
+            encoded.get("normalized_payload"),
+            encoded.get("resolution_action"),
+            encoded.get("resolved_at"),
+            encoded.get("resolved_by"),
+            encoded.get("committed_at"),
+            encoded.get("committed_entity_id"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_import_row_result(db: aiosqlite.Connection, row_id: int, data: dict) -> None:
+    allowed = {
+        "entity_type",
+        "outcome",
+        "error_code",
+        "error_message",
+        "raw_payload",
+        "normalized_payload",
+        "resolution_action",
+        "resolved_at",
+        "resolved_by",
+        "committed_at",
+        "committed_entity_id",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("import_row_results", updates)
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE import_row_results SET {cols} WHERE id=?",
+        (*encoded.values(), row_id),
+    )
+    await db.commit()
+
+
+async def list_import_row_results(
+    db: aiosqlite.Connection,
+    job_id: int,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT * FROM import_row_results
+        WHERE import_job_id=?
+        ORDER BY row_number ASC, id ASC
+        """,
+        (job_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("import_row_results", row) for row in rows]
 
 
 # ── cascades ──────────────────────────────────────────────────────────────────
@@ -642,6 +1451,8 @@ async def update_cascade(db: aiosqlite.Connection, cascade_id: int, **kwargs: An
         "current_batch",
         "current_position",
         "confirmed_worker_id",
+        "pending_claim_worker_id",
+        "pending_claim_at",
         "standby_queue",
         "manager_approved_tier3",
     }
@@ -654,6 +1465,99 @@ async def update_cascade(db: aiosqlite.Connection, cascade_id: int, **kwargs: An
         f"UPDATE cascades SET {cols} WHERE id=?", (*encoded.values(), cascade_id)
     )
     await db.commit()
+
+
+async def reserve_cascade_confirmation(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    worker_id: int,
+) -> bool:
+    cur = await db.execute(
+        """UPDATE cascades
+           SET confirmed_worker_id=?
+           WHERE id=?
+             AND status='active'
+             AND confirmed_worker_id IS NULL""",
+        (worker_id, cascade_id),
+    )
+    await db.commit()
+    return int(cur.rowcount or 0) > 0
+
+
+async def reserve_cascade_pending_claim(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    worker_id: int,
+    *,
+    pending_claim_at: str,
+    standby_queue: Optional[list[int]] = None,
+) -> bool:
+    if standby_queue is None:
+        cur = await db.execute(
+            """UPDATE cascades
+               SET pending_claim_worker_id=?, pending_claim_at=?
+               WHERE id=?
+                 AND status='active'
+                 AND confirmed_worker_id IS NULL
+                 AND pending_claim_worker_id IS NULL""",
+            (worker_id, pending_claim_at, cascade_id),
+        )
+    else:
+        cur = await db.execute(
+            """UPDATE cascades
+               SET pending_claim_worker_id=?, pending_claim_at=?, standby_queue=?
+               WHERE id=?
+                 AND status='active'
+                 AND confirmed_worker_id IS NULL
+                 AND pending_claim_worker_id IS NULL""",
+            (worker_id, pending_claim_at, json.dumps(standby_queue), cascade_id),
+        )
+    await db.commit()
+    return int(cur.rowcount or 0) > 0
+
+
+async def approve_cascade_pending_claim(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    worker_id: int,
+) -> bool:
+    cur = await db.execute(
+        """UPDATE cascades
+           SET confirmed_worker_id=?, pending_claim_worker_id=NULL, pending_claim_at=NULL
+           WHERE id=?
+             AND status='active'
+             AND confirmed_worker_id IS NULL
+             AND pending_claim_worker_id=?""",
+        (worker_id, cascade_id, worker_id),
+    )
+    await db.commit()
+    return int(cur.rowcount or 0) > 0
+
+
+async def clear_cascade_pending_claim(
+    db: aiosqlite.Connection,
+    cascade_id: int,
+    *,
+    worker_id: Optional[int] = None,
+) -> bool:
+    if worker_id is None:
+        cur = await db.execute(
+            """UPDATE cascades
+               SET pending_claim_worker_id=NULL, pending_claim_at=NULL
+               WHERE id=?
+                 AND pending_claim_worker_id IS NOT NULL""",
+            (cascade_id,),
+        )
+    else:
+        cur = await db.execute(
+            """UPDATE cascades
+               SET pending_claim_worker_id=NULL, pending_claim_at=NULL
+               WHERE id=?
+                 AND pending_claim_worker_id=?""",
+            (cascade_id, worker_id),
+        )
+    await db.commit()
+    return int(cur.rowcount or 0) > 0
 
 
 async def list_cascades(
@@ -679,6 +1583,15 @@ async def list_cascades(
 
 
 # ── outreach attempts ─────────────────────────────────────────────────────────
+
+async def get_outreach_attempt(db: aiosqlite.Connection, attempt_id: int) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM outreach_attempts WHERE id=?",
+        (attempt_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
 
 async def insert_outreach_attempt(db: aiosqlite.Connection, data: dict) -> int:
     cur = await db.execute(
@@ -1033,6 +1946,208 @@ async def update_onboarding_session(
     await db.commit()
 
 
+# ── dashboard auth ────────────────────────────────────────────────────────────
+
+async def insert_dashboard_access_request(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("dashboard_access_requests", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO dashboard_access_requests
+        (phone, organization_id, location_ids_json, token_hash, status, expires_at, used_at,
+         requested_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            encoded["phone"],
+            encoded.get("organization_id"),
+            encoded.get("location_ids_json", "[]"),
+            encoded["token_hash"],
+            encoded.get("status", "pending"),
+            encoded["expires_at"],
+            encoded.get("used_at"),
+            encoded.get("requested_at", now),
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_dashboard_access_request_by_token_hash(
+    db: aiosqlite.Connection,
+    token_hash: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM dashboard_access_requests WHERE token_hash=?",
+        (token_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("dashboard_access_requests", row) if row else None
+
+
+async def update_dashboard_access_request(
+    db: aiosqlite.Connection,
+    request_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "phone",
+        "organization_id",
+        "location_ids_json",
+        "token_hash",
+        "status",
+        "expires_at",
+        "used_at",
+        "requested_at",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("dashboard_access_requests", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE dashboard_access_requests SET {cols} WHERE id=?",
+        (*encoded.values(), request_id),
+    )
+    await db.commit()
+
+
+async def insert_dashboard_session(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("dashboard_sessions", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO dashboard_sessions
+        (organization_id, location_ids_json, subject_phone, session_token_hash, access_request_id,
+         status, expires_at, last_seen_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            encoded.get("organization_id"),
+            encoded.get("location_ids_json", "[]"),
+            encoded["subject_phone"],
+            encoded["session_token_hash"],
+            encoded.get("access_request_id"),
+            encoded.get("status", "active"),
+            encoded["expires_at"],
+            encoded.get("last_seen_at"),
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_dashboard_session_by_token_hash(
+    db: aiosqlite.Connection,
+    token_hash: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM dashboard_sessions WHERE session_token_hash=?",
+        (token_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("dashboard_sessions", row) if row else None
+
+
+async def update_dashboard_session(
+    db: aiosqlite.Connection,
+    session_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "organization_id",
+        "location_ids_json",
+        "subject_phone",
+        "session_token_hash",
+        "access_request_id",
+        "status",
+        "expires_at",
+        "last_seen_at",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("dashboard_sessions", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE dashboard_sessions SET {cols} WHERE id=?",
+        (*encoded.values(), session_id),
+    )
+    await db.commit()
+
+
+async def insert_setup_access_token(db: aiosqlite.Connection, data: dict) -> int:
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO setup_access_tokens
+        (location_id, token_hash, status, source, expires_at, last_seen_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        """,
+        (
+            data["location_id"],
+            data["token_hash"],
+            data.get("status", "active"),
+            data.get("source"),
+            data["expires_at"],
+            data.get("last_seen_at"),
+            data.get("created_at", now),
+            data.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def get_setup_access_token_by_token_hash(
+    db: aiosqlite.Connection,
+    token_hash: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM setup_access_tokens WHERE token_hash=?",
+        (token_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def update_setup_access_token(
+    db: aiosqlite.Connection,
+    token_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "location_id",
+        "token_hash",
+        "status",
+        "source",
+        "expires_at",
+        "last_seen_at",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    updates["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in updates)
+    await db.execute(
+        f"UPDATE setup_access_tokens SET {cols} WHERE id=?",
+        (*updates.values(), token_id),
+    )
+    await db.commit()
+    
+
 # ── app state + repair helpers ────────────────────────────────────────────────
 
 async def get_app_state(db: aiosqlite.Connection, key: str) -> Optional[str]:
@@ -1379,6 +2494,179 @@ async def find_pending_sync_job_for_scope(
     return dict(row) if row else None
 
 
+# ── ops jobs ──────────────────────────────────────────────────────────────────
+
+async def get_ops_job(db: aiosqlite.Connection, job_id: int) -> Optional[dict]:
+    async with db.execute("SELECT * FROM ops_jobs WHERE id=?", (job_id,)) as cur:
+        row = await cur.fetchone()
+    return _decode("ops_jobs", row) if row else None
+
+
+async def get_ops_job_by_idempotency_key(
+    db: aiosqlite.Connection,
+    idempotency_key: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM ops_jobs WHERE idempotency_key=?",
+        (idempotency_key,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("ops_jobs", row) if row else None
+
+
+async def insert_ops_job(db: aiosqlite.Connection, data: dict) -> int:
+    idempotency_key = data.get("idempotency_key")
+    if idempotency_key:
+        existing = await get_ops_job_by_idempotency_key(db, idempotency_key)
+        if existing is not None:
+            return int(existing["id"])
+
+    encoded = _encode_json("ops_jobs", data)
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        INSERT INTO ops_jobs
+        (job_type, location_id, priority, payload_json, status, attempt_count, max_attempts,
+         next_run_at, started_at, completed_at, last_error, idempotency_key, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            encoded["job_type"],
+            encoded.get("location_id"),
+            encoded.get("priority", 50),
+            encoded.get("payload_json", "{}"),
+            encoded.get("status", "queued"),
+            encoded.get("attempt_count", 0),
+            encoded.get("max_attempts", 3),
+            encoded.get("next_run_at", now),
+            encoded.get("started_at"),
+            encoded.get("completed_at"),
+            encoded.get("last_error"),
+            idempotency_key,
+            encoded.get("created_at", now),
+            encoded.get("updated_at", now),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_ops_job(db: aiosqlite.Connection, job_id: int, data: dict) -> None:
+    allowed = {
+        "status",
+        "priority",
+        "payload_json",
+        "attempt_count",
+        "max_attempts",
+        "next_run_at",
+        "started_at",
+        "completed_at",
+        "last_error",
+        "idempotency_key",
+        "created_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("ops_jobs", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE ops_jobs SET {cols} WHERE id=?",
+        (*encoded.values(), job_id),
+    )
+    await db.commit()
+
+
+async def list_ops_jobs(
+    db: aiosqlite.Connection,
+    *,
+    status: Optional[str] = None,
+    job_type: Optional[str] = None,
+    location_id: Optional[int] = None,
+    limit: int = 100,
+) -> list[dict]:
+    query = "SELECT * FROM ops_jobs"
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if job_type is not None:
+        clauses.append("job_type=?")
+        params.append(job_type)
+    if location_id is not None:
+        clauses.append("location_id=?")
+        params.append(location_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY priority ASC, next_run_at ASC, id ASC LIMIT ?"
+    params.append(limit)
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ops_jobs", row) for row in rows]
+
+
+async def claim_due_ops_jobs(
+    db: aiosqlite.Connection,
+    *,
+    limit: int = 10,
+    now_iso: Optional[str] = None,
+) -> list[dict]:
+    now = now_iso or datetime.utcnow().isoformat()
+    async with db.execute(
+        """
+        SELECT id
+        FROM ops_jobs
+        WHERE status='queued' AND next_run_at<=?
+        ORDER BY priority ASC, next_run_at ASC, id ASC
+        LIMIT ?
+        """,
+        (now, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    job_ids = [int(row["id"]) for row in rows]
+
+    claimed: list[dict] = []
+    for job_id in job_ids:
+        await db.execute(
+            """
+            UPDATE ops_jobs
+            SET status='running', started_at=?, attempt_count=attempt_count+1
+            WHERE id=? AND status='queued'
+            """,
+            (now, job_id),
+        )
+        await db.commit()
+        refreshed = await get_ops_job(db, job_id)
+        if refreshed and refreshed["status"] == "running":
+            claimed.append(refreshed)
+    return claimed
+
+
+async def claim_ops_job(
+    db: aiosqlite.Connection,
+    job_id: int,
+    *,
+    now_iso: Optional[str] = None,
+) -> Optional[dict]:
+    now = now_iso or datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE ops_jobs
+        SET status='running', started_at=?, attempt_count=attempt_count+1
+        WHERE id=? AND status='queued'
+        """,
+        (now, job_id),
+    )
+    await db.commit()
+    job = await get_ops_job(db, job_id)
+    if job and job["status"] == "running":
+        return job
+    return None
+
+
 # ── audit log ─────────────────────────────────────────────────────────────────
 
 async def insert_audit(db: aiosqlite.Connection, data: dict) -> int:
@@ -1396,6 +2684,145 @@ async def insert_audit(db: aiosqlite.Connection, data: dict) -> int:
     )
     await db.commit()
     return cur.lastrowid
+
+
+async def get_webhook_receipt(
+    db: aiosqlite.Connection,
+    *,
+    source: str,
+    external_id: str,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM webhook_receipts WHERE source=? AND external_id=?",
+        (source, external_id),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("webhook_receipts", row) if row else None
+
+
+async def claim_webhook_receipt(
+    db: aiosqlite.Connection,
+    *,
+    source: str,
+    external_id: str,
+    request_payload: Optional[dict] = None,
+) -> dict:
+    now = datetime.utcnow().isoformat()
+    payload = _encode_json(
+        "webhook_receipts",
+        {
+            "source": source,
+            "external_id": external_id,
+            "status": "processing",
+            "duplicate_count": 0,
+            "request_payload": request_payload or {},
+            "last_seen_at": now,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+    try:
+        cur = await db.execute(
+            """INSERT INTO webhook_receipts
+               (source, external_id, status, duplicate_count, request_payload, last_seen_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                payload["source"],
+                payload["external_id"],
+                payload["status"],
+                payload["duplicate_count"],
+                payload["request_payload"],
+                payload["last_seen_at"],
+                payload["created_at"],
+                payload["updated_at"],
+            ),
+        )
+        await db.commit()
+        receipt_id = cur.lastrowid
+        async with db.execute("SELECT * FROM webhook_receipts WHERE id=?", (receipt_id,)) as fetch_cur:
+            row = await fetch_cur.fetchone()
+        return {"status": "claimed", "receipt": _decode("webhook_receipts", row) if row else None}
+    except aiosqlite.IntegrityError:
+        await db.execute(
+            """UPDATE webhook_receipts
+               SET duplicate_count=COALESCE(duplicate_count, 0) + 1,
+                   last_seen_at=?,
+                   updated_at=?
+               WHERE source=? AND external_id=?""",
+            (
+                now,
+                now,
+                source,
+                external_id,
+            ),
+        )
+        await db.commit()
+        existing = await get_webhook_receipt(db, source=source, external_id=external_id)
+        return {"status": "existing", "receipt": existing}
+
+
+async def finalize_webhook_receipt(
+    db: aiosqlite.Connection,
+    receipt_id: int,
+    *,
+    response_body: str,
+    response_status_code: int,
+    status: str = "completed",
+) -> Optional[dict]:
+    updated_at = datetime.utcnow().isoformat()
+    await db.execute(
+        """UPDATE webhook_receipts
+           SET status=?, response_body=?, response_status_code=?, updated_at=?
+           WHERE id=?""",
+        (
+            status,
+            response_body,
+            response_status_code,
+            updated_at,
+            receipt_id,
+        ),
+    )
+    await db.commit()
+    async with db.execute("SELECT * FROM webhook_receipts WHERE id=?", (receipt_id,)) as cur:
+        row = await cur.fetchone()
+    return _decode("webhook_receipts", row) if row else None
+
+
+async def delete_webhook_receipt(
+    db: aiosqlite.Connection,
+    receipt_id: int,
+) -> None:
+    await db.execute("DELETE FROM webhook_receipts WHERE id=?", (receipt_id,))
+    await db.commit()
+
+
+async def list_webhook_receipts(
+    db: aiosqlite.Connection,
+    *,
+    source: Optional[str] = None,
+    status: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict]:
+    query = "SELECT * FROM webhook_receipts"
+    clauses: list[str] = []
+    params: list[Any] = []
+    if source is not None:
+        clauses.append("source=?")
+        params.append(source)
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if since is not None:
+        clauses.append("created_at>=?")
+        params.append(since)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY COALESCE(last_seen_at, created_at) DESC, id DESC LIMIT ?"
+    params.append(limit)
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("webhook_receipts", row) for row in rows]
 
 
 async def list_audit_log(
@@ -1416,6 +2843,37 @@ async def list_audit_log(
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("audit_log", row) for row in rows]
+
+
+async def list_audit_log_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+    *,
+    limit: int = 5000,
+    since: Optional[str] = None,
+) -> list[dict]:
+    query = """
+        SELECT al.*
+        FROM audit_log al
+        LEFT JOIN schedules sc
+            ON al.entity_type='schedule' AND al.entity_id=sc.id
+        LEFT JOIN shifts sh
+            ON al.entity_type='shift' AND al.entity_id=sh.id
+        LEFT JOIN workers w
+            ON al.entity_type='worker' AND al.entity_id=w.id
+        LEFT JOIN locations loc
+            ON al.entity_type='location' AND al.entity_id=loc.id
+        WHERE COALESCE(sc.location_id, sh.location_id, w.location_id, loc.id)=?
+    """
+    params: list[Any] = [location_id]
+    if since is not None:
+        query += " AND al.timestamp>=?"
+        params.append(since)
+    query += " ORDER BY al.id DESC LIMIT ?"
     params.append(limit)
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
@@ -1596,20 +3054,37 @@ async def get_dashboard_summary(db: aiosqlite.Connection, location_id: Optional[
 async def list_filled_shifts_needing_reminder(
     db: aiosqlite.Connection,
     within_minutes: int = 30,
+    location_id: Optional[int] = None,
 ) -> list[dict]:
-    """Return filled shifts whose start time is within `within_minutes` and no reminder sent yet."""
+    """Return schedule-assigned or filled shifts due for worker reminder delivery."""
     from datetime import datetime, timedelta
 
     now = datetime.utcnow()
     cutoff = now + timedelta(minutes=within_minutes)
-    async with db.execute(
-        """SELECT * FROM shifts
-           WHERE status='filled'
-             AND filled_by IS NOT NULL
-             AND reminder_sent_at IS NULL
-             AND datetime(date || ' ' || start_time) BETWEEN ? AND ?""",
-        (now.strftime("%Y-%m-%d %H:%M:%S"), cutoff.strftime("%Y-%m-%d %H:%M:%S")),
-    ) as cur:
+    query = """
+        SELECT
+            s.*,
+            COALESCE(sa.worker_id, s.filled_by) AS reminder_worker_id
+        FROM shifts s
+        LEFT JOIN shift_assignments sa
+          ON sa.shift_id = s.id
+         AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+        WHERE s.reminder_sent_at IS NULL
+          AND datetime(s.date || ' ' || s.start_time) BETWEEN ? AND ?
+          AND (
+                (s.published_state IN ('published', 'amended') AND sa.worker_id IS NOT NULL)
+                OR (s.status='filled' AND s.filled_by IS NOT NULL)
+          )
+    """
+    params: list[object] = [
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    if location_id is not None:
+        query += " AND s.location_id=?"
+        params.append(location_id)
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [_decode("shifts", row) for row in rows]
 
@@ -1622,6 +3097,213 @@ async def mark_reminder_sent(db: aiosqlite.Connection, shift_id: int) -> None:
         (datetime.utcnow().isoformat(), shift_id),
     )
     await db.commit()
+
+
+async def list_shifts_needing_confirmation_request(
+    db: aiosqlite.Connection,
+    within_minutes: int = 120,
+    location_id: Optional[int] = None,
+) -> list[dict]:
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    cutoff = now + timedelta(minutes=within_minutes)
+    query = """
+        SELECT
+            s.*,
+            sa.worker_id AS assigned_worker_id,
+            sa.assignment_status,
+            sa.source AS assignment_source,
+            w.name AS assigned_worker_name,
+            w.phone AS assigned_worker_phone,
+            l.name AS location_name
+        FROM shifts s
+        JOIN shift_assignments sa
+          ON sa.shift_id = s.id
+         AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+         AND sa.worker_id IS NOT NULL
+        JOIN workers w
+          ON w.id = sa.worker_id
+        LEFT JOIN locations l
+          ON l.id = s.location_id
+        LEFT JOIN cascades c
+          ON c.shift_id = s.id
+         AND c.status = 'active'
+        WHERE s.status = 'scheduled'
+          AND s.published_state IN ('published', 'amended')
+          AND s.confirmation_requested_at IS NULL
+          AND s.worker_confirmed_at IS NULL
+          AND w.sms_consent_status = 'granted'
+          AND datetime(s.date || ' ' || s.start_time) BETWEEN ? AND ?
+          AND c.id IS NULL
+    """
+    params: list[object] = [
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    if location_id is not None:
+        query += " AND s.location_id=?"
+        params.append(location_id)
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("shifts", row) for row in rows]
+
+
+async def list_unconfirmed_shifts_for_escalation(
+    db: aiosqlite.Connection,
+    within_minutes: int = 15,
+    location_id: Optional[int] = None,
+) -> list[dict]:
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    cutoff = now + timedelta(minutes=within_minutes)
+    query = """
+        SELECT
+            s.*,
+            sa.worker_id AS assigned_worker_id,
+            sa.assignment_status,
+            sa.source AS assignment_source,
+            w.name AS assigned_worker_name,
+            w.phone AS assigned_worker_phone,
+            l.name AS location_name
+        FROM shifts s
+        JOIN shift_assignments sa
+          ON sa.shift_id = s.id
+         AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+         AND sa.worker_id IS NOT NULL
+        JOIN workers w
+          ON w.id = sa.worker_id
+        LEFT JOIN locations l
+          ON l.id = s.location_id
+        LEFT JOIN cascades c
+          ON c.shift_id = s.id
+         AND c.status = 'active'
+        WHERE s.status = 'scheduled'
+          AND s.published_state IN ('published', 'amended')
+          AND s.confirmation_requested_at IS NOT NULL
+          AND s.worker_confirmed_at IS NULL
+          AND s.worker_declined_at IS NULL
+          AND s.confirmation_escalated_at IS NULL
+          AND w.sms_consent_status = 'granted'
+          AND datetime(s.date || ' ' || s.start_time) BETWEEN ? AND ?
+          AND c.id IS NULL
+    """
+    params: list[object] = [
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    if location_id is not None:
+        query += " AND s.location_id=?"
+        params.append(location_id)
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("shifts", row) for row in rows]
+
+
+async def list_shifts_needing_check_in_request(
+    db: aiosqlite.Connection,
+    within_minutes: int = 15,
+    location_id: Optional[int] = None,
+) -> list[dict]:
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    cutoff = now + timedelta(minutes=within_minutes)
+    query = """
+        SELECT
+            s.*,
+            sa.worker_id AS assigned_worker_id,
+            sa.assignment_status,
+            sa.source AS assignment_source,
+            w.name AS assigned_worker_name,
+            w.phone AS assigned_worker_phone,
+            l.name AS location_name
+        FROM shifts s
+        JOIN shift_assignments sa
+          ON sa.shift_id = s.id
+         AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+         AND sa.worker_id IS NOT NULL
+        JOIN workers w
+          ON w.id = sa.worker_id
+        LEFT JOIN locations l
+          ON l.id = s.location_id
+        LEFT JOIN cascades c
+          ON c.shift_id = s.id
+         AND c.status = 'active'
+        WHERE s.status = 'scheduled'
+          AND s.published_state IN ('published', 'amended')
+          AND s.check_in_requested_at IS NULL
+          AND s.checked_in_at IS NULL
+          AND s.check_in_escalated_at IS NULL
+          AND w.sms_consent_status = 'granted'
+          AND datetime(s.date || ' ' || s.start_time) BETWEEN ? AND ?
+          AND c.id IS NULL
+    """
+    params: list[object] = [
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        cutoff.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    if location_id is not None:
+        query += " AND s.location_id=?"
+        params.append(location_id)
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("shifts", row) for row in rows]
+
+
+async def list_shifts_missing_check_in(
+    db: aiosqlite.Connection,
+    lookback_hours: int = 12,
+    location_id: Optional[int] = None,
+) -> list[dict]:
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    earliest = now - timedelta(hours=lookback_hours)
+    query = """
+        SELECT
+            s.*,
+            sa.worker_id AS assigned_worker_id,
+            sa.assignment_status,
+            sa.source AS assignment_source,
+            w.name AS assigned_worker_name,
+            w.phone AS assigned_worker_phone,
+            l.name AS location_name
+        FROM shifts s
+        JOIN shift_assignments sa
+          ON sa.shift_id = s.id
+         AND sa.assignment_status IN ('assigned', 'claimed', 'confirmed')
+         AND sa.worker_id IS NOT NULL
+        JOIN workers w
+          ON w.id = sa.worker_id
+        LEFT JOIN locations l
+          ON l.id = s.location_id
+        LEFT JOIN cascades c
+          ON c.shift_id = s.id
+         AND c.status = 'active'
+        WHERE s.status = 'scheduled'
+          AND s.published_state IN ('published', 'amended')
+          AND s.check_in_requested_at IS NOT NULL
+          AND s.checked_in_at IS NULL
+          AND s.check_in_escalated_at IS NULL
+          AND datetime(s.date || ' ' || s.start_time) BETWEEN ? AND ?
+          AND c.id IS NULL
+    """
+    params: list[object] = [
+        earliest.strftime("%Y-%m-%d %H:%M:%S"),
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    if location_id is not None:
+        query += " AND s.location_id=?"
+        params.append(location_id)
+    query += " ORDER BY s.date ASC, s.start_time ASC, s.id ASC"
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [_decode("shifts", row) for row in rows]
 
 
 # ── agency partners ───────────────────────────────────────────────────────────

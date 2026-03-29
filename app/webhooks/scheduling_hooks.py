@@ -18,10 +18,15 @@ from app.config import settings
 from app.db.database import get_db
 from app.db import queries
 from app.services import cascade as cascade_svc
+from app.services import rate_limit
 from app.services import shift_manager
 from app.services import sync_engine
 
-router = APIRouter(prefix="/webhooks/scheduling", tags=["scheduling-webhooks"])
+router = APIRouter(
+    prefix="/webhooks/scheduling",
+    tags=["scheduling-webhooks"],
+    dependencies=[Depends(rate_limit.limit_by_request_key("scheduling_webhook", limit=240, window_seconds=60))],
+)
 
 
 def _nested(data: dict[str, Any], *path: str) -> Any:

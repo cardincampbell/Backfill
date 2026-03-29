@@ -8,6 +8,7 @@ import {
   ShiftStatusResponse,
   Worker
 } from "./types";
+import { getAuthHeaders } from "./auth/session";
 
 const API_BASE_URL =
   process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ??
@@ -17,7 +18,9 @@ const API_BASE_URL =
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   try {
+    const authHeaders = await getAuthHeaders();
     const response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { ...authHeaders },
       next: { revalidate: 0 }
     });
 

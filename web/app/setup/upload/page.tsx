@@ -13,16 +13,17 @@ async function submitCsvSetup(formData: FormData) {
   "use server";
 
   const existingLocationId = Number(formData.get("location_id") || 0) || undefined;
+  const setupToken = String(formData.get("setup_token") ?? "").trim() || undefined;
   const locationName = String(formData.get("location_name") ?? "").trim();
   const organizationName = String(formData.get("organization_name") ?? "").trim();
   const vertical = String(formData.get("vertical") ?? "restaurant").trim() || "restaurant";
   const file = formData.get("roster_file");
 
   if (!locationName) {
-    redirect("/setup/upload?status=error&message=Location+name+is+required");
+    redirect(`/setup/upload?status=error&message=Location+name+is+required${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
   if (!(file instanceof File) || !file.name) {
-    redirect("/setup/upload?status=error&message=CSV+file+is+required");
+    redirect(`/setup/upload?status=error&message=CSV+file+is+required${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
 
   try {
@@ -38,30 +39,33 @@ async function submitCsvSetup(formData: FormData) {
       onboarding_info: String(formData.get("onboarding_info") ?? "").trim() || undefined
     };
     const location = existingLocationId
-      ? await updateLocation(existingLocationId, payload)
-      : await createLocation(payload);
+      ? await updateLocation(existingLocationId, payload, { setupToken })
+      : await createLocation(payload, { setupToken });
 
-    const result = await importWorkersCsvForLocation(location.id, file);
+    const result = await importWorkersCsvForLocation(location.id, file, { setupToken });
 
     revalidatePath("/dashboard");
     redirect(
-      `/setup/upload?status=created&location_id=${location.id}&created=${result.created}&skipped=${result.skipped}`
+      `/setup/upload?status=created&location_id=${location.id}&created=${result.created}&skipped=${result.skipped}${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload failed";
-    redirect(`/setup/upload?status=error&message=${encodeURIComponent(message)}`);
+    redirect(`/setup/upload?status=error&message=${encodeURIComponent(message)}${setupToken ? `&setup_token=${encodeURIComponent(setupToken)}` : ""}`);
   }
 }
 
 export default async function SetupUploadPage({ searchParams }: SetupUploadPageProps) {
   const params = searchParams ? await searchParams : {};
+  const setupToken = typeof params.setup_token === "string" ? params.setup_token : "";
   const resumeLocationId = typeof params.location_id === "string" ? Number(params.location_id) || 0 : 0;
   const status = typeof params.status === "string" ? params.status : "";
   const locationId = typeof params.location_id === "string" ? params.location_id : "";
   const created = typeof params.created === "string" ? params.created : "";
   const skipped = typeof params.skipped === "string" ? params.skipped : "";
   const message = typeof params.message === "string" ? decodeURIComponent(params.message) : "";
-  const existingLocation = resumeLocationId ? await getLocation(resumeLocationId) : null;
+  const existingLocation = resumeLocationId
+    ? await getLocation(resumeLocationId, { setupToken: setupToken || undefined })
+    : null;
   const defaultLocationName = typeof params.location_name === "string" ? decodeURIComponent(params.location_name) : existingLocation?.name ?? "";
   const defaultOrganizationName =
     typeof params.organization_name === "string"
@@ -85,27 +89,35 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
     typeof params.onboarding_info === "string"
       ? decodeURIComponent(params.onboarding_info)
       : existingLocation?.onboarding_info ?? "";
+  const linkParams = new URLSearchParams();
+  if (resumeLocationId) {
+    linkParams.set("location_id", String(resumeLocationId));
+  }
+  if (setupToken) {
+    linkParams.set("setup_token", setupToken);
+  }
+  const linkSuffix = linkParams.toString() ? `?${linkParams.toString()}` : "";
 
   return (
     <main className="section">
       <div className="page-head">
-        <span className="eyebrow">CSV Intake</span>
-        <h1>Upload the team list when the data already exists.</h1>
+        <span className="eyebrow">Backfill Shifts</span>
+        <h1>Start Backfill Shifts by uploading the team roster.</h1>
         <p>
-          This path is for locations without a supported writeable scheduler but with a spreadsheet or
-          exported roster ready to go.
+          This is the default setup path for operators without a connected scheduler. Import the team first,
+          then use Backfill as the schedule and coverage layer instead of leaving the location hanging after onboarding.
         </p>
       </div>
 
       <div className="three-up">
-        <SectionCard title="1. Upload roster data">
-          <p>Start with names, phone numbers, roles, and certifications. Keep the import small and operational.</p>
+        <SectionCard title="1. Import the team">
+          <p>Start with names, phone numbers, roles, and certifications so Backfill can route coverage correctly.</p>
         </SectionCard>
-        <SectionCard title="2. Verify site contacts">
-          <p>Confirm the location, primary contact phone, and any onboarding notes the coverage engine needs later.</p>
+        <SectionCard title="2. Set the operating record">
+          <p>Confirm the location, primary contact phone, and the notes Backfill Shifts needs to run coverage cleanly.</p>
         </SectionCard>
-        <SectionCard title="3. Collect worker consent">
-          <p>After import, text workers the Backfill disclosure so outreach consent is logged before live coverage starts.</p>
+        <SectionCard title="3. Go live">
+          <p>Once consent is collected, this location can run schedule notifications, callouts, and open-shift outreach through Backfill.</p>
         </SectionCard>
       </div>
 
@@ -114,8 +126,8 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
           <div className="callout success-callout">
             <h3>Roster imported</h3>
             <p>
-              Location ID <strong>{locationId}</strong> created. Imported <strong>{created}</strong> worker(s),
-              skipped <strong>{skipped}</strong>. Review the results in the{" "}
+              Backfill Shifts is now started for location <strong>{locationId}</strong>. Imported <strong>{created}</strong> worker(s),
+              skipped <strong>{skipped}</strong>. Review the location in the{" "}
               <Link className="text-link" href="/dashboard">dashboard</Link>.
             </p>
           </div>
@@ -134,12 +146,13 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
       <section className="section">
         <div className="section-head">
           <div>
-            <h2>Create the location and import a CSV</h2>
-            <p className="muted">Expected CSV columns: <code>name,phone,role,priority_rank</code>.</p>
+            <h2>Create the location and import the roster</h2>
+            <p className="muted">Current supported columns: <code>name,phone,role,priority_rank</code>.</p>
           </div>
         </div>
         <form className="setup-form" action={submitCsvSetup}>
           {resumeLocationId ? <input name="location_id" type="hidden" value={resumeLocationId} /> : null}
+          {setupToken ? <input name="setup_token" type="hidden" value={setupToken} /> : null}
           <div className="form-grid">
             <label className="field">
               <span>Business name</span>
@@ -177,7 +190,7 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
               <input name="manager_email" placeholder="mike@coastalgrill.com" defaultValue={defaultManagerEmail} />
             </label>
             <label className="field">
-              <span>Roster CSV</span>
+              <span>Backfill Shifts roster CSV</span>
               <input name="roster_file" type="file" accept=".csv" required />
             </label>
             <label className="field field-span-2">
@@ -190,16 +203,16 @@ export default async function SetupUploadPage({ searchParams }: SetupUploadPageP
               />
             </label>
           </div>
-          <button className="button" type="submit">Create location and import roster</button>
+          <button className="button" type="submit">Start Backfill Shifts</button>
         </form>
       </section>
 
       <section className="section">
         <div className="callout">
-          <h3>Fallback path</h3>
+          <h3>Manual fallback</h3>
           <p>
             If the location does not even have a spreadsheet, use{" "}
-            <Link className="text-link" href="/setup/add">manual team entry</Link>.
+            <Link className="text-link" href={`/setup/add${linkSuffix}`}>manual team entry</Link>.
           </p>
         </div>
       </section>
