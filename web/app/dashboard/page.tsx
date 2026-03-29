@@ -67,18 +67,31 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   return (
     <main className="section">
-      <div className="page-head">
-        <span className="eyebrow">Dashboard</span>
-        <h1>Operations</h1>
-      </div>
+      <section className="ops-hero">
+        <div className="ops-hero-copy">
+          <span className="eyebrow">Dashboard</span>
+          <h1>Operations command.</h1>
+          <p className="lede">
+            Live schedule risk, coverage state, and location health in one calm control surface.
+          </p>
+        </div>
+        <div className="ops-hero-actions">
+          <Link className="button" href={locations[0] ? `/dashboard/locations/${locations[0].id}` : "/setup/choose"}>
+            {locations[0] ? "Open first location" : "Start setup"}
+          </Link>
+          <Link className="button-secondary" href="/setup/choose">
+            Add location
+          </Link>
+        </div>
+      </section>
 
-      <div className="stat-grid">
-        <StatCard label="Locations" value={summary.locations} />
-        <StatCard label="Workers" value={summary.workers} />
-        <StatCard label="Vacant shifts" value={summary.shifts_vacant} />
-        <StatCard label="Active cascades" value={summary.cascades_active} />
-        <StatCard label="Broadcasting" value={summary.broadcast_cascades_active} />
-        <StatCard label="On standby" value={summary.workers_on_standby} />
+      <div className="stat-grid stat-grid-wide">
+        <StatCard label="Locations" value={summary.locations} hint="Active operating records" />
+        <StatCard label="Workers" value={summary.workers} hint="Tracked labor pool" />
+        <StatCard label="Vacant shifts" value={summary.shifts_vacant} hint="Unfilled or open coverage needs" />
+        <StatCard label="Active cascades" value={summary.cascades_active} hint="Coverage runs in progress" />
+        <StatCard label="Broadcasting" value={summary.broadcast_cascades_active} hint="Concurrent outreach" />
+        <StatCard label="On standby" value={summary.workers_on_standby} hint="Ready reserve labor" />
       </div>
 
       {/* Coverage engine */}

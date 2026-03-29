@@ -15,27 +15,44 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
-        <div className="shell">
-          <header className="topbar">
+      <body className="site-body">
+        <div className="site-ambient" aria-hidden="true">
+          <div className="ambient-orb ambient-orb-one" />
+          <div className="ambient-orb ambient-orb-two" />
+          <div className="ambient-grid" />
+        </div>
+        <header className="topbar-wrap">
+          <div className="shell topbar">
             <Link className="brand" href="/">
               <span className="brand-mark">B</span>
-              <span>Backfill</span>
+              <span className="brand-wordmark">
+                <strong>Backfill</strong>
+                <small>Shift operations</small>
+              </span>
             </Link>
             <nav className="nav">
               <Link href="/">Home</Link>
               <Link href="/dashboard">Dashboard</Link>
               <Link href="/schedule">Schedules</Link>
               <Link href="/roster">Roster</Link>
-              <Link href="/setup/connect">Setup</Link>
-              <Link href="/join">Join</Link>
+              <Link href="/setup/choose">Setup</Link>
+              <Link href="/login">Access</Link>
             </nav>
-          </header>
-          {children}
-          <footer className="footer">
-            <div>1-800-BACKFILL is the command surface. The website handles structured setup, uploads, and location-level visibility.</div>
-          </footer>
+          </div>
+        </header>
+        <div className="site-main">
+          <div className="shell">{children}</div>
         </div>
+        <footer className="shell footer">
+          <div className="footer-kicker">Backfill shifts</div>
+          <div className="footer-copy">
+            Premium schedule, coverage, and exception handling for high-expectation hourly operators.
+          </div>
+          <div className="footer-meta">
+            <span>1-800-BACKFILL</span>
+            <span>AI schedules the week. Managers approve by text.</span>
+          </div>
+        </footer>
       </body>
     </html>
   );
