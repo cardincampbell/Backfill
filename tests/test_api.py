@@ -135,6 +135,24 @@ def test_internal_backfill_routes_require_internal_key(client, public_client):
     assert public_response.json()["detail"] == "Authentication required"
 
 
+def test_places_autocomplete_and_details_work_without_dashboard_auth(public_client, monkeypatch):
+    monkeypatch.setattr(settings, "google_places_api_key", "")
+
+    autocomplete = public_client.get("/api/places/autocomplete?q=mission")
+    assert autocomplete.status_code == 200
+    autocomplete_payload = autocomplete.json()
+    assert autocomplete_payload["provider"] == "fallback"
+    assert autocomplete_payload["suggestions"]
+
+    place_id = autocomplete_payload["suggestions"][0]["place_id"]
+    details = public_client.get(f"/api/places/details?place_id={place_id}")
+    assert details.status_code == 200
+    details_payload = details.json()
+    assert details_payload["provider"] == "fallback"
+    assert details_payload["place"]["place_id"] == place_id
+    assert details_payload["place"]["name"]
+
+
 def test_dashboard_access_sms_exchange_and_location_scope(client, public_client, monkeypatch):
     sent_messages = []
     monkeypatch.setattr(settings, "backfill_dashboard_auth_required", True)

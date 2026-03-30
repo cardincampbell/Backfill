@@ -30,6 +30,18 @@ type ConversationEntry = {
   response?: WebAiActionResponse;
 };
 
+const DEFAULT_PROMPTS = [
+  "Show me open shifts this week",
+  "What needs my attention right now?",
+  "Can you publish this schedule?",
+];
+
+const SCHEDULE_PROMPTS = [
+  "Open a dishwasher shift on Friday from 4pm to 10pm",
+  "Show me what changed before publish",
+  "Assign this week's open shifts if there are safe options",
+];
+
 export default function AiPromptPanel({
   locationId,
   scheduleId,
@@ -53,9 +65,8 @@ export default function AiPromptPanel({
     addEntry({ role: "assistant", text: response.summary, response });
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  async function runPrompt(rawText: string) {
+    const text = rawText.trim();
     if (!text || loading) return;
 
     addEntry({ role: "user", text });
@@ -83,6 +94,11 @@ export default function AiPromptPanel({
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await runPrompt(input);
   }
 
   async function handleConfirm() {
@@ -145,50 +161,53 @@ export default function AiPromptPanel({
     window.location.href = activeResponse.redirect.url;
   }
 
+  const promptSuggestions = activeTab === "schedule"
+    ? [...DEFAULT_PROMPTS.slice(0, 2), ...SCHEDULE_PROMPTS]
+    : DEFAULT_PROMPTS;
+
   return (
     <div className="settings-card">
-      <div className="settings-card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="settings-card-header ai-panel-header">
         <span>Assistant</span>
         <button
           onClick={() => setShowHistory(!showHistory)}
-          style={{
-            fontSize: "0.65rem",
-            color: "var(--muted)",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            fontWeight: 500,
-          }}
+          className="ai-panel-toggle"
         >
           {showHistory ? "Prompt" : "History"}
         </button>
       </div>
 
-      <div className="settings-card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className="settings-card-body ai-panel-body">
         {showHistory ? (
           <AiActionHistoryFeed key={historyKey} locationId={locationId} />
         ) : (
           <>
+            <div className="ai-panel-prompt-suggestions">
+              {promptSuggestions.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className="ai-panel-suggestion"
+                  disabled={loading}
+                  onClick={() => void runPrompt(prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+
             {/* Conversation thread */}
             {conversation.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
+              <div className="ai-thread">
                 {conversation.map((entry, i) => (
-                  <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div
-                      style={{
-                        fontSize: "0.6rem",
-                        fontWeight: 600,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.04em",
-                        color: entry.role === "user" ? "var(--foreground)" : "var(--muted)",
-                      }}
-                    >
+                  <div key={i} className={`ai-thread-entry ai-thread-entry-${entry.role}`}>
+                    <div className="ai-thread-speaker">
                       {entry.role === "user" ? "You" : "Backfill"}
                     </div>
                     {entry.response ? (
                       <AiResultCard response={entry.response} />
                     ) : (
-                      <div style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>{entry.text}</div>
+                      <div className="ai-thread-text">{entry.text}</div>
                     )}
                   </div>
                 ))}
@@ -217,21 +236,11 @@ export default function AiPromptPanel({
             )}
 
             {activeResponse?.mode === "redirect" && activeResponse.redirect && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                  padding: "14px 16px",
-                  background: "var(--panel)",
-                  borderRadius: "var(--radius)",
-                  border: "1px solid var(--line)",
-                }}
-              >
-                <div style={{ fontSize: "0.8rem", lineHeight: 1.5 }}>
+              <div className="ai-redirect-card">
+                <div className="ai-redirect-summary">
                   {activeResponse.summary}
                 </div>
-                <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+                <div className="ai-redirect-reason">
                   {activeResponse.redirect.reason}
                 </div>
                 <button className="button" onClick={handleRedirect}>
@@ -241,11 +250,11 @@ export default function AiPromptPanel({
             )}
 
             {/* Input */}
-            <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8 }}>
+            <form onSubmit={handleSubmit} className="ai-input-row">
               <input
                 ref={inputRef}
                 type="text"
-                placeholder="Ask Backfill anything..."
+                placeholder="Ask Backfill to publish, explain, create, assign, or fix"
                 className="settings-select"
                 style={{ flex: 1 }}
                 value={input}

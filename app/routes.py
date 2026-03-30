@@ -11,6 +11,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 import aiosqlite
+import httpx
 
 from app.config import settings
 from app.db.database import get_db
@@ -36,6 +37,10 @@ from app.models.ai_actions import (
     InternalAiActionRecentResponse,
     AiWebActionRequest,
 )
+from app.models.places import (
+    PlaceAutocompleteResponse,
+    PlaceDetailsResponse,
+)
 from app.services import (
     ai_actions as ai_actions_svc,
     auth as auth_svc,
@@ -44,6 +49,7 @@ from app.services import (
     backfill_shifts as backfill_shifts_svc,
     notifications as notifications_svc,
     ops_queue,
+    places as places_svc,
     rate_limit,
     roster as roster_svc,
 )
@@ -704,6 +710,69 @@ async def logout_dashboard_session(
 ):
     await auth_svc.revoke_dashboard_session(db, principal)
     return await auth_svc.build_auth_response_payload(db, principal)
+
+
+@router.get(
+    "/places/autocomplete",
+    response_model=PlaceAutocompleteResponse,
+    dependencies=[
+        Depends(
+            rate_limit.limit_by_request_key(
+                "places_autocomplete",
+                limit=60,
+                window_seconds=60,
+                key_func=auth_svc.request_rate_limit_key,
+            )
+        )
+    ],
+)
+async def get_places_autocomplete(
+    q: str = Query(..., min_length=2, max_length=120),
+    session_token: Optional[str] = Query(default=None, max_length=256),
+):
+    try:
+        payload = await places_svc.autocomplete_places(q, session_token=session_token)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail="Places autocomplete failed") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Places autocomplete unavailable") from exc
+    return {
+        "query": q.strip(),
+        "provider": payload["provider"],
+        "suggestions": payload["suggestions"],
+    }
+
+
+@router.get(
+    "/places/details",
+    response_model=PlaceDetailsResponse,
+    dependencies=[
+        Depends(
+            rate_limit.limit_by_request_key(
+                "places_details",
+                limit=60,
+                window_seconds=60,
+                key_func=auth_svc.request_rate_limit_key,
+            )
+        )
+    ],
+)
+async def get_place_details(
+    place_id: str = Query(..., min_length=2, max_length=256),
+    session_token: Optional[str] = Query(default=None, max_length=256),
+):
+    try:
+        place = await places_svc.get_place_details(place_id, session_token=session_token)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail="Place lookup failed") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Place lookup unavailable") from exc
+    if place is None:
+        raise HTTPException(status_code=404, detail="Place not found")
+    return {
+        "provider": place["provider"],
+        "place": place,
+    }
 
 
 @router.post("/ai-actions/web", response_model=AiActionResponse)

@@ -214,7 +214,7 @@ function buildManagerMetrics(
   if (!schedule?.schedule) {
     return [
       {
-        label: "Est. manager hours saved",
+        label: "Manager hours saved",
         value: "0.0h",
         hint: "Starts accruing once Backfill handles live fill work.",
       },
@@ -234,7 +234,7 @@ function buildManagerMetrics(
         hint: "Calculated after the first weekly draft exists.",
       },
       {
-        label: "Needs attention now",
+        label: "Needs attention",
         value: String(managerActions.summary.total),
         hint: "Outstanding approvals and reviews waiting on the manager.",
         tone: managerActions.summary.total > 0 ? "accent" : "default",
@@ -251,7 +251,7 @@ function buildManagerMetrics(
 
   return [
     {
-      label: "Est. manager hours saved",
+      label: "Manager hours saved",
       value: formatEstimatedHours(estimateManagerHoursSaved(schedule.shifts)),
       hint: "Estimated from automated fill coverage and Backfill-led interventions this week.",
       tone: countBackfillWins(schedule.shifts) > 0 ? "success" : "default",
@@ -275,7 +275,7 @@ function buildManagerMetrics(
       tone: fillRate >= 90 ? "success" : fillRate < 70 ? "accent" : "default",
     },
     {
-      label: "Needs attention now",
+      label: "Needs attention",
       value: String(needsAttention),
       hint: "Approvals, attendance reviews, and exception items requiring a manager decision.",
       tone: needsAttention > 0 ? "accent" : "default",
@@ -778,14 +778,14 @@ async function ScheduleTabContent({
 
   if (!schedule || !schedule.schedule) {
     return (
-      <section className="section workspace-shell">
-        <div className="workspace-top">
-          <div className="workspace-context">
-            <span className="workspace-kicker">{organizationLabel} / {locationLabel}</span>
-            <h2>Build the week</h2>
-            <p>Start from a template, import a CSV, or ask Backfill to draft the schedule around this location’s staffing reality.</p>
-          </div>
-          <div className="workspace-top-actions">
+      <section className="section workspace-shell workspace-shell-manager">
+      <div className="workspace-top workspace-top-manager">
+        <div className="workspace-context">
+          <span className="workspace-kicker">{organizationLabel} / {locationLabel}</span>
+          <h2>{locationLabel} schedule</h2>
+          <p>Start from a template, import the roster, or ask Backfill to draft the first workable week for this location.</p>
+        </div>
+        <div className="workspace-top-actions">
             <WeekNav locationId={locationId} weekStartDate={targetWeek} basePath={basePath} />
             <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
               Import CSV
@@ -795,8 +795,8 @@ async function ScheduleTabContent({
 
         <ManagerMetricStrip metrics={metrics} />
 
-        <div className="workspace-layout">
-          <div className="workspace-main">
+        <div className="workspace-layout workspace-layout-manager">
+          <div className="workspace-main workspace-main-manager">
             <div className="workspace-section">
               <div className="workspace-section-headline">
                 <div>
@@ -811,7 +811,7 @@ async function ScheduleTabContent({
               />
             </div>
 
-            <div className="workspace-secondary">
+            <div className="workspace-secondary workspace-secondary-manager">
               <div className="workspace-section">
                 <div className="workspace-section-headline">
                   <div>
@@ -850,7 +850,7 @@ async function ScheduleTabContent({
             </div>
           </div>
 
-          <aside className="workspace-rail">
+          <aside className="workspace-rail workspace-rail-manager">
             <div className="workspace-section workspace-section-sticky">
               <div className="workspace-section-headline">
                 <div>
@@ -884,12 +884,12 @@ async function ScheduleTabContent({
   const exceptionFeed = buildExceptionFeed(locationId, schedule.exceptions);
 
   return (
-    <section className="section workspace-shell">
-      <div className="workspace-top">
+    <section className="section workspace-shell workspace-shell-manager">
+      <div className="workspace-top workspace-top-manager">
         <div className="workspace-context">
           <span className="workspace-kicker">{organizationLabel} / {locationLabel}</span>
-          <h2>Weekly schedule</h2>
-          <p>Who works when, what Backfill is covering, and what still needs a manager decision.</p>
+          <h2>{locationLabel} week board</h2>
+          <p>The schedule is the main operating surface: who works when, what is open, and what still needs a manager decision.</p>
         </div>
         <div className="workspace-top-actions">
           <span className={`${scheduleLifecyclePillClass(schedule.schedule.lifecycle_state)} workspace-state-pill`}>
@@ -908,8 +908,8 @@ async function ScheduleTabContent({
 
       <ManagerMetricStrip metrics={metrics} />
 
-      <div className="workspace-layout">
-        <div className="workspace-main">
+      <div className="workspace-layout workspace-layout-manager">
+        <div className="workspace-main workspace-main-manager">
           <div className="workspace-section workspace-section-schedule">
             <div className="workspace-section-headline workspace-section-headline-wide">
               <div>
@@ -935,8 +935,8 @@ async function ScheduleTabContent({
             />
           </div>
 
-          <div className="workspace-secondary">
-            <div className="workspace-section">
+          <div className="workspace-secondary workspace-secondary-manager">
+            <div className="workspace-section workspace-section-support">
               <div className="workspace-section-headline">
                 <div>
                   <h3>Review before publish</h3>
@@ -946,7 +946,7 @@ async function ScheduleTabContent({
               <ScheduleReviewPanel scheduleId={schedule.schedule.id} />
             </div>
 
-            <div className="workspace-section">
+            <div className="workspace-section workspace-section-support">
               <div className="workspace-section-headline">
                 <div>
                   <h3>Templates and next week</h3>
@@ -964,8 +964,8 @@ async function ScheduleTabContent({
           </div>
         </div>
 
-        <aside className="workspace-rail">
-          <div className="workspace-section workspace-section-sticky">
+        <aside className="workspace-rail workspace-rail-manager">
+          <div className="workspace-section workspace-section-sticky workspace-section-rail workspace-section-rail-ai">
             <div className="workspace-section-headline">
               <div>
                 <h3>Backfill Copilot</h3>
@@ -980,7 +980,7 @@ async function ScheduleTabContent({
             />
           </div>
 
-          <div className="workspace-section">
+          <div className="workspace-section workspace-section-rail">
             <div className="workspace-section-headline">
               <div>
                 <h3>Needs attention</h3>
@@ -991,7 +991,7 @@ async function ScheduleTabContent({
             <ManagerActionsPanel data={actionQueue} />
           </div>
 
-          <div className="workspace-section">
+          <div className="workspace-section workspace-section-rail">
             <div className="workspace-section-headline">
               <div>
                 <h3>Shift exceptions</h3>

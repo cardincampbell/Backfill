@@ -21,6 +21,8 @@ _PUBLIC_API_PATTERNS = (
     re.compile(r"^/api/auth/exchange$"),
     re.compile(r"^/api/onboarding/sessions/[^/]+$"),
     re.compile(r"^/api/onboarding/sessions/[^/]+/complete$"),
+    re.compile(r"^/api/places/autocomplete$"),
+    re.compile(r"^/api/places/details$"),
 )
 
 _INTERNAL_ONLY_PATTERNS = (

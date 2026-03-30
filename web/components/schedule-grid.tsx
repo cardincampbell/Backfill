@@ -67,6 +67,19 @@ function lifecyclePillClass(state: ScheduleLifecycleState): string {
   return map[state] ?? "pill";
 }
 
+function normalizeRole(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function workerSupportsRole(worker: Worker, role: string): boolean {
+  return (worker.roles ?? []).some((item) => normalizeRole(item) === normalizeRole(role));
+}
+
+function workerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
 export function ScheduleGrid({
   shifts,
   exceptions,
@@ -87,6 +100,37 @@ export function ScheduleGrid({
   const roles = [...new Set(shifts.map((s) => s.role))].sort();
   const dates = DAY_LABELS.map((_, i) => dateForDay(weekStartDate, i));
   const isReadOnly = lifecycleState === "archived";
+  const roleSections = roles.map((role) => {
+    const roleShifts = shifts.filter((shift) => shift.role === role);
+    const openShifts = roleShifts.filter((shift) => !shift.assignment?.worker_id);
+    const rosterWorkers = workers.filter((worker) => workerSupportsRole(worker, role));
+    const assignedWorkers = Array.from(
+      new Map(
+        roleShifts
+          .filter((shift) => shift.assignment?.worker_id && shift.assignment?.worker_name)
+          .map((shift) => [
+            Number(shift.assignment?.worker_id),
+            {
+              id: Number(shift.assignment?.worker_id),
+              name: shift.assignment?.worker_name ?? "Assigned worker",
+            },
+          ]),
+      ).values(),
+    );
+    const workerRows = [
+      ...rosterWorkers.map((worker) => ({ id: worker.id, name: worker.name })),
+      ...assignedWorkers.filter((worker) => !rosterWorkers.some((item) => item.id === worker.id)),
+    ].sort((left, right) => left.name.localeCompare(right.name));
+
+    return {
+      role,
+      openShifts,
+      workerRows,
+      scheduledCount: roleShifts.length,
+      openCount: openShifts.length,
+      filledCount: roleShifts.filter((shift) => Boolean(shift.assignment?.worker_id)).length,
+    };
+  });
 
   // Compute which batch actions are available for the selected shifts
   const selectedShiftObjects = shifts.filter((s) => selectedShifts.has(s.id));
@@ -334,53 +378,118 @@ export function ScheduleGrid({
       )}
 
       {/* Grid */}
-      <div className="schedule-grid">
-        <div className="schedule-grid-header" />
-        {DAY_LABELS.map((day, i) => (
-          <div key={day} className="schedule-grid-header">
-            {day}
-            <br />
-            <span style={{ fontSize: "0.65rem", opacity: 0.6, fontWeight: 400, letterSpacing: 0 }}>
-              {dates[i].slice(5)}
-            </span>
-          </div>
-        ))}
-
-        {roles.map((role) => (
-          <div key={`row-${role}`} style={{ display: "contents" }}>
-            <div className="schedule-grid-role">
-              {role}
+      <div className="schedule-board">
+        {roleSections.map((section) => (
+          <section key={section.role} className="schedule-roster-group">
+            <div className="schedule-roster-group-head">
+              <div>
+                <h4>{section.role}</h4>
+                <p>
+                  {section.filledCount} covered · {section.openCount} open · {section.workerRows.length} people in the lane
+                </p>
+              </div>
+              <span className="schedule-roster-group-pill">{section.scheduledCount} shifts</span>
             </div>
-            {dates.map((date) => {
-              const dayShifts = shifts.filter(
-                (s) => s.role === role && s.date === date
-              );
-              return (
-                <div key={`${role}-${date}`} className="schedule-grid-cell">
-                  {dayShifts.map((shift) => (
-                    <ShiftChip
-                      key={shift.id}
-                      shiftId={shift.id}
-                      workerName={shift.assignment?.worker_name ?? null}
-                      workerId={shift.assignment?.worker_id ?? null}
-                      startTime={shift.start_time}
-                      endTime={shift.end_time}
-                      workers={workers}
-                      canDelete={!isReadOnly}
-                      coverageStatus={shift.coverage?.status ?? null}
-                      filledViaBackfill={shift.assignment?.filled_via_backfill ?? false}
-                      confirmationStatus={shift.confirmation?.status ?? null}
-                      attendanceStatus={shift.attendance?.status ?? null}
-                      availableActions={shift.available_actions}
-                      selectable={selectMode}
-                      selected={selectedShifts.has(shift.id)}
-                      onSelect={toggleSelect}
-                    />
-                  ))}
+
+            <div className="schedule-roster-grid">
+              <div className="schedule-roster-head schedule-roster-head-label">Team</div>
+              {DAY_LABELS.map((day, i) => (
+                <div key={`${section.role}-${day}`} className="schedule-roster-head">
+                  {day}
+                  <span>{dates[i].slice(5)}</span>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+
+              <div className="schedule-roster-person schedule-roster-person-open">
+                <div className="schedule-roster-avatar schedule-roster-avatar-open">+</div>
+                <div className="schedule-roster-person-text">
+                  <strong>Open shifts</strong>
+                  <span>
+                    {section.openCount > 0
+                      ? `${section.openCount} shifts still need coverage`
+                      : "No open shifts in this role lane"}
+                  </span>
+                </div>
+              </div>
+              {dates.map((date) => {
+                const dayShifts = section.openShifts.filter((shift) => shift.date === date);
+                return (
+                  <div
+                    key={`${section.role}-open-${date}`}
+                    className={`schedule-roster-cell${dayShifts.length === 0 ? " schedule-roster-cell-empty" : ""}`}
+                  >
+                    {dayShifts.map((shift) => (
+                      <ShiftChip
+                        key={shift.id}
+                        shiftId={shift.id}
+                        workerName={shift.assignment?.worker_name ?? null}
+                        workerId={shift.assignment?.worker_id ?? null}
+                        startTime={shift.start_time}
+                        endTime={shift.end_time}
+                        workers={workers}
+                        canDelete={!isReadOnly}
+                        coverageStatus={shift.coverage?.status ?? null}
+                        filledViaBackfill={shift.assignment?.filled_via_backfill ?? false}
+                        confirmationStatus={shift.confirmation?.status ?? null}
+                        attendanceStatus={shift.attendance?.status ?? null}
+                        availableActions={shift.available_actions}
+                        selectable={selectMode}
+                        selected={selectedShifts.has(shift.id)}
+                        onSelect={toggleSelect}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+
+              {section.workerRows.map((worker) => (
+                <div key={`${section.role}-${worker.id}`} className="schedule-roster-row">
+                  <div className="schedule-roster-person">
+                    <div className="schedule-roster-avatar">{workerInitials(worker.name)}</div>
+                    <div className="schedule-roster-person-text">
+                      <strong>{worker.name}</strong>
+                      <span>{section.role}</span>
+                    </div>
+                  </div>
+                  {dates.map((date) => {
+                    const dayShifts = shifts.filter(
+                      (shift) =>
+                        shift.role === section.role &&
+                        shift.date === date &&
+                        shift.assignment?.worker_id === worker.id,
+                    );
+                    return (
+                      <div
+                        key={`${section.role}-${worker.id}-${date}`}
+                        className={`schedule-roster-cell${dayShifts.length === 0 ? " schedule-roster-cell-empty" : ""}`}
+                      >
+                        {dayShifts.map((shift) => (
+                          <ShiftChip
+                            key={shift.id}
+                            shiftId={shift.id}
+                            workerName={shift.assignment?.worker_name ?? null}
+                            workerId={shift.assignment?.worker_id ?? null}
+                            startTime={shift.start_time}
+                            endTime={shift.end_time}
+                            workers={workers}
+                            canDelete={!isReadOnly}
+                            coverageStatus={shift.coverage?.status ?? null}
+                            filledViaBackfill={shift.assignment?.filled_via_backfill ?? false}
+                            confirmationStatus={shift.confirmation?.status ?? null}
+                            attendanceStatus={shift.attendance?.status ?? null}
+                            availableActions={shift.available_actions}
+                            selectable={selectMode}
+                            selected={selectedShifts.has(shift.id)}
+                            onSelect={toggleSelect}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </section>
         ))}
       </div>
 

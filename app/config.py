@@ -60,6 +60,19 @@ class Settings:
     ).strip().lower() in {"1", "true", "yes", "on"}
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
     openai_base_url: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    google_places_api_key: str = os.environ.get(
+        "GOOGLE_PLACES_API_KEY",
+        os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+    )
+    google_places_region_code: str = os.environ.get(
+        "BACKFILL_GOOGLE_PLACES_REGION_CODE",
+        "US",
+    )
+    google_places_country_codes: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_GOOGLE_PLACES_COUNTRY_CODES", "us").split(",")
+        if value.strip()
+    ]
     backfill_ai_timeout_seconds: float = float(
         os.environ.get("BACKFILL_AI_TIMEOUT_SECONDS", "20")
     )

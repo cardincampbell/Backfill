@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { PlaceAutocomplete } from "@/components/place-autocomplete";
 import { API_BASE_URL, apiFetch } from "@/lib/api/client";
+import type { PlaceSuggestion } from "@/lib/api/places";
 import {
   clearStoredPreviewPhone,
   getStoredPreviewPhone,
@@ -19,6 +21,7 @@ interface FormState {
   role: string;
   locationCount: number;
   locationNames: string[];
+  selectedLocations: Array<PlaceSuggestion | null>;
   staffBand: string;
   scheduler: string;
 }
@@ -61,6 +64,7 @@ export default function OnboardingPage() {
     role: "",
     locationCount: 1,
     locationNames: [""],
+    selectedLocations: [null],
     staffBand: "",
     scheduler: "",
   });
@@ -71,13 +75,21 @@ export default function OnboardingPage() {
   const progress = ((stepIndex + 1) / STEPS.length) * 100;
   const isLast = stepIndex === STEPS.length - 1;
 
+  const namedLocationCount = form.selectedLocations.filter(Boolean).length;
+  const invalidLocationCount = form.locationNames.filter(
+    (name, index) =>
+      name.trim().length > 0 &&
+      (!form.selectedLocations[index] || form.selectedLocations[index]?.label !== name.trim()),
+  ).length;
+
   function canAdvance(): boolean {
     switch (currentStep) {
       case "name": return form.name.trim().length > 0;
       case "business": return form.business.trim().length > 0;
       case "role": return form.role.length > 0;
       case "locations": return form.locationCount >= 1;
-      case "sites": return form.locationNames.some((name) => name.trim().length > 0);
+      case "sites":
+        return namedLocationCount > 0 && invalidLocationCount === 0;
       case "staff": return form.staffBand.length > 0;
       case "scheduler": return form.scheduler.length > 0;
     }
@@ -87,10 +99,12 @@ export default function OnboardingPage() {
     setForm((f) => {
       const normalizedCount = Math.max(1, nextCount);
       const nextNames = f.locationNames.slice(0, Math.max(1, normalizedCount));
+      const nextSelections = f.selectedLocations.slice(0, Math.max(1, normalizedCount));
       return {
         ...f,
         locationCount: normalizedCount,
         locationNames: nextNames.length ? nextNames : [""],
+        selectedLocations: nextSelections.length ? nextSelections : [null],
       };
     });
   }
@@ -98,8 +112,22 @@ export default function OnboardingPage() {
   function updateLocationName(index: number, value: string) {
     setForm((f) => {
       const nextNames = [...f.locationNames];
+      const nextSelections = [...f.selectedLocations];
       nextNames[index] = value;
-      return { ...f, locationNames: nextNames };
+      if (nextSelections[index]?.label !== value.trim()) {
+        nextSelections[index] = null;
+      }
+      return { ...f, locationNames: nextNames, selectedLocations: nextSelections };
+    });
+  }
+
+  function selectLocation(index: number, place: PlaceSuggestion) {
+    setForm((f) => {
+      const nextNames = [...f.locationNames];
+      const nextSelections = [...f.selectedLocations];
+      nextNames[index] = place.label;
+      nextSelections[index] = place;
+      return { ...f, locationNames: nextNames, selectedLocations: nextSelections };
     });
   }
 
@@ -108,7 +136,11 @@ export default function OnboardingPage() {
       if (f.locationNames.length >= f.locationCount) {
         return f;
       }
-      return { ...f, locationNames: [...f.locationNames, ""] };
+      return {
+        ...f,
+        locationNames: [...f.locationNames, ""],
+        selectedLocations: [...f.selectedLocations, null],
+      };
     });
   }
 
@@ -118,7 +150,12 @@ export default function OnboardingPage() {
         return f;
       }
       const nextNames = f.locationNames.filter((_, i) => i !== index);
-      return { ...f, locationNames: nextNames.length ? nextNames : [""] };
+      const nextSelections = f.selectedLocations.filter((_, i) => i !== index);
+      return {
+        ...f,
+        locationNames: nextNames.length ? nextNames : [""],
+        selectedLocations: nextSelections.length ? nextSelections : [null],
+      };
     });
   }
 
@@ -146,9 +183,9 @@ export default function OnboardingPage() {
     try {
       const schedulerValue = SCHEDULER_VALUES[form.scheduler] ?? "backfill_native";
       const previewPhone = getStoredPreviewPhone();
-      const namedLocations = form.locationNames
-        .map((name) => name.trim())
-        .filter(Boolean);
+      const namedLocations = form.selectedLocations.filter(
+        (item): item is PlaceSuggestion => Boolean(item),
+      );
 
       if (namedLocations.length === 0) {
         throw new Error("Add at least one location to continue");
@@ -158,7 +195,8 @@ export default function OnboardingPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: namedLocations[0],
+          name: namedLocations[0].name,
+          address: namedLocations[0].formatted_address ?? undefined,
           organization_name: form.business.trim(),
           manager_name: form.name.trim(),
           manager_phone: previewPhone ?? undefined,
@@ -193,12 +231,13 @@ export default function OnboardingPage() {
 
       if (additionalLocations.length > 0) {
         await Promise.allSettled(
-          additionalLocations.map((locationName) =>
+          additionalLocations.map((locationChoice) =>
             apiFetch(`${API_BASE_URL}/api/locations`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                name: locationName,
+                name: locationChoice.name,
+                address: locationChoice.formatted_address ?? undefined,
                 organization_id: location.organization_id ?? undefined,
                 organization_name: location.organization_id ? undefined : form.business.trim(),
                 manager_name: form.name.trim(),
@@ -271,7 +310,7 @@ export default function OnboardingPage() {
 
           {currentStep === "business" && (
             <>
-              <p className="ob-question">What&rsquo;s your restaurant or business called?</p>
+              <p className="ob-question">What&rsquo;s the name of your business?</p>
               <input
                 className="ob-input"
                 type="text"
@@ -335,19 +374,18 @@ export default function OnboardingPage() {
             <>
               <p className="ob-question">What are your locations called?</p>
               <p className="ob-sub">
-                Add at least one location now. You said you manage {form.locationCount} {form.locationCount === 1 ? "location" : "locations"}.
+                Search and choose each real location so Backfill uses the correct place name and address. You said you manage {form.locationCount} {form.locationCount === 1 ? "location" : "locations"}.
               </p>
               <div className="ob-locations">
                 {form.locationNames.map((locationName, index) => (
                   <div key={index} className="ob-location-row">
-                    <input
-                      className="ob-input"
-                      type="text"
-                      placeholder={index === 0 ? "e.g. Mission District" : `Location ${index + 1}`}
-                      autoFocus={index === 0}
+                    <PlaceAutocomplete
                       value={locationName}
-                      onChange={(e) => updateLocationName(index, e.target.value)}
-                      onKeyDown={handleKey}
+                      selectedPlace={form.selectedLocations[index]}
+                      onInputChange={(value) => updateLocationName(index, value)}
+                      onSelect={(place) => selectLocation(index, place)}
+                      placeholder={index === 0 ? "Search your first location" : `Search location ${index + 1}`}
+                      autoFocus={index === 0}
                     />
                     {form.locationNames.length > 1 ? (
                       <button
@@ -372,9 +410,14 @@ export default function OnboardingPage() {
                   + Add another location
                 </button>
                 <span className="ob-location-count">
-                  {form.locationNames.filter((name) => name.trim().length > 0).length} of {form.locationCount} named
+                  {namedLocationCount} of {form.locationCount} selected
                 </span>
               </div>
+              {invalidLocationCount > 0 && (
+                <p className="ob-sub ob-location-validation">
+                  Select each typed location from the live places dropdown before continuing.
+                </p>
+              )}
             </>
           )}
 
