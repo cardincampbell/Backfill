@@ -31,12 +31,9 @@ export default function RootLayout({
               </span>
             </Link>
             <nav className="nav">
-              <Link href="/">Home</Link>
               <Link href="/dashboard">Dashboard</Link>
-              <Link href="/schedule">Schedules</Link>
-              <Link href="/roster">Roster</Link>
               <Link href="/setup/choose">Setup</Link>
-              <Link href="/login">Access</Link>
+              <Link href="/login">Sign in</Link>
             </nav>
           </div>
         </header>

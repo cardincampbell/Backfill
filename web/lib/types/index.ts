@@ -6,3 +6,4 @@ export * from "./schedule";
 export * from "./template";
 export * from "./publishing";
 export * from "./operations";
+export * from "./ai-actions";

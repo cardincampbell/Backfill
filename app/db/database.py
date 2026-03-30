@@ -476,6 +476,88 @@ async def init_db():
             ON ops_jobs(idempotency_key)
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS ai_action_requests (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel             TEXT NOT NULL,
+                actor_type          TEXT NOT NULL,
+                actor_id            INTEGER,
+                organization_id     INTEGER REFERENCES organizations(id),
+                location_id         INTEGER NOT NULL REFERENCES locations(id),
+                original_text       TEXT NOT NULL,
+                intent_type         TEXT,
+                status              TEXT NOT NULL DEFAULT 'received',
+                risk_class          TEXT,
+                requires_confirmation INTEGER NOT NULL DEFAULT 0,
+                redirect_reason     TEXT,
+                action_plan_json    TEXT NOT NULL DEFAULT '{}',
+                result_summary_json TEXT NOT NULL DEFAULT '{}',
+                error_code          TEXT,
+                error_message       TEXT,
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_action_requests_location
+            ON ai_action_requests(location_id, status, created_at DESC, id DESC)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_action_requests_actor
+            ON ai_action_requests(actor_type, actor_id, created_at DESC, id DESC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ai_action_entities (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                ai_action_request_id  INTEGER NOT NULL REFERENCES ai_action_requests(id),
+                entity_type           TEXT NOT NULL,
+                entity_id             INTEGER,
+                raw_reference         TEXT,
+                normalized_reference  TEXT,
+                confidence_score      REAL,
+                resolution_status     TEXT NOT NULL,
+                candidate_payload_json TEXT NOT NULL DEFAULT '[]',
+                created_at            TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_action_entities_request
+            ON ai_action_entities(ai_action_request_id, id ASC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ai_action_events (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                ai_action_request_id INTEGER NOT NULL REFERENCES ai_action_requests(id),
+                event_type           TEXT NOT NULL,
+                payload_json         TEXT NOT NULL DEFAULT '{}',
+                created_at           TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_action_events_request
+            ON ai_action_events(ai_action_request_id, id ASC)
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS action_sessions (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                ai_action_request_id INTEGER NOT NULL REFERENCES ai_action_requests(id),
+                channel              TEXT NOT NULL,
+                actor_type           TEXT NOT NULL,
+                actor_id             INTEGER,
+                organization_id      INTEGER REFERENCES organizations(id),
+                location_id          INTEGER NOT NULL REFERENCES locations(id),
+                status               TEXT NOT NULL DEFAULT 'active',
+                pending_prompt_type  TEXT,
+                pending_payload_json TEXT NOT NULL DEFAULT '{}',
+                expires_at           TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_action_sessions_request
+            ON action_sessions(ai_action_request_id, status, id DESC)
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS schedules (
                 id                       INTEGER PRIMARY KEY AUTOINCREMENT,
                 location_id              INTEGER NOT NULL REFERENCES locations(id),

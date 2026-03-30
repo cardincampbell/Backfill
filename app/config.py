@@ -39,6 +39,49 @@ class Settings:
     backfill_webhook_url: str = os.environ.get("BACKFILL_WEBHOOK_URL", "")
     backfill_web_base_url: str = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
     backfill_internal_api_key: str = os.environ.get("BACKFILL_INTERNAL_API_KEY", "")
+    backfill_ai_provider: str = os.environ.get("BACKFILL_AI_PROVIDER", "rules")
+    backfill_ai_model: str = os.environ.get("BACKFILL_AI_MODEL", "rules-v1")
+    backfill_ai_openai_channels: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_AI_OPENAI_CHANNELS", "web,voice").split(",")
+        if value.strip()
+    ]
+    backfill_ai_fallback_provider: str = os.environ.get(
+        "BACKFILL_AI_FALLBACK_PROVIDER",
+        "rules",
+    )
+    backfill_ai_fallback_enabled: bool = os.environ.get(
+        "BACKFILL_AI_FALLBACK_ENABLED",
+        "1",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
+    openai_base_url: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    backfill_ai_timeout_seconds: float = float(
+        os.environ.get("BACKFILL_AI_TIMEOUT_SECONDS", "20")
+    )
+    backfill_ai_action_session_ttl_minutes: int = int(
+        os.environ.get("BACKFILL_AI_ACTION_SESSION_TTL_MINUTES", "30")
+    )
+    backfill_ai_disabled_actions: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_AI_DISABLED_ACTIONS", "").split(",")
+        if value.strip()
+    ]
+    backfill_ai_disabled_actions_web: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_AI_DISABLED_ACTIONS_WEB", "").split(",")
+        if value.strip()
+    ]
+    backfill_ai_disabled_actions_sms: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_AI_DISABLED_ACTIONS_SMS", "").split(",")
+        if value.strip()
+    ]
+    backfill_ai_disabled_actions_voice: List[str] = [
+        value.strip().lower()
+        for value in os.environ.get("BACKFILL_AI_DISABLED_ACTIONS_VOICE", "").split(",")
+        if value.strip()
+    ]
     backfill_dashboard_session_ttl_hours: int = int(
         os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "24")
     )

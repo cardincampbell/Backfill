@@ -1,0 +1,256 @@
+BACKFILL LANDING PAGE — CONTENT OUTLINE
+========================================
+For use by coding agent. Match existing site look and feel.
+Primary CTA throughout: Call 1-800-BACKFILL
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — NAV
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Logo: Backfill (wordmark)
+- CTA button (top right): 1-800-BACKFILL
+- Sticky on scroll
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — HERO (Above the fold)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Eyebrow label: AI shift coverage · Always on
+
+Headline:
+From Callout to Covered.
+
+Subheadline:
+Callouts happen. Scrambling doesn't have to. Backfill handles callouts and last-minute shift changes automatically — so you never have to.
+
+Primary CTA button: Call 1-800-BACKFILL
+CTA supporting note: Call us. We'll have you live in 24 hours.
+
+Stats row (4 stats):
+- $20 / per shift filled, flat
+- < 4 min / average fill time
+- 0 / manager hours spent
+- 24/7 / on-call coverage
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — THE PROBLEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Section label: The problem
+
+Headline:
+It's 5:47 AM. Your opener just called out.
+
+Subheadline:
+Here's what that morning looks like without Backfill.
+
+Content: Timestamped timeline (dark background treatment)
+
+5:47 AM — Voicemail. Your opener isn't coming in. Service starts in two hours.
+5:49 AM — You open the group chat. You start texting names. Most are asleep.
+5:58 AM — Three replies. Two can't do it. One wants to negotiate hours.
+6:15 AM — You call someone else. Rings out. You leave a voicemail and wait.
+6:34 AM — Finally. Someone says yes. You've been at this for 47 minutes before your day even started.
+
+Closing callout box:
+"For a 30-location group, this is happening multiple times a week — across every location, every manager, every shift window. That's not a staffing problem. That's a systems problem."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — HOW IT WORKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Section label: How it works
+
+Headline:
+Three steps. Zero manual work.
+
+Subheadline:
+Backfill plugs into your existing workflow. When a shift opens, the engine takes over.
+
+Content: 3-column card layout
+
+Step 01 — Callout Detected / A shift opens
+When an employee calls out, a shift goes unclaimed, or a schedule changes — Backfill knows instantly, via your scheduler integration or directly through its own built-in calling line.
+Badge: Automatic detection
+
+Step 02 — Backfill Calls / Your list gets worked
+Backfill's AI agent calls available employees in priority order — by role, availability, and standing. It explains the shift, fields questions, and waits for a clear yes.
+Badge: Voice AI · Calls go out in seconds
+
+Step 03 — Shift Filled / First yes wins
+The moment someone confirms, the shift is locked. They get a confirmation. You get a notification. Everyone else automatically gets a clear — no awkward follow-up needed.
+Badge: Confirmed · Standby queue activated
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — INTEGRATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Section label: Works with your scheduler
+
+Headline:
+Plug in. Go live in 24 hours.
+
+Subheadline:
+Already using scheduling software? Backfill connects directly so your shifts, roles, and employee data are always in sync.
+
+Integrations (displayed as chips/pills):
+- 7shifts
+- Deputy
+- When I Work
+- Homebase
+
+Supporting note:
+No manual data entry. No duplicate setup. Your employees, roles, and availability already live in your scheduler — we sync with it automatically.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6 — BACKFILL SHIFTS (distinct section, dark treatment)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Tag label: NEW — Backfill Shifts
+
+Headline:
+Don't have scheduling software? Ours thinks for you.
+
+Body:
+Backfill Shifts isn't just a scheduler. It's an AI-native scheduling layer built directly into your Backfill account — one that builds your schedule, learns your operation, and updates itself in plain language.
+
+Tell it what you need. "Add a closing shift Friday, same crew as last week." Done. "Daniela can't do Tuesday — move her to Thursday." Done. No grid-clicking. No manual juggling. Just say what you need and your schedule reflects it.
+
+When a shift opens, the Backfill coverage engine takes over automatically — same as any integrated scheduler, without the third-party subscription.
+
+Note: Included for all Backfill customers. No additional cost.
+
+Features list (right column):
+
+AI schedule generation
+Describe your week, your roles, your team. Backfill Shifts drafts the schedule. You approve, adjust, or just say what's wrong.
+
+Natural language edits
+No forms, no dropdowns. Type or say the change, and the schedule updates. It's as fast as sending a text.
+
+Pattern learning
+The more you use it, the better it knows your operation. Recurring roles, preferred staff, shift windows — it stops asking what you always do.
+
+Real-time coverage board
+Every open shift, every in-progress fill attempt, every confirmation — across all locations — at a glance.
+
+Standby queue management
+Primary fill falls through? Your pre-ranked standby queue activates automatically. No second round of calls from you.
+
+Upgrade anytime
+Grow into a dedicated platform later? Everything ports over. No rebuilding from scratch.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — PRICING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Section label: Pricing
+
+Headline:
+You pay when we deliver.
+
+Subheadline:
+No monthly seat fees. No per-user subscriptions. Backfill charges like labor — when the work gets done.
+
+Pricing card:
+$20 per successfully filled shift
+
+Line items:
+- One-time location setup — Flat fee per site
+- Backfill Shifts included — No extra cost
+- Scheduler integrations — Included
+- Unfilled attempts — $0
+- Monthly commitment — None
+
+Pricing philosophy note (below card):
+"Our take: AI agents aren't software. They're labor. You wouldn't pay a staffing agency a monthly retainer whether they filled your shifts or not — and you shouldn't pay us that way either."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8 — FAQ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Section label: FAQ
+
+Headline:
+Questions operators actually ask.
+
+Subheadline:
+Straight answers. No runaround.
+
+Layout: Accordion (one open at a time)
+
+Q: How does Backfill know who to call?
+A: During setup, you define your team, their roles, and their availability. Backfill uses that data to build a prioritized call list — by role fit, availability, and standing. You control the order. We work it.
+
+Q: What happens if nobody picks up or says yes?
+A: Backfill keeps working the list. If the shift goes unfilled, you're notified immediately so you can step in — but you're never left in the dark mid-attempt. And you don't pay for unfilled shifts.
+
+Q: Do my employees need to download an app?
+A: No. Backfill reaches them the way they already communicate — by phone. No app installs, no new logins, no behavior change required from your team.
+
+Q: What if I already use a scheduling platform?
+A: Backfill integrates directly with 7shifts, Deputy, When I Work, and Homebase. Your existing schedule syncs automatically — no duplicate setup.
+
+Q: What is Backfill Shifts, and do I have to use it?
+A: Backfill Shifts is our built-in AI-native scheduling layer for businesses that don't have a scheduling platform. It's included with your Backfill account at no extra cost. If you already have a scheduler, you don't need it — but it's there if you do.
+
+Q: How does billing work?
+A: You pay $20 per successfully filled shift, plus a one-time location setup fee. If a shift goes unfilled, you're not charged. No monthly fees, no minimums, no surprises.
+
+Q: How long does setup take?
+A: Most customers are live within 24 hours of their first call with us. That's it.
+
+Q: Is Backfill only for restaurants?
+A: Backfill was built with restaurant and hospitality operators in mind — environments where shift coverage is mission-critical and time-sensitive. If that sounds like your operation, we're a fit.
+Section label: Pricing
+
+Headline:
+You pay when we deliver.
+
+Subheadline:
+No monthly seat fees. No per-user subscriptions. Backfill charges like labor — when the work gets done.
+
+Pricing card:
+$20 per successfully filled shift
+
+Line items:
+- One-time location setup — Flat fee per site
+- Backfill Shifts included — No extra cost
+- Scheduler integrations — Included
+- Unfilled attempts — $0
+- Monthly commitment — None
+
+Pricing philosophy note (below card):
+"Our take: AI agents aren't software. They're labor. You wouldn't pay a staffing agency a monthly retainer whether they filled your shifts or not — and you shouldn't pay us that way either."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9 — FINAL CTA (dark/full-width treatment)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Headline:
+Ready to stop making those 6 AM calls?
+
+Subheadline:
+One call to us, and you'll never have to make that call again.
+
+CTA: 1-800-BACKFILL (large, linked to tel:)
+Supporting note: Mon–Fri 8am–6pm PT · Or leave us a message
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10 — FOOTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Logo: Backfill (wordmark)
+- Copyright: © 2026 Backfill Technologies, Inc.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTES FOR CODING AGENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Match existing site fonts, colors, and component styles throughout
+- Phone number links: tel:18002225345
+- Sections 3 and 6 use a dark background treatment to create visual contrast/separation
+- Section 6 (Backfill Shifts) is a two-column layout: headline/body left, features list right
+- All CTAs point to the phone number — no form submissions on this page
+- The $20 stat and < 4 min fill time in the hero should be visually prominent
+- "Backfill Shifts" should feel like a product reveal, not a feature bullet

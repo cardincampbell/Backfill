@@ -6,14 +6,20 @@ import pytest
 
 from app.config import settings
 from app.db.queries import (
+    get_active_cascade_for_shift,
     get_cascade,
     get_onboarding_session_by_source_external_id,
     get_organization_by_name,
+    get_schedule,
     get_shift,
     get_shift_status,
     insert_location,
+    insert_schedule,
     insert_shift,
     insert_worker,
+    list_shifts,
+    get_shift_assignment,
+    upsert_shift_assignment,
 )
 from app.services import cascade as cascade_svc
 from app.services.shift_manager import create_vacancy
@@ -291,6 +297,722 @@ def test_retell_rejects_missing_location_id_for_create_open_shift(client):
     payload = response.json()
     assert payload["detail"]["message"] == "Invalid args for create_open_shift"
     assert payload["detail"]["errors"][0]["type"] == "missing"
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_publish_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Publish Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550130",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    worker_id = await insert_worker(
+        db,
+        {
+            "name": "Sam Cook",
+            "phone": "+13105550131",
+            "roles": ["prep_cook"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "prep_cook",
+            "date": "2026-04-14",
+            "start_time": "08:00:00",
+            "end_time": "16:00:00",
+            "pay_rate": 22.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+            "published_state": "draft",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": worker_id,
+            "assignment_status": "assigned",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550130",
+                "text": "publish next week",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert action_payload["mode"] == "confirmation"
+    assert "publish" in action_payload["summary"].lower()
+    assert action_payload["action_request_id"] > 0
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "published the schedule" in confirmed_payload["summary"].lower()
+
+    schedule = await get_schedule(db, schedule_id)
+    assert schedule is not None
+    assert schedule["lifecycle_state"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_clarify_open_shift_choice(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Clarify Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550132",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    await insert_worker(
+        db,
+        {
+            "name": "Jordan",
+            "phone": "+13105550133",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    first_shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    second_shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-16",
+            "start_time": "15:00:00",
+            "end_time": "23:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": first_shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": second_shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550132",
+                "text": "start coverage for the open shift",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_clarification"
+    assert action_payload["mode"] == "clarification"
+    assert len(action_payload["options"]) == 2
+
+    clarified = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "clarify_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+                "selection": {"shift_id": second_shift_id},
+            },
+        },
+    )
+    assert clarified.status_code == 200
+    clarified_payload = clarified.json()
+    assert clarified_payload["status"] == "awaiting_confirmation"
+    assert "15:00" in clarified_payload["summary"]
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "started coverage" in confirmed_payload["summary"].lower()
+
+    second_cascade = await get_active_cascade_for_shift(db, second_shift_id)
+    first_cascade = await get_active_cascade_for_shift(db, first_shift_id)
+    assert second_cascade is not None
+    assert first_cascade is None
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_create_open_shift_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Create Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550135",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550135",
+                "text": "Create an open dishwasher shift on 2026-04-15 from 11 to 7",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert "create an open dishwasher shift" in action_payload["summary"].lower()
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "created the open dishwasher shift" in confirmed_payload["summary"].lower()
+
+    shifts = await list_shifts(db, schedule_id=schedule_id)
+    target_shift = next(
+        shift
+        for shift in shifts
+        if shift["role"] == "dishwasher" and shift["date"] == "2026-04-15" and shift["start_time"] == "11:00:00"
+    )
+    assignment = await get_shift_assignment(db, int(target_shift["id"]))
+    assert assignment is not None
+    assert assignment["assignment_status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_reopen_closed_open_shift_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Reopen Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550138",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    await insert_worker(
+        db,
+        {
+            "name": "Taylor",
+            "phone": "+13105550139",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "published",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+            "published_state": "published",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "closed",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550138",
+                "text": "Reopen and offer the shift",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert "reopen the closed dishwasher shift" in action_payload["summary"].lower()
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "started offering it" in confirmed_payload["summary"].lower()
+
+    assignment = await get_shift_assignment(db, shift_id)
+    active_cascade = await get_active_cascade_for_shift(db, shift_id)
+    assert assignment is not None
+    assert assignment["assignment_status"] == "open"
+    assert active_cascade is not None
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_assign_shift_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Assign Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550142",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    worker_id = await insert_worker(
+        db,
+        {
+            "name": "Taylor",
+            "phone": "+13105550143",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550142",
+                "text": "Assign Taylor to the dishwasher shift",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+                "worker_id": worker_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert "assign taylor" in action_payload["summary"].lower()
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "assigned taylor" in confirmed_payload["summary"].lower()
+
+    assignment = await get_shift_assignment(db, shift_id)
+    assert assignment is not None
+    assert assignment["worker_id"] == worker_id
+    assert assignment["assignment_status"] == "assigned"
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_edit_shift_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Edit Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550145",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550145",
+                "text": "Move the dishwasher shift to 12 to 8",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert "update the dishwasher shift" in action_payload["summary"].lower()
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "updated the dishwasher shift" in confirmed_payload["summary"].lower()
+
+    updated_shift = await get_shift(db, shift_id)
+    assert updated_shift is not None
+    assert updated_shift["start_time"] == "12:00:00"
+    assert updated_shift["end_time"] == "20:00:00"
+
+
+@pytest.mark.asyncio
+async def test_retell_ai_manager_action_can_delete_shift_after_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "Retell AI Delete Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550147",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    action = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "ai_manager_action",
+            "args": {
+                "phone": "+13105550147",
+                "text": "Delete the dishwasher shift",
+                "location_id": location_id,
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    action_payload = action.json()
+    assert action_payload["status"] == "awaiting_confirmation"
+    assert "delete the dishwasher shift" in action_payload["summary"].lower()
+
+    confirmed = client.post(
+        "/webhooks/retell",
+        json={
+            "event": "function_call",
+            "name": "confirm_ai_action",
+            "args": {
+                "location_id": location_id,
+                "action_request_id": action_payload["action_request_id"],
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "deleted the dishwasher shift" in confirmed_payload["summary"].lower()
+
+    deleted_shift = await get_shift(db, shift_id)
+    assert deleted_shift is None
 
 
 @pytest.mark.asyncio

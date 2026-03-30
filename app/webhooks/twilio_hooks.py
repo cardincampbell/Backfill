@@ -19,6 +19,7 @@ import aiosqlite
 from app.config import settings
 from app.db.database import get_db
 from app.db import queries
+from app.services import ai_actions as ai_actions_svc
 from app.services import backfill_shifts as backfill_shifts_svc
 from app.services import cascade as cascade_svc
 from app.services import consent as consent_svc
@@ -207,6 +208,11 @@ async def _handle_inbound_sms_request(
 
     if body in _MANAGER_SCHEDULE_COMMANDS and manager_context:
         return _twiml(await _handle_manager_schedule_command(db, manager_context, body))
+
+    if manager_context:
+        manager_ai_reply = await _handle_manager_ai_message(db, manager_context, phone, body)
+        if manager_ai_reply:
+            return _twiml(manager_ai_reply)
 
     callout_message = await _handle_worker_callout(db, phone, body, manager_context=manager_context)
     if callout_message:
@@ -1035,6 +1041,152 @@ async def _handle_manager_schedule_command(
         )
 
     return _manager_help_text()
+
+
+async def _handle_manager_ai_message(
+    db: aiosqlite.Connection,
+    manager_context: dict,
+    phone: str,
+    body: str,
+) -> str | None:
+    location = manager_context["location"]
+    location_id = int(location["id"])
+    active_session = await queries.get_latest_active_action_session_for_location(
+        db,
+        location_id=location_id,
+        channel="sms",
+        actor_type="manager",
+    )
+    if active_session is not None:
+        request_id = int(active_session["ai_action_request_id"])
+        prompt_type = str(active_session.get("pending_prompt_type") or "")
+        if prompt_type == "confirmation":
+            if body == "CONFIRM":
+                response = await ai_actions_svc.confirm_action_request_for_location(
+                    db,
+                    location_id=location_id,
+                    action_request_id=request_id,
+                    actor=f"manager_sms:{phone}",
+                )
+                return _render_ai_sms_response(response)
+            if body == "CANCEL":
+                response = await ai_actions_svc.cancel_action_request_for_location(
+                    db,
+                    location_id=location_id,
+                    action_request_id=request_id,
+                )
+                return _render_ai_sms_response(response)
+            return _render_ai_confirmation_reminder(active_session)
+
+        if prompt_type == "clarification":
+            if body == "CANCEL":
+                response = await ai_actions_svc.cancel_action_request_for_location(
+                    db,
+                    location_id=location_id,
+                    action_request_id=request_id,
+                )
+                return _render_ai_sms_response(response)
+            selection = _parse_ai_sms_selection(body)
+            if selection is None:
+                return _render_ai_clarification_reminder(active_session)
+            response = await ai_actions_svc.clarify_action_request_for_location(
+                db,
+                location_id=location_id,
+                action_request_id=request_id,
+                selection=selection,
+                actor=f"manager_sms:{phone}",
+            )
+            return _render_ai_sms_response(response)
+
+    if not _looks_like_manager_ai_message(body):
+        return None
+
+    context: dict[str, str] = {}
+    schedule = manager_context.get("schedule")
+    if schedule:
+        context["schedule_id"] = str(schedule["id"])
+        context["week_start_date"] = str(schedule["week_start_date"])
+    response = await ai_actions_svc.handle_manager_sms_action(
+        db,
+        location=location,
+        phone=phone,
+        text=body,
+        context=context,
+    )
+    return _render_ai_sms_response(response)
+
+
+def _render_ai_confirmation_reminder(session: dict) -> str:
+    payload = dict(session.get("pending_payload_json") or {})
+    prompt = str(payload.get("prompt") or "Reply CONFIRM to continue or CANCEL to stop.")
+    return f"{prompt} Reply CONFIRM to continue or CANCEL to stop."
+
+
+def _render_ai_clarification_reminder(session: dict) -> str:
+    payload = dict(session.get("pending_payload_json") or {})
+    lines = ["I still need one choice before I can do that."]
+    options = list(payload.get("options") or [])[:5]
+    for option in options:
+        lines.append(f"{int(option.get('option_index') or 0)}. {option.get('label')}")
+    lines.append("Reply with the number you want or CANCEL.")
+    return "\n".join(lines)
+
+
+def _parse_ai_sms_selection(body: str) -> dict | None:
+    normalized = _normalize_match_text(body)
+    if normalized.isdigit():
+        return {"option_index": int(normalized)}
+    shift_match = re.search(r"\bSHIFT\s*(\d+)\b", normalized)
+    if shift_match:
+        return {"shift_id": int(shift_match.group(1))}
+    cascade_match = re.search(r"\bCASCADE\s*(\d+)\b", normalized)
+    if cascade_match:
+        return {"cascade_id": int(cascade_match.group(1))}
+    return None
+
+
+def _looks_like_manager_ai_message(body: str) -> bool:
+    normalized = _normalize_match_text(body)
+    return any(
+        keyword in normalized
+        for keyword in (
+            "PUBLISH",
+            "READY",
+            "REVIEW",
+            "SCHEDULE",
+            "SHIFT",
+            "COVERAGE",
+            "OPEN",
+            "UNFILLED",
+            "FILL",
+            "APPROVE",
+            "DECLINE",
+            "EXCEPTION",
+            "ISSUE",
+            "PROBLEM",
+            "STATUS",
+            "ATTENTION",
+        )
+    )
+
+
+def _render_ai_sms_response(response: dict) -> str:
+    summary = str(response.get("summary") or "Done.")
+    mode = str(response.get("mode") or "result")
+    if mode == "confirmation":
+        return f"{summary} Reply CONFIRM to continue or CANCEL to stop."
+    if mode == "clarification":
+        clarification = dict(response.get("clarification") or {})
+        lines = [str(clarification.get("prompt") or summary)]
+        for candidate in list(clarification.get("candidates") or [])[:5]:
+            lines.append(f"{int(candidate.get('option_index') or 0)}. {candidate.get('label')}")
+        lines.append("Reply with the number you want or CANCEL.")
+        return "\n".join(lines)
+    if mode == "redirect":
+        redirect = dict(response.get("redirect") or {})
+        url = str(redirect.get("url") or "").strip()
+        return f"{summary} {url}".strip()
+    return summary
 
 
 def _twiml(message: str) -> Response:

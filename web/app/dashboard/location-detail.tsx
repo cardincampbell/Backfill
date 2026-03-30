@@ -14,6 +14,7 @@ import { RosterPanel } from "@/components/roster-panel";
 import { ManagerActionsPanel } from "@/components/manager-actions-panel";
 import { LocationSettingsPanel } from "@/components/location-settings-panel";
 import { PilotMetricsPanel } from "@/components/pilot-metrics-panel";
+import AiPromptPanel from "@/components/ai-prompt-panel";
 import { ExceptionsFeed } from "@/components/exceptions-feed";
 import { AddEmployeeForm } from "@/components/add-employee-form";
 import { ScheduleActions } from "@/components/schedule-actions";
@@ -555,6 +556,14 @@ async function ScheduleTabContent({ locationId, weekStart }: { locationId: numbe
         scheduleId={schedule.schedule.id}
         workers={workers}
       />
+      <div style={{ marginTop: 24 }}>
+        <AiPromptPanel
+          locationId={locationId}
+          scheduleId={schedule.schedule.id}
+          weekStartDate={schedule.schedule.week_start_date}
+          activeTab="schedule"
+        />
+      </div>
       <ScheduleReviewPanel scheduleId={schedule.schedule.id} />
       <div style={{ marginTop: 24 }}>
         <TemplatePanel
@@ -657,6 +666,9 @@ async function CoverageTabContent({ locationId, weekStart, highlightShiftId }: {
         locationId={locationId}
         highlightShiftId={highlightShiftId}
       />
+      <div style={{ marginTop: 24 }}>
+        <AiPromptPanel locationId={locationId} activeTab="coverage" />
+      </div>
     </section>
   );
 }

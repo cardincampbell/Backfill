@@ -20,7 +20,22 @@ from app.models.organization import Organization, OrganizationCreate
 from app.models.worker import Worker, WorkerCreate
 from app.models.shift import Shift, ShiftCreate
 from app.models.cascade import Cascade
+from app.models.ai_actions import (
+    AiActionClarifyRequest,
+    AiActionDebugResponse,
+    AiActionFeedbackRequest,
+    AiActionFeedbackResponse,
+    AiActionHistoryResponse,
+    AiActiveSessionsResponse,
+    AiCapabilitiesResponse,
+    AiActionResponse,
+    AiRuntimeStatsResponse,
+    InternalAiActionSessionsResponse,
+    InternalAiActionRecentResponse,
+    AiWebActionRequest,
+)
 from app.services import (
+    ai_actions as ai_actions_svc,
     auth as auth_svc,
     shift_manager,
     cascade as cascade_svc,
@@ -687,6 +702,245 @@ async def logout_dashboard_session(
 ):
     await auth_svc.revoke_dashboard_session(db, principal)
     return await auth_svc.build_auth_response_payload(db, principal)
+
+
+@router.post("/ai-actions/web", response_model=AiActionResponse)
+async def post_ai_web_action(
+    body: AiWebActionRequest,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        await auth_svc.ensure_location_access(db, principal, body.location_id)
+        return await ai_actions_svc.handle_web_action(
+            db,
+            principal=principal,
+            location_id=body.location_id,
+            text=body.text,
+            context=body.context,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/ai-actions/{action_request_id}", response_model=AiActionResponse)
+async def get_ai_action_request(
+    action_request_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.get_action_request_detail(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/ai-actions/{action_request_id}/debug", response_model=AiActionDebugResponse)
+async def get_ai_action_request_debug(
+    action_request_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.get_action_request_debug_detail(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ai-actions/{action_request_id}/confirm", response_model=AiActionResponse)
+async def confirm_ai_action_request(
+    action_request_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.confirm_action_request(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 409 if "awaiting confirmation" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ai-actions/{action_request_id}/clarify", response_model=AiActionResponse)
+async def clarify_ai_action_request(
+    action_request_id: int,
+    body: AiActionClarifyRequest,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.clarify_action_request(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+            selection=body.selection,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 409 if "awaiting clarification" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ai-actions/{action_request_id}/cancel", response_model=AiActionResponse)
+async def cancel_ai_action_request(
+    action_request_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.cancel_action_request(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ai-actions/{action_request_id}/retry", response_model=AiActionResponse)
+async def retry_ai_action_request(
+    action_request_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.retry_action_request(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 409 if "still active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/ai-actions/{action_request_id}/feedback", response_model=AiActionFeedbackResponse)
+async def submit_ai_action_feedback(
+    action_request_id: int,
+    body: AiActionFeedbackRequest,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.record_action_feedback(
+            db,
+            principal=principal,
+            action_request_id=action_request_id,
+            feedback=body.model_dump(mode="json"),
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/locations/{location_id}/ai-active-sessions", response_model=AiActiveSessionsResponse)
+async def get_location_ai_active_sessions(
+    location_id: int,
+    include_expired: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.list_location_active_sessions(
+            db,
+            principal=principal,
+            location_id=location_id,
+            include_expired=include_expired,
+            limit=limit,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/locations/{location_id}/ai-action-history", response_model=AiActionHistoryResponse)
+async def get_location_ai_action_history(
+    location_id: int,
+    status: Optional[str] = Query(default=None),
+    channel: Optional[str] = Query(default=None),
+    fallback_only: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.list_location_action_history(
+            db,
+            principal=principal,
+            location_id=location_id,
+            status=status,
+            channel=channel,
+            fallback_only=fallback_only,
+            limit=limit,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/locations/{location_id}/ai-runtime-stats", response_model=AiRuntimeStatsResponse)
+async def get_location_ai_runtime_stats(
+    location_id: int,
+    days: int = Query(default=7, ge=1, le=90),
+    channel: Optional[str] = Query(default=None),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.get_location_runtime_stats(
+            db,
+            principal=principal,
+            location_id=location_id,
+            days=days,
+            channel=channel,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/locations/{location_id}/ai-capabilities", response_model=AiCapabilitiesResponse)
+async def get_location_ai_capabilities(
+    location_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.get_location_ai_capabilities(
+            db,
+            principal=principal,
+            location_id=location_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/organizations", response_model=Organization, status_code=201)
@@ -3220,6 +3474,105 @@ async def process_due_ops_jobs(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     return await ops_queue.process_due_jobs(db, limit=limit)
+
+
+@router.get("/internal/ai-actions/recent", response_model=InternalAiActionRecentResponse)
+async def list_recent_ai_actions_internal(
+    location_id: Optional[int] = Query(default=None),
+    organization_id: Optional[int] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    channel: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    return await ai_actions_svc.list_recent_ai_actions_internal(
+        db,
+        location_id=location_id,
+        organization_id=organization_id,
+        status=status,
+        channel=channel,
+        limit=limit,
+    )
+
+
+@router.get("/internal/ai-actions/sessions", response_model=InternalAiActionSessionsResponse)
+async def list_ai_action_sessions_internal(
+    location_id: Optional[int] = Query(default=None),
+    organization_id: Optional[int] = Query(default=None),
+    status: Optional[str] = Query(default="active"),
+    channel: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    return await ai_actions_svc.list_ai_action_sessions_internal(
+        db,
+        location_id=location_id,
+        organization_id=organization_id,
+        status=status,
+        channel=channel,
+        limit=limit,
+    )
+
+
+@router.post("/internal/ai-actions/expire-stale")
+async def expire_stale_ai_action_sessions(
+    location_id: Optional[int] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    return await ai_actions_svc.expire_stale_action_sessions_internal(
+        db,
+        location_id=location_id,
+        limit=limit,
+    )
+
+
+@router.post("/internal/ai-actions/{action_request_id}/retry", response_model=AiActionResponse)
+async def retry_ai_action_internal(
+    action_request_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.retry_action_request_internal(
+            db,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 409 if "still active" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/internal/ai-actions/{action_request_id}/cancel", response_model=AiActionResponse)
+async def cancel_ai_action_internal(
+    action_request_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.cancel_action_request_internal(
+            db,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/internal/ai-actions/{action_request_id}/expire", response_model=AiActionResponse)
+async def expire_ai_action_internal(
+    action_request_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.expire_action_request_internal(
+            db,
+            action_request_id=action_request_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 409 if "active session" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.get(

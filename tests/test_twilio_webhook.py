@@ -11,6 +11,7 @@ from app.db.queries import (
     get_cascade,
     get_schedule,
     get_schedule_by_location_week,
+    get_shift_assignment,
     get_shift,
     get_worker,
     insert_import_job,
@@ -21,6 +22,7 @@ from app.db.queries import (
     insert_shift,
     insert_worker,
     list_agency_requests,
+    list_shifts,
     upsert_shift_assignment,
 )
 from app.services import cascade as cascade_svc
@@ -530,6 +532,688 @@ async def test_manager_action_queue_and_api_fill_approval_flow(db, client, monke
     assert queue_after.status_code == 200
     assert queue_after.json()["summary"]["pending_actions"] == 0
     assert queue_after.json()["actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_publish_via_ai_confirmation(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Publish SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550124",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    worker_id = await insert_worker(
+        db,
+        {
+            "name": "Sam Cook",
+            "phone": "+13105550125",
+            "roles": ["prep_cook"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "prep_cook",
+            "date": "2026-04-14",
+            "start_time": "08:00:00",
+            "end_time": "16:00:00",
+            "pay_rate": 22.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+            "published_state": "draft",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": worker_id,
+            "assignment_status": "assigned",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550124", "Body": "publish next week"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550124", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    schedule = await get_schedule(db, schedule_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "published the schedule" in confirmed.text.lower()
+    assert schedule["lifecycle_state"] == "published"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_clarify_open_shift_choice(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Clarify SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550126",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    await insert_worker(
+        db,
+        {
+            "name": "Jordan",
+            "phone": "+13105550127",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    first_shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    second_shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-16",
+            "start_time": "15:00:00",
+            "end_time": "23:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": first_shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": second_shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550126", "Body": "start coverage for the open shift"}
+    clarification = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    second_message = {"From": "+13105550126", "Body": "2"}
+    chosen = client.post(
+        "/webhooks/twilio/sms",
+        data=second_message,
+        headers=_signed_sms_headers("test-token", second_message),
+    )
+    confirm_message = {"From": "+13105550126", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    second_cascade = await get_active_cascade_for_shift(db, second_shift_id)
+    first_cascade = await get_active_cascade_for_shift(db, first_shift_id)
+
+    assert clarification.status_code == 200
+    assert "reply with the number you want" in clarification.text.lower()
+    assert "1." in clarification.text
+    assert "2." in clarification.text
+    assert chosen.status_code == 200
+    assert "reply confirm to continue" in chosen.text.lower()
+    assert "15:00" in chosen.text
+    assert confirmed.status_code == 200
+    assert "started coverage for the open dishwasher shift" in confirmed.text.lower()
+    assert second_cascade is not None
+    assert first_cascade is None
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_cancel_open_shift_offer(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Cancel SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550128",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    await insert_worker(
+        db,
+        {
+            "name": "Jordan",
+            "phone": "+13105550129",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+    started = client.post(f"/api/shifts/{shift_id}/coverage/start")
+    assert started.status_code == 200
+
+    first_message = {"From": "+13105550128", "Body": "cancel the open shift offer"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550128", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    active_cascade = await get_active_cascade_for_shift(db, shift_id)
+    assignment = await get_shift_assignment(db, shift_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "cancelled the active offer" in confirmed.text.lower()
+    assert active_cascade is None
+    assert assignment is not None
+    assert assignment["assignment_status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_create_open_shift(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Create SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550134",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+
+    first_message = {
+        "From": "+13105550134",
+        "Body": "Create an open dishwasher shift on 2026-04-15 from 11 to 7",
+    }
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550134", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    shifts = await list_shifts(db, schedule_id=schedule_id)
+    target_shift = next(
+        shift
+        for shift in shifts
+        if shift["role"] == "dishwasher" and shift["date"] == "2026-04-15" and shift["start_time"] == "11:00:00"
+    )
+    assignment = await get_shift_assignment(db, int(target_shift["id"]))
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "created the open dishwasher shift" in confirmed.text.lower()
+    assert assignment is not None
+    assert assignment["assignment_status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_reopen_closed_open_shift(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Reopen SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550136",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    await insert_worker(
+        db,
+        {
+            "name": "Taylor",
+            "phone": "+13105550137",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "published",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+            "published_state": "published",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "closed",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550136", "Body": "Reopen and offer the shift"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550136", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    active_cascade = await get_active_cascade_for_shift(db, shift_id)
+    assignment = await get_shift_assignment(db, shift_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "started offering it" in confirmed.text.lower()
+    assert active_cascade is not None
+    assert assignment is not None
+    assert assignment["assignment_status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_clear_shift_assignment(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Clear SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550140",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    worker_id = await insert_worker(
+        db,
+        {
+            "name": "Taylor",
+            "phone": "+13105550141",
+            "roles": ["dishwasher"],
+            "location_id": location_id,
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": worker_id,
+            "assignment_status": "assigned",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550140", "Body": "Clear the assignment for the dishwasher shift"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550140", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    assignment = await get_shift_assignment(db, shift_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "removed taylor from the dishwasher shift" in confirmed.text.lower()
+    assert assignment is not None
+    assert assignment["worker_id"] is None
+    assert assignment["assignment_status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_edit_shift(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Edit SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550144",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550144", "Body": "Move the dishwasher shift to 12 to 8"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550144", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    updated_shift = await get_shift(db, shift_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "updated the dishwasher shift" in confirmed.text.lower()
+    assert updated_shift is not None
+    assert updated_shift["start_time"] == "12:00:00"
+    assert updated_shift["end_time"] == "20:00:00"
+
+
+@pytest.mark.asyncio
+async def test_manager_natural_language_sms_can_delete_shift(db, client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+    monkeypatch.setattr("app.services.messaging.send_sms", lambda to, body, metadata=None: "SM123")
+    monkeypatch.setattr("app.services.retell.create_phone_call", pytest.fail)
+
+    location_id = await insert_location(
+        db,
+        {
+            "name": "AI Delete SMS Cafe",
+            "manager_name": "Chef Nina",
+            "manager_phone": "+13105550146",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    schedule_id = await insert_schedule(
+        db,
+        {
+            "location_id": location_id,
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "lifecycle_state": "draft",
+            "created_by": "test",
+        },
+    )
+    shift_id = await insert_shift(
+        db,
+        {
+            "location_id": location_id,
+            "schedule_id": schedule_id,
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "status": "scheduled",
+            "source_platform": "backfill_native",
+        },
+    )
+    await upsert_shift_assignment(
+        db,
+        {
+            "shift_id": shift_id,
+            "worker_id": None,
+            "assignment_status": "open",
+            "source": "manual",
+        },
+    )
+
+    first_message = {"From": "+13105550146", "Body": "Delete the dishwasher shift"}
+    preview = client.post(
+        "/webhooks/twilio/sms",
+        data=first_message,
+        headers=_signed_sms_headers("test-token", first_message),
+    )
+    confirm_message = {"From": "+13105550146", "Body": "CONFIRM"}
+    confirmed = client.post(
+        "/webhooks/twilio/sms",
+        data=confirm_message,
+        headers=_signed_sms_headers("test-token", confirm_message),
+    )
+
+    deleted_shift = await get_shift(db, shift_id)
+
+    assert preview.status_code == 200
+    assert "reply confirm to continue" in preview.text.lower()
+    assert confirmed.status_code == 200
+    assert "deleted the dishwasher shift" in confirmed.text.lower()
+    assert deleted_shift is None
 
 
 @pytest.mark.asyncio

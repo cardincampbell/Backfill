@@ -7,3 +7,4 @@ export * from "./schedules";
 export * from "./templates";
 export * from "./publishing";
 export * from "./operations";
+export * from "./ai-actions";

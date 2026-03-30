@@ -29,6 +29,10 @@ _JSON_COLS: dict[str, list[str]] = {
     "dashboard_access_requests": ["location_ids_json"],
     "dashboard_sessions": ["location_ids_json"],
     "ops_jobs": ["payload_json"],
+    "ai_action_requests": ["action_plan_json", "result_summary_json"],
+    "ai_action_entities": ["candidate_payload_json"],
+    "ai_action_events": ["payload_json"],
+    "action_sessions": ["pending_payload_json"],
 }
 
 _BOOL_COLS: dict[str, list[str]] = {
@@ -43,6 +47,7 @@ _BOOL_COLS: dict[str, list[str]] = {
     "schedule_template_shifts": ["spans_midnight"],
     "cascades":    ["manager_approved_tier3"],
     "agency_partners": ["active"],
+    "ai_action_requests": ["requires_confirmation"],
 }
 
 
@@ -2606,6 +2611,388 @@ async def list_ops_jobs(
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [_decode("ops_jobs", row) for row in rows]
+
+
+# ── ai action requests ───────────────────────────────────────────────────────
+
+async def get_ai_action_request(
+    db: aiosqlite.Connection,
+    action_request_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM ai_action_requests WHERE id=?",
+        (action_request_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("ai_action_requests", row) if row else None
+
+
+async def insert_ai_action_request(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("ai_action_requests", data)
+    cur = await db.execute(
+        """INSERT INTO ai_action_requests
+           (channel, actor_type, actor_id, organization_id, location_id, original_text,
+            intent_type, status, risk_class, requires_confirmation, redirect_reason,
+            action_plan_json, result_summary_json, error_code, error_message, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["channel"],
+            encoded["actor_type"],
+            encoded.get("actor_id"),
+            encoded.get("organization_id"),
+            encoded["location_id"],
+            encoded["original_text"],
+            encoded.get("intent_type"),
+            encoded.get("status", "received"),
+            encoded.get("risk_class"),
+            int(bool(encoded.get("requires_confirmation", False))),
+            encoded.get("redirect_reason"),
+            encoded.get("action_plan_json", "{}"),
+            encoded.get("result_summary_json", "{}"),
+            encoded.get("error_code"),
+            encoded.get("error_message"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+            encoded.get("updated_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_ai_action_request(
+    db: aiosqlite.Connection,
+    action_request_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "intent_type",
+        "status",
+        "risk_class",
+        "requires_confirmation",
+        "redirect_reason",
+        "action_plan_json",
+        "result_summary_json",
+        "error_code",
+        "error_message",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("ai_action_requests", updates)
+    if "requires_confirmation" in encoded:
+        encoded["requires_confirmation"] = int(bool(encoded["requires_confirmation"]))
+    if "updated_at" not in encoded:
+        encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE ai_action_requests SET {cols} WHERE id=?",
+        (*encoded.values(), action_request_id),
+    )
+    await db.commit()
+
+
+async def list_ai_action_requests_for_location(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int,
+    status: str | None = None,
+    channel: str | None = None,
+    created_after: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    where_clauses = ["location_id=?"]
+    params: list[Any] = [location_id]
+    if status:
+        where_clauses.append("status=?")
+        params.append(status)
+    if channel:
+        where_clauses.append("channel=?")
+        params.append(channel)
+    if created_after:
+        where_clauses.append("created_at>=?")
+        params.append(created_after)
+    sql = f"""
+        SELECT *
+        FROM ai_action_requests
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    async with db.execute(sql, tuple(params)) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ai_action_requests", row) for row in rows]
+
+
+async def insert_ai_action_entity(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("ai_action_entities", data)
+    cur = await db.execute(
+        """INSERT INTO ai_action_entities
+           (ai_action_request_id, entity_type, entity_id, raw_reference, normalized_reference,
+            confidence_score, resolution_status, candidate_payload_json, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["ai_action_request_id"],
+            encoded["entity_type"],
+            encoded.get("entity_id"),
+            encoded.get("raw_reference"),
+            encoded.get("normalized_reference"),
+            encoded.get("confidence_score"),
+            encoded["resolution_status"],
+            encoded.get("candidate_payload_json", "[]"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_ai_action_entities(
+    db: aiosqlite.Connection,
+    ai_action_request_id: int,
+) -> list[dict]:
+    async with db.execute(
+        "SELECT * FROM ai_action_entities WHERE ai_action_request_id=? ORDER BY id ASC",
+        (ai_action_request_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ai_action_entities", row) for row in rows]
+
+
+async def insert_ai_action_event(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("ai_action_events", data)
+    cur = await db.execute(
+        """INSERT INTO ai_action_events
+           (ai_action_request_id, event_type, payload_json, created_at)
+           VALUES (?,?,?,?)""",
+        (
+            encoded["ai_action_request_id"],
+            encoded["event_type"],
+            encoded.get("payload_json", "{}"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def list_ai_action_events(
+    db: aiosqlite.Connection,
+    ai_action_request_id: int,
+) -> list[dict]:
+    async with db.execute(
+        "SELECT * FROM ai_action_events WHERE ai_action_request_id=? ORDER BY id ASC",
+        (ai_action_request_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ai_action_events", row) for row in rows]
+
+
+async def list_ai_action_events_for_request_ids(
+    db: aiosqlite.Connection,
+    request_ids: list[int],
+    *,
+    event_type: str | None = None,
+) -> list[dict]:
+    normalized_ids = [int(value) for value in request_ids if int(value) > 0]
+    if not normalized_ids:
+        return []
+    placeholders = ",".join("?" for _ in normalized_ids)
+    params: list[Any] = list(normalized_ids)
+    where = [f"ai_action_request_id IN ({placeholders})"]
+    if event_type:
+        where.append("event_type=?")
+        params.append(event_type)
+    sql = f"""
+        SELECT *
+        FROM ai_action_events
+        WHERE {' AND '.join(where)}
+        ORDER BY ai_action_request_id ASC, id ASC
+    """
+    async with db.execute(sql, tuple(params)) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ai_action_events", row) for row in rows]
+
+
+async def list_recent_ai_action_requests(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int | None = None,
+    organization_id: int | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    where_clauses = ["1=1"]
+    params: list[Any] = []
+    if location_id is not None:
+        where_clauses.append("r.location_id=?")
+        params.append(location_id)
+    if organization_id is not None:
+        where_clauses.append("r.organization_id=?")
+        params.append(organization_id)
+    if status:
+        where_clauses.append("r.status=?")
+        params.append(status)
+    if channel:
+        where_clauses.append("r.channel=?")
+        params.append(channel)
+    sql = f"""
+        SELECT r.*, l.name AS location_name
+        FROM ai_action_requests r
+        LEFT JOIN locations l ON l.id = r.location_id
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    async with db.execute(sql, tuple(params)) as cur:
+        rows = await cur.fetchall()
+    return [_decode("ai_action_requests", row) for row in rows]
+
+
+async def get_action_session_by_request_id(
+    db: aiosqlite.Connection,
+    ai_action_request_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM action_sessions
+        WHERE ai_action_request_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (ai_action_request_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("action_sessions", row) if row else None
+
+
+async def get_latest_active_action_session_for_location(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int,
+    channel: str,
+    actor_type: str,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM action_sessions
+        WHERE location_id=?
+          AND channel=?
+          AND actor_type=?
+          AND status='active'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (location_id, channel, actor_type),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("action_sessions", row) if row else None
+
+
+async def insert_action_session(db: aiosqlite.Connection, data: dict) -> int:
+    encoded = _encode_json("action_sessions", data)
+    cur = await db.execute(
+        """INSERT INTO action_sessions
+           (ai_action_request_id, channel, actor_type, actor_id, organization_id, location_id,
+            status, pending_prompt_type, pending_payload_json, expires_at, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            encoded["ai_action_request_id"],
+            encoded["channel"],
+            encoded["actor_type"],
+            encoded.get("actor_id"),
+            encoded.get("organization_id"),
+            encoded["location_id"],
+            encoded.get("status", "active"),
+            encoded.get("pending_prompt_type"),
+            encoded.get("pending_payload_json", "{}"),
+            encoded.get("expires_at"),
+            encoded.get("created_at", datetime.utcnow().isoformat()),
+            encoded.get("updated_at", datetime.utcnow().isoformat()),
+        ),
+    )
+    await db.commit()
+    return cur.lastrowid
+
+
+async def update_action_session(
+    db: aiosqlite.Connection,
+    session_id: int,
+    data: dict,
+) -> None:
+    allowed = {
+        "status",
+        "pending_prompt_type",
+        "pending_payload_json",
+        "expires_at",
+        "updated_at",
+    }
+    updates = {k: v for k, v in data.items() if k in allowed}
+    if not updates:
+        return
+    encoded = _encode_json("action_sessions", updates)
+    if "updated_at" not in encoded:
+        encoded["updated_at"] = datetime.utcnow().isoformat()
+    cols = ", ".join(f"{key}=?" for key in encoded)
+    await db.execute(
+        f"UPDATE action_sessions SET {cols} WHERE id=?",
+        (*encoded.values(), session_id),
+    )
+    await db.commit()
+
+
+async def list_action_sessions(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int | None = None,
+    organization_id: int | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+    expired_before: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    where_clauses = ["1=1"]
+    params: list[Any] = []
+    if location_id is not None:
+        where_clauses.append("s.location_id=?")
+        params.append(location_id)
+    if organization_id is not None:
+        where_clauses.append("s.organization_id=?")
+        params.append(organization_id)
+    if status:
+        where_clauses.append("s.status=?")
+        params.append(status)
+    if channel:
+        where_clauses.append("s.channel=?")
+        params.append(channel)
+    if expired_before:
+        where_clauses.append("s.expires_at IS NOT NULL")
+        where_clauses.append("s.expires_at<=?")
+        params.append(expired_before)
+    sql = f"""
+        SELECT
+            s.*,
+            r.status AS request_status,
+            r.original_text AS request_text,
+            r.action_plan_json AS request_action_plan_json,
+            r.result_summary_json AS request_result_summary_json,
+            l.name AS location_name
+        FROM action_sessions s
+        JOIN ai_action_requests r ON r.id = s.ai_action_request_id
+        LEFT JOIN locations l ON l.id = s.location_id
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY s.updated_at DESC, s.id DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    async with db.execute(sql, tuple(params)) as cur:
+        rows = await cur.fetchall()
+    return [_decode("action_sessions", row) for row in rows]
 
 
 async def claim_due_ops_jobs(

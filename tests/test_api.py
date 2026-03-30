@@ -2,6 +2,11 @@ from datetime import date, datetime, timedelta
 import re
 from urllib.parse import parse_qs, urlparse
 
+import httpx
+from twilio.request_validator import RequestValidator
+
+from app.config import settings
+
 
 def _make_shift_payload(location_id: int, start_delta_hours: int = 12):
     start = datetime.utcnow() + timedelta(hours=start_delta_hours)
@@ -31,6 +36,94 @@ def _create_backfill_shifts_import_job(client, location_id: int, csv_text: str):
     )
     assert uploaded.status_code == 200
     return job, uploaded.json()
+
+
+def _exchange_dashboard_session(public_client, phone: str, sent_messages):
+    requested = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": phone},
+    )
+    assert requested.status_code == 200
+    assert sent_messages
+    token_match = re.search(r"token=([^\s]+)", sent_messages[-1][1])
+    assert token_match is not None
+    access_token = token_match.group(1)
+    exchanged = public_client.post("/api/auth/exchange", json={"token": access_token})
+    assert exchanged.status_code == 200
+    session_token = exchanged.json()["session_token"]
+    return {"Authorization": f"Bearer {session_token}"}
+
+
+def _signed_sms_headers(token: str, params):
+    validator = RequestValidator(token)
+    signature = validator.compute_signature("http://testserver/webhooks/twilio/sms", params)
+    return {"X-Twilio-Signature": signature}
+
+
+def _create_schedule_with_open_shift(client, location_id: int, *, role: str = "dishwasher"):
+    csv_text = "\n".join(
+        [
+            "employee_name,mobile,role,date,start,end",
+            "Maria Lopez,+13105550901,line_cook,2026-04-14,09:00,17:00",
+        ]
+    )
+    job, _ = _create_backfill_shifts_import_job(client, location_id, csv_text)
+    mapped = client.post(
+        f"/api/import-jobs/{job['id']}/mapping",
+        json={
+            "mapping": {
+                "employee_name": "worker_name",
+                "mobile": "phone",
+                "role": "role",
+                "date": "date",
+                "start": "start_time",
+                "end": "end_time",
+            }
+        },
+    )
+    assert mapped.status_code == 200
+    committed = client.post(f"/api/import-jobs/{job['id']}/commit")
+    assert committed.status_code == 200
+    schedule_id = committed.json()["schedule_id"]
+
+    created_shift = client.post(
+        f"/api/schedules/{schedule_id}/shifts",
+        json={
+            "role": role,
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+        },
+    )
+    assert created_shift.status_code == 200
+    return schedule_id, created_shift.json()["shift"]["id"]
+
+
+def _create_schedule_week(client, location_id: int):
+    csv_text = "\n".join(
+        [
+            "employee_name,mobile,role,date,start,end",
+            "Maria Lopez,+13105550921,line_cook,2026-04-14,09:00,17:00",
+        ]
+    )
+    job, _ = _create_backfill_shifts_import_job(client, location_id, csv_text)
+    mapped = client.post(
+        f"/api/import-jobs/{job['id']}/mapping",
+        json={
+            "mapping": {
+                "employee_name": "worker_name",
+                "mobile": "phone",
+                "role": "role",
+                "date": "date",
+                "start": "start_time",
+                "end": "end_time",
+            }
+        },
+    )
+    assert mapped.status_code == 200
+    committed = client.post(f"/api/import-jobs/{job['id']}/commit")
+    assert committed.status_code == 200
+    return committed.json()["schedule_id"]
 
 
 def test_internal_backfill_routes_require_internal_key(client, public_client):
@@ -154,6 +247,1495 @@ def test_dashboard_access_request_is_rate_limited(client, public_client, monkeyp
     )
     assert limited.status_code == 429
     assert limited.json()["detail"] == "Rate limit exceeded"
+
+
+def test_ai_web_action_can_return_schedule_exceptions_and_history(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Action Bistro",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550430",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    csv_text = "\n".join(
+        [
+            "employee_name,mobile,role,date,start,end",
+            "Maria Lopez,+13105550431,line_cook,2026-04-14,09:00,17:00",
+        ]
+    )
+    job, _ = _create_backfill_shifts_import_job(client, location["id"], csv_text)
+    mapped = client.post(
+        f"/api/import-jobs/{job['id']}/mapping",
+        json={
+            "mapping": {
+                "employee_name": "worker_name",
+                "mobile": "phone",
+                "role": "role",
+                "date": "date",
+                "start": "start_time",
+                "end": "end_time",
+            }
+        },
+    )
+    assert mapped.status_code == 200
+    committed = client.post(f"/api/import-jobs/{job['id']}/commit")
+    assert committed.status_code == 200
+    schedule_id = committed.json()["schedule_id"]
+
+    created_shift = client.post(
+        f"/api/schedules/{schedule_id}/shifts",
+        json={
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+        },
+    )
+    assert created_shift.status_code == 200
+
+    headers = _exchange_dashboard_session(public_client, "+13105550430", auth_messages)
+
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Which shifts are unfilled this week?",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-14",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "completed"
+    assert payload["mode"] == "result"
+    assert payload["ui_payload"]["kind"] == "schedule_exceptions"
+    assert payload["ui_payload"]["data"]["summary"]["total_items"] >= 1
+    action_request_id = payload["action_request_id"]
+
+    fetched = public_client.get(f"/api/ai-actions/{action_request_id}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["action_request_id"] == action_request_id
+    assert fetched.json()["summary"] == payload["summary"]
+
+    history = public_client.get(
+        f"/api/locations/{location['id']}/ai-action-history",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    history_payload = history.json()
+    assert history_payload["location_id"] == location["id"]
+    assert history_payload["items"][0]["action_request_id"] == action_request_id
+    assert "unfilled" in history_payload["items"][0]["text"].lower()
+
+
+def test_ai_web_action_records_runtime_fallback_metadata(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    class _FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            raise httpx.ConnectError("upstream model unavailable")
+
+    monkeypatch.setattr(settings, "backfill_ai_provider", "openai")
+    monkeypatch.setattr(settings, "backfill_ai_model", "gpt-4.1-mini")
+    monkeypatch.setattr(settings, "openai_api_key", "test-openai-key")
+    monkeypatch.setattr(settings, "backfill_ai_fallback_enabled", True)
+    monkeypatch.setattr("app.services.ai_runtime.httpx.AsyncClient", _FailingClient)
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Runtime Fallback Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550435",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    headers = _exchange_dashboard_session(public_client, "+13105550435", auth_messages)
+
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Which shifts are unfilled this week?",
+            "context": {
+                "week_start_date": "2026-04-14",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "completed"
+    assert payload["runtime"]["requested_provider"] == "openai"
+    assert payload["runtime"]["provider"] == "rules"
+    assert payload["runtime"]["fallback_used"] is True
+    assert payload["runtime"]["fallback_provider"] == "rules"
+    assert payload["runtime"]["fallback_reason"] == "ConnectError"
+
+    action_request_id = payload["action_request_id"]
+    fetched = public_client.get(f"/api/ai-actions/{action_request_id}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["runtime"]["fallback_used"] is True
+
+    history = public_client.get(
+        f"/api/locations/{location['id']}/ai-action-history",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    assert history.json()["items"][0]["runtime"]["fallback_used"] is True
+
+    filtered_history = public_client.get(
+        f"/api/locations/{location['id']}/ai-action-history?fallback_only=true",
+        headers=headers,
+    )
+    assert filtered_history.status_code == 200
+    assert len(filtered_history.json()["items"]) == 1
+
+    debug = public_client.get(
+        f"/api/ai-actions/{action_request_id}/debug",
+        headers=headers,
+    )
+    assert debug.status_code == 200
+    debug_payload = debug.json()
+    parsed_event = next(event for event in debug_payload["events"] if event["event_type"] == "parsed")
+    assert parsed_event["payload_json"]["runtime"]["fallback_used"] is True
+    assert debug_payload["request"]["result_summary_json"]["runtime"]["fallback_reason"] == "ConnectError"
+
+    stats = public_client.get(
+        f"/api/locations/{location['id']}/ai-runtime-stats?days=7",
+        headers=headers,
+    )
+    assert stats.status_code == 200
+    stats_payload = stats.json()
+    assert stats_payload["summary"]["total_actions"] == 1
+    assert stats_payload["summary"]["fallback_count"] == 1
+    assert stats_payload["provider_counts"]["rules"] == 1
+    assert stats_payload["action_counts"]["get_unfilled_shifts"] == 1
+    assert stats_payload["recent_fallbacks"][0]["runtime"]["fallback_used"] is True
+
+    monkeypatch.setattr(settings, "backfill_ai_openai_channels", ["web"])
+    capabilities = public_client.get(
+        f"/api/locations/{location['id']}/ai-capabilities",
+        headers=headers,
+    )
+    assert capabilities.status_code == 200
+    capabilities_payload = capabilities.json()
+    assert capabilities_payload["provider_policy"]["default_provider"] == "openai"
+    assert capabilities_payload["provider_policy"]["intent_provider_by_channel"]["web"] == "openai"
+    assert capabilities_payload["provider_policy"]["intent_provider_by_channel"]["sms"] == "rules"
+    publish_capability = next(
+        item for item in capabilities_payload["actions"] if item["action_type"] == "publish_schedule"
+    )
+    assert publish_capability["requires_confirmation"] is True
+    assert "web" in publish_capability["channels"]
+
+    feedback = public_client.post(
+        f"/api/ai-actions/{action_request_id}/feedback",
+        headers=headers,
+        json={"helpful": True, "correct": True, "notes": "Fallback still returned the right result."},
+    )
+    assert feedback.status_code == 200
+    feedback_payload = feedback.json()
+    assert feedback_payload["feedback_recorded"] is True
+    assert feedback_payload["feedback"]["helpful"] is True
+
+    stats_after_feedback = public_client.get(
+        f"/api/locations/{location['id']}/ai-runtime-stats?days=7",
+        headers=headers,
+    )
+    assert stats_after_feedback.status_code == 200
+    assert stats_after_feedback.json()["summary"]["total_feedback"] == 1
+    assert stats_after_feedback.json()["summary"]["helpful_count"] == 1
+    assert stats_after_feedback.json()["summary"]["correct_count"] == 1
+
+    recent_internal = client.get("/api/internal/ai-actions/recent")
+    assert recent_internal.status_code == 200
+    recent_items = recent_internal.json()["items"]
+    assert recent_items[0]["action_request_id"] == action_request_id
+    assert recent_items[0]["location_id"] == location["id"]
+    assert recent_items[0]["runtime"]["fallback_used"] is True
+
+
+def test_ai_capabilities_and_policy_can_disable_specific_actions(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+    monkeypatch.setattr(settings, "backfill_ai_disabled_actions_web", ["delete_shift"])
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Disabled Action Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550436",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    headers = _exchange_dashboard_session(public_client, "+13105550436", auth_messages)
+
+    capabilities = public_client.get(
+        f"/api/locations/{location['id']}/ai-capabilities",
+        headers=headers,
+    )
+    assert capabilities.status_code == 200
+    delete_capability = next(
+        item for item in capabilities.json()["actions"] if item["action_type"] == "delete_shift"
+    )
+    assert delete_capability["enabled_by_channel"]["web"] is False
+    assert "web" in delete_capability["disabled_channels"]
+
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "redirected"
+    assert payload["redirect"]["reason"] == "action_disabled"
+
+
+def test_ai_action_expiry_retry_and_session_inspection(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Retry Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550437",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    headers = _exchange_dashboard_session(public_client, "+13105550437", auth_messages)
+
+    active = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert active.status_code == 200
+    active_payload = active.json()
+    assert active_payload["status"] == "awaiting_confirmation"
+
+    sessions = public_client.get(
+        f"/api/locations/{location['id']}/ai-active-sessions",
+        headers=headers,
+    )
+    assert sessions.status_code == 200
+    assert sessions.json()["items"][0]["action_request_id"] == active_payload["action_request_id"]
+    assert sessions.json()["items"][0]["action_type"] == "delete_shift"
+
+    internal_sessions = client.get(f"/api/internal/ai-actions/sessions?location_id={location['id']}")
+    assert internal_sessions.status_code == 200
+    assert internal_sessions.json()["items"][0]["action_request_id"] == active_payload["action_request_id"]
+
+    monkeypatch.setattr(settings, "backfill_ai_action_session_ttl_minutes", -1)
+    expired = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert expired.status_code == 200
+    expired_action_id = expired.json()["action_request_id"]
+
+    expire_run = client.post(f"/api/internal/ai-actions/expire-stale?location_id={location['id']}")
+    assert expire_run.status_code == 200
+    assert expire_run.json()["expired_count"] >= 1
+
+    expired_detail = public_client.get(
+        f"/api/ai-actions/{expired_action_id}",
+        headers=headers,
+    )
+    assert expired_detail.status_code == 200
+    assert expired_detail.json()["status"] == "expired"
+
+    expired_debug = public_client.get(
+        f"/api/ai-actions/{expired_action_id}/debug",
+        headers=headers,
+    )
+    assert expired_debug.status_code == 200
+    assert expired_debug.json()["state_summary"]["retryable"] is True
+
+    monkeypatch.setattr(settings, "backfill_ai_action_session_ttl_minutes", 30)
+    retried = public_client.post(
+        f"/api/ai-actions/{expired_action_id}/retry",
+        headers=headers,
+    )
+    assert retried.status_code == 200
+    retried_payload = retried.json()
+    assert retried_payload["status"] == "awaiting_confirmation"
+    assert retried_payload["action_request_id"] != expired_action_id
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{retried_payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "completed"
+
+
+def test_internal_ai_action_recovery_routes(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Internal Recovery Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550438",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    headers = _exchange_dashboard_session(public_client, "+13105550438", auth_messages)
+
+    first_action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert first_action.status_code == 200
+    first_action_id = first_action.json()["action_request_id"]
+
+    debug = public_client.get(f"/api/ai-actions/{first_action_id}/debug", headers=headers)
+    assert debug.status_code == 200
+    recovery_actions = debug.json()["recovery_actions"]
+    assert recovery_actions["internal_retry_route"] == f"/api/internal/ai-actions/{first_action_id}/retry"
+    assert recovery_actions["internal_cancel_route"] == f"/api/internal/ai-actions/{first_action_id}/cancel"
+    assert recovery_actions["internal_expire_route"] == f"/api/internal/ai-actions/{first_action_id}/expire"
+
+    cancelled = client.post(f"/api/internal/ai-actions/{first_action_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    cancelled_detail = public_client.get(f"/api/ai-actions/{first_action_id}", headers=headers)
+    assert cancelled_detail.status_code == 200
+    assert cancelled_detail.json()["status"] == "cancelled"
+
+    second_action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert second_action.status_code == 200
+    second_action_id = second_action.json()["action_request_id"]
+
+    expired = client.post(f"/api/internal/ai-actions/{second_action_id}/expire")
+    assert expired.status_code == 200
+    assert expired.json()["status"] == "expired"
+
+    retried = client.post(f"/api/internal/ai-actions/{second_action_id}/retry")
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "awaiting_confirmation"
+    assert retried.json()["action_request_id"] != second_action_id
+
+
+def test_ai_web_publish_action_requires_confirmation_and_can_be_confirmed(client, public_client, monkeypatch):
+    auth_messages = []
+    outbound_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+    monkeypatch.setattr(
+        "app.services.notifications.send_sms",
+        lambda to, body: outbound_messages.append((to, body)) or "SM-NOTIFY",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Publish Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550440",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    csv_text = "\n".join(
+        [
+            "employee_name,mobile,role,date,start,end",
+            "Sam Cook,+13105550441,prep_cook,2026-04-14,08:00,16:00",
+        ]
+    )
+    job, _ = _create_backfill_shifts_import_job(client, location["id"], csv_text)
+    mapped = client.post(
+        f"/api/import-jobs/{job['id']}/mapping",
+        json={
+            "mapping": {
+                "employee_name": "worker_name",
+                "mobile": "phone",
+                "role": "role",
+                "date": "date",
+                "start": "start_time",
+                "end": "end_time",
+            }
+        },
+    )
+    assert mapped.status_code == 200
+    committed = client.post(f"/api/import-jobs/{job['id']}/commit")
+    assert committed.status_code == 200
+    schedule_id = committed.json()["schedule_id"]
+
+    headers = _exchange_dashboard_session(public_client, "+13105550440", auth_messages)
+
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Publish next week",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-14",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert payload["mode"] == "confirmation"
+    assert payload["requires_confirmation"] is True
+    assert payload["ui_payload"]["kind"] == "publish_preview"
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "Published the schedule." in confirmed_payload["summary"]
+
+    review = client.get(f"/api/schedules/{schedule_id}/review")
+    assert review.status_code == 200
+    assert review.json()["schedule"]["lifecycle_state"] == "published"
+
+    stored = public_client.get(f"/api/ai-actions/{payload['action_request_id']}", headers=headers)
+    assert stored.status_code == 200
+    assert stored.json()["status"] == "completed"
+
+
+def test_ai_web_action_can_approve_pending_fill_after_confirmation(client, public_client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Fill Approval Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550450",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+            "coverage_requires_manager_approval": True,
+        },
+    ).json()
+
+    schedule_id, open_shift_id = _create_schedule_with_open_shift(client, location["id"])
+    created_worker = client.post(
+        "/api/workers",
+        json={
+            "name": "James",
+            "phone": "+13105550451",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    assert created_worker.status_code == 201
+
+    started = client.post(f"/api/shifts/{open_shift_id}/coverage/start")
+    assert started.status_code == 200
+
+    worker_yes = {"From": "+13105550451", "Body": "YES"}
+    worker_response = client.post(
+        "/webhooks/twilio/sms",
+        data=worker_yes,
+        headers=_signed_sms_headers("test-token", worker_yes),
+    )
+    assert worker_response.status_code == 200
+    assert "manager for approval" in worker_response.text.lower()
+
+    headers = _exchange_dashboard_session(public_client, "+13105550450", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Approve James for the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "shift_id": open_shift_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert payload["mode"] == "confirmation"
+    assert "approve james" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "approved james" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == open_shift_id)
+    assert target_shift["assignment"]["worker_name"] == "James"
+    assert target_shift["assignment"]["assignment_status"] == "confirmed"
+
+
+def test_ai_web_action_can_decline_pending_fill_after_confirmation(client, public_client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_auth_token", "test-token")
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+    monkeypatch.setattr("app.services.notifications.send_sms", lambda to, body: "SM-NOTIFY")
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Fill Decline Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550460",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+            "coverage_requires_manager_approval": True,
+        },
+    ).json()
+
+    schedule_id, open_shift_id = _create_schedule_with_open_shift(client, location["id"])
+    created_worker = client.post(
+        "/api/workers",
+        json={
+            "name": "Drew",
+            "phone": "+13105550461",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    assert created_worker.status_code == 201
+
+    started = client.post(f"/api/shifts/{open_shift_id}/coverage/start")
+    assert started.status_code == 200
+
+    worker_yes = {"From": "+13105550461", "Body": "YES"}
+    worker_response = client.post(
+        "/webhooks/twilio/sms",
+        data=worker_yes,
+        headers=_signed_sms_headers("test-token", worker_yes),
+    )
+    assert worker_response.status_code == 200
+    assert "manager for approval" in worker_response.text.lower()
+
+    headers = _exchange_dashboard_session(public_client, "+13105550460", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Decline Drew and keep looking",
+            "context": {
+                "schedule_id": schedule_id,
+                "shift_id": open_shift_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "decline drew" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "keep looking" in confirmed_payload["summary"].lower()
+
+    coverage = client.get(f"/api/locations/{location['id']}/coverage?week_start=2026-04-13")
+    assert coverage.status_code == 200
+    target_shift = next(item for item in coverage.json()["at_risk_shifts"] if item["shift_id"] == open_shift_id)
+    assert target_shift["coverage_status"] != "awaiting_manager_approval"
+    assert target_shift["claimed_by_worker_id"] is None
+
+
+def test_ai_web_action_can_start_open_shift_coverage_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Open Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550470",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    schedule_id, open_shift_id = _create_schedule_with_open_shift(client, location["id"])
+    created_worker = client.post(
+        "/api/workers",
+        json={
+            "name": "Taylor",
+            "phone": "+13105550471",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    assert created_worker.status_code == 201
+
+    headers = _exchange_dashboard_session(public_client, "+13105550470", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Start coverage for the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert payload["mode"] == "confirmation"
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "started coverage" in confirmed_payload["summary"].lower()
+
+    coverage = client.get(f"/api/locations/{location['id']}/coverage?week_start=2026-04-13")
+    assert coverage.status_code == 200
+    target_shift = next(item for item in coverage.json()["at_risk_shifts"] if item["shift_id"] == open_shift_id)
+    assert target_shift["cascade_id"] is not None
+    assert target_shift["coverage_status"] != "unassigned"
+
+
+def test_ai_web_action_can_clarify_which_open_shift_to_start(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Clarification Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550480",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    schedule_id, first_shift_id = _create_schedule_with_open_shift(client, location["id"])
+    second_shift = client.post(
+        f"/api/schedules/{schedule_id}/shifts",
+        json={
+            "role": "dishwasher",
+            "date": "2026-04-16",
+            "start_time": "15:00:00",
+            "end_time": "23:00:00",
+        },
+    )
+    assert second_shift.status_code == 200
+    second_shift_id = second_shift.json()["shift"]["id"]
+    created_worker = client.post(
+        "/api/workers",
+        json={
+            "name": "Jordan",
+            "phone": "+13105550481",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    assert created_worker.status_code == 201
+
+    headers = _exchange_dashboard_session(public_client, "+13105550480", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Start coverage for the open shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_clarification"
+    assert payload["mode"] == "clarification"
+    assert len(payload["clarification"]["candidates"]) == 2
+
+    clarified = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/clarify",
+        headers=headers,
+        json={"selection": {"shift_id": second_shift_id}},
+    )
+    assert clarified.status_code == 200
+    clarified_payload = clarified.json()
+    assert clarified_payload["status"] == "awaiting_confirmation"
+    assert "15:00" in clarified_payload["summary"]
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "completed"
+
+    coverage = client.get(f"/api/locations/{location['id']}/coverage?week_start=2026-04-13")
+    assert coverage.status_code == 200
+    coverage_items = {item["shift_id"]: item for item in coverage.json()["at_risk_shifts"]}
+    assert coverage_items[second_shift_id]["cascade_id"] is not None
+    assert coverage_items[second_shift_id]["coverage_status"] != "unassigned"
+    assert coverage_items[first_shift_id]["cascade_id"] is None
+
+
+def test_ai_web_action_can_cancel_open_shift_offer_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Cancel Offer Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550482",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    client.post(
+        "/api/workers",
+        json={
+            "name": "Jordan",
+            "phone": "+13105550483",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    started = client.post(f"/api/shifts/{shift_id}/coverage/start")
+    assert started.status_code == 200
+
+    headers = _exchange_dashboard_session(public_client, "+13105550482", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Cancel the open shift offer",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "cancel the active offer" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "cancelled the active offer" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["coverage"]["status"] == "none"
+    assert target_shift["available_actions"] == ["start_coverage", "close_shift"]
+
+
+def test_ai_web_action_can_close_open_shift_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Close Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550484",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    headers = _exchange_dashboard_session(public_client, "+13105550484", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Close the open shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "close the open dishwasher shift" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "closed the open dishwasher shift" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["assignment"]["assignment_status"] == "closed"
+    assert target_shift["coverage"]["status"] == "closed"
+    assert target_shift["available_actions"] == ["reopen_shift", "reopen_and_offer"]
+
+
+def test_ai_web_action_can_create_open_shift_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Create Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550485",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id = _create_schedule_week(client, location["id"])
+
+    headers = _exchange_dashboard_session(public_client, "+13105550485", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Create an open dishwasher shift on 2026-04-15 from 11 to 7",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "create an open dishwasher shift" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "created the open dishwasher shift" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(
+        shift
+        for shift in current.json()["shifts"]
+        if shift["role"] == "dishwasher" and shift["date"] == "2026-04-15" and shift["start_time"] == "11:00:00"
+    )
+    assert target_shift["assignment"]["worker_id"] is None
+    assert target_shift["assignment"]["assignment_status"] == "open"
+    assert target_shift["available_actions"] == ["start_coverage", "close_shift"]
+
+
+def test_ai_web_action_can_create_and_offer_open_shift_when_context_requests_it(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Create Offer Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550486",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    client.post(
+        "/api/workers",
+        json={
+            "name": "Taylor",
+            "phone": "+13105550487",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id = _create_schedule_week(client, location["id"])
+    published = client.post(f"/api/schedules/{schedule_id}/publish")
+    assert published.status_code == 200
+
+    headers = _exchange_dashboard_session(public_client, "+13105550486", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Create an open dishwasher shift on 2026-04-16 from 15 to 23",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "start_open_shift_offer": True,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "started offering it" in confirmed_payload["summary"].lower()
+
+    coverage = client.get(f"/api/locations/{location['id']}/coverage?week_start=2026-04-13")
+    assert coverage.status_code == 200
+    target_shift = next(
+        item
+        for item in coverage.json()["at_risk_shifts"]
+        if item["role"] == "dishwasher" and item["date"] == "2026-04-16" and item["start_time"] == "15:00:00"
+    )
+    assert target_shift["cascade_id"] is not None
+    assert target_shift["coverage_status"] != "unassigned"
+
+
+def test_ai_web_action_can_reopen_and_offer_closed_open_shift(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Reopen Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550488",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    client.post(
+        "/api/workers",
+        json={
+            "name": "Taylor",
+            "phone": "+13105550489",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    closed = client.post(f"/api/shifts/{shift_id}/open-shift/close")
+    assert closed.status_code == 200
+
+    headers = _exchange_dashboard_session(public_client, "+13105550488", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Reopen and offer the shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "reopen the closed dishwasher shift" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "started offering it" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["assignment"]["assignment_status"] == "open"
+    assert target_shift["coverage"]["status"] == "active"
+    assert target_shift["available_actions"] == ["cancel_offer", "close_shift"]
+
+
+def test_ai_web_action_can_assign_shift_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Assign Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550490",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    client.post(
+        "/api/workers",
+        json={
+            "name": "Taylor",
+            "phone": "+13105550491",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+
+    headers = _exchange_dashboard_session(public_client, "+13105550490", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Assign Taylor to the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "assign taylor" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "assigned taylor" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["assignment"]["worker_name"] == "Taylor"
+    assert target_shift["assignment"]["assignment_status"] == "assigned"
+
+
+def test_ai_web_action_can_clarify_which_worker_to_assign(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Assign Clarify Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550492",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    first_worker = client.post(
+        "/api/workers",
+        json={
+            "name": "Taylor",
+            "phone": "+13105550493",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    ).json()
+    client.post(
+        "/api/workers",
+        json={
+            "name": "Jordan",
+            "phone": "+13105550494",
+            "roles": ["dishwasher"],
+            "location_id": location["id"],
+            "sms_consent_status": "granted",
+            "voice_consent_status": "granted",
+        },
+    )
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+
+    headers = _exchange_dashboard_session(public_client, "+13105550492", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Assign the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_clarification"
+    assert len(payload["clarification"]["candidates"]) == 2
+
+    clarified = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/clarify",
+        headers=headers,
+        json={"selection": {"worker_id": first_worker["id"]}},
+    )
+    assert clarified.status_code == 200
+    clarified_payload = clarified.json()
+    assert clarified_payload["status"] == "awaiting_confirmation"
+    assert "taylor" in clarified_payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "completed"
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["assignment"]["worker_name"] == "Taylor"
+    assert target_shift["assignment"]["assignment_status"] == "assigned"
+
+
+def test_ai_web_action_can_edit_shift_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Edit Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550495",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id = _create_schedule_week(client, location["id"])
+    created = client.post(
+        f"/api/schedules/{schedule_id}/shifts",
+        json={
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "worker_id": None,
+            "assignment_status": "open",
+        },
+    )
+    assert created.status_code == 200
+    shift_id = created.json()["shift"]["id"]
+
+    headers = _exchange_dashboard_session(public_client, "+13105550495", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Move the dishwasher shift to 12 to 8",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "update the dishwasher shift" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "updated the dishwasher shift" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    target_shift = next(shift for shift in current.json()["shifts"] if shift["id"] == shift_id)
+    assert target_shift["start_time"] == "12:00:00"
+    assert target_shift["end_time"] == "20:00:00"
+
+
+def test_ai_web_action_can_delete_shift_after_confirmation(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Delete Shift Cafe",
+            "manager_name": "Nina Ops",
+            "manager_phone": "+13105550496",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id = _create_schedule_week(client, location["id"])
+    created = client.post(
+        f"/api/schedules/{schedule_id}/shifts",
+        json={
+            "role": "dishwasher",
+            "date": "2026-04-15",
+            "start_time": "11:00:00",
+            "end_time": "19:00:00",
+            "pay_rate": 21.0,
+            "requirements": [],
+            "worker_id": None,
+            "assignment_status": "open",
+        },
+    )
+    assert created.status_code == 200
+    shift_id = created.json()["shift"]["id"]
+
+    headers = _exchange_dashboard_session(public_client, "+13105550496", auth_messages)
+    action = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert action.status_code == 200
+    payload = action.json()
+    assert payload["status"] == "awaiting_confirmation"
+    assert "delete the dishwasher shift" in payload["summary"].lower()
+
+    confirmed = public_client.post(
+        f"/api/ai-actions/{payload['action_request_id']}/confirm",
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "completed"
+    assert "deleted the dishwasher shift" in confirmed_payload["summary"].lower()
+
+    current = client.get(
+        f"/api/locations/{location['id']}/schedules/current?week_start=2026-04-13"
+    )
+    assert current.status_code == 200
+    assert all(shift["id"] != shift_id for shift in current.json()["shifts"])
 
 
 def test_native_lite_read_update_export_and_dashboard(client):
