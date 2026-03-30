@@ -23,8 +23,19 @@ From Callout to Covered.
 Subheadline:
 Callouts happen. Scrambling doesn't have to. Backfill handles callouts and last-minute shift changes automatically — so you never have to.
 
-Primary CTA button: Call 1-800-BACKFILL
-CTA supporting note: Call us. We'll have you live in 24 hours.
+Primary CTA button: Try Backfill Free → triggers phone number signup modal
+Supporting note: Your phone number is your login. We'll text you a link to get started.
+
+SIGNUP MODAL (triggered by "Try Backfill Free"):
+- Eyebrow: GET EARLY ACCESS
+- Headline: Your phone number is your login.
+- Body: Drop your number and we'll text you a link to get into Backfill — no passwords, no friction. Just the product.
+- Input: Phone number field (auto-formatted)
+- Submit: Get access
+- Disclaimer: We'll text you a one-time link. Standard messaging rates may apply. No spam — ever.
+- Success state: "You're in. Check your phone — we just sent you a link to get started with Backfill. See you on the inside."
+
+NOTE: 1-800-BACKFILL is reserved for offline/OOH marketing (billboards, etc.) — not featured on the landing page.
 
 Stats row (4 stats):
 - $20 / per shift filled, flat
@@ -241,7 +252,7 @@ Supporting note: Mon–Fri 8am–6pm PT · Or leave us a message
 SECTION 10 — FOOTER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Logo: Backfill (wordmark)
-- Copyright: © 2026 Backfill Technologies, Inc.
+- Copyright: © 2025 Backfill Technologies, Inc.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

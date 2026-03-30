@@ -7,7 +7,7 @@ export default function HomePage() {
       <nav className="lp-nav">
         <div className="lp-nav-inner">
           <Link href="/" className="lp-logo">Backfill</Link>
-          <Link href="/onboarding" className="lp-nav-cta">Try Backfill Free</Link>
+          <Link href="/try" className="lp-nav-cta">Try Backfill Free</Link>
         </div>
       </nav>
 
@@ -23,9 +23,9 @@ export default function HomePage() {
             last-minute shift changes automatically &mdash; so you never have to.
           </p>
           <div className="lp-hero-actions">
-            <Link href="/onboarding" className="lp-btn-primary">Try Backfill Free</Link>
+            <Link href="/try" className="lp-btn-primary">Try Backfill Free</Link>
           </div>
-          <p className="lp-hero-note">Or call us at <a href="tel:18002225345" style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--muted)" }}>1-800-BACKFILL</a> &mdash; we&rsquo;ll have you live in 24 hours.</p>
+          <p className="lp-hero-note">Your phone number is your login. We&rsquo;ll text you a link to get started.</p>
 
           <div className="lp-stats-row">
             <div className="lp-stat">
@@ -102,7 +102,7 @@ export default function HomePage() {
           <div className="lp-steps-grid">
             <article className="lp-step-card">
               <span className="lp-step-num">01</span>
-              <h3>Callout Detected</h3>
+              <h3>Callout Detected / A shift opens</h3>
               <p>
                 When an employee calls out, a shift goes unclaimed, or a schedule changes &mdash;
                 Backfill knows instantly, via your scheduler integration or directly through its
@@ -112,7 +112,7 @@ export default function HomePage() {
             </article>
             <article className="lp-step-card">
               <span className="lp-step-num">02</span>
-              <h3>Backfill Calls</h3>
+              <h3>Backfill Calls / Your list gets worked</h3>
               <p>
                 Backfill&rsquo;s AI agent calls available employees in priority order &mdash; by role,
                 availability, and standing. It explains the shift, fields questions, and waits for
@@ -122,7 +122,7 @@ export default function HomePage() {
             </article>
             <article className="lp-step-card">
               <span className="lp-step-num">03</span>
-              <h3>Shift Filled</h3>
+              <h3>Shift Filled / First yes wins</h3>
               <p>
                 The moment someone confirms, the shift is locked. They get a confirmation. You get
                 a notification. Everyone else automatically gets a clear &mdash; no awkward follow-up needed.
@@ -305,9 +305,9 @@ export default function HomePage() {
       <section className="lp-section lp-final-cta">
         <div className="lp-section-inner lp-final-cta-inner">
           <h2>Ready to stop making those 6 AM calls?</h2>
-          <p>See how Backfill handles it in a 20-minute demo. No pressure, no commitment.</p>
-          <Link href="/onboarding" className="lp-btn-primary lp-btn-lg">Try Backfill Free</Link>
-          <span className="lp-final-note">Or call us at <a href="tel:18002225345" style={{ color: "inherit", textDecoration: "underline" }}>1-800-BACKFILL</a> &middot; Mon&ndash;Fri 8am&ndash;6pm PT</span>
+          <p>One call to us, and you&rsquo;ll never have to make that call again.</p>
+          <a href="tel:18002225345" className="lp-btn-primary lp-btn-lg">1-800-BACKFILL</a>
+          <span className="lp-final-note">Mon&ndash;Fri 8am&ndash;6pm PT &middot; Or leave us a message</span>
         </div>
       </section>
 

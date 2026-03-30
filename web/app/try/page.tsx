@@ -36,10 +36,11 @@ export default function TryPage() {
               <a href="/" className="lp-signup-logo">Backfill</a>
             </div>
             <div className="lp-signup-body">
-              <h1 className="lp-signup-headline">Try Backfill Free</h1>
+              <p className="lp-eyebrow" style={{ marginBottom: 12 }}>GET EARLY ACCESS</p>
+              <h1 className="lp-signup-headline">Your phone number is your login.</h1>
               <p className="lp-signup-sub">
-                Enter your number and we&rsquo;ll text you a link to get started.
-                Most operators are live within 24 hours.
+                Drop your number and we&rsquo;ll text you a link to get into Backfill
+                &mdash; no passwords, no friction. Just the product.
               </p>
               <form onSubmit={handleSubmit} className="lp-signup-form">
                 <div className="lp-signup-field">
@@ -78,13 +79,13 @@ export default function TryPage() {
                   className="lp-signup-submit"
                   disabled={!phone.trim() || !consented || loading}
                 >
-                  {loading ? "Sending..." : "Try Backfill Free"}
+                  {loading ? "Sending..." : "Get access"}
                 </button>
               </form>
 
               <p className="lp-signup-footer-note">
-                Already have an account?{" "}
-                <a href="/login" className="lp-signup-text-link">Sign in</a>
+                We&rsquo;ll text you a one-time link. Standard messaging rates may apply.
+                No spam &mdash; ever.
               </p>
             </div>
           </>
@@ -95,10 +96,10 @@ export default function TryPage() {
             </div>
             <div className="lp-signup-body lp-signup-body-sent">
               <div className="lp-signup-check" aria-hidden="true">✓</div>
-              <h1 className="lp-signup-headline">Check your phone</h1>
+              <h1 className="lp-signup-headline">You&rsquo;re in.</h1>
               <p className="lp-signup-sub">
-                We just texted a link to <strong>{destination}</strong>.
-                Tap it to finish setting up your account.
+                Check your phone &mdash; we just sent a link to <strong>{destination}</strong>
+                to get started with Backfill. See you on the inside.
               </p>
               <p className="lp-signup-resend">
                 Didn&rsquo;t get it?{" "}
