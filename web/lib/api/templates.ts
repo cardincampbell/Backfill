@@ -15,16 +15,28 @@ import type {
   SuggestionFeedResponse,
   ApplySuggestionsResponse,
 } from "../types";
-import { API_BASE_URL, apiFetch, fetchJson } from "./client";
+import { API_BASE_URL, apiFetch } from "./client";
 
 // ── Schedule template endpoints ───────────────────────────────────────────
 
 export async function getScheduleTemplates(
   locationId: number
 ): Promise<ScheduleTemplate[] | null> {
-  return fetchJson<ScheduleTemplate[]>(
-    `/api/locations/${locationId}/schedule-templates`
-  );
+  try {
+    const res = await apiFetch(
+      `${API_BASE_URL}/api/locations/${locationId}/schedule-templates`
+    );
+    if (!res.ok) return null;
+    const payload = (await res.json()) as
+      | ScheduleTemplate[]
+      | { location_id?: number; templates?: ScheduleTemplate[] | null };
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+    return payload.templates ?? [];
+  } catch {
+    return null;
+  }
 }
 
 export async function saveAsTemplate(
