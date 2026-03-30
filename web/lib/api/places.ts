@@ -16,6 +16,10 @@ export type PlaceAutocompleteResponse = {
   suggestions: PlaceSuggestion[];
 };
 
+export type PlaceAutocompleteResult =
+  | { ok: true; data: PlaceAutocompleteResponse }
+  | { ok: false; error: string };
+
 export type PlaceDetailsResponse = {
   provider: string;
   place: PlaceSuggestion | null;
@@ -24,7 +28,7 @@ export type PlaceDetailsResponse = {
 export async function autocompletePlaces(
   query: string,
   sessionToken?: string,
-): Promise<PlaceAutocompleteResponse | null> {
+): Promise<PlaceAutocompleteResult> {
   const params = new URLSearchParams({ q: query });
   if (sessionToken) {
     params.set("session_token", sessionToken);
@@ -35,11 +39,21 @@ export async function autocompletePlaces(
       cache: "no-store",
     });
     if (!response.ok) {
-      return null;
+      const payload = await response.json().catch(() => null);
+      return {
+        ok: false,
+        error: payload?.detail ?? "Places autocomplete failed",
+      };
     }
-    return (await response.json()) as PlaceAutocompleteResponse;
+    return {
+      ok: true,
+      data: (await response.json()) as PlaceAutocompleteResponse,
+    };
   } catch {
-    return null;
+    return {
+      ok: false,
+      error: "Could not reach the places service",
+    };
   }
 }
 

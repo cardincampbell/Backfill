@@ -733,7 +733,10 @@ async def get_places_autocomplete(
     try:
         payload = await places_svc.autocomplete_places(q, session_token=session_token)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=502, detail="Places autocomplete failed") from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Places autocomplete failed. Verify GOOGLE_PLACES_API_KEY, billing, and Places API access.",
+        ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Places autocomplete unavailable") from exc
     return {
@@ -764,7 +767,10 @@ async def get_place_details(
     try:
         place = await places_svc.get_place_details(place_id, session_token=session_token)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=502, detail="Place lookup failed") from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Place lookup failed. Verify GOOGLE_PLACES_API_KEY, billing, and Places API access.",
+        ) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Place lookup unavailable") from exc
     if place is None:

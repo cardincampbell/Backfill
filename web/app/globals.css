@@ -4164,6 +4164,11 @@ body:has(.lp-onboarding) .site-main {
   color: var(--muted);
 }
 
+.place-dropdown-status-error {
+  color: var(--accent);
+  background: rgba(143, 106, 75, 0.06);
+}
+
 .place-dropdown-footer {
   border-top: 1px solid var(--line);
   background: rgba(15, 23, 34, 0.02);

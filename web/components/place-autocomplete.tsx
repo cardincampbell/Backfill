@@ -41,25 +41,36 @@ export function PlaceAutocomplete({
   const [selectingPlaceId, setSelectingPlaceId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string>("google");
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedPlace && value === selectedPlace.label) {
       setSuggestions([]);
+      setErrorMessage(null);
       return;
     }
     if (deferredQuery.length < 2) {
       setSuggestions([]);
+      setErrorMessage(null);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
-    void autocompletePlaces(deferredQuery, sessionToken).then((payload) => {
+    setErrorMessage(null);
+    void autocompletePlaces(deferredQuery, sessionToken).then((result) => {
       if (cancelled) {
         return;
       }
-      setSuggestions(payload?.suggestions ?? []);
-      setProvider(payload?.provider ?? "google");
+      if (result.ok) {
+        setSuggestions(result.data.suggestions);
+        setProvider(result.data.provider ?? "google");
+        setErrorMessage(null);
+      } else {
+        setSuggestions([]);
+        setProvider("google");
+        setErrorMessage(result.error);
+      }
       setLoading(false);
       setOpen(true);
     });
@@ -95,9 +106,16 @@ export function PlaceAutocomplete({
   }
 
   function handleFocus() {
-    if (suggestions.length > 0) {
+    if (suggestions.length > 0 || errorMessage) {
       setOpen(true);
     }
+  }
+
+  function friendlyError(message: string): string {
+    if (message.toLowerCase().includes("places autocomplete failed")) {
+      return "Google Places request failed. Check Railway GOOGLE_PLACES_API_KEY, billing, and Places API access.";
+    }
+    return message;
   }
 
   return (
@@ -121,6 +139,10 @@ export function PlaceAutocomplete({
         <div className="place-dropdown">
           {loading ? (
             <div className="place-dropdown-status">Searching places…</div>
+          ) : errorMessage ? (
+            <div className="place-dropdown-status place-dropdown-status-error">
+              {friendlyError(errorMessage)}
+            </div>
           ) : suggestions.length > 0 ? (
             <>
               <div className="place-dropdown-list">
@@ -150,7 +172,7 @@ export function PlaceAutocomplete({
             </>
           ) : (
             <div className="place-dropdown-status">
-              Search for a real location or address and choose one result.
+              No matching places found yet. Try a fuller location name or street address.
             </div>
           )}
         </div>
