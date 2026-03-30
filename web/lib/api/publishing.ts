@@ -9,7 +9,66 @@ export async function getDraftOptions(
     if (weekStart) url += `?target_week_start_date=${encodeURIComponent(weekStart)}`;
     const res = await apiFetch(url);
     if (!res.ok) return null;
-    return (await res.json()) as import("../types").DraftOptionsResponse;
+    const payload = (await res.json()) as
+      | import("../types").DraftOptionsResponse
+      | {
+          location_id: number;
+          target_week_start_date?: string;
+          templates?: Array<{
+            id: number;
+            name: string;
+            description?: string | null;
+            shift_count?: number;
+          }>;
+          latest_schedule?: {
+            id: number;
+            week_start_date?: string | null;
+            lifecycle_state?: string | null;
+          } | null;
+        };
+    if ("options" in payload && Array.isArray(payload.options)) {
+      return payload;
+    }
+    const normalizedPayload = payload as {
+      location_id: number;
+      target_week_start_date?: string;
+      templates?: Array<{
+        id: number;
+        name: string;
+        description?: string | null;
+        shift_count?: number;
+      }>;
+      latest_schedule?: {
+        id: number;
+        week_start_date?: string | null;
+        lifecycle_state?: string | null;
+      } | null;
+    };
+    const options: import("../types").DraftOption[] = [];
+    for (const template of normalizedPayload.templates ?? []) {
+      options.push({
+        type: "template",
+        id: template.id,
+        name: template.name,
+        description: template.description ?? undefined,
+        slot_count: template.shift_count,
+      });
+    }
+    if (normalizedPayload.latest_schedule?.id != null) {
+      options.push({
+        type: "prior_schedule",
+        id: normalizedPayload.latest_schedule.id,
+        name: normalizedPayload.latest_schedule.lifecycle_state
+          ? `Previous ${normalizedPayload.latest_schedule.lifecycle_state} schedule`
+          : "Previous schedule",
+        week_start_date: normalizedPayload.latest_schedule.week_start_date ?? undefined,
+      });
+    }
+    return {
+      location_id: normalizedPayload.location_id,
+      target_week_start_date: normalizedPayload.target_week_start_date,
+      options,
+    };
   } catch {
     return null;
   }
