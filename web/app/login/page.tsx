@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { requestAccess } from "@/lib/api/auth";
+import {
+  isPreviewAuthBypassEnabled,
+  storePreviewPhone,
+} from "@/lib/auth/preview";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,6 +15,7 @@ export default function LoginPage() {
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const previewBypassEnabled = isPreviewAuthBypassEnabled();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -18,6 +23,11 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
+      if (previewBypassEnabled) {
+        storePreviewPhone(phone.trim());
+        router.push("/onboarding");
+        return;
+      }
       const result = await requestAccess(phone.trim());
       setDestination(result.destination);
       setStep("sent");
@@ -69,10 +79,12 @@ export default function LoginPage() {
                     disabled={!phone.trim() || loading}
                     style={{ marginTop: 4 }}
                   >
-                    {loading ? "Sending..." : "Send access link"}
+                    {loading ? (previewBypassEnabled ? "Continuing..." : "Sending...") : (previewBypassEnabled ? "Continue to setup" : "Send access link")}
                   </button>
                   <div style={{ fontSize: "0.7rem", color: "var(--muted)", textAlign: "center", lineHeight: 1.5 }}>
-                    We'll text you a one-time link to sign in.
+                    {previewBypassEnabled
+                      ? "We’ll carry this number into setup for now instead of sending a text."
+                      : "We’ll text you a one-time link to sign in."}
                   </div>
                 </form>
               </div>

@@ -1,15 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { requestAccess } from "@/lib/api/auth";
+import {
+  isPreviewAuthBypassEnabled,
+  storePreviewPhone,
+} from "@/lib/auth/preview";
 
 export default function TryPage() {
+  const router = useRouter();
   const [phone, setPhone] = useState("");
   const [consented, setConsented] = useState(false);
   const [step, setStep] = useState<"form" | "sent">("form");
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const previewBypassEnabled = isPreviewAuthBypassEnabled();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -17,6 +24,11 @@ export default function TryPage() {
     setError("");
     setLoading(true);
     try {
+      if (previewBypassEnabled) {
+        storePreviewPhone(phone.trim());
+        router.push("/onboarding");
+        return;
+      }
       const result = await requestAccess(phone.trim());
       setDestination(result.destination);
       setStep("sent");
@@ -39,8 +51,9 @@ export default function TryPage() {
               <p className="lp-eyebrow" style={{ marginBottom: 12 }}>GET EARLY ACCESS</p>
               <h1 className="lp-signup-headline">Your phone number is your login.</h1>
               <p className="lp-signup-sub">
-                Drop your number and we&rsquo;ll text you a link to get into Backfill
-                &mdash; no passwords, no friction. Just the product.
+                {previewBypassEnabled
+                  ? "Drop your number and we’ll carry it into setup so you can get into Backfill without re-entering it."
+                  : "Drop your number and we’ll text you a link to get into Backfill — no passwords, no friction. Just the product."}
               </p>
               <form onSubmit={handleSubmit} className="lp-signup-form">
                 <div className="lp-signup-field">
@@ -64,10 +77,9 @@ export default function TryPage() {
                     onChange={(e) => setConsented(e.target.checked)}
                   />
                   <span>
-                    By checking this box, you agree to receive text messages from Backfill
-                    Technologies, Inc. at the number provided above, including marketing and
-                    account messages. Message and data rates may apply. Reply STOP at any time
-                    to unsubscribe. View our{" "}
+                    {previewBypassEnabled
+                      ? "By checking this box, you agree that Backfill may use this number for your setup and future account communications. View our "
+                      : "By checking this box, you agree to receive text messages from Backfill Technologies, Inc. at the number provided above, including marketing and account messages. Message and data rates may apply. Reply STOP at any time to unsubscribe. View our "}
                     <a href="/privacy" className="lp-signup-text-link">Privacy Policy</a>.
                   </span>
                 </label>
@@ -79,13 +91,14 @@ export default function TryPage() {
                   className="lp-signup-submit"
                   disabled={!phone.trim() || !consented || loading}
                 >
-                  {loading ? "Sending..." : "Get access"}
+                  {loading ? (previewBypassEnabled ? "Continuing..." : "Sending...") : (previewBypassEnabled ? "Continue" : "Get access")}
                 </button>
               </form>
 
               <p className="lp-signup-footer-note">
-                We&rsquo;ll text you a one-time link. Standard messaging rates may apply.
-                No spam &mdash; ever.
+                {previewBypassEnabled
+                  ? "We’ll carry this number into your setup so you don’t have to enter it again."
+                  : "We’ll text you a one-time link. Standard messaging rates may apply. No spam — ever."}
               </p>
             </div>
           </>

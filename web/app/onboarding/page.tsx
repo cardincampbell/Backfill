@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE_URL, apiFetch } from "@/lib/api/client";
+import {
+  clearStoredPreviewPhone,
+  getStoredPreviewPhone,
+} from "@/lib/auth/preview";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +102,7 @@ export default function OnboardingPage() {
     setError("");
     try {
       const schedulerValue = SCHEDULER_VALUES[form.scheduler] ?? "backfill_native";
+      const previewPhone = getStoredPreviewPhone();
       const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,6 +110,7 @@ export default function OnboardingPage() {
           name: form.business.trim(),
           organization_name: form.business.trim(),
           manager_name: form.name.trim(),
+          manager_phone: previewPhone ?? undefined,
           employee_count: STAFF_BAND_VALUES[form.staffBand] ?? undefined,
           scheduling_platform: schedulerValue,
           operating_mode: schedulerValue === "backfill_native" ? "backfill_shifts" : "integration",
@@ -125,6 +131,7 @@ export default function OnboardingPage() {
       }
 
       const location = (await response.json()) as { id: number };
+      clearStoredPreviewPhone();
       router.replace(`/dashboard/locations/${location.id}?tab=schedule`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish onboarding");
