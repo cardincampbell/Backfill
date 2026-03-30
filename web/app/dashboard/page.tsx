@@ -3,6 +3,7 @@ import Link from "next/link";
 import { EmptyState } from "@/components/empty-state";
 import { StatCard } from "@/components/stat-card";
 import { getAuditLog, getCascades, getLocations, getShifts, getSupportSnapshot, getWorkers } from "@/lib/api";
+import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +77,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </p>
         </div>
         <div className="ops-hero-actions">
-          <Link className="button" href={locations[0] ? `/dashboard/locations/${locations[0].id}` : "/setup/choose"}>
+          <Link className="button" href={locations[0] ? buildDashboardLocationPath(locations[0], { tab: "schedule" }) : "/setup/choose"}>
             {locations[0] ? "Open first location" : "Start setup"}
           </Link>
           <Link className="button-secondary" href="/setup/choose">
@@ -217,7 +218,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   return (
                     <tr key={location.id}>
                       <td>
-                        <Link className="text-link" href={`/dashboard/locations/${location.id}`} style={{ fontWeight: 600 }}>
+                        <Link className="text-link" href={buildDashboardLocationPath(location, { tab: "schedule" })} style={{ fontWeight: 600 }}>
                           {location.name}
                         </Link>
                         <div style={{ fontSize: "0.78rem", color: "var(--muted)", marginTop: 2 }}>
@@ -230,7 +231,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                         {location.writeback_enabled ? "Enabled" : "Off"}
                       </td>
                       <td>
-                        <Link className="button-secondary button-small" href={`/dashboard/locations/${location.id}`}>
+                        <Link className="button-secondary button-small" href={buildDashboardLocationPath(location, { tab: "schedule" })}>
                           View
                         </Link>
                       </td>

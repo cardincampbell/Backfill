@@ -14,9 +14,10 @@ const STRATEGY_OPTIONS: { value: AssignmentStrategy; label: string }[] = [
 type DraftLauncherProps = {
   locationId: number;
   weekStart: string;
+  basePath?: string;
 };
 
-export function DraftLauncher({ locationId, weekStart }: DraftLauncherProps) {
+export function DraftLauncher({ locationId, weekStart, basePath }: DraftLauncherProps) {
   const router = useRouter();
   const [options, setOptions] = useState<DraftOptionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,6 +25,7 @@ export function DraftLauncher({ locationId, weekStart }: DraftLauncherProps) {
   const [strategy, setStrategy] = useState<AssignmentStrategy>("balance_hours");
   const [autoAssign, setAutoAssign] = useState(true);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const locationBasePath = basePath ?? `/dashboard/locations/${locationId}`;
 
   useEffect(() => {
     getDraftOptions(locationId, weekStart).then((r) => {
@@ -46,7 +48,7 @@ export function DraftLauncher({ locationId, weekStart }: DraftLauncherProps) {
         type: "success",
         message: `Created schedule: ${result.created_shift_count} shifts (${result.assigned_shift_count} assigned).`,
       });
-      router.push(`/dashboard/locations/${locationId}?tab=schedule&week_start=${result.week_start_date}`);
+      router.push(`${locationBasePath}?tab=schedule&week_start=${result.week_start_date}`);
       router.refresh();
     } else {
       setFeedback({ type: "error", message: "Failed to create schedule from template." });
@@ -68,7 +70,7 @@ export function DraftLauncher({ locationId, weekStart }: DraftLauncherProps) {
         type: "success",
         message: `AI draft created: ${result.created_shift_count} shifts (${result.assigned_shift_count} assigned, ${result.open_shift_count} open).`,
       });
-      router.push(`/dashboard/locations/${locationId}?tab=schedule&week_start=${result.week_start_date}`);
+      router.push(`${locationBasePath}?tab=schedule&week_start=${result.week_start_date}`);
       router.refresh();
     } else {
       setFeedback({ type: "error", message: "Failed to create AI draft." });

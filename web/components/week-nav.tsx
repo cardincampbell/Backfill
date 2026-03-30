@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 type WeekNavProps = {
   locationId: number;
   weekStartDate: string;
+  basePath?: string;
 };
 
 function offsetWeek(weekStart: string, days: number): string {
@@ -30,13 +31,14 @@ function currentMonday(): string {
   return monday.toISOString().slice(0, 10);
 }
 
-export function WeekNav({ locationId, weekStartDate }: WeekNavProps) {
+export function WeekNav({ locationId, weekStartDate, basePath }: WeekNavProps) {
   const router = useRouter();
   const thisMonday = currentMonday();
   const isCurrentWeek = weekStartDate === thisMonday;
+  const locationBasePath = basePath ?? `/dashboard/locations/${locationId}`;
 
   function navigate(weekStart: string) {
-    router.push(`/dashboard/locations/${locationId}?tab=schedule&week_start=${weekStart}`);
+    router.push(`${locationBasePath}?tab=schedule&week_start=${weekStart}`);
   }
 
   return (

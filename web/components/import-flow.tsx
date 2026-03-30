@@ -20,6 +20,7 @@ type ImportFlowStep = "pick" | "uploading" | "mapping" | "validating" | "review"
 
 type ImportFlowProps = {
   locationId: number;
+  basePath?: string;
 };
 
 function StepIndicator({ label }: { label: string }) {
@@ -38,7 +39,7 @@ function StepIndicator({ label }: { label: string }) {
   );
 }
 
-export function ImportFlow({ locationId }: ImportFlowProps) {
+export function ImportFlow({ locationId, basePath }: ImportFlowProps) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<ImportFlowStep>("pick");
@@ -48,6 +49,7 @@ export function ImportFlow({ locationId }: ImportFlowProps) {
   const [mappingResult, setMappingResult] = useState<ImportMappingResponse | null>(null);
   const [commitResult, setCommitResult] = useState<ImportCommitResponse | null>(null);
   const [importType, setImportType] = useState<string>("combined");
+  const locationBasePath = basePath ?? `/dashboard/locations/${locationId}`;
 
   function reset() {
     setStep("pick");
@@ -131,7 +133,7 @@ export function ImportFlow({ locationId }: ImportFlowProps) {
 
   function handleViewResults() {
     if (job) {
-      router.push(`/dashboard/locations/${locationId}?tab=imports&job_id=${job.id}`);
+      router.push(`${locationBasePath}?tab=imports&job_id=${job.id}`);
       router.refresh();
     }
   }

@@ -7,23 +7,25 @@ import {
   clearStoredPreviewPhone,
   getStoredPreviewPhone,
 } from "@/lib/auth/preview";
+import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-type StepId = "name" | "business" | "role" | "locations" | "staff" | "scheduler";
+type StepId = "name" | "business" | "role" | "locations" | "sites" | "staff" | "scheduler";
 
 interface FormState {
   name: string;
   business: string;
   role: string;
   locationCount: number;
+  locationNames: string[];
   staffBand: string;
   scheduler: string;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: StepId[] = ["name", "business", "role", "locations", "staff", "scheduler"];
+const STEPS: StepId[] = ["name", "business", "role", "locations", "sites", "staff", "scheduler"];
 
 const ROLES = ["Owner", "General Manager", "Ops Manager", "HR", "Other"];
 
@@ -58,6 +60,7 @@ export default function OnboardingPage() {
     business: "",
     role: "",
     locationCount: 1,
+    locationNames: [""],
     staffBand: "",
     scheduler: "",
   });
@@ -74,9 +77,49 @@ export default function OnboardingPage() {
       case "business": return form.business.trim().length > 0;
       case "role": return form.role.length > 0;
       case "locations": return form.locationCount >= 1;
+      case "sites": return form.locationNames.some((name) => name.trim().length > 0);
       case "staff": return form.staffBand.length > 0;
       case "scheduler": return form.scheduler.length > 0;
     }
+  }
+
+  function updateLocationCount(nextCount: number) {
+    setForm((f) => {
+      const normalizedCount = Math.max(1, nextCount);
+      const nextNames = f.locationNames.slice(0, Math.max(1, normalizedCount));
+      return {
+        ...f,
+        locationCount: normalizedCount,
+        locationNames: nextNames.length ? nextNames : [""],
+      };
+    });
+  }
+
+  function updateLocationName(index: number, value: string) {
+    setForm((f) => {
+      const nextNames = [...f.locationNames];
+      nextNames[index] = value;
+      return { ...f, locationNames: nextNames };
+    });
+  }
+
+  function addLocationField() {
+    setForm((f) => {
+      if (f.locationNames.length >= f.locationCount) {
+        return f;
+      }
+      return { ...f, locationNames: [...f.locationNames, ""] };
+    });
+  }
+
+  function removeLocationField(index: number) {
+    setForm((f) => {
+      if (f.locationNames.length <= 1) {
+        return f;
+      }
+      const nextNames = f.locationNames.filter((_, i) => i !== index);
+      return { ...f, locationNames: nextNames.length ? nextNames : [""] };
+    });
   }
 
   function goForward() {
@@ -103,11 +146,19 @@ export default function OnboardingPage() {
     try {
       const schedulerValue = SCHEDULER_VALUES[form.scheduler] ?? "backfill_native";
       const previewPhone = getStoredPreviewPhone();
-      const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
+      const namedLocations = form.locationNames
+        .map((name) => name.trim())
+        .filter(Boolean);
+
+      if (namedLocations.length === 0) {
+        throw new Error("Add at least one location to continue");
+      }
+
+      const primaryResponse = await apiFetch(`${API_BASE_URL}/api/locations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: form.business.trim(),
+          name: namedLocations[0],
           organization_name: form.business.trim(),
           manager_name: form.name.trim(),
           manager_phone: previewPhone ?? undefined,
@@ -119,20 +170,61 @@ export default function OnboardingPage() {
           onboarding_info: [
             `Role: ${form.role}`,
             `Locations: ${form.locationCount}`,
+            `Named locations: ${namedLocations.length}`,
             `Staff band: ${form.staffBand}`,
             schedulerValue === "backfill_native" ? "Scheduler: none" : `Scheduler: ${form.scheduler}`,
           ].join(" · "),
         }),
       });
 
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
+      if (!primaryResponse.ok) {
+        const payload = await primaryResponse.json().catch(() => null);
         throw new Error(payload?.detail ?? "Could not finish onboarding");
       }
 
-      const location = (await response.json()) as { id: number };
+      const location = (await primaryResponse.json()) as {
+        id: number;
+        name: string;
+        organization_id?: number | null;
+        organization_name?: string | null;
+      };
+
+      const additionalLocations = namedLocations.slice(1);
+
+      if (additionalLocations.length > 0) {
+        await Promise.allSettled(
+          additionalLocations.map((locationName) =>
+            apiFetch(`${API_BASE_URL}/api/locations`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: locationName,
+                organization_id: location.organization_id ?? undefined,
+                organization_name: location.organization_id ? undefined : form.business.trim(),
+                manager_name: form.name.trim(),
+                manager_phone: previewPhone ?? undefined,
+                employee_count: STAFF_BAND_VALUES[form.staffBand] ?? undefined,
+                scheduling_platform: schedulerValue,
+                operating_mode: schedulerValue === "backfill_native" ? "backfill_shifts" : "integration",
+                backfill_shifts_enabled: true,
+                backfill_shifts_launch_state: "enabled",
+                onboarding_info: [
+                  `Role: ${form.role}`,
+                  `Locations: ${form.locationCount}`,
+                  `Named locations: ${namedLocations.length}`,
+                  `Staff band: ${form.staffBand}`,
+                  schedulerValue === "backfill_native" ? "Scheduler: none" : `Scheduler: ${form.scheduler}`,
+                ].join(" · "),
+              }),
+            }),
+          ),
+        );
+      }
+
       clearStoredPreviewPhone();
-      router.replace(`/dashboard/locations/${location.id}?tab=schedule`);
+      router.replace(
+        buildDashboardLocationPath(location, { tab: "schedule" }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish onboarding");
       setSubmitting(false);
@@ -219,7 +311,7 @@ export default function OnboardingPage() {
               <div className="ob-stepper">
                 <button
                   className="ob-stepper-btn"
-                  onClick={() => setForm((f) => ({ ...f, locationCount: Math.max(1, f.locationCount - 1) }))}
+                  onClick={() => updateLocationCount(form.locationCount - 1)}
                   disabled={form.locationCount <= 1}
                   type="button"
                   aria-label="Decrease"
@@ -229,12 +321,59 @@ export default function OnboardingPage() {
                 <span className="ob-stepper-value">{form.locationCount}</span>
                 <button
                   className="ob-stepper-btn"
-                  onClick={() => setForm((f) => ({ ...f, locationCount: f.locationCount + 1 }))}
+                  onClick={() => updateLocationCount(form.locationCount + 1)}
                   type="button"
                   aria-label="Increase"
                 >
                   +
                 </button>
+              </div>
+            </>
+          )}
+
+          {currentStep === "sites" && (
+            <>
+              <p className="ob-question">What are your locations called?</p>
+              <p className="ob-sub">
+                Add at least one location now. You said you manage {form.locationCount} {form.locationCount === 1 ? "location" : "locations"}.
+              </p>
+              <div className="ob-locations">
+                {form.locationNames.map((locationName, index) => (
+                  <div key={index} className="ob-location-row">
+                    <input
+                      className="ob-input"
+                      type="text"
+                      placeholder={index === 0 ? "e.g. Mission District" : `Location ${index + 1}`}
+                      autoFocus={index === 0}
+                      value={locationName}
+                      onChange={(e) => updateLocationName(index, e.target.value)}
+                      onKeyDown={handleKey}
+                    />
+                    {form.locationNames.length > 1 ? (
+                      <button
+                        className="ob-location-remove"
+                        type="button"
+                        onClick={() => removeLocationField(index)}
+                        aria-label={`Remove location ${index + 1}`}
+                      >
+                        ×
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              <div className="ob-location-actions">
+                <button
+                  className="ob-location-add"
+                  type="button"
+                  onClick={addLocationField}
+                  disabled={form.locationNames.length >= form.locationCount}
+                >
+                  + Add another location
+                </button>
+                <span className="ob-location-count">
+                  {form.locationNames.filter((name) => name.trim().length > 0).length} of {form.locationCount} named
+                </span>
               </div>
             </>
           )}

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/empty-state";
 import { getLocations } from "@/lib/api";
+import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export default async function RosterIndexPage() {
                   <td style={{ fontWeight: 600 }}>
                     <Link
                       className="text-link"
-                      href={`/dashboard/locations/${location.id}?tab=roster`}
+                      href={buildDashboardLocationPath(location, { tab: "roster" })}
                     >
                       {location.name}
                     </Link>
@@ -49,13 +50,13 @@ export default async function RosterIndexPage() {
                     <div className="cta-row">
                       <Link
                         className="button-secondary button-small"
-                        href={`/dashboard/locations/${location.id}?tab=roster`}
+                        href={buildDashboardLocationPath(location, { tab: "roster" })}
                       >
                         Manage roster
                       </Link>
                       <Link
                         className="button-secondary button-small"
-                        href={`/dashboard/locations/${location.id}?tab=imports`}
+                        href={buildDashboardLocationPath(location, { tab: "imports" })}
                       >
                         Import CSV
                       </Link>

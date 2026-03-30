@@ -10,6 +10,7 @@ type ScheduleActionsProps = {
   locationId: number;
   lifecycleState: ScheduleLifecycleState;
   weekStartDate: string;
+  basePath?: string;
 };
 
 function nextMonday(weekStart: string): string {
@@ -23,10 +24,12 @@ export function ScheduleActions({
   locationId,
   lifecycleState,
   weekStartDate,
+  basePath,
 }: ScheduleActionsProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const locationBasePath = basePath ?? `/dashboard/locations/${locationId}`;
 
   const disabled = busy !== null;
 
@@ -63,7 +66,7 @@ export function ScheduleActions({
           message: `Copied ${result.copied_shift_count} shifts to week of ${result.week_start_date}. ${result.open_shift_count} open.`,
         });
         router.push(
-          `/dashboard/locations/${locationId}?tab=schedule&week_start=${result.week_start_date}`
+          `${locationBasePath}?tab=schedule&week_start=${result.week_start_date}`
         );
         router.refresh();
       } else {

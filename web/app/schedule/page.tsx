@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/empty-state";
 import { getLocations } from "@/lib/api";
+import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export default async function ScheduleIndexPage() {
                   <td style={{ fontWeight: 600 }}>
                     <Link
                       className="text-link"
-                      href={`/dashboard/locations/${location.id}?tab=schedule`}
+                      href={buildDashboardLocationPath(location, { tab: "schedule" })}
                     >
                       {location.name}
                     </Link>
@@ -49,13 +50,13 @@ export default async function ScheduleIndexPage() {
                     <div className="cta-row">
                       <Link
                         className="button-secondary button-small"
-                        href={`/dashboard/locations/${location.id}?tab=schedule`}
+                        href={buildDashboardLocationPath(location, { tab: "schedule" })}
                       >
                         View schedule
                       </Link>
                       <Link
                         className="button-secondary button-small"
-                        href={`/dashboard/locations/${location.id}?tab=imports`}
+                        href={buildDashboardLocationPath(location, { tab: "imports" })}
                       >
                         Import
                       </Link>

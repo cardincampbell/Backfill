@@ -21,6 +21,7 @@ type TemplatePanelProps = {
   scheduleId?: number;
   currentWeekStart?: string;
   templates: ScheduleTemplate[];
+  basePath?: string;
 };
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -132,6 +133,7 @@ function TemplateCard({
   template: initialTemplate,
   locationId,
   scheduleId,
+  basePath,
   onUpdated,
   onDeleted,
   onCloned,
@@ -139,6 +141,7 @@ function TemplateCard({
   template: ScheduleTemplate;
   locationId: number;
   scheduleId?: number;
+  basePath?: string;
   onUpdated: (t: ScheduleTemplate) => void;
   onDeleted: (id: number) => void;
   onCloned: (t: ScheduleTemplate) => void;
@@ -159,6 +162,7 @@ function TemplateCard({
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(template.name);
   const [editDesc, setEditDesc] = useState(template.description ?? "");
+  const locationBasePath = basePath ?? `/dashboard/locations/${locationId}`;
 
   // Delete confirmation
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -175,7 +179,7 @@ function TemplateCard({
     const result = await applyTemplate(template.id, weekStart, false, dayFilter, autoAssignOnApply);
     if (result) {
       setFeedback({ type: "success", message: `Applied ${result.created_shift_count} shifts to week of ${formatDate(result.week_start_date)}.` });
-      router.push(`/dashboard/locations/${locationId}?tab=schedule&week_start=${result.week_start_date}`);
+      router.push(`${locationBasePath}?tab=schedule&week_start=${result.week_start_date}`);
       router.refresh();
     } else {
       setFeedback({ type: "error", message: "Failed to apply template." });
@@ -261,7 +265,7 @@ function TemplateCard({
         type: "success",
         message: `Draft created: ${result.created_shift_count} shifts (${result.assigned_shift_count} assigned, ${result.open_shift_count} open).`,
       });
-      router.push(`/dashboard/locations/${locationId}?tab=schedule&week_start=${result.week_start_date}`);
+      router.push(`${locationBasePath}?tab=schedule&week_start=${result.week_start_date}`);
       router.refresh();
     } else {
       setFeedback({ type: "error", message: "Failed to generate draft." });
@@ -651,7 +655,7 @@ function CreateBlankTemplateForm({
   );
 }
 
-export function TemplatePanel({ locationId, scheduleId, currentWeekStart, templates: initialTemplates }: TemplatePanelProps) {
+export function TemplatePanel({ locationId, scheduleId, currentWeekStart, templates: initialTemplates, basePath }: TemplatePanelProps) {
   const [templates, setTemplates] = useState(initialTemplates);
 
   function handleSaved(t: ScheduleTemplate) {
@@ -697,6 +701,7 @@ export function TemplatePanel({ locationId, scheduleId, currentWeekStart, templa
               template={t}
               locationId={locationId}
               scheduleId={scheduleId}
+              basePath={basePath}
               onUpdated={handleUpdated}
               onDeleted={handleDeleted}
               onCloned={handleCloned}
