@@ -956,6 +956,65 @@ async def list_location_action_history(
     return {"location_id": location_id, "items": items}
 
 
+async def list_location_action_attention(
+    db: aiosqlite.Connection,
+    *,
+    principal: AuthPrincipal,
+    location_id: int,
+    include_resolved: bool = False,
+    limit: int = 20,
+) -> dict[str, Any]:
+    if not principal.is_internal and location_id not in principal.location_ids and principal.organization_id is None:
+        raise ValueError("Forbidden for this location")
+    await expire_stale_action_sessions_internal(db, location_id=location_id, limit=max(limit, 100))
+    rows = await queries.list_ai_action_requests_for_location(
+        db,
+        location_id=location_id,
+        limit=max(limit * 5, 100),
+    )
+    items: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    for row in rows:
+        session = await queries.get_action_session_by_request_id(db, int(row["id"]))
+        item = _build_attention_item(row, session)
+        if item is None and not include_resolved:
+            continue
+        if item is None:
+            item = {
+                "action_request_id": int(row["id"]),
+                "location_id": int(row["location_id"]),
+                "channel": row.get("channel"),
+                "status": row.get("status"),
+                "action_type": (row.get("action_plan_json") or {}).get("action_type"),
+                "text": row.get("original_text") or "",
+                "summary": (row.get("result_summary_json") or {}).get("summary") or row.get("original_text") or "AI action",
+                "risk_class": row.get("risk_class"),
+                "attention_reason": None,
+                "recovery_actions": [],
+                "state_summary": _build_request_state_summary(row, session),
+                "runtime": (row.get("result_summary_json") or {}).get("runtime"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        items.append(item)
+        status_key = str(item.get("status") or "unknown")
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+        reason_key = str(item.get("attention_reason") or "resolved")
+        reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+        if len(items) >= limit:
+            break
+    return {
+        "location_id": location_id,
+        "summary": {
+            "total": len(items),
+            "status_counts": status_counts,
+            "reason_counts": reason_counts,
+        },
+        "items": items,
+    }
+
+
 async def retry_action_request(
     db: aiosqlite.Connection,
     *,
@@ -1317,6 +1376,64 @@ async def list_ai_action_sessions_internal(
     return {"items": [_serialize_action_session(row) for row in rows]}
 
 
+async def list_ai_action_attention_internal(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int | None = None,
+    organization_id: int | None = None,
+    include_resolved: bool = False,
+    limit: int = 50,
+) -> dict[str, Any]:
+    rows = await queries.list_recent_ai_action_requests(
+        db,
+        location_id=location_id,
+        organization_id=organization_id,
+        limit=max(limit * 5, 100),
+    )
+    items: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    for row in rows:
+        session = await queries.get_action_session_by_request_id(db, int(row["id"]))
+        item = _build_attention_item(row, session, location_name=row.get("location_name"))
+        if item is None and not include_resolved:
+            continue
+        if item is None:
+            item = {
+                "action_request_id": int(row["id"]),
+                "location_id": int(row["location_id"]),
+                "location_name": row.get("location_name"),
+                "organization_id": row.get("organization_id"),
+                "channel": row.get("channel"),
+                "status": row.get("status"),
+                "action_type": (row.get("action_plan_json") or {}).get("action_type"),
+                "text": row.get("original_text") or "",
+                "summary": (row.get("result_summary_json") or {}).get("summary") or row.get("original_text") or "AI action",
+                "risk_class": row.get("risk_class"),
+                "attention_reason": None,
+                "recovery_actions": [],
+                "state_summary": _build_request_state_summary(row, session),
+                "runtime": (row.get("result_summary_json") or {}).get("runtime"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        items.append(item)
+        status_key = str(item.get("status") or "unknown")
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+        reason_key = str(item.get("attention_reason") or "resolved")
+        reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+        if len(items) >= limit:
+            break
+    return {
+        "summary": {
+            "total": len(items),
+            "status_counts": status_counts,
+            "reason_counts": reason_counts,
+        },
+        "items": items,
+    }
+
+
 async def expire_stale_action_sessions_internal(
     db: aiosqlite.Connection,
     *,
@@ -1511,6 +1628,7 @@ def _serialize_action_session(row: dict[str, Any]) -> dict[str, Any]:
 def _build_request_state_summary(request_row: dict[str, Any], session: dict[str, Any] | None) -> dict[str, Any]:
     request_status = str(request_row.get("status") or "unknown")
     session_expired = _is_session_expired(session)
+    attention_reason = _attention_reason_for_request(request_row, session)
     retryable_statuses = {"failed", "cancelled", "expired", "redirected"}
     return {
         "request_status": request_status,
@@ -1518,7 +1636,9 @@ def _build_request_state_summary(request_row: dict[str, Any], session: dict[str,
         "pending_prompt_type": session.get("pending_prompt_type") if session else None,
         "expires_at": session.get("expires_at") if session else None,
         "is_session_expired": session_expired,
-        "retryable": request_status in retryable_statuses or session_expired,
+        "stalled_resolution": attention_reason == "stalled_resolution",
+        "attention_reason": attention_reason,
+        "retryable": request_status in retryable_statuses or session_expired or attention_reason == "stalled_resolution",
     }
 
 
@@ -1628,3 +1748,82 @@ def _options_with_indexes(options: list[dict[str, Any]]) -> list[dict[str, Any]]
         enriched["option_index"] = index
         indexed.append(enriched)
     return indexed
+
+
+def _attention_reason_for_request(request_row: dict[str, Any], session: dict[str, Any] | None) -> str | None:
+    request_status = str(request_row.get("status") or "unknown")
+    if session is not None and _is_session_expired(session):
+        return "expired"
+    if request_status == "awaiting_confirmation":
+        return "pending_confirmation"
+    if request_status == "awaiting_clarification":
+        return "pending_clarification"
+    if request_status == "failed":
+        return "failed"
+    if request_status == "expired":
+        return "expired"
+    if request_status == "redirected":
+        return "redirected"
+    if request_status == "resolving" and _is_request_stalled(request_row):
+        return "stalled_resolution"
+    return None
+
+
+def _is_request_stalled(request_row: dict[str, Any]) -> bool:
+    updated_at = str(request_row.get("updated_at") or request_row.get("created_at") or "").strip()
+    if not updated_at:
+        return False
+    try:
+        updated = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return False
+    return updated <= datetime.utcnow() - timedelta(minutes=settings.backfill_ai_resolving_attention_minutes)
+
+
+def _recovery_actions_for_request(request_row: dict[str, Any], session: dict[str, Any] | None) -> list[dict[str, Any]]:
+    action_request_id = int(request_row["id"])
+    attention_reason = _attention_reason_for_request(request_row, session)
+    actions: list[dict[str, Any]] = []
+    if attention_reason in {"pending_confirmation", "pending_clarification"}:
+        actions.append({"type": "open", "label": "Open pending action", "route": f"/api/ai-actions/{action_request_id}"})
+    if attention_reason in {"failed", "expired", "redirected", "stalled_resolution"}:
+        actions.append({"type": "retry", "label": "Retry", "route": f"/api/ai-actions/{action_request_id}/retry"})
+        actions.append({"type": "internal_retry", "label": "Retry internally", "route": f"/api/internal/ai-actions/{action_request_id}/retry"})
+    if attention_reason in {"pending_confirmation", "pending_clarification", "stalled_resolution"}:
+        actions.append({"type": "internal_cancel", "label": "Cancel", "route": f"/api/internal/ai-actions/{action_request_id}/cancel"})
+    if attention_reason in {"pending_confirmation", "pending_clarification", "stalled_resolution"}:
+        actions.append({"type": "internal_expire", "label": "Expire", "route": f"/api/internal/ai-actions/{action_request_id}/expire"})
+    return actions
+
+
+def _build_attention_item(
+    request_row: dict[str, Any],
+    session: dict[str, Any] | None,
+    *,
+    location_name: str | None = None,
+) -> dict[str, Any] | None:
+    attention_reason = _attention_reason_for_request(request_row, session)
+    if attention_reason is None:
+        return None
+    result_summary = dict(request_row.get("result_summary_json") or {})
+    item = {
+        "action_request_id": int(request_row["id"]),
+        "location_id": int(request_row["location_id"]),
+        "channel": request_row.get("channel"),
+        "status": request_row.get("status"),
+        "action_type": (request_row.get("action_plan_json") or {}).get("action_type"),
+        "text": request_row.get("original_text") or "",
+        "summary": result_summary.get("summary") or request_row.get("original_text") or "AI action",
+        "risk_class": request_row.get("risk_class"),
+        "attention_reason": attention_reason,
+        "recovery_actions": _recovery_actions_for_request(request_row, session),
+        "state_summary": _build_request_state_summary(request_row, session),
+        "runtime": result_summary.get("runtime"),
+        "created_at": request_row.get("created_at"),
+        "updated_at": request_row.get("updated_at"),
+    }
+    if location_name is not None:
+        item["location_name"] = location_name
+    if request_row.get("organization_id") is not None:
+        item["organization_id"] = request_row.get("organization_id")
+    return item

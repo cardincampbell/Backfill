@@ -62,6 +62,9 @@ class Settings:
     backfill_ai_action_session_ttl_minutes: int = int(
         os.environ.get("BACKFILL_AI_ACTION_SESSION_TTL_MINUTES", "30")
     )
+    backfill_ai_resolving_attention_minutes: int = int(
+        os.environ.get("BACKFILL_AI_RESOLVING_ATTENTION_MINUTES", "5")
+    )
     backfill_ai_disabled_actions: List[str] = [
         value.strip().lower()
         for value in os.environ.get("BACKFILL_AI_DISABLED_ACTIONS", "").split(",")

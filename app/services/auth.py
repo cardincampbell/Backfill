@@ -44,7 +44,7 @@ _DASHBOARD_PROTECTED_PATTERNS = (
     re.compile(r"^/api/locations/\d+/(connect-sync|sync-roster|sync-schedule)$"),
     re.compile(r"^/api/locations/\d+/(settings|status|roster|eligible-workers|enrollment-invite-preview|enrollment-invites)$"),
     re.compile(r"^/api/locations/\d+/backfill-shifts-(metrics|activity)$"),
-    re.compile(r"^/api/locations/\d+/(ai-action-history|ai-runtime-stats|ai-capabilities|ai-active-sessions)$"),
+    re.compile(r"^/api/locations/\d+/(ai-action-history|ai-action-attention|ai-runtime-stats|ai-capabilities|ai-active-sessions)$"),
     re.compile(r"^/api/locations/\d+/import-jobs$"),
     re.compile(r"^/api/ai-actions($|/)"),
     re.compile(r"^/api/import-jobs/\d+/(upload|mapping|rows|error-csv|commit)$"),

@@ -118,6 +118,33 @@ class AiActiveSessionsResponse(BaseModel):
     items: list[AiActiveSessionItem] = Field(default_factory=list)
 
 
+class AiActionAttentionItem(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    action_request_id: int
+    location_id: int
+    channel: str
+    status: str
+    action_type: Optional[str] = None
+    text: str
+    summary: str
+    risk_class: Optional[str] = None
+    attention_reason: Optional[str] = None
+    recovery_actions: list[dict[str, Any]] = Field(default_factory=list)
+    state_summary: dict[str, Any] = Field(default_factory=dict)
+    runtime: Optional[dict[str, Any]] = None
+    created_at: str
+    updated_at: Optional[str] = None
+
+
+class AiActionAttentionResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    location_id: int
+    summary: dict[str, Any] = Field(default_factory=dict)
+    items: list[AiActionAttentionItem] = Field(default_factory=list)
+
+
 class InternalAiActionRecentResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -127,4 +154,11 @@ class InternalAiActionRecentResponse(BaseModel):
 class InternalAiActionSessionsResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InternalAiActionAttentionResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    summary: dict[str, Any] = Field(default_factory=dict)
     items: list[dict[str, Any]] = Field(default_factory=list)

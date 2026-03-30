@@ -714,6 +714,84 @@ def test_internal_ai_action_recovery_routes(client, public_client, monkeypatch):
     assert retried.json()["action_request_id"] != second_action_id
 
 
+def test_ai_action_attention_routes_show_pending_and_expired_items(client, public_client, monkeypatch):
+    auth_messages = []
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms",
+        lambda to, body, metadata=None, dynamic_variables=None: auth_messages.append((to, body)) or "SM-AUTH",
+    )
+
+    location = client.post(
+        "/api/locations",
+        json={
+            "name": "AI Attention Cafe",
+            "manager_name": "Pat Lead",
+            "manager_phone": "+13105550439",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    ).json()
+    schedule_id, shift_id = _create_schedule_with_open_shift(client, location["id"])
+    headers = _exchange_dashboard_session(public_client, "+13105550439", auth_messages)
+
+    pending = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert pending.status_code == 200
+    pending_action_id = pending.json()["action_request_id"]
+
+    monkeypatch.setattr(settings, "backfill_ai_action_session_ttl_minutes", -1)
+    expired = public_client.post(
+        "/api/ai-actions/web",
+        headers=headers,
+        json={
+            "location_id": location["id"],
+            "text": "Delete the dishwasher shift",
+            "context": {
+                "schedule_id": schedule_id,
+                "week_start_date": "2026-04-13",
+                "shift_id": shift_id,
+            },
+        },
+    )
+    assert expired.status_code == 200
+    expired_action_id = expired.json()["action_request_id"]
+    expire_run = client.post(f"/api/internal/ai-actions/expire-stale?location_id={location['id']}")
+    assert expire_run.status_code == 200
+    monkeypatch.setattr(settings, "backfill_ai_action_session_ttl_minutes", 30)
+
+    attention = public_client.get(
+        f"/api/locations/{location['id']}/ai-action-attention",
+        headers=headers,
+    )
+    assert attention.status_code == 200
+    payload = attention.json()
+    assert payload["summary"]["total"] >= 2
+    items_by_id = {item["action_request_id"]: item for item in payload["items"]}
+    assert items_by_id[pending_action_id]["attention_reason"] == "pending_confirmation"
+    assert any(action["type"] == "open" for action in items_by_id[pending_action_id]["recovery_actions"])
+    assert items_by_id[expired_action_id]["attention_reason"] == "expired"
+    assert any(action["type"] == "retry" for action in items_by_id[expired_action_id]["recovery_actions"])
+
+    internal_attention = client.get(f"/api/internal/ai-actions/attention?location_id={location['id']}")
+    assert internal_attention.status_code == 200
+    internal_payload = internal_attention.json()
+    assert internal_payload["summary"]["total"] >= 2
+    internal_items = {item["action_request_id"]: item for item in internal_payload["items"]}
+    assert internal_items[pending_action_id]["location_name"] == location["name"]
+    assert internal_items[expired_action_id]["attention_reason"] == "expired"
+
+
 def test_ai_web_publish_action_requires_confirmation_and_can_be_confirmed(client, public_client, monkeypatch):
     auth_messages = []
     outbound_messages = []

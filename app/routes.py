@@ -26,10 +26,12 @@ from app.models.ai_actions import (
     AiActionFeedbackRequest,
     AiActionFeedbackResponse,
     AiActionHistoryResponse,
+    AiActionAttentionResponse,
     AiActiveSessionsResponse,
     AiCapabilitiesResponse,
     AiActionResponse,
     AiRuntimeStatsResponse,
+    InternalAiActionAttentionResponse,
     InternalAiActionSessionsResponse,
     InternalAiActionRecentResponse,
     AiWebActionRequest,
@@ -895,6 +897,28 @@ async def get_location_ai_action_history(
             status=status,
             channel=channel,
             fallback_only=fallback_only,
+            limit=limit,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 403 if "forbidden" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/locations/{location_id}/ai-action-attention", response_model=AiActionAttentionResponse)
+async def get_location_ai_action_attention(
+    location_id: int,
+    include_resolved: bool = Query(default=False),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await ai_actions_svc.list_location_action_attention(
+            db,
+            principal=principal,
+            location_id=location_id,
+            include_resolved=include_resolved,
             limit=limit,
         )
     except ValueError as exc:
@@ -3491,6 +3515,23 @@ async def list_recent_ai_actions_internal(
         organization_id=organization_id,
         status=status,
         channel=channel,
+        limit=limit,
+    )
+
+
+@router.get("/internal/ai-actions/attention", response_model=InternalAiActionAttentionResponse)
+async def list_ai_action_attention_internal(
+    location_id: Optional[int] = Query(default=None),
+    organization_id: Optional[int] = Query(default=None),
+    include_resolved: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    return await ai_actions_svc.list_ai_action_attention_internal(
+        db,
+        location_id=location_id,
+        organization_id=organization_id,
+        include_resolved=include_resolved,
         limit=limit,
     )
 

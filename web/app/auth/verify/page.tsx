@@ -34,7 +34,7 @@ function VerifyContent() {
         const secure = window.location.protocol === "https:" ? "; Secure" : "";
         document.cookie = `${SESSION_COOKIE}=${result.session_token}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`;
 
-        router.replace("/dashboard");
+        router.replace("/onboarding");
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Verification failed");
