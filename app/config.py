@@ -64,6 +64,10 @@ class Settings:
         "GOOGLE_PLACES_API_KEY",
         os.environ.get("GOOGLE_MAPS_API_KEY", ""),
     )
+    backfill_google_places_enabled: bool = os.environ.get(
+        "BACKFILL_GOOGLE_PLACES_ENABLED",
+        "0",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     google_places_region_code: str = os.environ.get(
         "BACKFILL_GOOGLE_PLACES_REGION_CODE",
         "US",

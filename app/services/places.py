@@ -53,6 +53,11 @@ def _fallback_place_id(name: str, formatted_address: str) -> str:
     return "fallback:" + "".join(ch if ch.isalnum() else "-" for ch in raw).strip("-")
 
 
+def _manual_place_id(query: str) -> str:
+    raw = query.strip().lower()
+    return "manual:" + "".join(ch if ch.isalnum() else "-" for ch in raw).strip("-")
+
+
 def _build_fallback_suggestion(item: dict[str, str]) -> dict[str, str]:
     name = item["name"]
     formatted_address = item["formatted_address"]
@@ -67,21 +72,48 @@ def _build_fallback_suggestion(item: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _build_manual_suggestion(query: str) -> dict[str, str | None]:
+    normalized = query.strip()
+    return {
+        "place_id": _manual_place_id(normalized),
+        "provider": "fallback",
+        "label": normalized,
+        "name": normalized,
+        "formatted_address": None,
+        "secondary_text": "Use typed location",
+        "resource_name": None,
+    }
+
+
 def _fallback_autocomplete(query: str) -> dict[str, Any]:
     normalized = query.strip().lower()
     if len(normalized) < 2:
         return {"provider": "fallback", "suggestions": []}
-    suggestions = []
+    suggestions = [_build_manual_suggestion(query)]
     for item in _FALLBACK_SUGGESTIONS:
         haystack = f"{item['name']} {item['formatted_address']}".lower()
         if normalized in haystack:
-            suggestions.append(_build_fallback_suggestion(item))
+            suggestion = _build_fallback_suggestion(item)
+            if suggestion["label"].lower() != query.strip().lower():
+                suggestions.append(suggestion)
         if len(suggestions) >= 8:
             break
     return {"provider": "fallback", "suggestions": suggestions}
 
 
 def _fallback_details(place_id: str) -> dict[str, Any] | None:
+    if place_id.startswith("manual:"):
+        raw = place_id[len("manual:"):].replace("-", " ").strip()
+        name = " ".join(part.capitalize() for part in raw.split()) or "Custom location"
+        return {
+            "place_id": place_id,
+            "provider": "fallback",
+            "label": name,
+            "name": name,
+            "formatted_address": None,
+            "secondary_text": "Use typed location",
+            "resource_name": None,
+        }
     for item in _FALLBACK_SUGGESTIONS:
         suggestion = _build_fallback_suggestion(item)
         if suggestion["place_id"] == place_id:
@@ -127,9 +159,9 @@ def _parse_autocomplete_response(payload: dict[str, Any]) -> list[dict[str, Any]
 async def autocomplete_places(query: str, *, session_token: str | None = None) -> dict[str, Any]:
     normalized = query.strip()
     if len(normalized) < 2:
-        return {"provider": "fallback" if not settings.google_places_api_key else "google", "suggestions": []}
+        return {"provider": "fallback", "suggestions": []}
 
-    if not settings.google_places_api_key:
+    if not settings.backfill_google_places_enabled or not settings.google_places_api_key:
         return _fallback_autocomplete(normalized)
 
     body: dict[str, Any] = {
@@ -163,7 +195,7 @@ async def get_place_details(place_id: str, *, session_token: str | None = None) 
     if not normalized:
         return None
 
-    if not settings.google_places_api_key:
+    if not settings.backfill_google_places_enabled or not settings.google_places_api_key:
         return _fallback_details(normalized)
 
     params: dict[str, str] = {}
