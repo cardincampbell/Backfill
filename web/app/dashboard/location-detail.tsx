@@ -503,8 +503,8 @@ export async function renderLocationDetailPage({
       )}
 
       <section className="section">
-        <Link className="text-link" href="/dashboard">
-          Back to dashboard
+        <Link className="text-link" href="/dashboard/ops">
+          All locations
         </Link>
       </section>
     </main>
