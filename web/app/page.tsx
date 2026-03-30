@@ -7,7 +7,7 @@ export default function HomePage() {
       <nav className="lp-nav">
         <div className="lp-nav-inner">
           <Link href="/" className="lp-logo">Backfill</Link>
-          <Link href="/try" className="lp-nav-cta">Try Backfill Free</Link>
+          <Link href="/onboarding" className="lp-nav-cta">Schedule Free Demo</Link>
         </div>
       </nav>
 
@@ -23,9 +23,9 @@ export default function HomePage() {
             last-minute shift changes automatically &mdash; so you never have to.
           </p>
           <div className="lp-hero-actions">
-            <Link href="/try" className="lp-btn-primary">Try Backfill Free</Link>
+            <Link href="/onboarding" className="lp-btn-primary">Schedule Free Demo</Link>
           </div>
-          <p className="lp-hero-note">Or call us at <a href="tel:18002225345" style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--muted)" }}>1-800-BACKFILL</a> — we&rsquo;ll have you live in 24 hours.</p>
+          <p className="lp-hero-note">Or call us at <a href="tel:18002225345" style={{ color: "inherit", textDecoration: "underline", textDecorationColor: "var(--muted)" }}>1-800-BACKFILL</a> &mdash; we&rsquo;ll have you live in 24 hours.</p>
 
           <div className="lp-stats-row">
             <div className="lp-stat">
@@ -305,8 +305,8 @@ export default function HomePage() {
       <section className="lp-section lp-final-cta">
         <div className="lp-section-inner lp-final-cta-inner">
           <h2>Ready to stop making those 6 AM calls?</h2>
-          <p>One call to us, and you&rsquo;ll never have to make that call again.</p>
-          <Link href="/try" className="lp-btn-primary lp-btn-lg">Try Backfill Free</Link>
+          <p>See how Backfill handles it in a 20-minute demo. No pressure, no commitment.</p>
+          <Link href="/onboarding" className="lp-btn-primary lp-btn-lg">Schedule Free Demo</Link>
           <span className="lp-final-note">Or call us at <a href="tel:18002225345" style={{ color: "inherit", textDecoration: "underline" }}>1-800-BACKFILL</a> &middot; Mon&ndash;Fri 8am&ndash;6pm PT</span>
         </div>
       </section>

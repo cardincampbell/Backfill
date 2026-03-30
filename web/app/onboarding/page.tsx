@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch, API_BASE_URL } from "@/lib/api/client";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +56,6 @@ export default function OnboardingPage() {
     staffBand: "",
     scheduler: "",
   });
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const currentStep = STEPS[stepIndex];
@@ -76,7 +74,7 @@ export default function OnboardingPage() {
   }
 
   function goForward() {
-    if (!canAdvance() || loading) return;
+    if (!canAdvance()) return;
     if (isLast) {
       submit();
     } else {
@@ -93,30 +91,8 @@ export default function OnboardingPage() {
     setError("");
   }
 
-  async function submit() {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/locations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.business.trim(),
-          organization_name: form.business.trim(),
-          manager_name: form.name.trim(),
-          employee_count: STAFF_BAND_VALUES[form.staffBand] ?? null,
-          scheduling_platform: SCHEDULER_VALUES[form.scheduler] ?? "backfill_native",
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { detail?: string }).detail ?? "Setup failed. Please try again.");
-      }
-      router.replace("/dashboard");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setLoading(false);
-    }
+  function submit() {
+    router.replace("/dashboard");
   }
 
   function handleKey(e: React.KeyboardEvent) {
@@ -271,10 +247,10 @@ export default function OnboardingPage() {
           <button
             className="ob-btn-next"
             onClick={goForward}
-            disabled={!canAdvance() || loading}
+            disabled={!canAdvance()}
             type="button"
           >
-            {loading ? "Setting up..." : isLast ? "Get started" : "Continue"}
+            {isLast ? "Get started" : "Continue"}
           </button>
         </div>
       </div>
