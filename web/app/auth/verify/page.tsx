@@ -74,26 +74,28 @@ function VerifyContent() {
 
 export default function VerifyPage() {
   return (
-    <section style={{ maxWidth: 400, margin: "120px auto 0", padding: "0 20px" }}>
-      <div style={{ textAlign: "center", marginBottom: 32 }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 600, letterSpacing: "-0.025em" }}>
-          Backfill
-        </h1>
-      </div>
-      <Suspense
-        fallback={
-          <div className="settings-card">
-            <div className="settings-card-header">Signing in...</div>
-            <div className="settings-card-body">
-              <div style={{ textAlign: "center", padding: "8px 0" }}>
-                <p style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Loading...</p>
+    <main className="lp-signup">
+      <section style={{ maxWidth: 400, margin: "120px auto 0", padding: "0 20px", width: "100%" }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 600, letterSpacing: "-0.025em" }}>
+            Backfill
+          </h1>
+        </div>
+        <Suspense
+          fallback={
+            <div className="settings-card">
+              <div className="settings-card-header">Signing in...</div>
+              <div className="settings-card-body">
+                <div style={{ textAlign: "center", padding: "8px 0" }}>
+                  <p style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Loading...</p>
+                </div>
               </div>
             </div>
-          </div>
-        }
-      >
-        <VerifyContent />
-      </Suspense>
-    </section>
+          }
+        >
+          <VerifyContent />
+        </Suspense>
+      </section>
+    </main>
   );
 }

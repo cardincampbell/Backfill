@@ -335,7 +335,9 @@ async def require_api_request_access(
 
     principal = await _authenticate_request(request, db)
     if principal is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
+        if needs_internal or (needs_dashboard_auth and settings.backfill_dashboard_auth_required):
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return None
     if needs_internal and not principal.is_internal:
         raise HTTPException(status_code=403, detail="Internal API key required")
 
@@ -354,6 +356,8 @@ async def require_dashboard_session(
     request: Request,
     db: aiosqlite.Connection = Depends(get_db),
 ) -> AuthPrincipal:
+    if not settings.backfill_dashboard_auth_required:
+        return AuthPrincipal(principal_type="internal")
     principal = _request_principal(request)
     if principal is None:
         principal = await _authenticate_request(request, db)

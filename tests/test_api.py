@@ -137,6 +137,7 @@ def test_internal_backfill_routes_require_internal_key(client, public_client):
 
 def test_dashboard_access_sms_exchange_and_location_scope(client, public_client, monkeypatch):
     sent_messages = []
+    monkeypatch.setattr(settings, "backfill_dashboard_auth_required", True)
     monkeypatch.setattr(
         "app.services.messaging.send_sms",
         lambda to, body, metadata=None, dynamic_variables=None: sent_messages.append((to, body)) or "SM-AUTH",

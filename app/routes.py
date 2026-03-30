@@ -3157,9 +3157,9 @@ async def create_onboarding_link(
     from app.services import onboarding as onboarding_svc
 
     principal = auth_svc.get_request_principal(request)
-    if principal is None:
+    if principal is None and settings.backfill_dashboard_auth_required:
         raise HTTPException(status_code=401, detail="Authentication required")
-    if not principal.is_internal:
+    if principal is not None and not principal.is_internal:
         await auth_svc.ensure_location_access(db, principal, body.location_id)
 
     try:

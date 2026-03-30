@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { API_BASE_URL, apiFetch } from "@/lib/api/client";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,7 @@ export default function OnboardingPage() {
     scheduler: "",
   });
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const currentStep = STEPS[stepIndex];
   const progress = ((stepIndex + 1) / STEPS.length) * 100;
@@ -74,9 +76,9 @@ export default function OnboardingPage() {
   }
 
   function goForward() {
-    if (!canAdvance()) return;
+    if (!canAdvance() || submitting) return;
     if (isLast) {
-      submit();
+      void submit();
     } else {
       setDirection("forward");
       setStepIndex((i) => i + 1);
@@ -91,8 +93,43 @@ export default function OnboardingPage() {
     setError("");
   }
 
-  function submit() {
-    router.replace("/dashboard");
+  async function submit() {
+    setSubmitting(true);
+    setError("");
+    try {
+      const schedulerValue = SCHEDULER_VALUES[form.scheduler] ?? "backfill_native";
+      const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.business.trim(),
+          organization_name: form.business.trim(),
+          manager_name: form.name.trim(),
+          employee_count: STAFF_BAND_VALUES[form.staffBand] ?? undefined,
+          scheduling_platform: schedulerValue,
+          operating_mode: schedulerValue === "backfill_native" ? "backfill_shifts" : "integration",
+          backfill_shifts_enabled: true,
+          backfill_shifts_launch_state: "enabled",
+          onboarding_info: [
+            `Role: ${form.role}`,
+            `Locations: ${form.locationCount}`,
+            `Staff band: ${form.staffBand}`,
+            schedulerValue === "backfill_native" ? "Scheduler: none" : `Scheduler: ${form.scheduler}`,
+          ].join(" · "),
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Could not finish onboarding");
+      }
+
+      const location = (await response.json()) as { id: number };
+      router.replace(`/dashboard/locations/${location.id}?tab=schedule`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not finish onboarding");
+      setSubmitting(false);
+    }
   }
 
   function handleKey(e: React.KeyboardEvent) {
@@ -247,10 +284,10 @@ export default function OnboardingPage() {
           <button
             className="ob-btn-next"
             onClick={goForward}
-            disabled={!canAdvance()}
+            disabled={!canAdvance() || submitting}
             type="button"
           >
-            {isLast ? "Get started" : "Continue"}
+            {isLast ? (submitting ? "Starting..." : "Get started") : "Continue"}
           </button>
         </div>
       </div>

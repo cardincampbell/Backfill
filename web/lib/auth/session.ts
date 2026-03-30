@@ -13,6 +13,9 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE } from "./constants";
 
+const AUTH_REQUIRED =
+  process.env.NEXT_PUBLIC_BACKFILL_DASHBOARD_AUTH_REQUIRED === "true";
+
 const API_BASE_URL =
   process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ??
   (process.env.NODE_ENV === "production"
@@ -64,6 +67,16 @@ export async function getSession(): Promise<Session | null> {
  * Redirects to /login if no session exists.
  */
 export async function requireAuth(): Promise<Session> {
+  if (!AUTH_REQUIRED) {
+    return {
+      principal_type: "preview",
+      session_id: null,
+      subject_phone: null,
+      organization: null,
+      location_ids: [],
+      locations: [],
+    };
+  }
   const session = await getSession();
   if (!session) {
     redirect("/login");

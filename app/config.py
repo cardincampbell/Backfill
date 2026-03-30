@@ -39,6 +39,10 @@ class Settings:
     backfill_webhook_url: str = os.environ.get("BACKFILL_WEBHOOK_URL", "")
     backfill_web_base_url: str = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
     backfill_internal_api_key: str = os.environ.get("BACKFILL_INTERNAL_API_KEY", "")
+    backfill_dashboard_auth_required: bool = os.environ.get(
+        "BACKFILL_DASHBOARD_AUTH_REQUIRED",
+        "0",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     backfill_ai_provider: str = os.environ.get("BACKFILL_AI_PROVIDER", "rules")
     backfill_ai_model: str = os.environ.get("BACKFILL_AI_MODEL", "rules-v1")
     backfill_ai_openai_channels: List[str] = [
