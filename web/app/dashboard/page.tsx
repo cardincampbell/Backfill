@@ -13,10 +13,11 @@ export default async function DashboardPage() {
   if (!locations.length) {
     return (
       <main className="section">
-        <div className="page-head">
-          <span className="eyebrow">Manager workspace</span>
-          <h1>No locations yet</h1>
-          <p>Create your first location to open the schedule workspace.</p>
+        <div className="workspace-shell-head">
+          <div className="workspace-shell-head-copy">
+            <h1>No locations yet</h1>
+            <p>Create your first location to open the schedule workspace.</p>
+          </div>
         </div>
         <EmptyState
           title="Start with one location"

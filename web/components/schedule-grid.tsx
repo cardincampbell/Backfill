@@ -80,6 +80,28 @@ function workerInitials(name: string): string {
   return parts.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "?";
 }
 
+function countBackfillWins(shifts: ScheduleShift[]): number {
+  return shifts.filter(
+    (shift) =>
+      Boolean(shift.assignment?.filled_via_backfill) ||
+      shift.coverage?.status === "backfilled",
+  ).length;
+}
+
+function estimateManagerHoursSaved(shifts: ScheduleShift[]): string {
+  const backfillWins = countBackfillWins(shifts);
+  const pendingAiAssist = shifts.filter(
+    (shift) =>
+      shift.coverage?.status === "awaiting_manager_approval" ||
+      shift.coverage?.status === "active",
+  ).length;
+  const value = backfillWins * 0.8 + pendingAiAssist * 0.15;
+  if (value <= 0) {
+    return "0.0h";
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}h`;
+}
+
 export function ScheduleGrid({
   shifts,
   exceptions,
@@ -100,6 +122,12 @@ export function ScheduleGrid({
   const roles = [...new Set(shifts.map((s) => s.role))].sort();
   const dates = DAY_LABELS.map((_, i) => dateForDay(weekStartDate, i));
   const isReadOnly = lifecycleState === "archived";
+  const totalShifts = shifts.length;
+  const fillRate = totalShifts > 0 ? Math.round((summary.filled_shifts / totalShifts) * 100) : 0;
+  const needsAttention = Math.max(
+    summary.action_required_count ?? 0,
+    summary.attendance_issues ?? 0,
+  );
   const roleSections = roles.map((role) => {
     const roleShifts = shifts.filter((shift) => shift.role === role);
     const openShifts = roleShifts.filter((shift) => !shift.assignment?.worker_id);
@@ -245,8 +273,12 @@ export function ScheduleGrid({
       {/* Summary */}
       <div className="summary-bar">
         <div className="summary-bar-item">
-          <strong>{summary.filled_shifts}</strong>
-          <span>Filled</span>
+          <strong>{estimateManagerHoursSaved(shifts)}</strong>
+          <span>Manager time saved</span>
+        </div>
+        <div className="summary-bar-item">
+          <strong>{fillRate}%</strong>
+          <span>Fill rate</span>
         </div>
         <div className="summary-bar-item">
           <strong>{summary.open_shifts}</strong>
@@ -256,28 +288,14 @@ export function ScheduleGrid({
           <strong>{summary.at_risk_shifts}</strong>
           <span>At risk</span>
         </div>
-        {(summary.action_required_count ?? 0) > 0 && (
-          <div className="summary-bar-item">
-            <strong style={{ color: "var(--accent)" }}>{summary.action_required_count}</strong>
-            <span>Action needed</span>
-          </div>
-        )}
-        {(summary.attendance_issues ?? 0) > 0 && (
-          <div className="summary-bar-item">
-            <strong>{summary.attendance_issues}</strong>
-            <span>Attendance</span>
-          </div>
-        )}
-        {summary.warning_count > 0 && !(summary.action_required_count) && (
-          <div className="summary-bar-item">
-            <strong>{summary.warning_count}</strong>
-            <span>Warnings</span>
-          </div>
-        )}
         <div className="summary-bar-item">
-          <span className={lifecyclePillClass(lifecycleState)}>
-            {lifecycleState}
-          </span>
+          <strong style={needsAttention > 0 ? { color: "var(--accent)" } : undefined}>
+            {needsAttention}
+          </strong>
+          <span>Attention</span>
+        </div>
+        <div className="summary-bar-item summary-bar-item-pill">
+          <span className={lifecyclePillClass(lifecycleState)}>{lifecycleState}</span>
         </div>
       </div>
 

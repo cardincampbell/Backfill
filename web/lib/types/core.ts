@@ -5,6 +5,10 @@ export type Location = {
   name: string;
   organization_id?: number | null;
   organization_name?: string | null;
+  place_display_name?: string | null;
+  place_brand_name?: string | null;
+  place_location_label?: string | null;
+  place_formatted_address?: string | null;
   vertical?: string | null;
   address?: string | null;
   employee_count?: number | null;

@@ -1,11 +1,9 @@
 import Link from "next/link";
-import { Suspense } from "react";
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
 import { StatCard } from "@/components/stat-card";
-import { TabBar } from "@/components/tab-bar";
 import { ScheduleGrid } from "@/components/schedule-grid";
 import { ImportStatus } from "@/components/import-status";
 import { ImportFlow } from "@/components/import-flow";
@@ -42,7 +40,6 @@ import type {
   ManagerActionsResponse,
   ScheduleExceptionQueueResponse,
   ScheduleShift,
-  WeeklyScheduleResponse,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -58,13 +55,6 @@ type RenderLocationDetailPageArgs = {
   locationId: number;
   query?: LocationDetailQuery;
   basePath: string;
-};
-
-type ManagerMetric = {
-  label: string;
-  value: string;
-  hint: string;
-  tone?: "default" | "accent" | "success";
 };
 
 function currentMonday(): string {
@@ -147,56 +137,12 @@ function legacyDetailPath(locationId: number, query?: string): string {
     : `/dashboard/locations/${locationId}`;
 }
 
-function countBackfillWins(shifts: ScheduleShift[]): number {
-  return shifts.filter(
-    (shift) =>
-      Boolean(shift.assignment?.filled_via_backfill) ||
-      shift.coverage?.status === "backfilled",
-  ).length;
-}
-
-function estimateManagerHoursSaved(shifts: ScheduleShift[]): number {
-  const backfillWins = countBackfillWins(shifts);
-  const pendingAiAssist = shifts.filter(
-    (shift) =>
-      shift.coverage?.status === "awaiting_manager_approval" ||
-      shift.coverage?.status === "active",
-  ).length;
-  return backfillWins * 0.8 + pendingAiAssist * 0.15;
-}
-
-function formatEstimatedHours(value: number): string {
-  if (value <= 0) {
-    return "0.0h";
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}h`;
-}
-
-function formatPercent(value: number): string {
-  return `${Math.round(value)}%`;
-}
-
 function scheduleLifecyclePillClass(lifecycleState?: string | null): string {
   if (lifecycleState === "published") return "pill pill-published";
   if (lifecycleState === "amended") return "pill pill-amended";
   if (lifecycleState === "recalled") return "pill pill-recalled";
   if (lifecycleState === "draft") return "pill pill-draft";
   return "pill";
-}
-
-function buildExceptionFeed(
-  locationId: number,
-  exceptions: WeeklyScheduleResponse["exceptions"],
-): ScheduleExceptionQueueResponse {
-  return {
-    location_id: locationId,
-    summary: {
-      total: exceptions.length,
-      action_required: exceptions.filter((exception) => exception.action_required).length,
-      critical: exceptions.filter((exception) => exception.severity === "critical").length,
-    },
-    exceptions,
-  };
 }
 
 function emptyManagerActions(locationId: number): ManagerActionsResponse {
@@ -207,109 +153,24 @@ function emptyManagerActions(locationId: number): ManagerActionsResponse {
   };
 }
 
-function buildManagerMetrics(
-  schedule: WeeklyScheduleResponse | null,
-  managerActions: ManagerActionsResponse,
-): ManagerMetric[] {
-  if (!schedule?.schedule) {
-    return [
-      {
-        label: "Manager hours saved",
-        value: "0.0h",
-        hint: "Starts accruing once Backfill handles live fill work.",
-      },
-      {
-        label: "Open shifts",
-        value: "0",
-        hint: "No shifts drafted yet for this week.",
-      },
-      {
-        label: "At-risk shifts",
-        value: "0",
-        hint: "Coverage issues surface here once the week is active.",
-      },
-      {
-        label: "Fill rate",
-        value: "0%",
-        hint: "Calculated after the first weekly draft exists.",
-      },
-      {
-        label: "Needs attention",
-        value: String(managerActions.summary.total),
-        hint: "Outstanding approvals and reviews waiting on the manager.",
-        tone: managerActions.summary.total > 0 ? "accent" : "default",
-      },
-    ];
-  }
+function formatWeekRange(weekStartDate: string): string {
+  const start = new Date(`${weekStartDate}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
 
-  const totalShifts = schedule.shifts.length;
-  const fillRate = totalShifts > 0 ? (schedule.summary.filled_shifts / totalShifts) * 100 : 0;
-  const needsAttention = Math.max(
-    schedule.summary.action_required_count ?? 0,
-    managerActions.summary.total,
-  );
-
-  return [
-    {
-      label: "Manager hours saved",
-      value: formatEstimatedHours(estimateManagerHoursSaved(schedule.shifts)),
-      hint: "Estimated from automated fill coverage and Backfill-led interventions this week.",
-      tone: countBackfillWins(schedule.shifts) > 0 ? "success" : "default",
-    },
-    {
-      label: "Open shifts",
-      value: String(schedule.summary.open_shifts),
-      hint: "Unassigned or still open on the live weekly schedule.",
-      tone: schedule.summary.open_shifts > 0 ? "accent" : "default",
-    },
-    {
-      label: "At-risk shifts",
-      value: String(schedule.summary.at_risk_shifts),
-      hint: "Coverage pressure across callouts, pending claims, and active escalation.",
-      tone: schedule.summary.at_risk_shifts > 0 ? "accent" : "default",
-    },
-    {
-      label: "Fill rate",
-      value: formatPercent(fillRate),
-      hint: totalShifts > 0 ? `${schedule.summary.filled_shifts} of ${totalShifts} shifts currently covered.` : "No shifts in this week yet.",
-      tone: fillRate >= 90 ? "success" : fillRate < 70 ? "accent" : "default",
-    },
-    {
-      label: "Needs attention",
-      value: String(needsAttention),
-      hint: "Approvals, attendance reviews, and exception items requiring a manager decision.",
-      tone: needsAttention > 0 ? "accent" : "default",
-    },
-  ];
+  const sameMonth = start.getMonth() === end.getMonth();
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const startLabel = start.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  const endLabel = end.toLocaleDateString("en-US", {
+    month: sameMonth ? undefined : "short",
+    day: "numeric",
+    year: sameYear ? undefined : "numeric",
+  });
+  return `${startLabel} - ${endLabel}`;
 }
-
-function ManagerMetricStrip({ metrics }: { metrics: ManagerMetric[] }) {
-  return (
-    <div className="workspace-kpis">
-      {metrics.map((metric) => (
-        <div
-          key={metric.label}
-          className={`workspace-kpi${metric.tone ? ` workspace-kpi-${metric.tone}` : ""}`}
-        >
-          <div className="workspace-kpi-label">{metric.label}</div>
-          <div className="workspace-kpi-value">{metric.value}</div>
-          <div className="workspace-kpi-hint">{metric.hint}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const LOCATION_TABS = [
-  { key: "schedule", label: "Schedule" },
-  { key: "coverage", label: "Coverage" },
-  { key: "actions", label: "Actions" },
-  { key: "exceptions", label: "Exceptions" },
-  { key: "roster", label: "Roster" },
-  { key: "imports", label: "Imports" },
-  { key: "overview", label: "Overview" },
-  { key: "settings", label: "Settings" },
-];
 
 async function runLocationAction(formData: FormData) {
   "use server";
@@ -413,17 +274,32 @@ export async function renderLocationDetailPage({
   const modeLabel = describeMode(status.integration.mode);
   const writebackEnabled = Boolean(status.integration.writeback_enabled);
   const writebackSupported = Boolean(status.integration.writeback_supported);
+  const organizationName = status.location.organization_name?.trim();
+  const brandName = status.location.place_brand_name?.trim() ?? organizationName;
+  const locationName = status.location.name.trim();
+  const placeLocationLabel = status.location.place_location_label?.trim();
+  const locationTitle =
+    placeLocationLabel &&
+    (!brandName || placeLocationLabel.toLowerCase() !== brandName.toLowerCase())
+      ? placeLocationLabel
+      : locationName;
+  const showOrganizationName =
+    Boolean(brandName) &&
+    brandName!.toLowerCase() !== locationTitle.toLowerCase();
+  const locationMeta = [status.location.place_formatted_address ?? status.location.address]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 
   return (
     <main className="section">
-      <div className="page-head">
-        <span className="eyebrow">Manager workspace</span>
-        <h1>{status.location.organization_name ?? status.location.name}</h1>
-        <p>
-          {status.location.name}
-          {status.location.address ? ` · ${status.location.address}` : ""}
-          {status.location.vertical ? ` · ${status.location.vertical}` : ""}
-        </p>
+      <div className="workspace-shell-head">
+        <div className="workspace-shell-head-copy">
+          {showOrganizationName ? (
+            <span className="workspace-shell-brand">{brandName}</span>
+          ) : null}
+          <h1>{locationTitle}</h1>
+          {locationMeta ? <p>{locationMeta}</p> : null}
+        </div>
       </div>
 
       {action.endsWith("_ok") ? (
@@ -444,18 +320,9 @@ export async function renderLocationDetailPage({
         </section>
       ) : null}
 
-      <Suspense>
-        <TabBar
-          tabs={LOCATION_TABS}
-          basePath={basePath}
-          preserveParams={["week_start", "job_id", "row", "shift_id"]}
-        />
-      </Suspense>
-
       {activeTab === "schedule" && (
         <ScheduleTabContent
           locationId={locationId}
-          location={status}
           weekStart={weekStart}
           basePath={basePath}
         />
@@ -501,12 +368,6 @@ export async function renderLocationDetailPage({
           writebackSupported={writebackSupported}
         />
       )}
-
-      <section className="section">
-        <Link className="text-link" href="/dashboard/ops">
-          All locations
-        </Link>
-      </section>
     </main>
   );
 }
@@ -753,12 +614,10 @@ async function OverviewTabContent({
 
 async function ScheduleTabContent({
   locationId,
-  location,
   weekStart,
   basePath,
 }: {
   locationId: number;
-  location: LocationStatusResponse;
   weekStart?: string;
   basePath: string;
 }) {
@@ -772,38 +631,24 @@ async function ScheduleTabContent({
 
   const workers = eligibleResponse?.workers ?? [];
   const actionQueue = managerActions ?? emptyManagerActions(locationId);
-  const metrics = buildManagerMetrics(schedule, actionQueue);
-  const organizationLabel = location.location.organization_name ?? "Independent business";
-  const locationLabel = location.location.name;
 
   if (!schedule || !schedule.schedule) {
     return (
       <section className="section workspace-shell workspace-shell-manager">
-      <div className="workspace-top workspace-top-manager">
-        <div className="workspace-context">
-          <span className="workspace-kicker">{organizationLabel} / {locationLabel}</span>
-          <h2>{locationLabel} schedule</h2>
-          <p>Start from a template, import the roster, or ask Backfill to draft the first workable week for this location.</p>
-        </div>
-        <div className="workspace-top-actions">
-            <WeekNav locationId={locationId} weekStartDate={targetWeek} basePath={basePath} />
-            <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
-              Import CSV
-            </Link>
-          </div>
-        </div>
-
-        <ManagerMetricStrip metrics={metrics} />
-
         <div className="workspace-layout workspace-layout-manager">
           <div className="workspace-main workspace-main-manager">
             <div className="workspace-section">
-              <div className="workspace-section-headline">
+              <div className="workspace-section-headline workspace-section-headline-board">
                 <div>
-                  <h3>Schedule canvas</h3>
-                  <p>No weekly draft exists yet. Use one of the launch paths below to get to a first-pass schedule fast.</p>
+                  <h3>{formatWeekRange(targetWeek)}</h3>
+                  <p>No schedule yet for this week.</p>
                 </div>
-                <span className="workspace-pill">Week of {targetWeek}</span>
+                <div className="workspace-top-actions">
+                  <WeekNav locationId={locationId} weekStartDate={targetWeek} basePath={basePath} />
+                  <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
+                    Import CSV
+                  </Link>
+                </div>
               </div>
               <EmptyState
                 title="No schedule found for this week"
@@ -851,7 +696,7 @@ async function ScheduleTabContent({
           </div>
 
           <aside className="workspace-rail workspace-rail-manager">
-            <div className="workspace-section workspace-section-sticky">
+            <div className="workspace-section workspace-section-sticky workspace-section-rail workspace-section-rail-ai">
               <div className="workspace-section-headline">
                 <div>
                   <h3>Backfill Copilot</h3>
@@ -880,49 +725,33 @@ async function ScheduleTabContent({
       </section>
     );
   }
-
-  const exceptionFeed = buildExceptionFeed(locationId, schedule.exceptions);
-
   return (
     <section className="section workspace-shell workspace-shell-manager">
-      <div className="workspace-top workspace-top-manager">
-        <div className="workspace-context">
-          <span className="workspace-kicker">{organizationLabel} / {locationLabel}</span>
-          <h2>{locationLabel} week board</h2>
-          <p>The schedule is the main operating surface: who works when, what is open, and what still needs a manager decision.</p>
-        </div>
-        <div className="workspace-top-actions">
-          <span className={`${scheduleLifecyclePillClass(schedule.schedule.lifecycle_state)} workspace-state-pill`}>
-            {schedule.schedule.lifecycle_state}
-          </span>
-          <WeekNav
-            locationId={locationId}
-            weekStartDate={schedule.schedule.week_start_date}
-            basePath={basePath}
-          />
-          <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
-            Import
-          </Link>
-        </div>
-      </div>
-
-      <ManagerMetricStrip metrics={metrics} />
-
       <div className="workspace-layout workspace-layout-manager">
         <div className="workspace-main workspace-main-manager">
           <div className="workspace-section workspace-section-schedule">
-            <div className="workspace-section-headline workspace-section-headline-wide">
+            <div className="workspace-section-headline workspace-section-headline-wide workspace-section-headline-board">
               <div>
-                <h3>Week of {schedule.schedule.week_start_date}</h3>
-                <p>The schedule is the main canvas. Use the actions here to publish, amend, and keep the week moving.</p>
+                <h3>{formatWeekRange(schedule.schedule.week_start_date)}</h3>
+                <p>{workers.length} scheduled team members across the visible role lanes.</p>
               </div>
-              <ScheduleActions
-                scheduleId={schedule.schedule.id}
-                locationId={locationId}
-                lifecycleState={schedule.schedule.lifecycle_state}
-                weekStartDate={schedule.schedule.week_start_date}
-                basePath={basePath}
-              />
+              <div className="workspace-top-actions">
+                <span className={`${scheduleLifecyclePillClass(schedule.schedule.lifecycle_state)} workspace-state-pill`}>
+                  {schedule.schedule.lifecycle_state}
+                </span>
+                <WeekNav
+                  locationId={locationId}
+                  weekStartDate={schedule.schedule.week_start_date}
+                  basePath={basePath}
+                />
+                <ScheduleActions
+                  scheduleId={schedule.schedule.id}
+                  locationId={locationId}
+                  lifecycleState={schedule.schedule.lifecycle_state}
+                  weekStartDate={schedule.schedule.week_start_date}
+                  basePath={basePath}
+                />
+              </div>
             </div>
             <ScheduleGrid
               shifts={schedule.shifts}
@@ -980,10 +809,10 @@ async function ScheduleTabContent({
             />
           </div>
 
-          <div className="workspace-section workspace-section-rail">
+          <div className="workspace-section workspace-section-rail workspace-section-rail-compact">
             <div className="workspace-section-headline">
               <div>
-                <h3>Needs attention</h3>
+                <h3>Action needed</h3>
                 <p>Coverage approvals and attendance decisions waiting for a manager.</p>
               </div>
               <span className="workspace-pill">{actionQueue.summary.total}</span>
@@ -991,16 +820,6 @@ async function ScheduleTabContent({
             <ManagerActionsPanel data={actionQueue} />
           </div>
 
-          <div className="workspace-section workspace-section-rail">
-            <div className="workspace-section-headline">
-              <div>
-                <h3>Shift exceptions</h3>
-                <p>Open shifts, active escalations, and any week-specific exception Backfill has already detected.</p>
-              </div>
-              <span className="workspace-pill">{exceptionFeed.summary.total}</span>
-            </div>
-            <ExceptionsFeed data={exceptionFeed} />
-          </div>
         </aside>
       </div>
     </section>
