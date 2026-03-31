@@ -1,24 +1,15 @@
 import { logout } from "@/lib/api/auth";
 import {
-  clearBrowserSessionToken,
-  getBrowserSessionToken,
-} from "@/lib/auth/browser-session";
-import {
   clearStoredPreviewPhone,
   clearStoredPreviewWorkspace,
 } from "@/lib/auth/preview";
 
 export async function signOutClientSession(redirectTo: string = "/login") {
-  const sessionToken = getBrowserSessionToken();
-
   try {
-    if (sessionToken) {
-      await logout(sessionToken);
-    }
+    await logout();
   } catch {
-    // Best-effort server revoke; clear local session regardless.
+    // Best-effort server revoke; clear local state regardless.
   } finally {
-    clearBrowserSessionToken();
     clearStoredPreviewWorkspace();
     clearStoredPreviewPhone();
     window.location.assign(redirectTo);

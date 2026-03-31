@@ -696,6 +696,11 @@ def test_owner_can_revoke_location_manager_access(client, public_client, monkeyp
 
 def test_dashboard_access_request_is_rate_limited(client, public_client, monkeypatch):
     monkeypatch.setattr(
+        settings,
+        "backfill_dashboard_access_resend_cooldown_seconds",
+        0,
+    )
+    monkeypatch.setattr(
         "app.services.messaging.send_sms_verification",
         lambda to, locale="en": {"sid": "VE-AUTH", "status": "pending", "channel": "sms"},
     )
@@ -724,6 +729,164 @@ def test_dashboard_access_request_is_rate_limited(client, public_client, monkeyp
     )
     assert limited.status_code == 429
     assert limited.json()["detail"] == "Rate limit exceeded"
+
+
+def test_dashboard_access_request_enforces_resend_cooldown(public_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-COOLDOWN", "status": "pending", "channel": "sms"},
+    )
+
+    requested = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": "+13105550421"},
+    )
+    assert requested.status_code == 200
+    assert requested.json()["resend_available_at"] is not None
+
+    repeated = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": "+13105550421"},
+    )
+    assert repeated.status_code == 400
+    assert "Please wait" in repeated.json()["detail"]
+
+
+def test_dashboard_exchange_sets_http_only_session_cookie(public_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-COOKIE", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-COOKIE-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+
+    requested = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": "+13105550422"},
+    )
+    assert requested.status_code == 200
+
+    exchanged = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": requested.json()["request_id"], "code": "123456"},
+    )
+    assert exchanged.status_code == 200
+    set_cookie = exchanged.headers.get("set-cookie", "")
+    assert "backfill_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+
+def test_data_export_requires_recent_step_up(client, public_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-EXPORT", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-EXPORT-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Export Risk Location",
+            "manager_name": "Nina Export",
+            "manager_phone": "+13105550423",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    assert created.status_code == 201
+    location_id = created.json()["id"]
+
+    headers = _exchange_dashboard_session(public_client, "+13105550423")
+
+    blocked = public_client.get(
+        f"/api/exports/workers?location_id={location_id}",
+        headers=headers,
+    )
+    assert blocked.status_code == 428
+    assert "Step-up verification required" in blocked.json()["detail"]
+
+    step_up = public_client.post(
+        "/api/auth/request-step-up",
+        headers=headers,
+        json={"purpose": "data_export"},
+    )
+    assert step_up.status_code == 200
+    assert step_up.json()["purpose"] == "step_up:data_export"
+
+    verified = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": step_up.json()["request_id"], "code": "123456"},
+    )
+    assert verified.status_code == 200
+    assert verified.json()["session_token"] is None
+
+    exported = public_client.get(
+        f"/api/exports/workers?location_id={location_id}",
+        headers=headers,
+    )
+    assert exported.status_code == 200
+
+
+def test_phone_number_update_requires_recent_step_up(client, public_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-PHONE", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-PHONE-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Phone Risk Location",
+            "manager_name": "Nina Phone",
+            "manager_phone": "+13105550424",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    assert created.status_code == 201
+    location_id = created.json()["id"]
+
+    headers = _exchange_dashboard_session(public_client, "+13105550424")
+
+    blocked = public_client.patch(
+        f"/api/locations/{location_id}",
+        headers=headers,
+        json={"manager_phone": "+13105550425"},
+    )
+    assert blocked.status_code == 428
+    assert "Step-up verification required" in blocked.json()["detail"]
+
+    step_up = public_client.post(
+        "/api/auth/request-step-up",
+        headers=headers,
+        json={"purpose": "phone_number_update"},
+    )
+    assert step_up.status_code == 200
+    assert step_up.json()["purpose"] == "step_up:phone_number_update"
+
+    verified = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": step_up.json()["request_id"], "code": "123456"},
+    )
+    assert verified.status_code == 200
+    assert verified.json()["session_token"] is None
+
+    updated = public_client.patch(
+        f"/api/locations/{location_id}",
+        headers=headers,
+        json={"manager_phone": "+13105550425"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["manager_phone"] == "+13105550425"
 
 
 def test_dashboard_access_verification_can_bootstrap_first_time_signup(client, public_client, monkeypatch):

@@ -4975,18 +4975,30 @@ body:has(.lp-onboarding) .site-main {
 
 .dashboard-rail-profile {
   margin-top: auto;
+  position: relative;
   display: grid;
-  gap: 12px;
-  padding: 10px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 8px;
 }
 
-.dashboard-rail-profile-header {
+.dashboard-rail-profile-trigger {
+  width: 100%;
   display: grid;
-  justify-items: center;
-  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.dashboard-rail-profile-trigger:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .dashboard-rail-profile-avatar {
@@ -5007,7 +5019,6 @@ body:has(.lp-onboarding) .site-main {
 .dashboard-rail-profile-copy {
   display: grid;
   gap: 2px;
-  text-align: center;
 }
 
 .dashboard-rail-profile-copy strong {
@@ -5021,18 +5032,32 @@ body:has(.lp-onboarding) .site-main {
   color: rgba(245, 247, 252, 0.65);
 }
 
-.dashboard-rail-profile-actions {
-  display: grid;
-  gap: 6px;
+.dashboard-rail-profile-caret {
+  font-size: 0.75rem;
+  color: rgba(245, 247, 252, 0.7);
 }
 
-.dashboard-rail-profile-link {
+.dashboard-rail-profile-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(10, 14, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+}
+
+.dashboard-rail-profile-item {
   width: 100%;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 32px;
-  padding: 0 10px;
+  padding: 0 12px;
   border-radius: 12px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.04);
@@ -5040,23 +5065,29 @@ body:has(.lp-onboarding) .site-main {
   font-size: 0.68rem;
   font-weight: 600;
   text-decoration: none;
+  font-family: inherit;
   transition: background var(--transition), border-color var(--transition), color var(--transition);
 }
 
-.dashboard-rail-profile-link[data-active="true"] {
+.dashboard-rail-profile-item[data-active="true"] {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.12);
   color: white;
 }
 
-.dashboard-rail-profile-link:hover {
+.dashboard-rail-profile-item:hover {
   background: rgba(255, 255, 255, 0.1);
   color: white;
 }
 
+.dashboard-rail-profile-meta {
+  padding: 0 12px;
+  font-size: 0.62rem;
+  color: rgba(245, 247, 252, 0.52);
+}
+
 .dashboard-rail-profile-signout {
   cursor: pointer;
-  font-family: inherit;
 }
 
 .dashboard-rail-profile-signout:disabled {
@@ -5563,24 +5594,20 @@ body:has(.lp-onboarding) .site-main {
 
   .dashboard-rail-profile {
     margin-top: 0;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 12px;
   }
 
-  .dashboard-rail-profile-header {
-    grid-template-columns: auto minmax(0, 1fr);
-    justify-items: start;
-    align-items: center;
-    gap: 10px;
+  .dashboard-rail-profile-trigger {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .dashboard-rail-profile-copy {
     text-align: left;
   }
 
-  .dashboard-rail-profile-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .dashboard-rail-profile-menu {
+    left: auto;
+    right: 0;
+    width: min(220px, calc(100vw - 32px));
   }
 
   .dashboard-stage {
@@ -5628,20 +5655,17 @@ body:has(.lp-onboarding) .site-main {
   }
 
   .dashboard-rail-profile {
-    grid-template-columns: 1fr;
+    width: 100%;
   }
 
-  .dashboard-rail-profile-header {
-    justify-items: center;
-    text-align: center;
+  .dashboard-rail-profile-trigger {
+    width: 100%;
   }
 
-  .dashboard-rail-profile-copy {
-    text-align: center;
-  }
-
-  .dashboard-rail-profile-actions {
-    grid-template-columns: 1fr;
+  .dashboard-rail-profile-menu {
+    width: 100%;
+    left: 0;
+    right: auto;
   }
 
   .workspace-section,

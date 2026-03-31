@@ -111,13 +111,19 @@ class Settings:
         if value.strip()
     ]
     backfill_dashboard_session_ttl_hours: int = int(
-        os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "720")
+        os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "336")
     )
     backfill_dashboard_access_request_ttl_minutes: int = int(
         os.environ.get("BACKFILL_DASHBOARD_ACCESS_REQUEST_TTL_MINUTES", "10")
     )
     backfill_dashboard_access_max_attempts: int = int(
         os.environ.get("BACKFILL_DASHBOARD_ACCESS_MAX_ATTEMPTS", "5")
+    )
+    backfill_dashboard_access_resend_cooldown_seconds: int = int(
+        os.environ.get("BACKFILL_DASHBOARD_ACCESS_RESEND_COOLDOWN_SECONDS", "30")
+    )
+    backfill_dashboard_step_up_ttl_minutes: int = int(
+        os.environ.get("BACKFILL_DASHBOARD_STEP_UP_TTL_MINUTES", "15")
     )
     backfill_location_invite_ttl_hours: int = int(
         os.environ.get("BACKFILL_LOCATION_INVITE_TTL_HOURS", "168")

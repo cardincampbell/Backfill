@@ -8,7 +8,7 @@ import {
   isPreviewAuthBypassEnabled,
   storePreviewPhone,
 } from "@/lib/auth/preview";
-import { persistBrowserSessionToken } from "@/lib/auth/browser-session";
+import { useOtpCooldown } from "@/lib/auth/use-otp-cooldown";
 
 export default function TryPage() {
   const router = useRouter();
@@ -21,6 +21,7 @@ export default function TryPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const previewBypassEnabled = isPreviewAuthBypassEnabled();
+  const { canResend, secondsLeft, startCooldown } = useOtpCooldown();
 
   async function handlePhoneSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,6 +38,7 @@ export default function TryPage() {
       const result = await requestAccess(phone.trim());
       setRequestId(result.request_id);
       setDestination(result.destination);
+      startCooldown(result.resend_available_at);
       setCode("");
       setStep("code");
     } catch (err) {
@@ -53,12 +55,24 @@ export default function TryPage() {
     setLoading(true);
     try {
       const result = await verifyAccessCode(requestId, code.trim());
-      if (!result.session_token) {
-        throw new Error("No session returned. Please try again.");
-      }
-      persistBrowserSessionToken(result.session_token);
       clearStoredPreviewWorkspace();
       router.replace(result.onboarding_required ? "/onboarding" : "/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResendCode() {
+    if (!canResend || !phone.trim() || loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const result = await requestAccess(phone.trim());
+      setRequestId(result.request_id);
+      setDestination(result.destination);
+      startCooldown(result.resend_available_at);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     } finally {
@@ -165,6 +179,17 @@ export default function TryPage() {
               </form>
               <p className="lp-signup-resend">
                 Didn&rsquo;t get it?{" "}
+                <button
+                  onClick={() => {
+                    void handleResendCode();
+                  }}
+                  className="lp-signup-text-link"
+                  disabled={!canResend || loading}
+                  style={{ opacity: canResend ? 1 : 0.5 }}
+                >
+                  {canResend ? "Resend code" : `Resend in ${secondsLeft}s`}
+                </button>
+                {" · "}
                 <button
                   onClick={() => {
                     setStep("form");

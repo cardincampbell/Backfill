@@ -6,7 +6,7 @@ import hashlib
 import re
 import secrets
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import aiosqlite
 from fastapi import Depends, HTTPException, Request
@@ -14,7 +14,14 @@ from fastapi import Depends, HTTPException, Request
 from app.config import settings
 from app.db import queries
 from app.db.database import get_db
+from app.models.audit import AuditAction
+from app.services import audit as audit_svc
 from app.services import messaging
+
+_SESSION_COOKIE_NAME = "backfill_session"
+_STEP_UP_PREFIX = "step_up:"
+_HIGH_RISK_EXPORT_PREFIX = "/api/exports/"
+_HIGH_RISK_BILLING_PREFIX = "/api/billing"
 
 _PUBLIC_API_PATTERNS = (
     re.compile(r"^/api/auth/request-access$"),
@@ -37,7 +44,6 @@ _INTERNAL_ONLY_PATTERNS = (
     re.compile(r"^/api/audit-log$"),
     re.compile(r"^/api/shifts/backfill$"),
     re.compile(r"^/api/manager/shifts$"),
-    re.compile(r"^/api/exports/"),
 )
 
 _DASHBOARD_PROTECTED_PATTERNS = (
@@ -68,6 +74,7 @@ _DASHBOARD_PROTECTED_PATTERNS = (
     re.compile(r"^/api/workers/\d+$"),
     re.compile(r"^/api/shifts$"),
     re.compile(r"^/api/cascades/\d+/(approve-fill|decline-fill|approve-agency)$"),
+    re.compile(r"^/api/exports/"),
     re.compile(r"^/api/shifts/\d+(/status)?$"),
     re.compile(r"^/api/shifts/\d+/(assignment|coverage/start|coverage/cancel|open-shift/close|open-shift/reopen|attendance/wait|attendance/start-coverage)$"),
     re.compile(r"^/api/workers/\d+/(deactivate|reactivate|transfer)$"),
@@ -120,6 +127,31 @@ def _hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
+def session_cookie_name() -> str:
+    return _SESSION_COOKIE_NAME
+
+
+def session_cookie_max_age_seconds() -> int:
+    return settings.backfill_dashboard_session_ttl_hours * 60 * 60
+
+
+def session_cookie_domain() -> Optional[str]:
+    hostname = (urlparse(settings.backfill_web_base_url).hostname or "").strip().lower()
+    if not hostname or hostname in {"localhost", "127.0.0.1"}:
+        return None
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return f".{hostname}"
+
+
+def session_cookie_secure() -> bool:
+    return urlparse(settings.backfill_web_base_url).scheme == "https"
+
+
+def session_cookie_samesite() -> str:
+    return "none" if session_cookie_secure() else "lax"
+
+
 def _new_raw_token(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(24)}"
 
@@ -146,6 +178,39 @@ def _is_expired(value: str | None) -> bool:
 
 def _is_public_api_path(path: str) -> bool:
     return any(pattern.match(path) for pattern in _PUBLIC_API_PATTERNS)
+
+
+def _required_step_up_reason(request: Request) -> Optional[str]:
+    path = request.url.path
+    if path.startswith(_HIGH_RISK_EXPORT_PREFIX):
+        return "data_export"
+    if path.startswith(_HIGH_RISK_BILLING_PREFIX):
+        return "billing"
+    return None
+
+
+def _has_recent_step_up(session: dict | None) -> bool:
+    if not session:
+        return False
+    verified_at = session.get("step_up_verified_at")
+    if not verified_at:
+        return False
+    try:
+        return datetime.fromisoformat(verified_at) >= (
+            datetime.utcnow() - timedelta(minutes=settings.backfill_dashboard_step_up_ttl_minutes)
+        )
+    except ValueError:
+        return False
+
+
+def _extract_session_token_from_request(request: Request) -> Optional[str]:
+    authorization = _trim_text(request.headers.get("authorization"))
+    if authorization and authorization.lower().startswith("bearer "):
+        session_token = authorization.split(" ", 1)[1].strip()
+        if session_token:
+            return session_token
+    cookie_token = _trim_text(request.cookies.get(_SESSION_COOKIE_NAME))
+    return cookie_token or None
 
 
 def _is_valid_otp_code(value: object | None) -> bool:
@@ -272,45 +337,43 @@ async def _authenticate_request(
     if internal_key and settings.backfill_internal_api_key and internal_key == settings.backfill_internal_api_key:
         return AuthPrincipal(principal_type="internal")
 
-    authorization = _trim_text(request.headers.get("authorization"))
-    if authorization and authorization.lower().startswith("bearer "):
-        session_token = authorization.split(" ", 1)[1].strip()
-        if session_token:
-            session = await queries.get_dashboard_session_by_token_hash(db, _hash_token(session_token))
-            if session is not None and session.get("status") == "active" and not _is_expired(session.get("expires_at")):
-                organization_id = session.get("organization_id")
-                location_ids = [int(value) for value in session.get("location_ids_json") or []]
-                subject_phone = session.get("subject_phone")
-                refresh_updates: dict[str, object] = {
-                    "last_seen_at": datetime.utcnow().isoformat(),
-                }
+    session_token = _extract_session_token_from_request(request)
+    if session_token:
+        session = await queries.get_dashboard_session_by_token_hash(db, _hash_token(session_token))
+        if session is not None and session.get("status") == "active" and not _is_expired(session.get("expires_at")):
+            organization_id = session.get("organization_id")
+            location_ids = [int(value) for value in session.get("location_ids_json") or []]
+            subject_phone = session.get("subject_phone")
+            refresh_updates: dict[str, object] = {
+                "last_seen_at": datetime.utcnow().isoformat(),
+            }
 
-                if subject_phone:
-                    refreshed_org_id, refreshed_location_ids = await _resolve_phone_access(
-                        db,
-                        subject_phone,
-                    )
-                    if refreshed_org_id != organization_id or refreshed_location_ids != location_ids:
-                        organization_id = refreshed_org_id
-                        location_ids = refreshed_location_ids
-                        refresh_updates["organization_id"] = organization_id
-                        refresh_updates["location_ids_json"] = location_ids
-
-                refresh_updates["expires_at"] = _expires_at(
-                    hours=settings.backfill_dashboard_session_ttl_hours
-                )
-                await queries.update_dashboard_session(
+            if subject_phone:
+                refreshed_org_id, refreshed_location_ids = await _resolve_phone_access(
                     db,
-                    int(session["id"]),
-                    refresh_updates,
+                    subject_phone,
                 )
-                return AuthPrincipal(
-                    principal_type="session",
-                    organization_id=organization_id,
-                    location_ids=location_ids,
-                    session_id=int(session["id"]),
-                    subject_phone=subject_phone,
-                )
+                if refreshed_org_id != organization_id or refreshed_location_ids != location_ids:
+                    organization_id = refreshed_org_id
+                    location_ids = refreshed_location_ids
+                    refresh_updates["organization_id"] = organization_id
+                    refresh_updates["location_ids_json"] = location_ids
+
+            refresh_updates["expires_at"] = _expires_at(
+                hours=settings.backfill_dashboard_session_ttl_hours
+            )
+            await queries.update_dashboard_session(
+                db,
+                int(session["id"]),
+                refresh_updates,
+            )
+            return AuthPrincipal(
+                principal_type="session",
+                organization_id=organization_id,
+                location_ids=location_ids,
+                session_id=int(session["id"]),
+                subject_phone=subject_phone,
+            )
 
     setup_token = _trim_text(request.headers.get("x-backfill-setup-token"))
     if setup_token:
@@ -438,6 +501,15 @@ async def require_api_request_access(
         location_id = await _resolve_location_id_from_request(request, db)
         if location_id is not None:
             await _ensure_location_access(db, principal, location_id)
+        if principal.is_session and principal.session_id is not None:
+            step_up_reason = _required_step_up_reason(request)
+            if step_up_reason:
+                session = await queries.get_dashboard_session(db, principal.session_id)
+                if not _has_recent_step_up(session):
+                    raise HTTPException(
+                        status_code=428,
+                        detail=f"Step-up verification required for {step_up_reason.replace('_', ' ')}",
+                    )
 
     request.state.backfill_principal = principal
     return principal
@@ -512,6 +584,8 @@ async def _create_dashboard_session(
             "subject_phone": phone,
             "session_token_hash": _hash_token(session_token),
             "access_request_id": access_request_id,
+            "verified_at": datetime.utcnow().isoformat(),
+            "step_up_verified_at": None,
             "expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours),
             "last_seen_at": datetime.utcnow().isoformat(),
         },
@@ -526,6 +600,113 @@ async def _create_dashboard_session(
     return session_token, principal
 
 
+async def _enforce_resend_cooldown(
+    db: aiosqlite.Connection,
+    *,
+    phone: str,
+    purpose: str,
+) -> None:
+    latest = await queries.get_latest_dashboard_access_request_for_phone(
+        db,
+        phone,
+        status="pending",
+        purpose=purpose,
+    )
+    if latest is None:
+        return
+    requested_at = latest.get("requested_at")
+    if not requested_at:
+        return
+    try:
+        requested_at_dt = datetime.fromisoformat(requested_at)
+    except ValueError:
+        return
+    retry_after = settings.backfill_dashboard_access_resend_cooldown_seconds - int(
+        (datetime.utcnow() - requested_at_dt).total_seconds()
+    )
+    if retry_after > 0:
+        raise ValueError(
+            f"Please wait {retry_after} seconds before requesting another code."
+        )
+
+
+async def require_recent_step_up(
+    db: aiosqlite.Connection,
+    principal: AuthPrincipal,
+    *,
+    reason: str,
+) -> None:
+    if not principal.is_session or principal.session_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    session = await queries.get_dashboard_session(db, principal.session_id)
+    if _has_recent_step_up(session):
+        return
+    raise HTTPException(
+        status_code=428,
+        detail=f"Step-up verification required for {reason.replace('_', ' ')}",
+    )
+
+
+async def request_dashboard_step_up(
+    db: aiosqlite.Connection,
+    *,
+    principal: AuthPrincipal,
+    purpose: str,
+) -> dict:
+    normalized_phone = normalize_phone(principal.subject_phone)
+    if not principal.is_session or principal.session_id is None or normalized_phone is None:
+        raise ValueError("A verified dashboard session is required")
+    if purpose not in {"billing", "data_export", "phone_number_update"}:
+        raise ValueError("Unsupported step-up purpose")
+
+    request_purpose = f"{_STEP_UP_PREFIX}{purpose}"
+    await _enforce_resend_cooldown(db, phone=normalized_phone, purpose=request_purpose)
+    try:
+        verification = messaging.send_sms_verification(normalized_phone)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Could not send verification code") from exc
+
+    request_id = await queries.insert_dashboard_access_request(
+        db,
+        {
+            "phone": normalized_phone,
+            "organization_id": principal.organization_id,
+            "location_ids_json": principal.location_ids,
+            "purpose": request_purpose,
+            "token_hash": _hash_token(_new_raw_token("bfreq")),
+            "session_id": principal.session_id,
+            "verification_sid": verification.get("sid"),
+            "channel": verification.get("channel") or "sms",
+            "expires_at": _expires_at(minutes=settings.backfill_dashboard_access_request_ttl_minutes),
+            "requested_at": datetime.utcnow().isoformat(),
+        },
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.auth_step_up_requested,
+        actor=normalized_phone,
+        entity_type="dashboard_access_request",
+        entity_id=request_id,
+        details={"purpose": purpose, "channel": verification.get("channel") or "sms"},
+    )
+    return {
+        "request_id": request_id,
+        "destination": _mask_phone(normalized_phone),
+        "expires_at": _expires_at(minutes=settings.backfill_dashboard_access_request_ttl_minutes),
+        "message_sid": verification.get("sid"),
+        "organization_id": principal.organization_id,
+        "location_ids": principal.location_ids,
+        "channel": verification.get("channel") or "sms",
+        "purpose": request_purpose,
+        "resend_available_at": (
+            datetime.utcnow()
+            + timedelta(seconds=settings.backfill_dashboard_access_resend_cooldown_seconds)
+        ).isoformat(),
+    }
+
+
 async def request_dashboard_access(
     db: aiosqlite.Connection,
     *,
@@ -536,6 +717,7 @@ async def request_dashboard_access(
         raise ValueError("Phone number must be a valid mobile number")
 
     organization_id, location_ids = await _resolve_phone_access(db, normalized_phone)
+    await _enforce_resend_cooldown(db, phone=normalized_phone, purpose="login")
     await queries.supersede_pending_dashboard_access_requests_for_phone(db, normalized_phone)
 
     try:
@@ -550,12 +732,21 @@ async def request_dashboard_access(
             "phone": normalized_phone,
             "organization_id": organization_id,
             "location_ids_json": location_ids,
+            "purpose": "login",
             "token_hash": _hash_token(_new_raw_token("bfreq")),
             "verification_sid": verification.get("sid"),
             "channel": verification.get("channel") or "sms",
             "expires_at": _expires_at(minutes=settings.backfill_dashboard_access_request_ttl_minutes),
             "requested_at": datetime.utcnow().isoformat(),
         },
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.auth_verification_requested,
+        actor=normalized_phone,
+        entity_type="dashboard_access_request",
+        entity_id=request_id,
+        details={"purpose": "login", "channel": verification.get("channel") or "sms"},
     )
     return {
         "request_id": request_id,
@@ -565,6 +756,11 @@ async def request_dashboard_access(
         "organization_id": None,
         "location_ids": [],
         "channel": verification.get("channel") or "sms",
+        "purpose": "login",
+        "resend_available_at": (
+            datetime.utcnow()
+            + timedelta(seconds=settings.backfill_dashboard_access_resend_cooldown_seconds)
+        ).isoformat(),
     }
 
 
@@ -598,6 +794,11 @@ async def request_dashboard_access_for_location_invite(
     if location is None:
         raise ValueError("Location not found")
 
+    await _enforce_resend_cooldown(
+        db,
+        phone=normalized_phone,
+        purpose="invite_onboarding",
+    )
     await queries.supersede_pending_dashboard_access_requests_for_phone(db, normalized_phone)
 
     try:
@@ -620,6 +821,7 @@ async def request_dashboard_access_for_location_invite(
             "phone": normalized_phone,
             "organization_id": location.get("organization_id"),
             "location_ids_json": [int(invite["location_id"])],
+            "purpose": "invite_onboarding",
             "location_manager_invite_id": int(invite["id"]),
             "token_hash": _hash_token(_new_raw_token("bfreq")),
             "verification_sid": verification.get("sid"),
@@ -628,6 +830,18 @@ async def request_dashboard_access_for_location_invite(
                 minutes=settings.backfill_dashboard_access_request_ttl_minutes
             ),
             "requested_at": datetime.utcnow().isoformat(),
+        },
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.auth_verification_requested,
+        actor=normalized_phone,
+        entity_type="dashboard_access_request",
+        entity_id=request_id,
+        details={
+            "purpose": "invite_onboarding",
+            "channel": verification.get("channel") or "sms",
+            "location_manager_invite_id": int(invite["id"]),
         },
     )
     return {
@@ -640,6 +854,11 @@ async def request_dashboard_access_for_location_invite(
         "organization_id": location.get("organization_id"),
         "location_ids": [int(invite["location_id"])],
         "channel": verification.get("channel") or "sms",
+        "purpose": "invite_onboarding",
+        "resend_available_at": (
+            datetime.utcnow()
+            + timedelta(seconds=settings.backfill_dashboard_access_resend_cooldown_seconds)
+        ).isoformat(),
     }
 
 
@@ -648,14 +867,28 @@ async def verify_dashboard_access_code(
     *,
     request_id: int,
     code: str,
-) -> tuple[str, AuthPrincipal]:
+) -> tuple[Optional[str], AuthPrincipal]:
     if not _is_valid_otp_code(code):
         raise ValueError("Verification code must be 4 to 10 digits")
 
     access_request = await queries.get_dashboard_access_request(db, request_id)
     if access_request is None:
         raise ValueError("Verification request not found")
+    purpose = str(access_request.get("purpose") or "login")
+    failure_action = (
+        AuditAction.auth_step_up_failed
+        if purpose.startswith(_STEP_UP_PREFIX)
+        else AuditAction.auth_verification_failed
+    )
     if access_request.get("status") != "pending" or _is_expired(access_request.get("expires_at")):
+        await audit_svc.append(
+            db,
+            failure_action,
+            actor=access_request.get("phone") or "unknown",
+            entity_type="dashboard_access_request",
+            entity_id=request_id,
+            details={"purpose": purpose, "reason": "expired"},
+        )
         raise ValueError("Verification code has expired")
     if int(access_request.get("check_count") or 0) >= settings.backfill_dashboard_access_max_attempts:
         await queries.update_dashboard_access_request(
@@ -665,6 +898,14 @@ async def verify_dashboard_access_code(
                 "status": "blocked",
                 "last_check_at": datetime.utcnow().isoformat(),
             },
+        )
+        await audit_svc.append(
+            db,
+            failure_action,
+            actor=access_request.get("phone") or "unknown",
+            entity_type="dashboard_access_request",
+            entity_id=request_id,
+            details={"purpose": purpose, "reason": "blocked"},
         )
         raise ValueError("Too many verification attempts. Request a new code.")
 
@@ -692,6 +933,18 @@ async def verify_dashboard_access_code(
             db,
             request_id,
             update_payload,
+        )
+        await audit_svc.append(
+            db,
+            failure_action,
+            actor=access_request.get("phone") or "unknown",
+            entity_type="dashboard_access_request",
+            entity_id=request_id,
+            details={
+                "purpose": purpose,
+                "reason": "invalid_code",
+                "check_count": check_count,
+            },
         )
         if check_count >= settings.backfill_dashboard_access_max_attempts:
             raise ValueError("Too many verification attempts. Request a new code.")
@@ -725,13 +978,40 @@ async def verify_dashboard_access_code(
         )
 
     organization_id, location_ids = await _resolve_phone_access(db, access_request["phone"])
-    session_token, principal = await _create_dashboard_session(
-        db,
-        phone=access_request["phone"],
-        organization_id=organization_id,
-        location_ids=location_ids,
-        access_request_id=int(access_request["id"]),
-    )
+    session_token: Optional[str] = None
+    if purpose.startswith(_STEP_UP_PREFIX):
+        session_id = access_request.get("session_id")
+        if session_id is None:
+            raise ValueError("Step-up request is missing its session context")
+        session = await queries.get_dashboard_session(db, int(session_id))
+        if session is None or session.get("status") != "active":
+            raise ValueError("Dashboard session not found")
+        await queries.update_dashboard_session(
+            db,
+            int(session_id),
+            {
+                "organization_id": organization_id,
+                "location_ids_json": location_ids,
+                "step_up_verified_at": datetime.utcnow().isoformat(),
+                "last_seen_at": datetime.utcnow().isoformat(),
+                "expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours),
+            },
+        )
+        principal = AuthPrincipal(
+            principal_type="session",
+            organization_id=organization_id,
+            location_ids=location_ids,
+            session_id=int(session_id),
+            subject_phone=access_request["phone"],
+        )
+    else:
+        session_token, principal = await _create_dashboard_session(
+            db,
+            phone=access_request["phone"],
+            organization_id=organization_id,
+            location_ids=location_ids,
+            access_request_id=int(access_request["id"]),
+        )
     await queries.update_dashboard_access_request(
         db,
         int(access_request["id"]),
@@ -744,6 +1024,16 @@ async def verify_dashboard_access_code(
             "last_check_at": datetime.utcnow().isoformat(),
             "check_count": int(access_request.get("check_count") or 0) + 1,
         },
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.auth_step_up_succeeded
+        if purpose.startswith(_STEP_UP_PREFIX)
+        else AuditAction.auth_verification_succeeded,
+        actor=access_request.get("phone") or "unknown",
+        entity_type="dashboard_access_request",
+        entity_id=request_id,
+        details={"purpose": purpose, "session_id": principal.session_id},
     )
     return session_token, principal
 
@@ -791,6 +1081,14 @@ async def revoke_dashboard_session(
         db,
         principal.session_id,
         {"status": "revoked"},
+    )
+    await audit_svc.append(
+        db,
+        AuditAction.auth_session_revoked,
+        actor=principal.subject_phone or "unknown",
+        entity_type="dashboard_session",
+        entity_id=principal.session_id,
+        details={"location_ids": principal.location_ids},
     )
 
 

@@ -427,7 +427,9 @@ async def init_db():
                 phone             TEXT NOT NULL,
                 organization_id   INTEGER REFERENCES organizations(id),
                 location_ids_json TEXT NOT NULL DEFAULT '[]',
+                purpose           TEXT NOT NULL DEFAULT 'login',
                 token_hash        TEXT NOT NULL UNIQUE,
+                session_id        INTEGER REFERENCES dashboard_sessions(id),
                 verification_sid  TEXT,
                 channel           TEXT NOT NULL DEFAULT 'sms',
                 status            TEXT NOT NULL DEFAULT 'pending',
@@ -454,6 +456,8 @@ async def init_db():
                 session_token_hash     TEXT NOT NULL UNIQUE,
                 access_request_id      INTEGER REFERENCES dashboard_access_requests(id),
                 status                 TEXT NOT NULL DEFAULT 'active',
+                verified_at            TEXT,
+                step_up_verified_at    TEXT,
                 expires_at             TEXT NOT NULL,
                 last_seen_at           TEXT,
                 created_at             TEXT NOT NULL,
@@ -1338,6 +1342,18 @@ async def init_db():
         await _ensure_column(
             db,
             "dashboard_access_requests",
+            "purpose",
+            "TEXT NOT NULL DEFAULT 'login'",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "session_id",
+            "INTEGER REFERENCES dashboard_sessions(id)",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
             "verification_sid",
             "TEXT",
         )
@@ -1363,6 +1379,18 @@ async def init_db():
             db,
             "dashboard_access_requests",
             "last_check_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_sessions",
+            "verified_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_sessions",
+            "step_up_verified_at",
             "TEXT",
         )
         await _ensure_column(

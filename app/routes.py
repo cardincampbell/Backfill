@@ -15,7 +15,7 @@ from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Response
 import aiosqlite
 import httpx
 
@@ -507,12 +507,18 @@ class DashboardAccessRequestResponse(BaseModel):
     channel: str = "sms"
     organization_id: Optional[int] = None
     location_ids: list[int] = Field(default_factory=list)
+    purpose: str = "login"
+    resend_available_at: Optional[str] = None
 
 
 class DashboardAccessExchangeBody(BaseModel):
     token: Optional[str] = None
     request_id: Optional[int] = None
     code: Optional[str] = None
+
+
+class DashboardStepUpRequestBody(BaseModel):
+    purpose: str
 
 
 class DashboardAuthResponse(BaseModel):
@@ -1039,6 +1045,30 @@ def _twilio_runtime_error_detail(detail: str, *, step: str) -> str:
     return " ".join(parts)
 
 
+def _set_dashboard_session_cookie(response: Response, session_token: str) -> None:
+    response.set_cookie(
+        key=auth_svc.session_cookie_name(),
+        value=session_token,
+        max_age=auth_svc.session_cookie_max_age_seconds(),
+        httponly=True,
+        secure=auth_svc.session_cookie_secure(),
+        samesite=auth_svc.session_cookie_samesite(),
+        domain=auth_svc.session_cookie_domain(),
+        path="/",
+    )
+
+
+def _clear_dashboard_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=auth_svc.session_cookie_name(),
+        domain=auth_svc.session_cookie_domain(),
+        path="/",
+        secure=auth_svc.session_cookie_secure(),
+        httponly=True,
+        samesite=auth_svc.session_cookie_samesite(),
+    )
+
+
 @router.post(
     "/auth/request-access",
     response_model=DashboardAccessRequestResponse,
@@ -1060,12 +1090,38 @@ async def request_dashboard_access(
 
 
 @router.post(
+    "/auth/request-step-up",
+    response_model=DashboardAccessRequestResponse,
+    dependencies=[Depends(rate_limit.limit_by_request_key("auth_step_up", limit=5, window_seconds=300))],
+)
+async def request_dashboard_step_up(
+    body: DashboardStepUpRequestBody,
+    db: aiosqlite.Connection = Depends(get_db),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+):
+    try:
+        return await auth_svc.request_dashboard_step_up(
+            db,
+            principal=principal,
+            purpose=body.purpose,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=_twilio_runtime_error_detail(str(exc), step="request-step-up"),
+        ) from exc
+
+
+@router.post(
     "/auth/exchange",
     response_model=DashboardAuthResponse,
     dependencies=[Depends(rate_limit.limit_by_request_key("auth_exchange", limit=12, window_seconds=300))],
 )
 async def exchange_dashboard_access(
     body: DashboardAccessExchangeBody,
+    response: Response,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     try:
@@ -1089,6 +1145,8 @@ async def exchange_dashboard_access(
             status_code=503,
             detail=_twilio_runtime_error_detail(str(exc), step="exchange"),
         ) from exc
+    if session_token:
+        _set_dashboard_session_cookie(response, session_token)
     payload = await auth_svc.build_auth_response_payload(db, principal)
     return {
         **payload,
@@ -1111,10 +1169,12 @@ async def get_dashboard_auth_me(
 
 @router.post("/auth/logout", response_model=DashboardAuthResponse)
 async def logout_dashboard_session(
+    response: Response,
     db: aiosqlite.Connection = Depends(get_db),
     principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
 ):
     await auth_svc.revoke_dashboard_session(db, principal)
+    _clear_dashboard_session_cookie(response)
     return await auth_svc.build_auth_response_payload(db, principal)
 
 
@@ -1975,12 +2035,25 @@ async def send_enrollment_invites(
 async def update_location(
     location_id: int,
     body: LocationUpdate,
+    request: Request,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     row = await queries.get_location(db, location_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Location not found")
+    principal = auth_svc.get_request_principal(request)
+    if principal is not None and not principal.is_internal:
+        await auth_svc.ensure_location_access(db, principal, location_id)
     payload = body.model_dump(mode="json", exclude_none=True)
+    if principal is not None and principal.is_session and "manager_phone" in payload:
+        current_phone = auth_svc.normalize_phone(row.get("manager_phone"))
+        next_phone = auth_svc.normalize_phone(payload.get("manager_phone"))
+        if next_phone != current_phone:
+            await auth_svc.require_recent_step_up(
+                db,
+                principal,
+                reason="phone_number_update",
+            )
     inferred_vertical = _infer_vertical_from_place(payload)
     if inferred_vertical:
         payload["place_inferred_vertical"] = inferred_vertical

@@ -2506,16 +2506,18 @@ async def insert_dashboard_access_request(db: aiosqlite.Connection, data: dict) 
     cur = await db.execute(
         """
         INSERT INTO dashboard_access_requests
-        (phone, organization_id, location_ids_json, token_hash, verification_sid, channel, status,
+        (phone, organization_id, location_ids_json, purpose, token_hash, session_id, verification_sid, channel, status,
          expires_at, used_at, verified_at, check_count, last_check_at, requested_at, created_at, updated_at,
          location_manager_invite_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             encoded["phone"],
             encoded.get("organization_id"),
             encoded.get("location_ids_json", "[]"),
+            encoded.get("purpose", "login"),
             encoded["token_hash"],
+            encoded.get("session_id"),
             encoded.get("verification_sid"),
             encoded.get("channel", "sms"),
             encoded.get("status", "pending"),
@@ -2558,6 +2560,27 @@ async def get_dashboard_access_request(
     return _decode("dashboard_access_requests", row) if row else None
 
 
+async def get_latest_dashboard_access_request_for_phone(
+    db: aiosqlite.Connection,
+    phone: str,
+    *,
+    status: Optional[str] = None,
+    purpose: Optional[str] = None,
+) -> Optional[dict]:
+    query = "SELECT * FROM dashboard_access_requests WHERE phone=?"
+    params: list[Any] = [phone]
+    if status is not None:
+        query += " AND status=?"
+        params.append(status)
+    if purpose is not None:
+        query += " AND purpose=?"
+        params.append(purpose)
+    query += " ORDER BY id DESC LIMIT 1"
+    async with db.execute(query, params) as cur:
+        row = await cur.fetchone()
+    return _decode("dashboard_access_requests", row) if row else None
+
+
 async def supersede_pending_dashboard_access_requests_for_phone(
     db: aiosqlite.Connection,
     phone: str,
@@ -2583,7 +2606,9 @@ async def update_dashboard_access_request(
         "phone",
         "organization_id",
         "location_ids_json",
+        "purpose",
         "token_hash",
+        "session_id",
         "location_manager_invite_id",
         "verification_sid",
         "channel",
@@ -2617,8 +2642,8 @@ async def insert_dashboard_session(db: aiosqlite.Connection, data: dict) -> int:
         """
         INSERT INTO dashboard_sessions
         (organization_id, location_ids_json, subject_phone, session_token_hash, access_request_id,
-         status, expires_at, last_seen_at, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+         status, verified_at, step_up_verified_at, expires_at, last_seen_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             encoded.get("organization_id"),
@@ -2627,6 +2652,8 @@ async def insert_dashboard_session(db: aiosqlite.Connection, data: dict) -> int:
             encoded["session_token_hash"],
             encoded.get("access_request_id"),
             encoded.get("status", "active"),
+            encoded.get("verified_at"),
+            encoded.get("step_up_verified_at"),
             encoded["expires_at"],
             encoded.get("last_seen_at"),
             encoded.get("created_at", now),
@@ -2649,6 +2676,18 @@ async def get_dashboard_session_by_token_hash(
     return _decode("dashboard_sessions", row) if row else None
 
 
+async def get_dashboard_session(
+    db: aiosqlite.Connection,
+    session_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM dashboard_sessions WHERE id=?",
+        (session_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("dashboard_sessions", row) if row else None
+
+
 async def update_dashboard_session(
     db: aiosqlite.Connection,
     session_id: int,
@@ -2661,6 +2700,8 @@ async def update_dashboard_session(
         "session_token_hash",
         "access_request_id",
         "status",
+        "verified_at",
+        "step_up_verified_at",
         "expires_at",
         "last_seen_at",
         "created_at",

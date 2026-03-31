@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { exchangeToken } from "@/lib/api/auth";
-import { persistBrowserSessionToken } from "@/lib/auth/browser-session";
 
 function VerifyContent() {
   const searchParams = useSearchParams();
@@ -23,13 +22,6 @@ function VerifyContent() {
       try {
         const result = await exchangeToken(token!);
         if (cancelled) return;
-
-        if (!result.session_token) {
-          setError("No session returned. Please try again.");
-          return;
-        }
-
-        persistBrowserSessionToken(result.session_token);
         router.replace(result.onboarding_required ? "/onboarding" : "/dashboard");
       } catch (err) {
         if (cancelled) return;

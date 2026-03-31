@@ -2,8 +2,10 @@
  * Shared API client utilities.
  * All domain API modules import from here.
  *
- * Works in both server components (reads cookie via next/headers)
- * and client components (reads cookie from document.cookie).
+ * Works in both server components and client components.
+ * Server-side requests forward the session cookie as a Bearer token to the
+ * backend. Client-side requests rely on the browser's HttpOnly cookie via
+ * `credentials: "include"`.
  */
 
 import { SESSION_COOKIE } from "../auth/constants";
@@ -16,19 +18,9 @@ export const API_BASE_URL =
 
 export const USE_MOCKS = process.env.BACKFILL_SHIFTS_MOCKS !== "false";
 
-/**
- * Resolve the session token from the appropriate cookie source.
- * Server-side: dynamic import of next/headers cookies()
- * Client-side: parse document.cookie
- */
+// Server-side only: dynamic import of next/headers cookies().
 async function getSessionToken(): Promise<string | undefined> {
-  if (typeof window !== "undefined") {
-    const match = document.cookie.match(
-      new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]*)`)
-    );
-    return match?.[1] || undefined;
-  }
-  // Server-side — dynamic import to avoid bundling next/headers in client chunks
+  if (typeof window !== "undefined") return undefined;
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   return cookieStore.get(SESSION_COOKIE)?.value;
@@ -45,6 +37,7 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
     : {};
   return fetch(url, {
     ...init,
+    credentials: typeof window !== "undefined" ? "include" : init?.credentials,
     headers: { ...authHeaders, ...init?.headers },
   });
 }

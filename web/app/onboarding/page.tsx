@@ -18,10 +18,7 @@ import {
   type LocationManagerInvitePreview,
   verifyAccessCode,
 } from "@/lib/api/auth";
-import {
-  getBrowserSessionToken,
-  persistBrowserSessionToken,
-} from "@/lib/auth/browser-session";
+import { useOtpCooldown } from "@/lib/auth/use-otp-cooldown";
 import {
   clearStoredPreviewPhone,
   getStoredPreviewPhone,
@@ -212,6 +209,7 @@ function OnboardingPageBody() {
   const [invitePreview, setInvitePreview] = useState<LocationManagerInvitePreview | null>(null);
   const [invitePreviewError, setInvitePreviewError] = useState("");
   const [invitePreviewLoading, setInvitePreviewLoading] = useState(false);
+  const { canResend, secondsLeft, startCooldown } = useOtpCooldown();
 
   const isEmailInviteFlow = Boolean(inviteToken);
   const activeSteps = isEmailInviteFlow
@@ -233,12 +231,6 @@ function OnboardingPageBody() {
     let cancelled = false;
 
     async function resolveSession() {
-      const token = getBrowserSessionToken();
-      if (!token) {
-        setSessionResolved(true);
-        return;
-      }
-
       try {
         const response = await apiFetch(`${API_BASE_URL}/api/auth/me`, {
           method: "GET",
@@ -522,15 +514,10 @@ function OnboardingPageBody() {
     }
     setEmailError("");
     if (isInviteCompletionFlow) {
-      const token = getBrowserSessionToken();
-      if (!token) {
-        setSubmitError("Your session expired. Sign in again to finish setup.");
-        return;
-      }
       setSubmitting(true);
       setSubmitError("");
       try {
-        await completeOnboardingProfile(token, name.trim(), email.trim());
+        await completeOnboardingProfile(name.trim(), email.trim());
         router.replace("/dashboard");
       } catch (error) {
         setSubmitError(
@@ -572,6 +559,7 @@ function OnboardingPageBody() {
       );
       setRequestId(result.request_id);
       setDestination(result.destination);
+      startCooldown(result.resend_available_at);
       setCode("");
       setStepIndex(2);
     } catch (error) {
@@ -593,17 +581,37 @@ function OnboardingPageBody() {
     setSubmitError("");
 
     try {
-      const result = await verifyAccessCode(requestId, code.trim());
-      if (!result.session_token) {
-        throw new Error("No session returned. Please try again.");
-      }
-      persistBrowserSessionToken(result.session_token);
+      await verifyAccessCode(requestId, code.trim());
       clearStoredPreviewPhone();
       router.replace("/dashboard");
     } catch (error) {
       setSubmitError(
         error instanceof Error ? error.message : "Could not verify this code",
       );
+      setSubmitting(false);
+    }
+  }
+
+  async function handleInviteCodeResend() {
+    if (!inviteToken || !canResend || !phone.trim()) {
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      const result = await requestLocationInviteAccess(
+        inviteToken,
+        name.trim(),
+        phone.trim(),
+      );
+      setRequestId(result.request_id);
+      setDestination(result.destination);
+      startCooldown(result.resend_available_at);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error ? error.message : "Could not send verification code",
+      );
+    } finally {
       setSubmitting(false);
     }
   }
@@ -960,7 +968,22 @@ function OnboardingPageBody() {
                 >
                   {submitting ? "Verifying…" : "Finish setup →"}
                 </button>
-                <span className="ob-btn-hint">or press Enter</span>
+                <span className="ob-btn-hint">
+                  {canResend ? (
+                    <button
+                      className="lp-signup-text-link"
+                      onClick={() => {
+                        void handleInviteCodeResend();
+                      }}
+                      disabled={submitting}
+                      type="button"
+                    >
+                      Resend code
+                    </button>
+                  ) : (
+                    `Resend in ${secondsLeft}s`
+                  )}
+                </span>
               </div>
             </div>
           ) : (

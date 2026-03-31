@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { signOutClientSession } from "@/lib/auth/client-signout";
 
 type DashboardRailNavProps = {
@@ -128,6 +128,29 @@ export function DashboardRailProfile({
   const settingsHref = buildSettingsHref(basePath);
   const maskedPhone = formatPhone(subjectPhone);
   const [signingOut, startSignOutTransition] = useTransition();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   function handleSignOut() {
     startSignOutTransition(async () => {
@@ -136,38 +159,52 @@ export function DashboardRailProfile({
   }
 
   return (
-    <div className="dashboard-rail-profile">
-      <div className="dashboard-rail-profile-header">
+    <div className="dashboard-rail-profile" ref={menuRef}>
+      <button
+        className="dashboard-rail-profile-trigger"
+        onClick={() => setMenuOpen((current) => !current)}
+        type="button"
+      >
         <div className="dashboard-rail-profile-avatar">{getInitials(displayName)}</div>
         <div className="dashboard-rail-profile-copy">
           <strong>{displayName}</strong>
           <span>{maskedPhone ?? `${locationCount} ${locationCount === 1 ? "location" : "locations"}`}</span>
         </div>
-      </div>
+        <span className="dashboard-rail-profile-caret" aria-hidden="true">
+          {menuOpen ? "▴" : "▾"}
+        </span>
+      </button>
 
-      <div className="dashboard-rail-profile-actions">
-        <Link
-          className="dashboard-rail-profile-link"
-          data-active={pathname === "/dashboard/ops"}
-          href="/dashboard/ops"
-        >
-          Locations
-        </Link>
-        <Link
-          className="dashboard-rail-profile-link"
-          data-active={currentTab === "settings" && pathname !== "/dashboard/ops"}
-          href={settingsHref}
-        >
-          Settings
-        </Link>
-        <button
-          className="dashboard-rail-profile-link dashboard-rail-profile-signout"
-          disabled={signingOut}
-          onClick={handleSignOut}
-          type="button"
-        >
-          {signingOut ? "Signing out…" : "Sign out"}
-        </button>
+      {menuOpen ? (
+        <div className="dashboard-rail-profile-menu">
+          <Link
+            className="dashboard-rail-profile-item"
+            data-active={pathname === "/dashboard/ops"}
+            href="/dashboard/ops"
+            onClick={() => setMenuOpen(false)}
+          >
+            Locations
+          </Link>
+          <Link
+            className="dashboard-rail-profile-item"
+            data-active={currentTab === "settings" && pathname !== "/dashboard/ops"}
+            href={settingsHref}
+            onClick={() => setMenuOpen(false)}
+          >
+            Settings
+          </Link>
+          <button
+            className="dashboard-rail-profile-item dashboard-rail-profile-signout"
+            disabled={signingOut}
+            onClick={handleSignOut}
+            type="button"
+          >
+            {signingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      ) : null}
+      <div className="dashboard-rail-profile-meta">
+        {locationCount} {locationCount === 1 ? "location" : "locations"}
       </div>
     </div>
   );

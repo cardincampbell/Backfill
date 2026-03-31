@@ -3,9 +3,8 @@
  *
  * Flow:
  * 1. POST /api/auth/request-access  { phone } → sends SMS verification code
- * 2. POST /api/auth/exchange  { request_id, code } → returns session_token + principal
- * 4. Browser stores session_token in cookie
- * 5. All subsequent server-side fetches read the cookie and pass Bearer header
+ * 2. POST /api/auth/exchange  { request_id, code } → backend sets HttpOnly session cookie
+ * 3. All subsequent server-side fetches read the cookie and pass Bearer header
  */
 
 import { cookies } from "next/headers";

@@ -17,6 +17,8 @@ export type AccessRequestResponse = {
   channel: string;
   organization_id: number | null;
   location_ids: number[];
+  purpose: string;
+  resend_available_at: string | null;
 };
 
 export type AuthResponse = {
@@ -60,6 +62,7 @@ export async function requestAccess(phone: string): Promise<AccessRequestRespons
   const res = await fetch(`${API_BASE_URL}/api/auth/request-access`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ phone }),
   });
   if (!res.ok) {
@@ -74,6 +77,7 @@ export async function getLocationManagerInvitePreview(
 ): Promise<LocationManagerInvitePreview> {
   const res = await fetch(`${API_BASE_URL}/api/location-manager-invites/${inviteToken}`, {
     method: "GET",
+    credentials: "include",
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
@@ -92,6 +96,7 @@ export async function requestLocationInviteAccess(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ manager_name: managerName, phone }),
     },
   );
@@ -113,6 +118,7 @@ export async function verifyAccessCode(
   const res = await fetch(`${API_BASE_URL}/api/auth/exchange`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ request_id: requestId, code }),
   });
   if (!res.ok) {
@@ -123,7 +129,6 @@ export async function verifyAccessCode(
 }
 
 export async function completeOnboardingProfile(
-  sessionToken: string,
   managerName: string,
   managerEmail: string,
 ): Promise<AuthResponse> {
@@ -131,8 +136,8 @@ export async function completeOnboardingProfile(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${sessionToken}`,
     },
+    credentials: "include",
     body: JSON.stringify({
       manager_name: managerName,
       manager_email: managerEmail,
@@ -153,6 +158,7 @@ export async function exchangeToken(token: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE_URL}/api/auth/exchange`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ token }),
   });
   if (!res.ok) {
@@ -166,9 +172,23 @@ export async function exchangeToken(token: string): Promise<AuthResponse> {
  * Revoke the current session.
  * POST /api/auth/logout
  */
-export async function logout(sessionToken: string): Promise<void> {
+export async function requestStepUp(purpose: "billing" | "data_export" | "phone_number_update"): Promise<AccessRequestResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/request-step-up`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ purpose }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to send verification code");
+  }
+  return (await res.json()) as AccessRequestResponse;
+}
+
+export async function logout(): Promise<void> {
   await fetch(`${API_BASE_URL}/api/auth/logout`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${sessionToken}` },
+    credentials: "include",
   });
 }
