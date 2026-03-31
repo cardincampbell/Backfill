@@ -969,6 +969,8 @@ def _build_manager_invite_email_content(
     location: dict,
     manager_name: Optional[str],
     raw_token: str,
+    recipient_has_phone: bool,
+    inviting_user_name: Optional[str],
 ) -> tuple[str, str, str]:
     location_label = location.get("place_location_label") or location.get("name") or "this location"
     business_name = (
@@ -978,23 +980,39 @@ def _build_manager_invite_email_content(
         or "Backfill"
     )
     invite_url = _build_manager_invite_link(raw_token)
-    salutation = f"{manager_name.strip()}," if manager_name and manager_name.strip() else "Hi,"
-    subject = f"You’re invited to manage {location_label} in Backfill"
-    text_body = (
-        f"{salutation}\n\n"
-        f"You’ve been invited to manage {business_name} - {location_label} in Backfill.\n\n"
-        "Open the link below to finish setup. We’ll collect your name and phone number, "
-        "then text you a one-time code before access is granted.\n\n"
-        f"{invite_url}\n\n"
-        "If you weren’t expecting this invite, you can ignore this email."
+    inviter = (inviting_user_name or location.get("manager_name") or "A Backfill manager").strip() or "A Backfill manager"
+    subject = (
+        f"Backfill: {inviter} invited you to manage {business_name} · {location_label}"
+    )
+    call_to_action = "Click the link below to accept this invitation and sign in." if recipient_has_phone else (
+        "Click the link below to accept this invitation and get your account setup."
+    )
+    body_blurb = (
+        f"{inviter} has invited you to manage {business_name} · {location_label} in Backfill. "
+        f"{call_to_action}"
+    )
+    text_body = "\n\n".join(
+        [
+            body_blurb,
+            f"Accept the invitation: {invite_url}",
+            "Backfill handles callouts and last-minute shift changes automatically — so you never have to.",
+            "If you weren’t expecting this invite, just ignore this email.",
+        ]
     )
     html_body = (
-        f"<p>{salutation}</p>"
-        f"<p>You’ve been invited to manage <strong>{business_name} - {location_label}</strong> in Backfill.</p>"
-        "<p>Open the link below to finish setup. We’ll collect your name and phone number, "
-        "then text you a one-time code before access is granted.</p>"
-        f"<p><a href=\"{invite_url}\">{invite_url}</a></p>"
-        "<p>If you weren’t expecting this invite, you can ignore this email.</p>"
+        "<div style=\"font-family: 'Helvetica Neue', Arial, sans-serif; color: #1f1f1f; max-width: 600px; margin: 0 auto; padding: 0 16px;\">\n"
+        "  <div style=\"display:flex; justify-content:space-between; align-items:center; padding-top:24px;\">\n"
+        "    <div style=\"font-weight:700; font-size:1.25rem;\">Backfill</div>\n"
+        "    <div style=\"font-weight:600; font-size:0.85rem; color:#6b6b6b;\">Callouts covered.</div>\n"
+        "  </div>\n"
+        "  <div style=\"margin-top:32px; padding:24px; background:#f8f8f8; border-radius:16px; border:1px solid #e0e0e0;\">\n"
+        "    <p style=\"font-size:2rem; font-weight:700; margin:0 0 16px;\">You've been invited to manage Backfill</p>\n"
+        f"    <p style=\"margin:0 0 24px; color:#4d4d4d; font-size:1rem;\">{body_blurb}</p>\n"
+        f"    <a href=\"{invite_url}\" style=\"display:inline-block; padding:12px 28px; background:#1f1f1f; color:#fff; text-decoration:none; border-radius:99px; font-weight:600;\">Accept invitation</a>\n"
+        "  </div>\n"
+        "  <p style=\"margin:28px 0 0; color:#4d4d4d; font-size:0.9rem;\">Backfill handles callouts and last-minute shift changes automatically — so you never have to.</p>\n"
+        "  <p style=\"margin-top:8px; color:#a1a1a1; font-size:0.8rem;\">If you believe this email was sent in error, just ignore it.</p>\n"
+        "</div>"
     )
     return subject, text_body, html_body
 
@@ -1783,6 +1801,16 @@ async def invite_location_manager(
         invite_email=invite_email,
         include_revoked=True,
     )
+    existing_membership = await queries.get_location_membership_by_email(db, invite_email)
+    inviter_membership = (
+        await queries.get_location_membership_by_phone(
+            db,
+            location_id,
+            principal.subject_phone or "",
+        )
+        if principal.subject_phone
+        else None
+    )
     membership = await queries.upsert_location_manager_invite(
         db,
         location_id=location_id,
@@ -1803,6 +1831,8 @@ async def invite_location_manager(
             location=location,
             manager_name=membership.get("manager_name"),
             raw_token=raw_token,
+            recipient_has_phone=bool(existing_membership and existing_membership.get("phone")),
+            inviting_user_name=(inviter_membership or {}).get("manager_name") if inviter_membership else None,
         )
         delivery_id = messaging_svc.send_email(
             invite_email,
@@ -1827,6 +1857,7 @@ async def invite_location_manager(
             "manager_name": membership.get("manager_name"),
             "created": existing is None,
             "invite_status": membership.get("status"),
+            "recipient_has_phone": bool(existing_membership and existing_membership.get("phone")),
         },
     )
     return {

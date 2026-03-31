@@ -234,6 +234,22 @@ async def get_location_membership_by_phone(
     return dict(row) if row else None
 
 
+async def get_location_membership_by_email(
+    db: aiosqlite.Connection,
+    email: str,
+) -> Optional[dict]:
+    query = """
+        SELECT *
+        FROM location_memberships
+        WHERE LOWER(manager_email)=LOWER(?)
+          AND invite_status != 'revoked'
+        LIMIT 1
+    """
+    async with db.execute(query, (email,)) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
 async def list_location_memberships_for_phone(
     db: aiosqlite.Connection,
     phone: str,
