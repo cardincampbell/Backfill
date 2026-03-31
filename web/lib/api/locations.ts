@@ -1,4 +1,6 @@
 import { API_BASE_URL, apiFetch } from "./client";
+import { buildLocationPayloadFromPlace } from "@/lib/place-location";
+import type { PlaceSuggestion } from "./places";
 
 async function parseError(response: Response): Promise<string> {
   try {
@@ -19,6 +21,28 @@ export async function deleteLocation(locationId: number) {
   }
 
   return (await response.json()) as { deleted: boolean; location_id: number };
+}
+
+export async function createLocationFromPlace(
+  place: PlaceSuggestion,
+  input: Parameters<typeof buildLocationPayloadFromPlace>[1],
+) {
+  const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildLocationPayloadFromPlace(place, input)),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as {
+    id: number;
+    name: string;
+    organization_id?: number | null;
+    organization_name?: string | null;
+  };
 }
 
 export type InviteLocationManagerPayload = {

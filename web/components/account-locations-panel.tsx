@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 
+import { PlaceAutocomplete } from "@/components/place-autocomplete";
 import {
+  createLocationFromPlace,
   deleteLocation,
   inviteLocationManager,
   listLocationManagers,
@@ -13,6 +15,7 @@ import {
   type LocationManagerMembership,
 } from "@/lib/api/locations";
 import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
+import type { PlaceSuggestion } from "@/lib/api/places";
 import type { Location } from "@/lib/types";
 
 type AccountLocationsPanelProps = {
@@ -21,8 +24,37 @@ type AccountLocationsPanelProps = {
 
 export function AccountLocationsPanel({ locations }: AccountLocationsPanelProps) {
   const router = useRouter();
+  const businessOptions = useMemo(() => {
+    const seen = new Map<
+      string,
+      { key: string; label: string; organization_id?: number | null }
+    >();
+    for (const location of locations) {
+      const label =
+        location.organization_name ||
+        location.place_brand_name ||
+        "Your business";
+      const key = location.organization_id ? `id:${location.organization_id}` : `name:${label}`;
+      if (!seen.has(key)) {
+        seen.set(key, {
+          key,
+          label,
+          organization_id: location.organization_id ?? null,
+        });
+      }
+    }
+    return Array.from(seen.values());
+  }, [locations]);
+  const defaultBusinessKey = businessOptions[0]?.key ?? null;
   const [deletingLocationId, setDeletingLocationId] = useState<number | null>(null);
   const [invitingLocationId, setInvitingLocationId] = useState<number | null>(null);
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [addLocationValue, setAddLocationValue] = useState("");
+  const [addLocationPlace, setAddLocationPlace] = useState<PlaceSuggestion | null>(null);
+  const [selectedBusinessKey, setSelectedBusinessKey] = useState<string | null>(
+    defaultBusinessKey,
+  );
+  const [addLocationError, setAddLocationError] = useState("");
   const [expandedInviteLocationId, setExpandedInviteLocationId] = useState<number | null>(
     null,
   );
@@ -41,6 +73,20 @@ export function AccountLocationsPanel({ locations }: AccountLocationsPanelProps)
     message: string;
   } | null>(null);
   const [isPending, startTransition] = useTransition();
+  const selectedBusiness = useMemo(
+    () =>
+      businessOptions.find(
+        (option) => option.key === (selectedBusinessKey ?? defaultBusinessKey),
+      ) ?? null,
+    [businessOptions, defaultBusinessKey, selectedBusinessKey],
+  );
+
+  useEffect(() => {
+    if (selectedBusinessKey || !defaultBusinessKey) {
+      return;
+    }
+    setSelectedBusinessKey(defaultBusinessKey);
+  }, [defaultBusinessKey, selectedBusinessKey]);
 
   function handleDelete(location: Location) {
     if (deletingLocationId || isPending) return;
@@ -72,6 +118,47 @@ export function AccountLocationsPanel({ locations }: AccountLocationsPanelProps)
         setDeletingLocationId(null);
       }
     });
+  }
+
+  async function handleAddLocation() {
+    if (!addLocationPlace || addingLocation || isPending) {
+      if (!addLocationPlace) {
+        setAddLocationError("Search and select a real place first.");
+      }
+      return;
+    }
+
+    setAddingLocation(true);
+    setAddLocationError("");
+    setFeedback(null);
+
+    try {
+      const selectedBusinessOption =
+        businessOptions.find(
+          (option) => option.key === (selectedBusinessKey ?? defaultBusinessKey),
+        ) ?? null;
+      const createdLocation = await createLocationFromPlace(addLocationPlace, {
+        organizationId: selectedBusinessOption?.organization_id ?? undefined,
+        organizationName: selectedBusinessOption?.organization_id
+          ? undefined
+          : selectedBusinessOption?.label,
+        onboardingInfo: "Added from logged-in locations page",
+      });
+      setAddLocationValue("");
+      setAddLocationPlace(null);
+      setSelectedBusinessKey(defaultBusinessKey);
+      setFeedback({
+        type: "success",
+        message: `${createdLocation.name} was added to your locations.`,
+      });
+      router.refresh();
+    } catch (error) {
+      setAddLocationError(
+        error instanceof Error ? error.message : "Could not add this location.",
+      );
+    } finally {
+      setAddingLocation(false);
+    }
   }
 
   function handleInviteFieldChange(
@@ -218,6 +305,72 @@ export function AccountLocationsPanel({ locations }: AccountLocationsPanelProps)
       <header className="account-locations-head">
         <h1>Locations</h1>
       </header>
+
+      <section className="account-location-create">
+        <div className="account-location-create-copy">
+          <strong>Add location</strong>
+          <span>Search a place and add it to one of your businesses.</span>
+        </div>
+        <div className="account-location-create-grid">
+          {businessOptions.length > 1 ? (
+            <label className="field account-location-create-business">
+              <span>Business</span>
+              <select
+                value={selectedBusinessKey ?? defaultBusinessKey ?? ""}
+                onChange={(event) => setSelectedBusinessKey(event.target.value)}
+              >
+                {businessOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="account-location-create-business-locked">
+              <span className="field-label">Business</span>
+              <strong>{selectedBusiness?.label ?? "New business"}</strong>
+            </div>
+          )}
+          <div className="account-location-create-place">
+            <span className="field-label">Location</span>
+            <PlaceAutocomplete
+              value={addLocationValue}
+              selectedPlace={addLocationPlace}
+              onInputChange={(value) => {
+                setAddLocationValue(value);
+                setAddLocationError("");
+                if (addLocationPlace && value !== addLocationPlace.label) {
+                  setAddLocationPlace(null);
+                }
+              }}
+              onSelect={(place) => {
+                setAddLocationPlace(place);
+                setAddLocationValue(place.label);
+                setAddLocationError("");
+              }}
+              placeholder="Search by business name or street address"
+            />
+          </div>
+          <div className="account-location-create-actions">
+            <button
+              className="button"
+              disabled={!addLocationPlace || addingLocation || isPending}
+              onClick={() => {
+                void handleAddLocation();
+              }}
+              type="button"
+            >
+              {addingLocation ? "Adding…" : "Add location"}
+            </button>
+          </div>
+        </div>
+        {addLocationError ? (
+          <div className="account-locations-feedback" data-tone="error" role="status">
+            {addLocationError}
+          </div>
+        ) : null}
+      </section>
 
       {feedback ? (
         <div

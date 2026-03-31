@@ -50,6 +50,7 @@ export type LocationManagerInvitePreview = {
   location_address?: string | null;
   expires_at: string;
   invite_status: string;
+  invite_mode: "setup_new" | "existing_user";
 };
 
 // ── API calls ────────────────────────────────────────────────────────────

@@ -552,10 +552,12 @@ def test_location_manager_invite_grants_location_scoped_access(
     invite_url_match = re.search(r"https?://\S+", str(invite_emails[0]["text_body"]))
     assert invite_url_match is not None
     invite_token = parse_qs(urlparse(invite_url_match.group(0)).query)["invite"][0]
+    assert "Whole Foods Market" in invite_emails[0]["subject"]
 
     preview = public_client.get(f"/api/location-manager-invites/{invite_token}")
     assert preview.status_code == 200
     assert preview.json()["invite_email"] == "jordan@example.com"
+    assert preview.json()["invite_mode"] == "setup_new"
 
     memberships = public_client.get(
         f"/api/locations/{primary_location['id']}/manager-memberships",

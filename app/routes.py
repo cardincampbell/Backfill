@@ -12,7 +12,7 @@ import os
 import secrets
 import socket
 from datetime import date, datetime, time, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Response
@@ -387,6 +387,7 @@ class LocationManagerInvitePreviewResponse(BaseModel):
     location_address: Optional[str] = None
     expires_at: str
     invite_status: str
+    invite_mode: Literal["setup_new", "existing_user"]
 
 
 class LocationManagerInviteAccessRequest(BaseModel):
@@ -981,16 +982,16 @@ def _build_manager_invite_email_content(
     )
     invite_url = _build_manager_invite_link(raw_token)
     inviter = (inviting_user_name or location.get("manager_name") or "A Backfill manager").strip() or "A Backfill manager"
-    subject = (
-        f"Backfill: {inviter} invited you to manage {business_name} · {location_label}"
+    subject = f"Backfill: Invitation to manage {business_name}"
+    call_to_action = (
+        "Click the link below to accept this invitation and sign in."
+        if recipient_has_phone
+        else "Click the link below to accept this invitation and get your account setup."
     )
-    call_to_action = "Click the link below to accept this invitation and sign in." if recipient_has_phone else (
-        "Click the link below to accept this invitation and get your account setup."
-    )
-    body_blurb = (
-        f"{inviter} has invited you to manage {business_name} · {location_label} in Backfill. "
-        f"{call_to_action}"
-    )
+    body_blurb = f"{inviter} has invited you to manage {business_name} · {location_label} in Backfill. {call_to_action}"
+    headline = f"You've been invited to manage {business_name}."
+    subline = f"{business_name} · {location_label}"
+    cta_label = "Accept Invitation"
     text_body = "\n\n".join(
         [
             body_blurb,
@@ -1002,16 +1003,16 @@ def _build_manager_invite_email_content(
     html_body = (
         "<div style=\"font-family: 'Helvetica Neue', Arial, sans-serif; color: #1f1f1f; max-width: 600px; margin: 0 auto; padding: 0 16px;\">\n"
         "  <div style=\"display:flex; justify-content:space-between; align-items:center; padding-top:24px;\">\n"
-        "    <div style=\"font-weight:700; font-size:1.25rem;\">Backfill</div>\n"
+        "    <div style=\"font-weight:800; font-size:1.4rem; letter-spacing:-0.04em;\">Backfill</div>\n"
         "    <div style=\"font-weight:600; font-size:0.85rem; color:#6b6b6b;\">Callouts covered.</div>\n"
         "  </div>\n"
         "  <div style=\"margin-top:32px; padding:24px; background:#f8f8f8; border-radius:16px; border:1px solid #e0e0e0;\">\n"
-        "    <p style=\"font-size:2rem; font-weight:700; margin:0 0 16px;\">You've been invited to manage Backfill</p>\n"
-        f"    <p style=\"margin:0 0 24px; color:#4d4d4d; font-size:1rem;\">{body_blurb}</p>\n"
-        f"    <a href=\"{invite_url}\" style=\"display:inline-block; padding:12px 28px; background:#1f1f1f; color:#fff; text-decoration:none; border-radius:99px; font-weight:600;\">Accept invitation</a>\n"
+        f"    <p style=\"font-size:2rem; font-weight:800; letter-spacing:-0.05em; margin:0 0 12px; line-height:1.05;\">{headline}</p>\n"
+        f"    <p style=\"margin:0 0 18px; color:#4d4d4d; font-size:1rem; line-height:1.55;\">{body_blurb}</p>\n"
+        f"    <a href=\"{invite_url}\" style=\"display:inline-block; padding:14px 28px; background:#1f1f1f; color:#fff; text-decoration:none; border-radius:12px; font-weight:700; letter-spacing:-0.01em;\">{cta_label}</a>\n"
         "  </div>\n"
-        "  <p style=\"margin:28px 0 0; color:#4d4d4d; font-size:0.9rem;\">Backfill handles callouts and last-minute shift changes automatically — so you never have to.</p>\n"
-        "  <p style=\"margin-top:8px; color:#a1a1a1; font-size:0.8rem;\">If you believe this email was sent in error, just ignore it.</p>\n"
+        "  <p style=\"margin:28px 0 0; color:#4d4d4d; font-size:0.95rem; line-height:1.55;\">Backfill handles callouts and last-minute shift changes automatically — so you never have to.</p>\n"
+        "  <p style=\"margin-top:8px; color:#a1a1a1; font-size:0.8rem;\">If you believe this email has been sent in error, please ignore it.</p>\n"
         "</div>"
     )
     return subject, text_body, html_body
@@ -1988,6 +1989,7 @@ async def get_location_manager_invite_preview(
         or "Backfill"
     )
     location_name = location.get("place_location_label") or location.get("name") or "Assigned location"
+    recipient_has_phone = bool(await queries.get_location_membership_by_email(db, invite.get("invite_email") or ""))
     return {
         "invite_email": invite.get("invite_email"),
         "manager_name": invite.get("manager_name"),
@@ -1997,6 +1999,7 @@ async def get_location_manager_invite_preview(
         "location_address": location.get("address") or location.get("place_formatted_address"),
         "expires_at": invite.get("expires_at"),
         "invite_status": invite.get("status") or "pending",
+        "invite_mode": "existing_user" if recipient_has_phone else "setup_new",
     }
 
 

@@ -5145,6 +5145,65 @@ body:has(.lp-onboarding) .site-main {
   gap: 14px;
 }
 
+.account-location-create {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.account-location-create-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.account-location-create-copy strong {
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.account-location-create-copy span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-location-create-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.8fr) minmax(0, 1.5fr) auto;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.account-location-create-business,
+.account-location-create-place {
+  min-width: 0;
+}
+
+.account-location-create-business-locked {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+
+.field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.account-location-create-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
 .account-location-card {
   display: grid;
   gap: 14px;
@@ -5560,6 +5619,11 @@ body:has(.lp-onboarding) .site-main {
   .account-locations-list {
     grid-template-columns: 1fr;
   }
+
+  .account-location-create-grid {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 960px) {
@@ -5717,5 +5781,13 @@ body:has(.lp-onboarding) .site-main {
 
   .account-location-invite-fields {
     grid-template-columns: 1fr;
+  }
+
+  .account-location-create {
+    padding: 16px;
+  }
+
+  .account-location-create-actions .button {
+    width: 100%;
   }
 }

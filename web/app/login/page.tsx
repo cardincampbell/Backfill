@@ -54,6 +54,33 @@ export default function LoginPage() {
     };
   }, [previewBypassEnabled, router]);
 
+  if (checkingSession) {
+    return (
+      <main className="lp-signup">
+        <div
+          style={{
+            minHeight: "100svh",
+            display: "grid",
+            placeItems: "center",
+            padding: "0 20px",
+          }}
+        >
+          <div
+            aria-hidden="true"
+            style={{
+              fontSize: "1.5rem",
+              fontWeight: 700,
+              letterSpacing: "-0.04em",
+              color: "var(--text)",
+            }}
+          >
+            Backfill
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   async function handlePhoneSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!phone.trim() || loading) return;
@@ -121,14 +148,7 @@ export default function LoginPage() {
         </div>
 
         <div className="settings-card">
-          {checkingSession ? (
-            <>
-              <div className="settings-card-header">Checking your session</div>
-              <div className="settings-card-body" style={{ display: "flex", justifyContent: "center", padding: "32px 0" }}>
-                <div className="lp-signup-check" aria-hidden="true">Backfill</div>
-              </div>
-            </>
-          ) : step === "phone" ? (
+          {step === "phone" ? (
             <>
               <div className="settings-card-header">Sign in</div>
               <div className="settings-card-body">

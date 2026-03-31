@@ -18,6 +18,9 @@ import {
   type LocationManagerInvitePreview,
   verifyAccessCode,
 } from "@/lib/api/auth";
+import {
+  createLocationFromPlace,
+} from "@/lib/api/locations";
 import { useOtpCooldown } from "@/lib/auth/use-otp-cooldown";
 import {
   clearStoredPreviewPhone,
@@ -25,6 +28,10 @@ import {
   storePreviewWorkspace,
 } from "@/lib/auth/preview";
 import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
+import {
+  inferLocationName,
+  inferOrganizationName,
+} from "@/lib/place-location";
 
 type StepId = "name" | "email" | "locations" | "phone" | "code";
 
@@ -53,88 +60,6 @@ function firstNameFrom(value: string): string {
 
 function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
-}
-
-function inferOrganizationName(place: PlaceSuggestion): string {
-  return place.brand_name?.trim() || place.name.trim();
-}
-
-function inferLocationName(place: PlaceSuggestion): string {
-  const businessName = inferOrganizationName(place);
-  const locationLabel = place.location_label?.trim();
-  const rawName = place.name.trim();
-  if (locationLabel) {
-    return `${businessName} · ${locationLabel}`;
-  }
-  if (rawName && rawName.toLowerCase() !== businessName.toLowerCase()) {
-    return rawName;
-  }
-  return businessName;
-}
-
-function buildLocationPayloadFromPlace(
-  place: PlaceSuggestion,
-  {
-    managerName,
-    managerEmail,
-    managerPhone,
-    organizationId,
-    organizationName,
-    onboardingInfo,
-  }: {
-    managerName: string;
-    managerEmail: string;
-    managerPhone?: string;
-    organizationId?: number;
-    organizationName?: string;
-    onboardingInfo: string;
-  },
-) {
-  return {
-    name: inferLocationName(place),
-    address: place.formatted_address ?? undefined,
-    organization_id: organizationId,
-    organization_name: organizationId ? undefined : organizationName,
-    manager_name: managerName,
-    manager_email: managerEmail,
-    manager_phone: managerPhone ?? undefined,
-    scheduling_platform: "backfill_native",
-    operating_mode: "backfill_shifts",
-    backfill_shifts_enabled: true,
-    backfill_shifts_launch_state: "enabled",
-    onboarding_info: onboardingInfo,
-    place_provider: place.provider,
-    place_id: place.place_id,
-    place_resource_name: place.resource_name ?? undefined,
-    place_display_name: place.name,
-    place_brand_name: place.brand_name ?? inferOrganizationName(place),
-    place_location_label: place.location_label ?? undefined,
-    place_formatted_address: place.formatted_address ?? undefined,
-    place_primary_type: place.primary_type ?? undefined,
-    place_primary_type_display_name: place.primary_type_display_name ?? undefined,
-    place_business_status: place.business_status ?? undefined,
-    place_latitude: place.latitude ?? undefined,
-    place_longitude: place.longitude ?? undefined,
-    place_google_maps_uri: place.google_maps_uri ?? undefined,
-    place_website_uri: place.website_uri ?? undefined,
-    place_national_phone_number: place.national_phone_number ?? undefined,
-    place_international_phone_number:
-      place.international_phone_number ?? undefined,
-    place_utc_offset_minutes: place.utc_offset_minutes ?? undefined,
-    place_rating: place.rating ?? undefined,
-    place_user_rating_count: place.user_rating_count ?? undefined,
-    place_city: place.city ?? undefined,
-    place_state_region: place.state_region ?? undefined,
-    place_postal_code: place.postal_code ?? undefined,
-    place_country_code: place.country_code ?? undefined,
-    place_neighborhood: place.neighborhood ?? undefined,
-    place_sublocality: place.sublocality ?? undefined,
-    place_types: place.types ?? [],
-    place_address_components: place.address_components ?? [],
-    place_regular_opening_hours: place.regular_opening_hours ?? {},
-    place_plus_code: place.plus_code ?? {},
-    place_metadata: place.metadata ?? {},
-  };
 }
 
 function normalizeBrand(value: string): string {
@@ -218,6 +143,8 @@ function OnboardingPageBody() {
       ? (["name", "email"] as StepId[])
       : STEPS;
   const isInviteCompletionFlow = assignedLocations.length > 0;
+  const inviteMode = invitePreview?.invite_mode ?? "setup_new";
+  const isExistingUserInvite = inviteMode === "existing_user";
   const firstName = useMemo(() => firstNameFrom(name), [name]);
   const currentStep = activeSteps[stepIndex];
   const progress = ((stepIndex + 1) / activeSteps.length) * 100;
@@ -634,32 +561,13 @@ function OnboardingPageBody() {
       const primaryLocation = hydratedLocations[0];
       const organizationName = inferOrganizationName(primaryLocation);
 
-      const primaryResponse = await apiFetch(`${API_BASE_URL}/api/locations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          buildLocationPayloadFromPlace(primaryLocation, {
-            managerName: name.trim(),
-            managerEmail: email.trim(),
-            managerPhone: previewPhone ?? undefined,
-            organizationName,
-            onboardingInfo,
-          }),
-        ),
+      const location = await createLocationFromPlace(primaryLocation, {
+        managerName: name.trim(),
+        managerEmail: email.trim(),
+        managerPhone: previewPhone ?? undefined,
+        organizationName,
+        onboardingInfo,
       });
-
-      if (!primaryResponse.ok) {
-        const payload = await primaryResponse.json().catch(() => null);
-        throw new Error(payload?.detail ?? "Could not finish onboarding");
-      }
-
-      const location = (await primaryResponse.json()) as {
-        id: number;
-        name: string;
-        organization_id?: number | null;
-        organization_name?: string | null;
-      };
-
       const bootstrapResponse = await apiFetch(
         `${API_BASE_URL}/api/locations/${location.id}/preview-bootstrap`,
         {
@@ -680,24 +588,14 @@ function OnboardingPageBody() {
       if (additionalLocations.length > 0) {
         const results = await Promise.allSettled(
           additionalLocations.map(async (locationChoice) => {
-            const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(
-                buildLocationPayloadFromPlace(locationChoice, {
-                  managerName: name.trim(),
-                  managerEmail: email.trim(),
-                  managerPhone: previewPhone ?? undefined,
-                  organizationId: location.organization_id ?? undefined,
-                  organizationName,
-                  onboardingInfo,
-                }),
-              ),
+            const created = await createLocationFromPlace(locationChoice, {
+              managerName: name.trim(),
+              managerEmail: email.trim(),
+              managerPhone: previewPhone ?? undefined,
+              organizationId: location.organization_id ?? undefined,
+              organizationName,
+              onboardingInfo,
             });
-            if (!response.ok) {
-              return null;
-            }
-            const created = (await response.json()) as { id: number };
             return created.id;
           }),
         );
@@ -744,7 +642,9 @@ function OnboardingPageBody() {
               <p className="ob-question">What&apos;s your name?</p>
               <p className="ob-sub">
                 {isEmailInviteFlow
-                  ? "We’ll pair your name with this invite before we verify your phone."
+                  ? isExistingUserInvite
+                    ? "We’ll pair your name with this invite, then verify your phone to sign you in."
+                    : "We’ll pair your name with this invite before we verify your phone."
                   : "First name is fine."}
               </p>
               {isEmailInviteFlow ? (
@@ -874,8 +774,13 @@ function OnboardingPageBody() {
             <div className="ob-step-pane">
               <p className="ob-question">What&apos;s your phone number?</p>
               <p className="ob-sub">
-                We&apos;ll text a one-time code to finish access for
-                {invitePreview ? ` ${invitePreview.location_name}` : " this location"}.
+                {isExistingUserInvite
+                  ? `We’ll text a one-time code to sign you in and attach this invitation to ${
+                      invitePreview ? invitePreview.location_name : "this location"
+                    }.`
+                  : `We’ll text a one-time code to finish setup for ${
+                      invitePreview ? invitePreview.location_name : "this location"
+                    }.`}
               </p>
               {invitePreview ? (
                 <div className="ob-confirmed-list">
@@ -966,7 +871,11 @@ function OnboardingPageBody() {
                   disabled={!code.trim() || submitting || !requestId}
                   type="button"
                 >
-                  {submitting ? "Verifying…" : "Finish setup →"}
+                  {submitting
+                    ? "Verifying…"
+                    : isExistingUserInvite
+                      ? "Sign in →"
+                      : "Finish setup →"}
                 </button>
                 <span className="ob-btn-hint">
                   {canResend ? (
