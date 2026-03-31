@@ -214,6 +214,432 @@ async def list_locations_by_contact_phone(db: aiosqlite.Connection, phone: str) 
     return [_decode("locations", row) for row in rows]
 
 
+async def get_location_membership_by_phone(
+    db: aiosqlite.Connection,
+    location_id: int,
+    phone: str,
+    *,
+    include_revoked: bool = True,
+) -> Optional[dict]:
+    query = """
+        SELECT *
+        FROM location_memberships
+        WHERE location_id=? AND phone=?
+    """
+    params: list[Any] = [location_id, phone]
+    if not include_revoked:
+        query += " AND (invite_status IS NULL OR invite_status != 'revoked')"
+    async with db.execute(query, params) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_location_memberships_for_phone(
+    db: aiosqlite.Connection,
+    phone: str,
+    *,
+    include_revoked: bool = False,
+) -> list[dict]:
+    query = """
+        SELECT *
+        FROM location_memberships
+        WHERE phone=?
+        ORDER BY location_id ASC, id ASC
+    """
+    params: list[Any] = [phone]
+    if not include_revoked:
+        query = """
+        SELECT *
+        FROM location_memberships
+        WHERE phone=? AND (invite_status IS NULL OR invite_status != 'revoked')
+        ORDER BY location_id ASC, id ASC
+        """
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def list_location_memberships_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+    *,
+    include_revoked: bool = False,
+) -> list[dict]:
+    query = """
+        SELECT *
+        FROM location_memberships
+        WHERE location_id=?
+    """
+    params: list[Any] = [location_id]
+    if not include_revoked:
+        query += """
+        AND (invite_status IS NULL OR invite_status != 'revoked')
+        """
+    query += """
+        ORDER BY
+            CASE WHEN role='owner' THEN 0 ELSE 1 END,
+            CASE
+                WHEN invite_status='pending' THEN 0
+                WHEN invite_status='active' THEN 1
+                ELSE 2
+            END,
+            COALESCE(manager_name, phone) ASC,
+            id ASC
+        """
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_location_membership(
+    db: aiosqlite.Connection,
+    membership_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM location_memberships
+        WHERE id=?
+        """,
+        (membership_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def upsert_location_membership(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int,
+    phone: str,
+    manager_name: Optional[str] = None,
+    manager_email: Optional[str] = None,
+    role: str = "manager",
+    invite_status: Optional[str] = None,
+    invited_by_phone: Optional[str] = None,
+    accepted_at: Optional[str] = None,
+    revoked_at: Optional[str] = None,
+) -> dict:
+    now = datetime.utcnow().isoformat()
+    if invite_status is None:
+        invite_status = "active" if role == "owner" else "pending"
+    if role == "owner" and accepted_at is None:
+        accepted_at = now
+    await db.execute(
+        """
+        INSERT INTO location_memberships (
+            location_id,
+            phone,
+            manager_name,
+            manager_email,
+            role,
+            invite_status,
+            invited_by_phone,
+            accepted_at,
+            revoked_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(location_id, phone) DO UPDATE SET
+            manager_name=COALESCE(excluded.manager_name, location_memberships.manager_name),
+            manager_email=COALESCE(excluded.manager_email, location_memberships.manager_email),
+            role=excluded.role,
+            invite_status=COALESCE(excluded.invite_status, location_memberships.invite_status),
+            invited_by_phone=COALESCE(excluded.invited_by_phone, location_memberships.invited_by_phone),
+            accepted_at=COALESCE(excluded.accepted_at, location_memberships.accepted_at),
+            revoked_at=excluded.revoked_at,
+            updated_at=excluded.updated_at
+        """,
+        (
+            location_id,
+            phone,
+            manager_name,
+            manager_email,
+            role,
+            invite_status,
+            invited_by_phone,
+            accepted_at,
+            revoked_at,
+            now,
+            now,
+        ),
+    )
+    await db.commit()
+    membership = await get_location_membership_by_phone(db, location_id, phone)
+    assert membership is not None
+    return membership
+
+
+async def complete_location_memberships_for_phone(
+    db: aiosqlite.Connection,
+    *,
+    phone: str,
+    manager_name: str,
+    manager_email: str,
+) -> int:
+    now = datetime.utcnow().isoformat()
+    cur = await db.execute(
+        """
+        UPDATE location_memberships
+        SET
+            manager_name=?,
+            manager_email=?,
+            invite_status='active',
+            accepted_at=COALESCE(accepted_at, ?),
+            revoked_at=NULL,
+            updated_at=?
+        WHERE phone=? AND role!='owner' AND (invite_status IS NULL OR invite_status != 'revoked')
+        """,
+        (manager_name, manager_email, now, now, phone),
+    )
+    await db.commit()
+    return int(cur.rowcount or 0)
+
+
+async def revoke_location_membership(
+    db: aiosqlite.Connection,
+    membership_id: int,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE location_memberships
+        SET invite_status='revoked', revoked_at=?, updated_at=?
+        WHERE id=?
+        """,
+        (now, now, membership_id),
+    )
+    await db.commit()
+
+
+async def list_incomplete_location_memberships_for_phone(
+    db: aiosqlite.Connection,
+    phone: str,
+) -> list[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM location_memberships
+        WHERE
+            phone=?
+            AND role!='owner'
+            AND (invite_status IS NULL OR invite_status != 'revoked')
+            AND (
+                invite_status='pending'
+                OR manager_name IS NULL
+                OR TRIM(manager_name)=''
+                OR manager_email IS NULL
+                OR TRIM(manager_email)=''
+            )
+        ORDER BY location_id ASC, id ASC
+        """,
+        (phone,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_location_manager_invite_by_email(
+    db: aiosqlite.Connection,
+    location_id: int,
+    invite_email: str,
+    *,
+    include_revoked: bool = True,
+) -> Optional[dict]:
+    query = """
+        SELECT *
+        FROM location_manager_invites
+        WHERE location_id=? AND LOWER(invite_email)=LOWER(?)
+    """
+    params: list[Any] = [location_id, invite_email]
+    if not include_revoked:
+        query += " AND status != 'revoked'"
+    async with db.execute(query, params) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_location_manager_invite(
+    db: aiosqlite.Connection,
+    invite_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM location_manager_invites
+        WHERE id=?
+        """,
+        (invite_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_location_manager_invite_by_token_hash(
+    db: aiosqlite.Connection,
+    token_hash: str,
+) -> Optional[dict]:
+    async with db.execute(
+        """
+        SELECT *
+        FROM location_manager_invites
+        WHERE token_hash=?
+        """,
+        (token_hash,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def list_location_manager_invites_for_location(
+    db: aiosqlite.Connection,
+    location_id: int,
+    *,
+    include_terminal: bool = False,
+) -> list[dict]:
+    query = """
+        SELECT *
+        FROM location_manager_invites
+        WHERE location_id=?
+    """
+    params: list[Any] = [location_id]
+    if not include_terminal:
+        query += " AND status='pending'"
+    query += """
+        ORDER BY COALESCE(claimed_name, manager_name, invite_email) ASC, id ASC
+    """
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+async def upsert_location_manager_invite(
+    db: aiosqlite.Connection,
+    *,
+    location_id: int,
+    invite_email: str,
+    manager_name: Optional[str] = None,
+    role: str = "manager",
+    token_hash: str,
+    invited_by_phone: Optional[str] = None,
+    expires_at: str,
+) -> dict:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        INSERT INTO location_manager_invites (
+            location_id,
+            invite_email,
+            manager_name,
+            role,
+            token_hash,
+            status,
+            invited_by_phone,
+            claimed_phone,
+            claimed_name,
+            accepted_phone,
+            accepted_at,
+            revoked_at,
+            expires_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
+        ON CONFLICT(location_id, invite_email) DO UPDATE SET
+            manager_name=COALESCE(excluded.manager_name, location_manager_invites.manager_name),
+            role=excluded.role,
+            token_hash=excluded.token_hash,
+            status='pending',
+            invited_by_phone=COALESCE(excluded.invited_by_phone, location_manager_invites.invited_by_phone),
+            claimed_phone=NULL,
+            claimed_name=NULL,
+            accepted_phone=NULL,
+            accepted_at=NULL,
+            revoked_at=NULL,
+            expires_at=excluded.expires_at,
+            updated_at=excluded.updated_at
+        """,
+        (
+            location_id,
+            invite_email,
+            manager_name,
+            role,
+            token_hash,
+            invited_by_phone,
+            expires_at,
+            now,
+            now,
+        ),
+    )
+    await db.commit()
+    invite = await get_location_manager_invite_by_email(
+        db,
+        location_id,
+        invite_email,
+        include_revoked=True,
+    )
+    assert invite is not None
+    return invite
+
+
+async def claim_location_manager_invite(
+    db: aiosqlite.Connection,
+    invite_id: int,
+    *,
+    claimed_phone: str,
+    claimed_name: Optional[str] = None,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE location_manager_invites
+        SET claimed_phone=?, claimed_name=COALESCE(?, claimed_name), updated_at=?
+        WHERE id=?
+        """,
+        (claimed_phone, claimed_name, now, invite_id),
+    )
+    await db.commit()
+
+
+async def accept_location_manager_invite(
+    db: aiosqlite.Connection,
+    invite_id: int,
+    *,
+    accepted_phone: str,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE location_manager_invites
+        SET
+            status='accepted',
+            accepted_phone=?,
+            accepted_at=COALESCE(accepted_at, ?),
+            updated_at=?
+        WHERE id=?
+        """,
+        (accepted_phone, now, now, invite_id),
+    )
+    await db.commit()
+
+
+async def revoke_location_manager_invite(
+    db: aiosqlite.Connection,
+    invite_id: int,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE location_manager_invites
+        SET status='revoked', revoked_at=?, updated_at=?
+        WHERE id=?
+        """,
+        (now, now, invite_id),
+    )
+    await db.commit()
+
+
 async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("locations", data)
     now = datetime.utcnow().isoformat()
@@ -428,6 +854,11 @@ async def update_location(db: aiosqlite.Connection, location_id: int, data: dict
         f"UPDATE {_LOCATION_TABLE} SET {cols} WHERE id=?",
         (*encoded.values(), location_id),
     )
+    await db.commit()
+
+
+async def delete_location(db: aiosqlite.Connection, location_id: int) -> None:
+    await db.execute(f"DELETE FROM {_LOCATION_TABLE} WHERE id=?", (location_id,))
     await db.commit()
 
 
@@ -2076,8 +2507,9 @@ async def insert_dashboard_access_request(db: aiosqlite.Connection, data: dict) 
         """
         INSERT INTO dashboard_access_requests
         (phone, organization_id, location_ids_json, token_hash, verification_sid, channel, status,
-         expires_at, used_at, verified_at, check_count, last_check_at, requested_at, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         expires_at, used_at, verified_at, check_count, last_check_at, requested_at, created_at, updated_at,
+         location_manager_invite_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             encoded["phone"],
@@ -2095,6 +2527,7 @@ async def insert_dashboard_access_request(db: aiosqlite.Connection, data: dict) 
             encoded.get("requested_at", now),
             encoded.get("created_at", now),
             encoded.get("updated_at", now),
+            encoded.get("location_manager_invite_id"),
         ),
     )
     await db.commit()
@@ -2151,6 +2584,7 @@ async def update_dashboard_access_request(
         "organization_id",
         "location_ids_json",
         "token_hash",
+        "location_manager_invite_id",
         "verification_sid",
         "channel",
         "status",

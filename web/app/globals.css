@@ -4883,7 +4883,7 @@ body:has(.lp-onboarding) .site-main {
 
 .dashboard-app-shell {
   display: grid;
-  grid-template-columns: 108px minmax(0, 1fr);
+  grid-template-columns: 124px minmax(0, 1fr);
   min-height: 100vh;
   background: var(--bg);
 }
@@ -4893,7 +4893,7 @@ body:has(.lp-onboarding) .site-main {
   top: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 18px;
   height: 100vh;
   padding: 18px 12px;
@@ -4906,6 +4906,7 @@ body:has(.lp-onboarding) .site-main {
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  align-self: center;
   text-decoration: none;
 }
 
@@ -4972,6 +4973,97 @@ body:has(.lp-onboarding) .site-main {
   text-align: center;
 }
 
+.dashboard-rail-profile {
+  margin-top: auto;
+  display: grid;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dashboard-rail-profile-header {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.dashboard-rail-profile-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13, 232, 255, 0.14);
+  color: var(--brand);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dashboard-rail-profile-copy {
+  display: grid;
+  gap: 2px;
+  text-align: center;
+}
+
+.dashboard-rail-profile-copy strong {
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: white;
+}
+
+.dashboard-rail-profile-copy span {
+  font-size: 0.62rem;
+  color: rgba(245, 247, 252, 0.65);
+}
+
+.dashboard-rail-profile-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.dashboard-rail-profile-link {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(245, 247, 252, 0.86);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.dashboard-rail-profile-link[data-active="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: white;
+}
+
+.dashboard-rail-profile-link:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.dashboard-rail-profile-signout {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.dashboard-rail-profile-signout:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .dashboard-stage {
   min-width: 0;
   padding: 20px 26px 30px;
@@ -4983,6 +5075,231 @@ body:has(.lp-onboarding) .site-main {
 
 .dashboard-stage .section {
   padding: 0;
+}
+
+.account-locations-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.account-locations-head h1 {
+  margin: 8px 0 0;
+  font-size: clamp(1.65rem, 2.8vw, 2.2rem);
+  letter-spacing: -0.05em;
+}
+
+.account-locations-feedback {
+  padding: 12px 14px;
+  border-radius: 16px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  border: 1px solid transparent;
+}
+
+.account-locations-feedback[data-tone="success"] {
+  background: rgba(39, 174, 96, 0.08);
+  border-color: rgba(39, 174, 96, 0.18);
+  color: #1a7a42;
+}
+
+.account-locations-feedback[data-tone="error"] {
+  background: rgba(191, 91, 57, 0.08);
+  border-color: rgba(191, 91, 57, 0.18);
+  color: var(--accent);
+}
+
+.account-locations-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.account-location-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.account-location-card-main {
+  display: grid;
+  gap: 10px;
+}
+
+.account-location-card-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.account-location-card-link {
+  color: inherit;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.account-location-card-link:hover {
+  opacity: 0.72;
+}
+
+.account-location-card-copy strong {
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.account-location-card-copy span,
+.account-location-card-meta span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-location-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-location-invite {
+  display: grid;
+  gap: 16px;
+  margin-top: 2px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.account-location-invite-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.account-location-invite-copy strong {
+  font-size: 0.92rem;
+}
+
+.account-location-invite-copy span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.account-location-invite-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-location-invite-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.account-location-membership-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.account-location-membership-group {
+  display: grid;
+  gap: 10px;
+}
+
+.account-location-membership-head strong {
+  font-size: 0.84rem;
+  letter-spacing: -0.01em;
+}
+
+.account-location-membership-list {
+  display: grid;
+  gap: 8px;
+}
+
+.account-location-membership-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+}
+
+.account-location-membership-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-location-membership-copy strong {
+  font-size: 0.88rem;
+}
+
+.account-location-membership-copy span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.account-location-membership-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.account-location-membership-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.account-location-membership-pill[data-tone="pending"] {
+  background: rgba(191, 91, 57, 0.12);
+  color: var(--warning);
+}
+
+.account-location-membership-pill[data-tone="active"] {
+  background: rgba(38, 160, 119, 0.12);
+  color: var(--success);
+}
+
+.account-location-membership-pill[data-tone="owner"] {
+  background: rgba(13, 232, 255, 0.12);
+  color: var(--brand);
+}
+
+.account-location-membership-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.account-location-membership-revoke {
+  min-width: 84px;
+}
+
+.account-location-delete {
+  color: var(--danger);
+}
+
+.account-location-delete:hover:not(:disabled) {
+  border-color: rgba(191, 91, 57, 0.35);
+  background: rgba(191, 91, 57, 0.08);
+  color: var(--danger);
 }
 
 .workspace-shell-head {
@@ -5208,9 +5525,79 @@ body:has(.lp-onboarding) .site-main {
   .schedule-roster-grid {
     grid-template-columns: 180px repeat(7, minmax(92px, 1fr));
   }
+
+  .account-locations-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 960px) {
+  .dashboard-app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-rail {
+    position: sticky;
+    z-index: 20;
+    height: auto;
+    min-height: 0;
+    padding: 12px 14px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .dashboard-rail-brand {
+    align-self: flex-start;
+  }
+
+  .dashboard-rail-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .dashboard-rail-link {
+    flex: 0 0 auto;
+    min-width: 78px;
+  }
+
+  .dashboard-rail-profile {
+    margin-top: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+  }
+
+  .dashboard-rail-profile-header {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-items: start;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .dashboard-rail-profile-copy {
+    text-align: left;
+  }
+
+  .dashboard-rail-profile-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboard-stage {
+    padding: 16px 14px 24px;
+  }
+
+  .workspace-shell-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .workspace-shell-head h1 {
+    font-size: clamp(1.5rem, 8vw, 2rem);
+    line-height: 1.02;
+  }
+
   .workspace-top,
   .workspace-section-headline {
     flex-direction: column;
@@ -5227,8 +5614,84 @@ body:has(.lp-onboarding) .site-main {
 }
 
 @media (max-width: 640px) {
+  .dashboard-rail {
+    gap: 10px;
+  }
+
+  .dashboard-rail-link {
+    min-width: 70px;
+    padding: 9px 10px;
+  }
+
+  .dashboard-rail-link span:last-child {
+    font-size: 0.62rem;
+  }
+
+  .dashboard-rail-profile {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-rail-profile-header {
+    justify-items: center;
+    text-align: center;
+  }
+
+  .dashboard-rail-profile-copy {
+    text-align: center;
+  }
+
+  .dashboard-rail-profile-actions {
+    grid-template-columns: 1fr;
+  }
+
   .workspace-section,
   .workspace-section-schedule {
-    padding: 18px;
+    padding: 14px;
+  }
+
+  .workspace-top-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .summary-bar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .summary-bar-item {
+    padding: 0 0 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .summary-bar-item-pill {
+    margin-left: 0;
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .account-location-card {
+    padding: 16px;
+  }
+
+  .account-location-card-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-location-membership-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .account-location-membership-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .account-location-invite-fields {
+    grid-template-columns: 1fr;
   }
 }

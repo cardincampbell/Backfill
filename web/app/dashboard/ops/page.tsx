@@ -1,8 +1,8 @@
 import Link from "next/link";
 
+import { AccountLocationsPanel } from "@/components/account-locations-panel";
 import { EmptyState } from "@/components/empty-state";
 import { getLocations } from "@/lib/api";
-import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -34,47 +34,7 @@ export default async function DashboardLocationsPage() {
 
   return (
     <main className="section">
-      <section className="page-head">
-        <div>
-          <span className="eyebrow">Your locations</span>
-          <h1>Switch locations</h1>
-          <p className="muted">
-            Only locations attached to your operator access are shown here.
-          </p>
-        </div>
-      </section>
-
-      <section className="section">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Location</th>
-                <th>Business</th>
-                <th>Address</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {locations.map((location) => (
-                <tr key={location.id}>
-                  <td style={{ fontWeight: 600 }}>{location.name}</td>
-                  <td>{location.organization_name ?? "Independent"}</td>
-                  <td>{location.address ?? location.place_formatted_address ?? "\u2014"}</td>
-                  <td style={{ textAlign: "right" }}>
-                    <Link
-                      className="button-secondary button-small"
-                      href={buildDashboardLocationPath(location, { tab: "schedule" })}
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <AccountLocationsPanel locations={locations} />
     </main>
   );
 }

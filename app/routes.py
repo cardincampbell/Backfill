@@ -5,12 +5,15 @@ Covers CRUD for customer locations, workers, and shifts, plus the backfill trigg
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import os
+import secrets
 import socket
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 import aiosqlite
@@ -50,6 +53,7 @@ from app.services import (
     shift_manager,
     cascade as cascade_svc,
     backfill_shifts as backfill_shifts_svc,
+    messaging as messaging_svc,
     notifications as notifications_svc,
     ops_queue,
     places as places_svc,
@@ -331,6 +335,68 @@ class LocationSettingsUpdate(BaseModel):
     late_arrival_policy: Optional[str] = None
     missed_check_in_policy: Optional[str] = None
     agency_supply_approved: Optional[bool] = None
+
+
+class LocationDeleteResponse(BaseModel):
+    deleted: bool
+    location_id: int
+
+
+class LocationManagerMembershipResponse(BaseModel):
+    id: Optional[int] = None
+    location_id: int
+    entry_kind: str = "membership"
+    phone: Optional[str] = None
+    manager_name: Optional[str] = None
+    manager_email: Optional[str] = None
+    role: str = "manager"
+    invite_status: str = "pending"
+    invite_channel: str = "email"
+    invited_by_phone: Optional[str] = None
+    accepted_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class LocationManagerInviteRequest(BaseModel):
+    email: str
+    manager_name: Optional[str] = None
+
+
+class LocationManagerInviteResponse(BaseModel):
+    location_id: int
+    created: bool
+    delivery_id: Optional[str] = None
+    membership: LocationManagerMembershipResponse
+
+
+class LocationManagerRevokeResponse(BaseModel):
+    revoked: bool
+    location_id: int
+    access_kind: str
+    access_id: int
+
+
+class LocationManagerInvitePreviewResponse(BaseModel):
+    invite_email: str
+    manager_name: Optional[str] = None
+    business_name: str
+    location_id: int
+    location_name: str
+    location_address: Optional[str] = None
+    expires_at: str
+    invite_status: str
+
+
+class LocationManagerInviteAccessRequest(BaseModel):
+    manager_name: str
+    phone: str
+
+
+class DashboardOnboardingCompleteRequest(BaseModel):
+    manager_name: str
+    manager_email: str
 
 
 class LocationBackfillShiftsMetricsResponse(BaseModel):
@@ -811,6 +877,122 @@ async def _resolve_organization_id(
     )
 
 
+def _build_location_owner_membership(location: dict) -> Optional[dict]:
+    owner_phone = auth_svc.normalize_phone(location.get("manager_phone"))
+    if owner_phone is None:
+        return None
+    return {
+        "id": None,
+        "location_id": int(location["id"]),
+        "entry_kind": "membership",
+        "phone": owner_phone,
+        "manager_name": location.get("manager_name"),
+        "manager_email": location.get("manager_email"),
+        "role": "owner",
+        "invite_status": "active",
+        "invite_channel": "phone",
+        "invited_by_phone": owner_phone,
+        "accepted_at": location.get("created_at"),
+        "revoked_at": None,
+        "created_at": location.get("created_at"),
+        "updated_at": location.get("updated_at"),
+    }
+
+
+def _list_location_access_memberships(
+    location: dict,
+    memberships: list[dict],
+    pending_invites: list[dict],
+) -> list[dict]:
+    owner_membership = _build_location_owner_membership(location)
+    rows: list[dict] = []
+    seen_phones: set[str] = set()
+
+    if owner_membership is not None:
+        seen_phones.add(owner_membership["phone"])
+        rows.append(owner_membership)
+
+    for membership in memberships:
+        phone = auth_svc.normalize_phone(membership.get("phone"))
+        if phone is None or phone in seen_phones:
+            continue
+        normalized = dict(membership)
+        normalized["entry_kind"] = "membership"
+        normalized["phone"] = phone
+        normalized["invite_channel"] = "phone"
+        rows.append(normalized)
+        seen_phones.add(phone)
+
+    for invite in pending_invites:
+        rows.append(
+            {
+                "id": int(invite["id"]),
+                "location_id": int(invite["location_id"]),
+                "entry_kind": "invite",
+                "phone": invite.get("claimed_phone"),
+                "manager_name": invite.get("claimed_name") or invite.get("manager_name"),
+                "manager_email": invite.get("invite_email"),
+                "role": invite.get("role") or "manager",
+                "invite_status": invite.get("status") or "pending",
+                "invite_channel": "email",
+                "invited_by_phone": invite.get("invited_by_phone"),
+                "accepted_at": invite.get("accepted_at"),
+                "revoked_at": invite.get("revoked_at"),
+                "created_at": invite.get("created_at"),
+                "updated_at": invite.get("updated_at"),
+            }
+        )
+
+    return rows
+
+
+def _new_invite_token(prefix: str) -> str:
+    return f"{prefix}_{secrets.token_urlsafe(24)}"
+
+
+def _hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _build_manager_invite_link(raw_token: str) -> str:
+    return f"{settings.backfill_web_base_url}/onboarding?invite={quote(raw_token)}"
+
+
+def _build_manager_invite_email_content(
+    *,
+    location: dict,
+    manager_name: Optional[str],
+    raw_token: str,
+) -> tuple[str, str, str]:
+    location_label = location.get("place_location_label") or location.get("name") or "this location"
+    business_name = (
+        location.get("organization_name")
+        or location.get("place_brand_name")
+        or location.get("name")
+        or "Backfill"
+    )
+    invite_url = _build_manager_invite_link(raw_token)
+    salutation = f"{manager_name.strip()}," if manager_name and manager_name.strip() else "Hi,"
+    subject = f"You’re invited to manage {location_label} in Backfill"
+    text_body = (
+        f"{salutation}\n\n"
+        f"You’ve been invited to manage {business_name} - {location_label} in Backfill.\n\n"
+        "Open the link below to finish setup. We’ll collect your name and phone number, "
+        "then text you a one-time code before access is granted.\n\n"
+        f"{invite_url}\n\n"
+        "If you weren’t expecting this invite, you can ignore this email."
+    )
+    html_body = (
+        f"<p>{salutation}</p>"
+        f"<p>You’ve been invited to manage <strong>{business_name} - {location_label}</strong> in Backfill.</p>"
+        "<p>Open the link below to finish setup. We’ll collect your name and phone number, "
+        "then text you a one-time code before access is granted.</p>"
+        f"<p><a href=\"{invite_url}\">{invite_url}</a></p>"
+        "<p>If you weren’t expecting this invite, you can ignore this email.</p>"
+    )
+    return subject, text_body, html_body
+
+
 def _ops_job_idempotency_key(job_type: str, **parts: object) -> str:
     bucket = datetime.utcnow().strftime("%Y%m%d%H%M")
     serialized = ":".join(f"{key}={parts[key]}" for key in sorted(parts))
@@ -933,6 +1115,37 @@ async def logout_dashboard_session(
     principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
 ):
     await auth_svc.revoke_dashboard_session(db, principal)
+    return await auth_svc.build_auth_response_payload(db, principal)
+
+
+@router.post("/auth/complete-onboarding", response_model=DashboardAuthResponse)
+async def complete_dashboard_onboarding(
+    body: DashboardOnboardingCompleteRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+):
+    manager_name = body.manager_name.strip()
+    manager_email = body.manager_email.strip().lower()
+    if not manager_name:
+        raise HTTPException(status_code=400, detail="Manager name is required")
+    if "@" not in manager_email:
+        raise HTTPException(status_code=400, detail="A valid email is required")
+    if not principal.subject_phone:
+        raise HTTPException(status_code=403, detail="Verified operator phone is required")
+
+    updated_count = await queries.complete_location_memberships_for_phone(
+        db,
+        phone=principal.subject_phone,
+        manager_name=manager_name,
+        manager_email=manager_email,
+    )
+    if updated_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="There are no invited manager profiles waiting for completion.",
+        )
+
+    await auth_svc.refresh_dashboard_session_access(db, principal)
     return await auth_svc.build_auth_response_payload(db, principal)
 
 
@@ -1327,6 +1540,18 @@ async def create_location(
     )
     data.pop("organization_name", None)
     location_id = await queries.insert_location(db, data)
+    if principal is not None and principal.is_session and principal.subject_phone:
+        await queries.upsert_location_membership(
+            db,
+            location_id=location_id,
+            phone=principal.subject_phone,
+            manager_name=data.get("manager_name"),
+            manager_email=data.get("manager_email"),
+            role="owner",
+            invite_status="active",
+            invited_by_phone=principal.subject_phone,
+            accepted_at=datetime.utcnow().isoformat(),
+        )
     if principal is not None and principal.is_session:
         await auth_svc.refresh_dashboard_session_access(db, principal)
     await audit_svc.append(
@@ -1371,16 +1596,7 @@ async def list_locations(
     principal = auth_svc.get_request_principal(request)
     if principal is None:
         return []
-    if principal.is_internal:
-        return rows
-    if principal.organization_id is not None:
-        return [
-            row
-            for row in rows
-            if row.get("organization_id") == principal.organization_id
-        ]
-    allowed_ids = set(principal.location_ids)
-    return [row for row in rows if int(row["id"]) in allowed_ids]
+    return auth_svc.filter_locations_for_principal(rows, principal)
 
 
 @router.get("/locations/{location_id}", response_model=Location)
@@ -1463,6 +1679,262 @@ async def get_location_eligible_workers(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get(
+    "/locations/{location_id}/manager-memberships",
+    response_model=List[LocationManagerMembershipResponse],
+)
+async def list_location_manager_memberships(
+    location_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    memberships = await queries.list_location_memberships_for_location(db, location_id)
+    pending_invites = await queries.list_location_manager_invites_for_location(
+        db,
+        location_id,
+    )
+    return _list_location_access_memberships(location, memberships, pending_invites)
+
+
+@router.post(
+    "/locations/{location_id}/manager-memberships",
+    response_model=LocationManagerInviteResponse,
+)
+async def invite_location_manager(
+    location_id: int,
+    body: LocationManagerInviteRequest,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    invite_email = body.email.strip().lower()
+    if "@" not in invite_email:
+        raise HTTPException(status_code=400, detail="A valid email is required")
+
+    raw_token = _new_invite_token("bfinvite")
+    existing = await queries.get_location_manager_invite_by_email(
+        db,
+        location_id=location_id,
+        invite_email=invite_email,
+        include_revoked=True,
+    )
+    membership = await queries.upsert_location_manager_invite(
+        db,
+        location_id=location_id,
+        invite_email=invite_email,
+        manager_name=(body.manager_name or "").strip() or None,
+        role="manager",
+        token_hash=_hash_token(raw_token),
+        invited_by_phone=principal.subject_phone,
+        expires_at=(
+            datetime.utcnow()
+            + timedelta(hours=settings.backfill_location_invite_ttl_hours)
+        ).isoformat(),
+    )
+
+    delivery_id: Optional[str] = None
+    try:
+        subject, text_body, html_body = _build_manager_invite_email_content(
+            location=location,
+            manager_name=membership.get("manager_name"),
+            raw_token=raw_token,
+        )
+        delivery_id = messaging_svc.send_email(
+            invite_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to send manager invite email for location_id=%s", location_id)
+        raise HTTPException(status_code=502, detail="Could not send manager invite email") from exc
+
+    await audit_svc.append(
+        db,
+        AuditAction.location_manager_invited,
+        actor=principal.subject_phone or "unknown",
+        entity_type="location",
+        entity_id=location_id,
+        details={
+            "invited_email": invite_email,
+            "manager_name": membership.get("manager_name"),
+            "created": existing is None,
+            "invite_status": membership.get("status"),
+        },
+    )
+    return {
+        "location_id": location_id,
+        "created": existing is None or existing.get("status") == "revoked",
+        "delivery_id": delivery_id,
+        "membership": {
+            "id": int(membership["id"]),
+            "location_id": int(membership["location_id"]),
+            "entry_kind": "invite",
+            "phone": membership.get("claimed_phone"),
+            "manager_name": membership.get("claimed_name") or membership.get("manager_name"),
+            "manager_email": membership.get("invite_email"),
+            "role": membership.get("role") or "manager",
+            "invite_status": membership.get("status") or "pending",
+            "invite_channel": "email",
+            "invited_by_phone": membership.get("invited_by_phone"),
+            "accepted_at": membership.get("accepted_at"),
+            "revoked_at": membership.get("revoked_at"),
+            "created_at": membership.get("created_at"),
+            "updated_at": membership.get("updated_at"),
+        },
+    }
+
+
+@router.delete(
+    "/locations/{location_id}/manager-memberships/{membership_id}",
+    response_model=LocationManagerRevokeResponse,
+)
+async def revoke_location_manager(
+    location_id: int,
+    membership_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    membership = await queries.get_location_membership(db, membership_id)
+    if membership is None or int(membership["location_id"]) != location_id:
+        raise HTTPException(status_code=404, detail="Manager invite not found")
+    if membership.get("role") == "owner":
+        raise HTTPException(status_code=400, detail="Owner access cannot be removed here")
+
+    await queries.revoke_location_membership(db, membership_id)
+    await audit_svc.append(
+        db,
+        AuditAction.location_manager_revoked,
+        actor=principal.subject_phone or "unknown",
+        entity_type="location",
+        entity_id=location_id,
+        details={
+            "revoked_phone": membership.get("phone"),
+            "membership_id": membership_id,
+        },
+    )
+    return {
+        "revoked": True,
+        "location_id": location_id,
+        "access_kind": "membership",
+        "access_id": membership_id,
+    }
+
+
+@router.delete(
+    "/locations/{location_id}/manager-invites/{invite_id}",
+    response_model=LocationManagerRevokeResponse,
+)
+async def revoke_location_manager_invite(
+    location_id: int,
+    invite_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    location = await queries.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    invite = await queries.get_location_manager_invite(db, invite_id)
+    if invite is None or int(invite["location_id"]) != location_id:
+        raise HTTPException(status_code=404, detail="Manager invite not found")
+
+    await queries.revoke_location_manager_invite(db, invite_id)
+    await audit_svc.append(
+        db,
+        AuditAction.location_manager_revoked,
+        actor=principal.subject_phone or "unknown",
+        entity_type="location",
+        entity_id=location_id,
+        details={
+            "invited_email": invite.get("invite_email"),
+            "access_kind": "invite",
+            "invite_id": invite_id,
+        },
+    )
+    return {
+        "revoked": True,
+        "location_id": location_id,
+        "access_kind": "invite",
+        "access_id": invite_id,
+    }
+
+
+@router.get(
+    "/location-manager-invites/{token}",
+    response_model=LocationManagerInvitePreviewResponse,
+)
+async def get_location_manager_invite_preview(
+    token: str,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    invite = await queries.get_location_manager_invite_by_token_hash(
+        db,
+        _hash_token(token),
+    )
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.get("status") != "pending" or auth_svc._is_expired(invite.get("expires_at")):
+        raise HTTPException(status_code=410, detail="Invite has expired")
+
+    location = await queries.get_location(db, int(invite["location_id"]))
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    business_name = (
+        location.get("organization_name")
+        or location.get("place_brand_name")
+        or location.get("name")
+        or "Backfill"
+    )
+    location_name = location.get("place_location_label") or location.get("name") or "Assigned location"
+    return {
+        "invite_email": invite.get("invite_email"),
+        "manager_name": invite.get("manager_name"),
+        "business_name": business_name,
+        "location_id": int(location["id"]),
+        "location_name": location_name,
+        "location_address": location.get("address") or location.get("place_formatted_address"),
+        "expires_at": invite.get("expires_at"),
+        "invite_status": invite.get("status") or "pending",
+    }
+
+
+@router.post(
+    "/location-manager-invites/{token}/request-access",
+    response_model=DashboardAccessRequestResponse,
+    dependencies=[Depends(rate_limit.limit_by_request_key("auth_request", limit=5, window_seconds=300))],
+)
+async def request_location_manager_invite_access(
+    token: str,
+    body: LocationManagerInviteAccessRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    try:
+        return await auth_svc.request_dashboard_access_for_location_invite(
+            db,
+            invite_token=token,
+            manager_name=body.manager_name,
+            phone=body.phone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=_twilio_runtime_error_detail(str(exc), step="invite-request-access"),
+        ) from exc
+
+
 @router.get("/locations/{location_id}/enrollment-invite-preview", response_model=EnrollmentInvitePreviewResponse)
 async def get_enrollment_invite_preview(
     location_id: int,
@@ -1527,6 +1999,48 @@ async def update_location(
         payload.pop("organization_name", None)
     await queries.update_location(db, location_id, payload)
     return await queries.get_location(db, location_id)
+
+
+@router.delete("/locations/{location_id}", response_model=LocationDeleteResponse)
+async def delete_location(
+    location_id: int,
+    principal: auth_svc.AuthPrincipal = Depends(auth_svc.require_dashboard_session),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    row = await queries.get_location(db, location_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    await auth_svc.ensure_location_access(db, principal, location_id)
+
+    if not principal.subject_phone:
+        raise HTTPException(status_code=403, detail="Verified operator phone is required")
+
+    location_phone = auth_svc.normalize_phone(row.get("manager_phone"))
+    if location_phone != principal.subject_phone:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the verified operator attached to this location can delete it",
+        )
+
+    try:
+        await queries.delete_location(db, location_id)
+    except aiosqlite.IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This location already has operational data and cannot be deleted from the account profile.",
+        ) from exc
+
+    await auth_svc.refresh_dashboard_session_access(db, principal)
+    await audit_svc.append(
+        db,
+        AuditAction.location_deleted,
+        actor=principal.subject_phone,
+        entity_type="location",
+        entity_id=location_id,
+        details={"name": row.get("name"), "organization_id": row.get("organization_id")},
+    )
+    return {"deleted": True, "location_id": location_id}
 
 
 @router.patch("/locations/{location_id}/settings", response_model=LocationSettingsResponse)

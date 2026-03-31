@@ -39,6 +39,17 @@ export type AuthResponse = {
   }>;
 };
 
+export type LocationManagerInvitePreview = {
+  invite_email: string;
+  manager_name?: string | null;
+  business_name: string;
+  location_id: number;
+  location_name: string;
+  location_address?: string | null;
+  expires_at: string;
+  invite_status: string;
+};
+
 // ── API calls ────────────────────────────────────────────────────────────
 
 /**
@@ -51,6 +62,39 @@ export async function requestAccess(phone: string): Promise<AccessRequestRespons
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ phone }),
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to send verification code");
+  }
+  return (await res.json()) as AccessRequestResponse;
+}
+
+export async function getLocationManagerInvitePreview(
+  inviteToken: string,
+): Promise<LocationManagerInvitePreview> {
+  const res = await fetch(`${API_BASE_URL}/api/location-manager-invites/${inviteToken}`, {
+    method: "GET",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to load invite");
+  }
+  return (await res.json()) as LocationManagerInvitePreview;
+}
+
+export async function requestLocationInviteAccess(
+  inviteToken: string,
+  managerName: string,
+  phone: string,
+): Promise<AccessRequestResponse> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/location-manager-invites/${inviteToken}/request-access`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manager_name: managerName, phone }),
+    },
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? "Failed to send verification code");
@@ -74,6 +118,29 @@ export async function verifyAccessCode(
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? "Failed to verify code");
+  }
+  return (await res.json()) as AuthResponse;
+}
+
+export async function completeOnboardingProfile(
+  sessionToken: string,
+  managerName: string,
+  managerEmail: string,
+): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/complete-onboarding`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${sessionToken}`,
+    },
+    body: JSON.stringify({
+      manager_name: managerName,
+      manager_email: managerEmail,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to complete onboarding");
   }
   return (await res.json()) as AuthResponse;
 }

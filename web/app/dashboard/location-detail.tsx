@@ -3,7 +3,6 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
-import { StatCard } from "@/components/stat-card";
 import { ScheduleGrid } from "@/components/schedule-grid";
 import { ImportStatus } from "@/components/import-status";
 import { ImportFlow } from "@/components/import-flow";
@@ -36,7 +35,6 @@ import {
 import type {
   LocationStatusResponse,
   ManagerActionsResponse,
-  ScheduleShift,
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -97,35 +95,6 @@ function buildLocationHref(
   }
   const qs = search.toString();
   return qs ? `${basePath}?${qs}` : basePath;
-}
-
-function formatSyncStamp(timestamp?: string | null, status?: string | null): string {
-  if (!timestamp && !status) {
-    return "Never";
-  }
-  const stamp = timestamp ? new Date(timestamp).toLocaleString() : "No timestamp";
-  return `${status ?? "unknown"} · ${stamp}`;
-}
-
-function describeMode(mode?: string | null): string {
-  if (mode === "companion_writeback") {
-    return "Companion + write-back";
-  }
-  if (mode === "companion") {
-    return "Companion";
-  }
-  return "Native Lite";
-}
-
-function setupKindForPlatform(platform?: string | null): "integration" | "csv_upload" {
-  return platform && platform !== "backfill_native" ? "integration" : "csv_upload";
-}
-
-function setupPathForPlatform(locationId: number, platform?: string | null): string {
-  if (platform && platform !== "backfill_native") {
-    return `/setup/connect?location_id=${locationId}&platform=${encodeURIComponent(platform)}`;
-  }
-  return `/setup/upload?location_id=${locationId}`;
 }
 
 function legacyDetailPath(locationId: number, query?: string): string {
@@ -260,18 +229,18 @@ export async function renderLocationDetailPage({
   }
 
   const requestedTab = queryValue(query.tab) ?? "schedule";
-  const activeTab = requestedTab === "exceptions" ? "schedule" : requestedTab;
+  const activeTab =
+    requestedTab === "exceptions" || requestedTab === "overview"
+      ? "schedule"
+      : requestedTab === "imports"
+        ? "roster"
+        : requestedTab;
   const action = queryValue(query.action) ?? "";
   const detail = queryValue(query.detail) ? decodeURIComponent(queryValue(query.detail) ?? "") : "";
   const weekStart = queryValue(query.week_start);
   const jobIdParam = queryValue(query.job_id) ? Number(queryValue(query.job_id)) : undefined;
   const rowParam = queryValue(query.row) ? Number(queryValue(query.row)) : undefined;
   const shiftIdParam = queryValue(query.shift_id) ? Number(queryValue(query.shift_id)) : undefined;
-  const setupKind = setupKindForPlatform(status.location.scheduling_platform);
-  const setupPath = setupPathForPlatform(locationId, status.location.scheduling_platform);
-  const modeLabel = describeMode(status.integration.mode);
-  const writebackEnabled = Boolean(status.integration.writeback_enabled);
-  const writebackSupported = Boolean(status.integration.writeback_supported);
   const organizationName = status.location.organization_name?.trim();
   const brandName = status.location.place_brand_name?.trim() ?? organizationName;
   const locationName = status.location.name.trim();
@@ -327,11 +296,7 @@ export async function renderLocationDetailPage({
       )}
 
       {activeTab === "roster" && (
-        <RosterTabContent locationId={locationId} basePath={basePath} />
-      )}
-
-      {activeTab === "imports" && (
-        <ImportsTabContent
+        <RosterTabContent
           locationId={locationId}
           basePath={basePath}
           jobId={jobIdParam}
@@ -350,259 +315,7 @@ export async function renderLocationDetailPage({
       {activeTab === "settings" && (
         <SettingsTabContent locationId={locationId} />
       )}
-
-      {activeTab === "overview" && (
-        <OverviewTabContent
-          locationId={locationId}
-          status={status}
-          setupPath={setupPath}
-          setupKind={setupKind}
-          modeLabel={modeLabel}
-          writebackEnabled={writebackEnabled}
-          writebackSupported={writebackSupported}
-        />
-      )}
     </main>
-  );
-}
-
-async function OverviewTabContent({
-  locationId,
-  status,
-  setupPath,
-  setupKind,
-  modeLabel,
-  writebackEnabled,
-  writebackSupported,
-}: {
-  locationId: number;
-  status: LocationStatusResponse;
-  setupPath: string;
-  setupKind: "integration" | "csv_upload";
-  modeLabel: string;
-  writebackEnabled: boolean;
-  writebackSupported: boolean;
-}) {
-  return (
-    <>
-      <div className="stat-grid">
-        <StatCard label="Workers" value={status.metrics.workers_total} />
-        <StatCard label="SMS Ready" value={status.metrics.workers_sms_ready} />
-        <StatCard label="Voice Ready" value={status.metrics.workers_voice_ready} />
-        <StatCard label="Upcoming Shifts" value={status.metrics.upcoming_shifts} />
-        <StatCard label="Vacancies" value={status.metrics.shifts_vacant} />
-        <StatCard label="Filled Shifts" value={status.metrics.shifts_filled} />
-        <StatCard label="Active Cascades" value={status.metrics.active_cascades} />
-        <StatCard label="Standby Workers" value={status.metrics.workers_on_standby} />
-      </div>
-
-      <section className="section">
-        <div className="two-up">
-          <div className="callout">
-            <h3>Platform settings</h3>
-            <p>Platform: <strong>{status.integration.platform}</strong></p>
-            <p>Mode: <strong>{modeLabel}</strong></p>
-            <p>Write-back support: <strong>{writebackSupported ? "Supported by platform" : "Not supported"}</strong></p>
-            <p>Write-back status: <strong>{writebackEnabled ? "Enabled" : "Disabled"}</strong></p>
-            <p>Plan: <strong>{status.integration.writeback_subscription_tier ?? "core"}</strong></p>
-            <p>External ID: <strong>{status.location.scheduling_platform_id ?? "Not set"}</strong></p>
-            <p>Integration status: <strong>{status.integration.status}</strong></p>
-            <p>Operational state: <strong>{status.integration.integration_state ?? "healthy"}</strong></p>
-            <div className="table-meta">
-              <div>Roster sync: {formatSyncStamp(status.integration.last_roster_sync_at, status.integration.last_roster_sync_status)}</div>
-              <div>Schedule sync: {formatSyncStamp(status.integration.last_schedule_sync_at, status.integration.last_schedule_sync_status)}</div>
-              <div>Event reconcile: {status.integration.last_event_sync_at ?? "Never"}</div>
-              <div>Rolling sweep: {status.integration.last_rolling_sync_at ?? "Never"}</div>
-              <div>Daily reconcile: {status.integration.last_daily_sync_at ?? "Never"}</div>
-              <div>Last write-back: {status.integration.last_writeback_at ?? "Never"}</div>
-              {status.integration.reason ? <div>Credential check: {status.integration.reason}</div> : null}
-              {status.integration.last_sync_error ? <div>Last error: {status.integration.last_sync_error}</div> : null}
-            </div>
-            <div className="cta-row">
-              <Link className="button-secondary button-small" href={setupPath}>
-                Open setup flow
-              </Link>
-              {writebackSupported ? (
-                <form action={runLocationAction}>
-                  <input type="hidden" name="location_id" value={status.location.id} />
-                  <input type="hidden" name="action" value="toggle_writeback" />
-                  <input type="hidden" name="enabled" value={writebackEnabled ? "false" : "true"} />
-                  <button className="button-secondary button-small" type="submit">
-                    {writebackEnabled ? "Disable write-back" : "Enable paid write-back"}
-                  </button>
-                </form>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="callout">
-            <h3>Primary contact handoff</h3>
-            <p>Primary contact: <strong>{status.location.manager_name ?? "Unassigned"}</strong></p>
-            <p>Phone: <strong>{status.location.manager_phone ?? "Missing"}</strong></p>
-            <p>Email: <strong>{status.location.manager_email ?? "Missing"}</strong></p>
-            <p>Agency escalation: <strong>{status.location.agency_supply_approved ? "Approved" : "Not approved"}</strong></p>
-            <div className="table-meta">
-              <div>Onboarding notes: {status.location.onboarding_info ?? "No notes yet."}</div>
-            </div>
-            <div className="cta-row">
-              <Link className="button-secondary button-small" href={setupPath}>
-                Continue setup
-              </Link>
-              <Link className="button-secondary button-small" href="/setup/add">
-                Manual add
-              </Link>
-              {status.location.manager_phone ? (
-                <form action={runLocationAction}>
-                  <input type="hidden" name="location_id" value={status.location.id} />
-                  <input type="hidden" name="action" value="send_onboarding" />
-                  <input type="hidden" name="phone" value={status.location.manager_phone} />
-                  <input type="hidden" name="kind" value={setupKind} />
-                  <input
-                    type="hidden"
-                    name="platform"
-                    value={status.location.scheduling_platform ?? ""}
-                  />
-                  <button className="button-secondary button-small" type="submit">Text setup link</button>
-                </form>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="section">
-        <div className="section-head">
-          <div>
-            <h2>Coverage runs</h2>
-            <p className="muted">Location-scoped coverage state.</p>
-          </div>
-        </div>
-        {status.active_cascades.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Shift</th>
-                  <th>Mode</th>
-                  <th>Tier</th>
-                  <th>Status</th>
-                  <th>Confirmed</th>
-                  <th>Standby</th>
-                </tr>
-              </thead>
-              <tbody>
-                {status.active_cascades.map((cascade) => (
-                  <tr key={cascade.id}>
-                    <td>
-                      <Link className="text-link" href={`/dashboard/shifts/${cascade.shift_id}`}>
-                        {cascade.shift_role} · {cascade.shift_date} · {cascade.shift_start_time}
-                      </Link>
-                    </td>
-                    <td>{cascade.outreach_mode ?? "n/a"}</td>
-                    <td>{cascade.current_tier ? `Tier ${cascade.current_tier}` : "n/a"}</td>
-                    <td><span className="pill">{cascade.status}</span></td>
-                    <td>{cascade.confirmed_worker_name ?? "None yet"}</td>
-                    <td>{cascade.standby_depth}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState title="No active coverage" body="This location does not currently have live broadcast or cascade runs." />
-        )}
-      </section>
-
-      <section className="section">
-        <div className="section-head">
-          <div>
-            <h2>Recent shifts</h2>
-            <p className="muted">Latest scheduled, vacant, and filled shifts.</p>
-          </div>
-        </div>
-        {status.recent_shifts.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Role</th>
-                  <th>Date</th>
-                  <th>Status</th>
-                  <th>Fill tier</th>
-                </tr>
-              </thead>
-              <tbody>
-                {status.recent_shifts.map((shift) => (
-                  <tr key={shift.id}>
-                    <td>
-                      <Link className="text-link" href={`/dashboard/shifts/${shift.id}`}>
-                        {shift.id}
-                      </Link>
-                    </td>
-                    <td>{shift.role}</td>
-                    <td>{shift.date} · {shift.start_time}</td>
-                    <td><span className="pill">{shift.status}</span></td>
-                    <td>{shift.fill_tier ?? "Not filled yet"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState title="No shifts yet" body="Shifts will appear here once created or synced." />
-        )}
-      </section>
-
-      <section className="section">
-        <div className="two-up">
-          <div className="panel">
-            <h3>Recent audit</h3>
-            {status.recent_audit.length ? (
-              <table>
-                <thead>
-                  <tr><th>Timestamp</th><th>Action</th><th>Actor</th></tr>
-                </thead>
-                <tbody>
-                  {status.recent_audit.map((audit) => (
-                    <tr key={audit.id}>
-                      <td>{audit.timestamp}</td>
-                      <td>{audit.action}</td>
-                      <td>{audit.actor}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState title="No audit yet" body="Events appear as actions happen." />
-            )}
-          </div>
-
-          <div className="panel">
-            <h3>Recent sync queue</h3>
-            {status.recent_sync_jobs.length ? (
-              <table>
-                <thead>
-                  <tr><th>Job</th><th>Status</th><th>Attempts</th><th>Next run</th></tr>
-                </thead>
-                <tbody>
-                  {status.recent_sync_jobs.map((job) => (
-                    <tr key={job.id}>
-                      <td>{job.job_type}<div className="table-meta"><div>{job.platform}</div></div></td>
-                      <td><span className="pill">{job.status}</span></td>
-                      <td>{job.attempt_count} / {job.max_attempts}</td>
-                      <td>{job.status === "completed" ? (job.completed_at ?? "-") : job.next_run_at}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState title="No sync jobs yet" body="Webhook-triggered and scheduled reconcile jobs appear automatically." />
-            )}
-          </div>
-        </div>
-      </section>
-    </>
   );
 }
 
@@ -639,7 +352,7 @@ async function ScheduleTabContent({
                 </div>
                 <div className="workspace-top-actions">
                   <WeekNav locationId={locationId} weekStartDate={targetWeek} basePath={basePath} />
-                  <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
+                  <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "roster" })}>
                     Import CSV
                   </Link>
                 </div>
@@ -823,13 +536,19 @@ async function ScheduleTabContent({
 async function RosterTabContent({
   locationId,
   basePath,
+  jobId,
+  highlightRow,
 }: {
   locationId: number;
   basePath: string;
+  jobId?: number;
+  highlightRow?: number;
 }) {
-  const [roster, allLocations] = await Promise.all([
+  const [roster, allLocations, job, rowsResponse] = await Promise.all([
     getLocationRoster(locationId),
     getLocations(),
+    jobId ? getImportJob(jobId) : Promise.resolve(null),
+    jobId ? getImportRows(jobId) : Promise.resolve(null),
   ]);
   const locationOptions = allLocations.map((l) => ({ id: l.id, name: l.name }));
   const emptyRoster = {
@@ -848,7 +567,7 @@ async function RosterTabContent({
         </div>
         <div className="cta-row">
           <AddEmployeeForm locationId={locationId} existingRoles={rosterRoles} />
-          <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "imports" })}>
+          <Link className="button-secondary button-small" href={buildLocationHref(basePath, { tab: "roster" })}>
             Import CSV
           </Link>
         </div>
@@ -858,57 +577,29 @@ async function RosterTabContent({
         locationId={locationId}
         locations={locationOptions}
       />
-    </section>
-  );
-}
-
-async function ImportsTabContent({
-  locationId,
-  basePath,
-  jobId,
-  highlightRow,
-}: {
-  locationId: number;
-  basePath: string;
-  jobId?: number;
-  highlightRow?: number;
-}) {
-  if (!jobId) {
-    return (
-      <section className="section">
-        <div className="section-head">
+      <div style={{ marginTop: 24 }} className="workspace-section">
+        <div className="workspace-section-headline">
           <div>
-            <h2>Import pipeline</h2>
-            <p className="muted">Upload, map, validate, and commit roster and shift data.</p>
+            <h3>Imports</h3>
+            <p>Upload, map, validate, and commit roster or shift data for this location.</p>
           </div>
+          {jobId ? (
+            <div className="cta-row">
+              <Link
+                className="button button-small"
+                href={buildLocationHref(basePath, { tab: "roster" })}
+              >
+                New import
+              </Link>
+            </div>
+          ) : null}
         </div>
-        <ImportFlow locationId={locationId} basePath={basePath} />
-      </section>
-    );
-  }
-
-  const [job, rowsResponse] = await Promise.all([
-    getImportJob(jobId),
-    getImportRows(jobId),
-  ]);
-
-  return (
-    <section className="section">
-      <div className="section-head">
-        <div>
-          <h2>Import pipeline</h2>
-          <p className="muted">Upload, map, validate, and commit roster and shift data.</p>
-        </div>
-        <div className="cta-row">
-          <Link
-            className="button button-small"
-            href={buildLocationHref(basePath, { tab: "imports" })}
-          >
-            New import
-          </Link>
-        </div>
+        {jobId && job ? (
+          <ImportStatus job={job} rows={rowsResponse?.rows ?? []} highlightRow={highlightRow} />
+        ) : (
+          <ImportFlow locationId={locationId} basePath={basePath} />
+        )}
       </div>
-      <ImportStatus job={job} rows={rowsResponse?.rows ?? []} highlightRow={highlightRow} />
     </section>
   );
 }

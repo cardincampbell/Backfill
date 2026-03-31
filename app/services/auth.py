@@ -19,6 +19,8 @@ from app.services import messaging
 _PUBLIC_API_PATTERNS = (
     re.compile(r"^/api/auth/request-access$"),
     re.compile(r"^/api/auth/exchange$"),
+    re.compile(r"^/api/location-manager-invites/[^/]+$"),
+    re.compile(r"^/api/location-manager-invites/[^/]+/request-access$"),
     re.compile(r"^/api/onboarding/sessions/[^/]+$"),
     re.compile(r"^/api/onboarding/sessions/[^/]+/complete$"),
     re.compile(r"^/api/places/autocomplete$"),
@@ -40,12 +42,15 @@ _INTERNAL_ONLY_PATTERNS = (
 
 _DASHBOARD_PROTECTED_PATTERNS = (
     re.compile(r"^/api/onboarding/link$"),
-    re.compile(r"^/api/auth/(me|logout)$"),
+    re.compile(r"^/api/auth/(me|logout|complete-onboarding)$"),
     re.compile(r"^/api/locations$"),
     re.compile(r"^/api/locations/\d+$"),
     re.compile(r"^/api/locations/\d+/preview-bootstrap$"),
     re.compile(r"^/api/locations/\d+/(connect-sync|sync-roster|sync-schedule)$"),
     re.compile(r"^/api/locations/\d+/(settings|status|roster|eligible-workers|enrollment-invite-preview|enrollment-invites)$"),
+    re.compile(r"^/api/locations/\d+/manager-memberships$"),
+    re.compile(r"^/api/locations/\d+/manager-memberships/\d+$"),
+    re.compile(r"^/api/locations/\d+/manager-invites/\d+$"),
     re.compile(r"^/api/locations/\d+/backfill-shifts-(metrics|activity)$"),
     re.compile(r"^/api/locations/\d+/(ai-action-history|ai-action-attention|ai-runtime-stats|ai-capabilities|ai-active-sessions)$"),
     re.compile(r"^/api/locations/\d+/import-jobs$"),
@@ -183,17 +188,56 @@ async def _resolve_phone_access(
     phone: str,
 ) -> tuple[Optional[int], list[int]]:
     locations = await queries.list_locations_by_contact_phone(db, phone)
+    memberships = await queries.list_location_memberships_for_phone(db, phone)
     organizations = await queries.list_organizations_by_contact_phone(db, phone)
 
     location_ids = sorted({int(location["id"]) for location in locations})
-    organization_ids = {
-        int(location["organization_id"])
-        for location in locations
-        if location.get("organization_id") is not None
-    }
-    organization_ids.update(int(item["id"]) for item in organizations)
+    location_ids.extend(
+        int(item["location_id"])
+        for item in memberships
+        if item.get("location_id") is not None
+    )
+    organization_ids = {int(item["id"]) for item in organizations}
     organization_id = next(iter(organization_ids)) if len(organization_ids) == 1 else None
-    return organization_id, location_ids
+    return organization_id, sorted(set(location_ids))
+
+
+def filter_locations_for_principal(
+    locations: list[dict],
+    principal: AuthPrincipal,
+) -> list[dict]:
+    if principal.is_internal:
+        return list(locations)
+
+    allowed_location_ids = set(int(value) for value in principal.location_ids)
+    accessible: list[dict] = []
+    for location in locations:
+        location_id = int(location["id"])
+        if location_id in allowed_location_ids:
+            accessible.append(location)
+            continue
+        if (
+            principal.organization_id is not None
+            and location.get("organization_id") == principal.organization_id
+        ):
+            accessible.append(location)
+    return accessible
+
+
+async def principal_requires_onboarding(
+    db: aiosqlite.Connection,
+    principal: AuthPrincipal,
+    accessible_locations: list[dict],
+) -> bool:
+    if not accessible_locations:
+        return True
+    if not principal.subject_phone:
+        return False
+    incomplete_memberships = await queries.list_incomplete_location_memberships_for_phone(
+        db,
+        principal.subject_phone,
+    )
+    return bool(incomplete_memberships)
 
 
 def _request_principal(request: Request) -> Optional[AuthPrincipal]:
@@ -241,7 +285,7 @@ async def _authenticate_request(
                     "last_seen_at": datetime.utcnow().isoformat(),
                 }
 
-                if subject_phone and organization_id is None and not location_ids:
+                if subject_phone:
                     refreshed_org_id, refreshed_location_ids = await _resolve_phone_access(
                         db,
                         subject_phone,
@@ -524,6 +568,81 @@ async def request_dashboard_access(
     }
 
 
+async def request_dashboard_access_for_location_invite(
+    db: aiosqlite.Connection,
+    *,
+    invite_token: str,
+    manager_name: str,
+    phone: str,
+) -> dict:
+    normalized_phone = normalize_phone(phone)
+    normalized_name = _trim_text(manager_name)
+    raw_token = _trim_text(invite_token)
+    if normalized_name is None:
+        raise ValueError("Manager name is required")
+    if normalized_phone is None:
+        raise ValueError("Phone number must be a valid mobile number")
+    if raw_token is None:
+        raise ValueError("Invite token is required")
+
+    invite = await queries.get_location_manager_invite_by_token_hash(
+        db,
+        _hash_token(raw_token),
+    )
+    if invite is None:
+        raise ValueError("Invite not found")
+    if invite.get("status") != "pending" or _is_expired(invite.get("expires_at")):
+        raise ValueError("Invite has expired")
+
+    location = await queries.get_location(db, int(invite["location_id"]))
+    if location is None:
+        raise ValueError("Location not found")
+
+    await queries.supersede_pending_dashboard_access_requests_for_phone(db, normalized_phone)
+
+    try:
+        verification = messaging.send_sms_verification(normalized_phone)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Could not send verification code") from exc
+
+    await queries.claim_location_manager_invite(
+        db,
+        int(invite["id"]),
+        claimed_phone=normalized_phone,
+        claimed_name=normalized_name,
+    )
+
+    request_id = await queries.insert_dashboard_access_request(
+        db,
+        {
+            "phone": normalized_phone,
+            "organization_id": location.get("organization_id"),
+            "location_ids_json": [int(invite["location_id"])],
+            "location_manager_invite_id": int(invite["id"]),
+            "token_hash": _hash_token(_new_raw_token("bfreq")),
+            "verification_sid": verification.get("sid"),
+            "channel": verification.get("channel") or "sms",
+            "expires_at": _expires_at(
+                minutes=settings.backfill_dashboard_access_request_ttl_minutes
+            ),
+            "requested_at": datetime.utcnow().isoformat(),
+        },
+    )
+    return {
+        "request_id": request_id,
+        "destination": _mask_phone(normalized_phone),
+        "expires_at": _expires_at(
+            minutes=settings.backfill_dashboard_access_request_ttl_minutes
+        ),
+        "message_sid": verification.get("sid"),
+        "organization_id": location.get("organization_id"),
+        "location_ids": [int(invite["location_id"])],
+        "channel": verification.get("channel") or "sms",
+    }
+
+
 async def verify_dashboard_access_code(
     db: aiosqlite.Connection,
     *,
@@ -577,6 +696,33 @@ async def verify_dashboard_access_code(
         if check_count >= settings.backfill_dashboard_access_max_attempts:
             raise ValueError("Too many verification attempts. Request a new code.")
         raise ValueError("Invalid verification code")
+
+    invite_id = access_request.get("location_manager_invite_id")
+    if invite_id is not None:
+        invite = await queries.get_location_manager_invite(db, int(invite_id))
+        if invite is None:
+            raise ValueError("Invite not found")
+        if invite.get("status") == "revoked" or _is_expired(invite.get("expires_at")):
+            raise ValueError("Invite has expired")
+        if invite.get("status") == "accepted" and invite.get("accepted_phone") != access_request["phone"]:
+            raise ValueError("Invite has already been accepted")
+        await queries.upsert_location_membership(
+            db,
+            location_id=int(invite["location_id"]),
+            phone=access_request["phone"],
+            manager_name=invite.get("claimed_name") or invite.get("manager_name"),
+            manager_email=invite.get("invite_email"),
+            role=invite.get("role") or "manager",
+            invite_status="active",
+            invited_by_phone=invite.get("invited_by_phone"),
+            accepted_at=datetime.utcnow().isoformat(),
+            revoked_at=None,
+        )
+        await queries.accept_location_manager_invite(
+            db,
+            int(invite_id),
+            accepted_phone=access_request["phone"],
+        )
 
     organization_id, location_ids = await _resolve_phone_access(db, access_request["phone"])
     session_token, principal = await _create_dashboard_session(
@@ -658,20 +804,16 @@ async def build_auth_response_payload(
         if principal.organization_id is not None
         else None
     )
-    accessible_locations: list[dict] = []
-    if principal.organization_id is not None:
-        locations = await queries.list_locations(db)
-        accessible_locations = [
-            location
-            for location in locations
-            if location.get("organization_id") == principal.organization_id
-        ]
-    elif principal.location_ids:
-        for location_id in principal.location_ids:
-            location = await queries.get_location(db, location_id)
-            if location is not None:
-                accessible_locations.append(location)
+    accessible_locations = filter_locations_for_principal(
+        await queries.list_locations(db),
+        principal,
+    )
     accessible_locations.sort(key=lambda item: (item.get("name") or "", int(item["id"])))
+    onboarding_required = await principal_requires_onboarding(
+        db,
+        principal,
+        accessible_locations,
+    )
     return {
         "principal_type": principal.principal_type,
         "session_id": principal.session_id,
@@ -679,7 +821,7 @@ async def build_auth_response_payload(
         "session_expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours)
         if principal.is_session
         else None,
-        "onboarding_required": not accessible_locations,
+        "onboarding_required": onboarding_required,
         "organization": organization,
         "location_ids": principal.location_ids,
         "locations": accessible_locations,

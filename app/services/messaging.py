@@ -8,6 +8,8 @@ fills, voice can be layered on top as an interruption channel.
 import logging
 from typing import Optional
 
+import httpx
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -124,3 +126,46 @@ def send_sms(
         body=body,
     )
     return message.sid
+
+
+def send_email(
+    to: str,
+    *,
+    subject: str,
+    text_body: str,
+    html_body: Optional[str] = None,
+) -> Optional[str]:
+    if not settings.sendgrid_api_key or not settings.backfill_email_from:
+        raise RuntimeError(
+            "Twilio SendGrid email is not configured. Set SENDGRID_API_KEY and BACKFILL_EMAIL_FROM."
+        )
+
+    content = [{"type": "text/plain", "value": text_body}]
+    if html_body:
+        content.append({"type": "text/html", "value": html_body})
+
+    payload = {
+        "personalizations": [
+            {
+                "to": [{"email": to}],
+            }
+        ],
+        "from": {
+            "email": settings.backfill_email_from,
+            "name": settings.backfill_email_from_name or "Backfill",
+        },
+        "subject": subject,
+        "content": content,
+    }
+
+    response = httpx.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {settings.sendgrid_api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=15.0,
+    )
+    response.raise_for_status()
+    return response.headers.get("x-message-id")

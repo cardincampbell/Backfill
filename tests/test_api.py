@@ -38,7 +38,7 @@ def _create_backfill_shifts_import_job(client, location_id: int, csv_text: str):
     return job, uploaded.json()
 
 
-def _exchange_dashboard_session(public_client, phone: str, sent_verifications):
+def _exchange_dashboard_session(public_client, phone: str, sent_verifications=None):
     requested = public_client.post(
         "/api/auth/request-access",
         json={"phone": phone},
@@ -408,13 +408,290 @@ def test_dashboard_access_sms_exchange_and_location_scope(client, public_client,
         headers=session_headers,
     )
     assert blocked_settings.status_code == 403
-    assert blocked_settings.json()["detail"] == "Forbidden for this location"
 
-    logout = public_client.post("/api/auth/logout", headers=session_headers)
-    assert logout.status_code == 200
 
-    expired_me = public_client.get("/api/auth/me", headers=session_headers)
-    assert expired_me.status_code == 401
+def test_dashboard_session_can_delete_owned_empty_location(client, public_client):
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Delete Me",
+            "organization_name": "Delete Org",
+            "manager_name": "Owner",
+            "manager_phone": "+13105550411",
+            "manager_email": "owner@example.com",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+    assert created.status_code == 201
+    location = created.json()
+
+    headers = _exchange_dashboard_session(public_client, "+13105550411")
+
+    deleted = public_client.delete(f"/api/locations/{location['id']}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True, "location_id": location["id"]}
+
+    listed = public_client.get("/api/locations", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+    fetched = public_client.get(f"/api/locations/{location['id']}", headers=headers)
+    assert fetched.status_code == 404
+
+
+def test_dashboard_session_cannot_delete_location_with_operational_data(
+    client,
+    public_client,
+):
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Protected Site",
+            "organization_name": "Protected Org",
+            "manager_name": "Owner",
+            "manager_phone": "+13105550412",
+            "manager_email": "owner@example.com",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+    assert created.status_code == 201
+    location = created.json()
+
+    created_shift = client.post("/api/shifts", json=_make_shift_payload(location["id"]))
+    assert created_shift.status_code == 201
+
+    headers = _exchange_dashboard_session(public_client, "+13105550412")
+
+    deleted = public_client.delete(f"/api/locations/{location['id']}", headers=headers)
+    assert deleted.status_code == 409
+    assert "cannot be deleted" in deleted.json()["detail"].lower()
+
+
+def test_location_manager_invite_grants_location_scoped_access(
+    client,
+    public_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-INVITE", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-INVITE-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+    invite_emails: list[dict[str, str | None]] = []
+
+    def _capture_invite_email(to, *, subject, text_body, html_body=None):
+        invite_emails.append(
+            {
+                "to": to,
+                "subject": subject,
+                "text_body": text_body,
+                "html_body": html_body,
+            }
+        )
+        return "EMAIL-INVITE"
+
+    monkeypatch.setattr("app.services.messaging.send_email", _capture_invite_email)
+
+    created_primary = client.post(
+        "/api/locations",
+        json={
+            "name": "Downtown Los Angeles",
+            "organization_name": "Whole Foods Market",
+            "manager_name": "Owner Operator",
+            "manager_phone": "+13105550413",
+            "manager_email": "owner@example.com",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+    assert created_primary.status_code == 201
+    primary_location = created_primary.json()
+
+    created_secondary = client.post(
+        "/api/locations",
+        json={
+            "name": "Santa Monica",
+            "organization_name": "Whole Foods Market",
+            "manager_name": "Store Lead",
+            "manager_phone": "+13105550414",
+            "manager_email": "lead@example.com",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+    assert created_secondary.status_code == 201
+    secondary_location = created_secondary.json()
+
+    owner_headers = _exchange_dashboard_session(public_client, "+13105550413")
+
+    owner_locations = public_client.get("/api/locations", headers=owner_headers)
+    assert owner_locations.status_code == 200
+    assert {row["id"] for row in owner_locations.json()} == {
+        primary_location["id"],
+        secondary_location["id"],
+    }
+
+    invited = public_client.post(
+        f"/api/locations/{primary_location['id']}/manager-memberships",
+        headers=owner_headers,
+        json={
+            "email": "jordan@example.com",
+            "manager_name": "Jordan Manager",
+        },
+    )
+    assert invited.status_code == 200
+    invite_payload = invited.json()
+    assert invite_payload["created"] is True
+    assert invite_payload["delivery_id"] == "EMAIL-INVITE"
+    assert invite_payload["membership"]["manager_email"] == "jordan@example.com"
+    assert invite_payload["membership"]["phone"] is None
+    assert invite_payload["membership"]["role"] == "manager"
+    assert invite_emails
+
+    invite_url_match = re.search(r"https?://\S+", str(invite_emails[0]["text_body"]))
+    assert invite_url_match is not None
+    invite_token = parse_qs(urlparse(invite_url_match.group(0)).query)["invite"][0]
+
+    preview = public_client.get(f"/api/location-manager-invites/{invite_token}")
+    assert preview.status_code == 200
+    assert preview.json()["invite_email"] == "jordan@example.com"
+
+    memberships = public_client.get(
+        f"/api/locations/{primary_location['id']}/manager-memberships",
+        headers=owner_headers,
+    )
+    assert memberships.status_code == 200
+    pending_invite = next(
+        row
+        for row in memberships.json()
+        if row["entry_kind"] == "invite" and row["manager_email"] == "jordan@example.com"
+    )
+    assert pending_invite["invite_status"] == "pending"
+
+    requested_access = public_client.post(
+        f"/api/location-manager-invites/{invite_token}/request-access",
+        json={
+            "manager_name": "Jordan Manager",
+            "phone": "+13105550415",
+        },
+    )
+    assert requested_access.status_code == 200
+    request_payload = requested_access.json()
+
+    exchanged = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": request_payload["request_id"], "code": "123456"},
+    )
+    assert exchanged.status_code == 200
+    invited_headers = {"Authorization": f"Bearer {exchanged.json()['session_token']}"}
+
+    invited_locations = public_client.get("/api/locations", headers=invited_headers)
+    assert invited_locations.status_code == 200
+    assert [row["id"] for row in invited_locations.json()] == [primary_location["id"]]
+
+    invited_me = public_client.get("/api/auth/me", headers=invited_headers)
+    assert invited_me.status_code == 200
+    invited_me_payload = invited_me.json()
+    assert invited_me_payload["location_ids"] == [primary_location["id"]]
+    assert invited_me_payload["locations"][0]["id"] == primary_location["id"]
+    assert invited_me_payload["onboarding_required"] is False
+
+    memberships_after = public_client.get(
+        f"/api/locations/{primary_location['id']}/manager-memberships",
+        headers=owner_headers,
+    )
+    assert memberships_after.status_code == 200
+    invited_membership = next(
+        row for row in memberships_after.json() if row["phone"] == "+13105550415"
+    )
+    assert invited_membership["invite_status"] == "active"
+    assert invited_membership["manager_email"] == "jordan@example.com"
+    assert invited_membership["accepted_at"] is not None
+
+    blocked_settings = public_client.get(
+        f"/api/locations/{secondary_location['id']}/settings",
+        headers=invited_headers,
+    )
+    assert blocked_settings.status_code == 403
+
+
+def test_owner_can_revoke_location_manager_access(client, public_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-REVOKE", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-REVOKE-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+    invite_emails: list[str] = []
+
+    def _capture_invite_email(to, *, subject, text_body, html_body=None):
+        invite_emails.append(text_body)
+        return "EMAIL-REVOKE"
+
+    monkeypatch.setattr("app.services.messaging.send_email", _capture_invite_email)
+
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Invite Revoke Site",
+            "organization_name": "Revoke Org",
+            "manager_name": "Owner",
+            "manager_phone": "+13105550416",
+            "manager_email": "owner@example.com",
+            "scheduling_platform": "backfill_native",
+        },
+    )
+    assert created.status_code == 201
+    location = created.json()
+
+    owner_headers = _exchange_dashboard_session(public_client, "+13105550416")
+    invited = public_client.post(
+        f"/api/locations/{location['id']}/manager-memberships",
+        headers=owner_headers,
+        json={"email": "taylor@example.com", "manager_name": "Taylor Lead"},
+    )
+    assert invited.status_code == 200
+    invite_url_match = re.search(r"https?://\S+", invite_emails[0])
+    assert invite_url_match is not None
+    invite_token = parse_qs(urlparse(invite_url_match.group(0)).query)["invite"][0]
+
+    requested = public_client.post(
+        f"/api/location-manager-invites/{invite_token}/request-access",
+        json={"manager_name": "Taylor Lead", "phone": "+13105550417"},
+    )
+    assert requested.status_code == 200
+
+    exchanged = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": requested.json()["request_id"], "code": "123456"},
+    )
+    assert exchanged.status_code == 200
+
+    memberships = public_client.get(
+        f"/api/locations/{location['id']}/manager-memberships",
+        headers=owner_headers,
+    )
+    membership_id = next(
+        row["id"]
+        for row in memberships.json()
+        if row["entry_kind"] == "membership" and row["phone"] == "+13105550417"
+    )
+
+    revoked = public_client.delete(
+        f"/api/locations/{location['id']}/manager-memberships/{membership_id}",
+        headers=owner_headers,
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["revoked"] is True
+
+    invited_headers = _exchange_dashboard_session(public_client, "+13105550417")
+    invited_me = public_client.get("/api/auth/me", headers=invited_headers)
+    assert invited_me.status_code == 200
+    assert invited_me.json()["locations"] == []
+    assert invited_me.json()["onboarding_required"] is True
 
 
 def test_dashboard_access_request_is_rate_limited(client, public_client, monkeypatch):

@@ -34,6 +34,9 @@ class Settings:
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
     twilio_verify_service_sid: str = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "")
     backfill_phone_number: str = os.environ.get("BACKFILL_PHONE_NUMBER", "+18002225345")
+    sendgrid_api_key: str = os.environ.get("SENDGRID_API_KEY", "")
+    backfill_email_from: str = os.environ.get("BACKFILL_EMAIL_FROM", "")
+    backfill_email_from_name: str = os.environ.get("BACKFILL_EMAIL_FROM_NAME", "Backfill")
 
     # Backend
     database_url: str = os.environ.get("DATABASE_URL", "backfill.db")
@@ -115,6 +118,9 @@ class Settings:
     )
     backfill_dashboard_access_max_attempts: int = int(
         os.environ.get("BACKFILL_DASHBOARD_ACCESS_MAX_ATTEMPTS", "5")
+    )
+    backfill_location_invite_ttl_hours: int = int(
+        os.environ.get("BACKFILL_LOCATION_INVITE_TTL_HOURS", "168")
     )
     backfill_setup_access_ttl_hours: int = int(
         os.environ.get("BACKFILL_SETUP_ACCESS_TTL_HOURS", "72")

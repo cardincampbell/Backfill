@@ -133,7 +133,7 @@ export function ImportFlow({ locationId, basePath }: ImportFlowProps) {
 
   function handleViewResults() {
     if (job) {
-      router.push(`${locationBasePath}?tab=imports&job_id=${job.id}`);
+      router.push(`${locationBasePath}?tab=roster&job_id=${job.id}`);
       router.refresh();
     }
   }

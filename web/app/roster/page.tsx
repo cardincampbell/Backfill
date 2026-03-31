@@ -56,7 +56,7 @@ export default async function RosterIndexPage() {
                       </Link>
                       <Link
                         className="button-secondary button-small"
-                        href={buildDashboardLocationPath(location, { tab: "imports" })}
+                        href={buildDashboardLocationPath(location, { tab: "roster" })}
                       >
                         Import CSV
                       </Link>

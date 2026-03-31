@@ -110,6 +110,58 @@ async def init_db():
         """)
 
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS location_memberships (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id       INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+                phone             TEXT NOT NULL,
+                manager_name      TEXT,
+                manager_email     TEXT,
+                role              TEXT NOT NULL DEFAULT 'manager',
+                invite_status     TEXT NOT NULL DEFAULT 'pending',
+                invited_by_phone  TEXT,
+                accepted_at       TEXT,
+                revoked_at        TEXT,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                UNIQUE(location_id, phone)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_location_memberships_phone ON location_memberships(phone)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_location_memberships_location_id ON location_memberships(location_id)"
+        )
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS location_manager_invites (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                location_id       INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+                invite_email      TEXT NOT NULL,
+                manager_name      TEXT,
+                role              TEXT NOT NULL DEFAULT 'manager',
+                token_hash        TEXT NOT NULL UNIQUE,
+                status            TEXT NOT NULL DEFAULT 'pending',
+                invited_by_phone  TEXT,
+                claimed_phone     TEXT,
+                claimed_name      TEXT,
+                accepted_phone    TEXT,
+                accepted_at       TEXT,
+                revoked_at        TEXT,
+                expires_at        TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                UNIQUE(location_id, invite_email)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_location_manager_invites_email ON location_manager_invites(invite_email)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_location_manager_invites_location_id ON location_manager_invites(location_id)"
+        )
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS workers (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                 name                  TEXT NOT NULL,
@@ -748,6 +800,36 @@ async def init_db():
             "organizations",
             "location_count_estimate",
             "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "location_memberships",
+            "manager_email",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "location_memberships",
+            "invite_status",
+            "TEXT NOT NULL DEFAULT 'pending'",
+        )
+        await _ensure_column(
+            db,
+            "location_memberships",
+            "accepted_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "location_memberships",
+            "revoked_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "location_manager_invite_id",
+            "INTEGER REFERENCES location_manager_invites(id)",
         )
         await _ensure_column(
             db,

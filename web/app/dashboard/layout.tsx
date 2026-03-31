@@ -1,26 +1,34 @@
 import {
   DashboardRailHomeLink,
   DashboardRailNav,
+  DashboardRailProfile,
 } from "@/components/dashboard-rail-nav";
 import { getLocations } from "@/lib/api";
 import { requireAuth } from "@/lib/auth/session";
 import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
+import { redirect } from "next/navigation";
 
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await requireAuth();
+  const session = await requireAuth();
+  if (session.onboarding_required) {
+    redirect("/onboarding");
+  }
 
   const locations = await getLocations();
   const primaryLocation = locations[0] ?? null;
   const primaryBasePath = primaryLocation
     ? buildDashboardLocationPath(primaryLocation)
     : "/dashboard";
-  const primaryHref = primaryLocation
-    ? buildDashboardLocationPath(primaryLocation, { tab: "schedule" })
-    : "/dashboard";
+  const profileDisplayName =
+    session.organization?.name ??
+    primaryLocation?.organization_name ??
+    primaryLocation?.place_brand_name ??
+    primaryLocation?.name ??
+    "Backfill";
 
   return (
     <>
@@ -47,6 +55,13 @@ export default async function DashboardLayout({
           <DashboardRailHomeLink fallbackBasePath={primaryBasePath} />
 
           <DashboardRailNav fallbackBasePath={primaryBasePath} />
+
+          <DashboardRailProfile
+            displayName={profileDisplayName}
+            fallbackBasePath={primaryBasePath}
+            locationCount={locations.length}
+            subjectPhone={session.subject_phone}
+          />
         </aside>
 
         <div className="dashboard-stage">
