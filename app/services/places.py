@@ -288,7 +288,14 @@ def _build_google_place_response(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def autocomplete_places(query: str, *, session_token: str | None = None) -> dict[str, Any]:
+async def autocomplete_places(
+    query: str,
+    *,
+    session_token: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    radius_meters: float | None = None,
+) -> dict[str, Any]:
     normalized = query.strip()
     if len(normalized) < 2:
         return {"provider": "fallback", "suggestions": []}
@@ -301,6 +308,16 @@ async def autocomplete_places(query: str, *, session_token: str | None = None) -
         "languageCode": "en",
         "regionCode": settings.google_places_region_code,
     }
+    if latitude is not None and longitude is not None:
+        body["locationBias"] = {
+            "circle": {
+                "center": {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                },
+                "radius": radius_meters or 50000.0,
+            }
+        }
     if session_token:
         body["sessionToken"] = session_token
     if settings.google_places_country_codes:

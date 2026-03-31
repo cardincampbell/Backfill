@@ -251,6 +251,33 @@ def test_places_autocomplete_surfaces_google_error_details(public_client, monkey
     assert "Places API (New)" in detail
 
 
+def test_places_autocomplete_accepts_location_bias(public_client, monkeypatch):
+    captured = {}
+
+    async def _fake(query, *, session_token=None, latitude=None, longitude=None, radius_meters=None):
+        captured["query"] = query
+        captured["session_token"] = session_token
+        captured["latitude"] = latitude
+        captured["longitude"] = longitude
+        captured["radius_meters"] = radius_meters
+        return {"provider": "google", "suggestions": []}
+
+    monkeypatch.setattr("app.services.places.autocomplete_places", _fake)
+
+    result = public_client.get(
+        "/api/places/autocomplete?q=whole%20foods&session_token=test-token&latitude=34.05&longitude=-118.24&radius_meters=25000"
+    )
+    assert result.status_code == 200
+    assert result.json()["provider"] == "google"
+    assert captured == {
+        "query": "whole foods",
+        "session_token": "test-token",
+        "latitude": 34.05,
+        "longitude": -118.24,
+        "radius_meters": 25000.0,
+    }
+
+
 def test_dashboard_access_sms_exchange_and_location_scope(client, public_client, monkeypatch):
     sent_messages = []
     monkeypatch.setattr(settings, "backfill_dashboard_auth_required", True)

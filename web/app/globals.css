@@ -3948,12 +3948,13 @@ body:has(.lp-onboarding) .site-main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 40px 20px;
+  justify-content: flex-start;
+  padding: clamp(28px, 6vh, 56px) 20px 72px;
   background: var(--bg);
   /* Break out of shell to go full viewport width */
   width: 100vw;
   margin-left: calc(50% - 50vw);
+  overflow-y: auto;
 }
 
 .ob-card {
@@ -3963,7 +3964,8 @@ body:has(.lp-onboarding) .site-main {
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 
 .ob-header {
@@ -4008,6 +4010,7 @@ body:has(.lp-onboarding) .site-main {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  overflow: visible;
 }
 
 .ob-question {
@@ -4462,6 +4465,8 @@ body:has(.lp-onboarding) .site-main {
   backdrop-filter: blur(20px);
   box-shadow: 0 28px 80px rgba(15, 23, 34, 0.14);
   overflow: hidden;
+  max-height: min(320px, 42vh);
+  overflow-y: auto;
 }
 
 .ob-search-status {

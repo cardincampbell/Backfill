@@ -803,9 +803,18 @@ async def logout_dashboard_session(
 async def get_places_autocomplete(
     q: str = Query(..., min_length=2, max_length=120),
     session_token: Optional[str] = Query(default=None, max_length=256),
+    latitude: Optional[float] = Query(default=None, ge=-90, le=90),
+    longitude: Optional[float] = Query(default=None, ge=-180, le=180),
+    radius_meters: Optional[float] = Query(default=None, gt=0, le=50000),
 ):
     try:
-        payload = await places_svc.autocomplete_places(q, session_token=session_token)
+        payload = await places_svc.autocomplete_places(
+            q,
+            session_token=session_token,
+            latitude=latitude,
+            longitude=longitude,
+            radius_meters=radius_meters,
+        )
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=_google_places_error_detail(exc, "Places autocomplete")) from exc
     except httpx.HTTPError as exc:

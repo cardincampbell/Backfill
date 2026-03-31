@@ -7,6 +7,7 @@ import { API_BASE_URL, apiFetch } from "@/lib/api/client";
 import {
   autocompletePlaces,
   getPlaceDetails,
+  type PlaceAutocompleteOptions,
   type PlaceSuggestion,
 } from "@/lib/api/places";
 import {
@@ -175,6 +176,7 @@ export default function OnboardingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [sessionToken, setSessionToken] = useState(() => newSessionToken());
+  const [geoBias, setGeoBias] = useState<PlaceAutocompleteOptions | null>(null);
 
   const firstName = useMemo(() => firstNameFrom(name), [name]);
   const currentStep = STEPS[stepIndex];
@@ -200,7 +202,7 @@ export default function OnboardingPage() {
     const timer = window.setTimeout(() => {
       setLoadingSearch(true);
       setSearchError("");
-      void autocompletePlaces(trimmed, sessionToken).then((result) => {
+      void autocompletePlaces(trimmed, sessionToken, geoBias ?? undefined).then((result) => {
         if (cancelled) return;
         setLoadingSearch(false);
         if (!result.ok) {
@@ -218,7 +220,33 @@ export default function OnboardingPage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [currentStep, searchValue, searchVisible, sessionToken]);
+  }, [currentStep, searchValue, searchVisible, sessionToken, geoBias]);
+
+  useEffect(() => {
+    if (currentStep !== "locations" || geoBias || typeof navigator === "undefined") {
+      return;
+    }
+    if (!("geolocation" in navigator)) {
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setGeoBias({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          radiusMeters: 25000,
+        });
+      },
+      () => {
+        // Silent fallback to non-localized search.
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 5000,
+        maximumAge: 5 * 60 * 1000,
+      },
+    );
+  }, [currentStep, geoBias]);
 
   useEffect(() => {
     if (currentStep !== "locations") return;
@@ -253,7 +281,7 @@ export default function OnboardingPage() {
       return;
     }
     const siblingToken = newSessionToken();
-    const result = await autocompletePlaces(query, siblingToken);
+    const result = await autocompletePlaces(query, siblingToken, geoBias ?? undefined);
     if (!result.ok) {
       setSiblingSuggestions([]);
       return;
@@ -619,7 +647,7 @@ export default function OnboardingPage() {
                               <strong>
                                 {selectingPlaceId === suggestion.place_id
                                   ? "Selecting…"
-                                  : suggestion.name}
+                                  : inferLocationName(suggestion)}
                               </strong>
                               <span>
                                 {suggestion.formatted_address ??
@@ -627,13 +655,11 @@ export default function OnboardingPage() {
                                   "Typed location"}
                               </span>
                             </div>
-                            <span className="ob-search-option-pill">
-                              {suggestion.primary_type_display_name ??
-                                suggestion.primary_type?.replaceAll("_", " ") ??
-                                (suggestion.provider === "google"
-                                  ? "Place"
-                                  : "Location")}
-                            </span>
+                            {suggestion.primary_type_display_name ? (
+                              <span className="ob-search-option-pill">
+                                {suggestion.primary_type_display_name}
+                              </span>
+                            ) : null}
                           </button>
                         ))
                       )}

@@ -45,6 +45,12 @@ export type PlaceAutocompleteResult =
   | { ok: true; data: PlaceAutocompleteResponse }
   | { ok: false; error: string };
 
+export type PlaceAutocompleteOptions = {
+  latitude?: number;
+  longitude?: number;
+  radiusMeters?: number;
+};
+
 export type PlaceDetailsResponse = {
   provider: string;
   place: PlaceSuggestion | null;
@@ -53,10 +59,18 @@ export type PlaceDetailsResponse = {
 export async function autocompletePlaces(
   query: string,
   sessionToken?: string,
+  options?: PlaceAutocompleteOptions,
 ): Promise<PlaceAutocompleteResult> {
   const params = new URLSearchParams({ q: query });
   if (sessionToken) {
     params.set("session_token", sessionToken);
+  }
+  if (typeof options?.latitude === "number" && typeof options?.longitude === "number") {
+    params.set("latitude", String(options.latitude));
+    params.set("longitude", String(options.longitude));
+    if (typeof options?.radiusMeters === "number") {
+      params.set("radius_meters", String(options.radiusMeters));
+    }
   }
   try {
     const response = await apiFetch(`${API_BASE_URL}/api/places/autocomplete?${params.toString()}`, {
