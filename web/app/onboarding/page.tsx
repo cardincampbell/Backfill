@@ -211,7 +211,7 @@ export default function OnboardingPage() {
           setDropdownOpen(true);
           return;
         }
-        setSearchResults(result.data.suggestions.slice(0, 5));
+        setSearchResults(result.data.suggestions.slice(0, 8));
         setDropdownOpen(true);
       });
     }, 200);
@@ -234,7 +234,7 @@ export default function OnboardingPage() {
         setGeoBias({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          radiusMeters: 25000,
+          radiusMeters: 50000,
         });
       },
       () => {

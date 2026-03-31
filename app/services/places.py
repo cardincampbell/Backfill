@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -7,7 +8,34 @@ import httpx
 from app.config import settings
 
 _AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
+_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
+_MAX_GOOGLE_SUGGESTIONS = 8
+_ADDRESS_HINTS = (
+    "st",
+    "street",
+    "ave",
+    "avenue",
+    "blvd",
+    "boulevard",
+    "rd",
+    "road",
+    "dr",
+    "drive",
+    "ln",
+    "lane",
+    "way",
+    "pkwy",
+    "parkway",
+    "ct",
+    "court",
+    "pl",
+    "place",
+    "cir",
+    "circle",
+    "hwy",
+    "highway",
+)
 
 _FALLBACK_SUGGESTIONS = [
     {"name": "Mission District", "formatted_address": "San Francisco, CA, USA"},
@@ -183,6 +211,37 @@ def _google_headers(field_mask: str) -> dict[str, str]:
     }
 
 
+def _looks_like_address(query: str) -> bool:
+    normalized = query.strip().lower()
+    if not normalized:
+        return False
+    if re.search(r"\d{1,6}", normalized):
+        if any(re.search(rf"\b{re.escape(hint)}\b", normalized) for hint in _ADDRESS_HINTS):
+            return True
+        if "," in normalized or re.search(r"\b[a-z]{2}\s+\d{5}(?:-\d{4})?\b", normalized):
+            return True
+    return False
+
+
+def _build_location_bias(
+    *,
+    latitude: float | None,
+    longitude: float | None,
+    radius_meters: float | None,
+) -> dict[str, Any] | None:
+    if latitude is None or longitude is None:
+        return None
+    return {
+        "circle": {
+            "center": {
+                "latitude": latitude,
+                "longitude": longitude,
+            },
+            "radius": radius_meters or 50000.0,
+        }
+    }
+
+
 def _parse_autocomplete_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
     suggestions: list[dict[str, Any]] = []
     for entry in payload.get("suggestions") or []:
@@ -212,6 +271,32 @@ def _parse_autocomplete_response(payload: dict[str, Any]) -> list[dict[str, Any]
             }
         )
     return suggestions
+
+
+def _parse_text_search_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
+    for place in payload.get("places") or []:
+        place_id = place.get("id")
+        if not place_id:
+            continue
+        suggestions.append(_build_google_place_response(place))
+    return suggestions
+
+
+def _dedupe_suggestions(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for suggestion in group:
+            key = (
+                str(suggestion.get("place_id") or "").strip()
+                or str(suggestion.get("label") or "").strip().lower()
+            )
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(suggestion)
+    return deduped
 
 
 def _build_google_place_response(payload: dict[str, Any]) -> dict[str, Any]:
@@ -303,21 +388,20 @@ async def autocomplete_places(
     if not settings.backfill_google_places_enabled or not settings.google_places_api_key:
         return _fallback_autocomplete(normalized)
 
+    location_bias = _build_location_bias(
+        latitude=latitude,
+        longitude=longitude,
+        radius_meters=radius_meters,
+    )
+    should_run_text_search = bool(location_bias) or _looks_like_address(normalized)
+
     body: dict[str, Any] = {
         "input": normalized,
         "languageCode": "en",
         "regionCode": settings.google_places_region_code,
     }
-    if latitude is not None and longitude is not None:
-        body["locationBias"] = {
-            "circle": {
-                "center": {
-                    "latitude": latitude,
-                    "longitude": longitude,
-                },
-                "radius": radius_meters or 50000.0,
-            }
-        }
+    if location_bias:
+        body["locationBias"] = location_bias
     if session_token:
         body["sessionToken"] = session_token
     if settings.google_places_country_codes:
@@ -335,8 +419,48 @@ async def autocomplete_places(
             json=body,
         )
         response.raise_for_status()
-        payload = response.json()
-    return {"provider": "google", "suggestions": _parse_autocomplete_response(payload)}
+        autocomplete_payload = response.json()
+        autocomplete_suggestions = _parse_autocomplete_response(autocomplete_payload)
+
+        text_search_suggestions: list[dict[str, Any]] = []
+        if should_run_text_search:
+            text_search_body: dict[str, Any] = {
+                "textQuery": normalized,
+                "languageCode": "en",
+                "regionCode": settings.google_places_region_code,
+            }
+            if location_bias:
+                text_search_body["locationBias"] = location_bias
+                text_search_body["rankPreference"] = "DISTANCE"
+            if settings.google_places_country_codes:
+                text_search_body["includedRegionCodes"] = settings.google_places_country_codes
+            try:
+                text_search_response = await client.post(
+                    _TEXT_SEARCH_URL,
+                    headers=_google_headers(
+                        "places.id,"
+                        "places.name,"
+                        "places.displayName,"
+                        "places.formattedAddress,"
+                        "places.location,"
+                        "places.businessStatus,"
+                        "places.types,"
+                        "places.primaryType,"
+                        "places.primaryTypeDisplayName,"
+                        "places.addressComponents"
+                    ),
+                    json=text_search_body,
+                )
+                text_search_response.raise_for_status()
+                text_search_suggestions = _parse_text_search_response(text_search_response.json())
+            except httpx.HTTPError:
+                text_search_suggestions = []
+
+    if should_run_text_search:
+        suggestions = _dedupe_suggestions(text_search_suggestions, autocomplete_suggestions)
+    else:
+        suggestions = autocomplete_suggestions
+    return {"provider": "google", "suggestions": suggestions[:_MAX_GOOGLE_SUGGESTIONS]}
 
 
 async def get_place_details(place_id: str, *, session_token: str | None = None) -> dict[str, Any] | None:
