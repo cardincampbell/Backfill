@@ -27,7 +27,6 @@ export default function HomePage() {
           </p>
           <div className="lp-hero-actions">
             <Link href="/try" className="lp-btn-primary">Try Backfill Free</Link>
-            <Link href="/login" className="lp-btn-secondary">Sign in</Link>
           </div>
           <p className="lp-hero-note">Your phone number is your login. Start setup now and we&rsquo;ll carry it into the product.</p>
 

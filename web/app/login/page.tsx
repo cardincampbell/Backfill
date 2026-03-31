@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { requestAccess, verifyAccessCode } from "@/lib/api/auth";
+import { API_BASE_URL, apiFetch } from "@/lib/api/client";
 import {
   clearStoredPreviewWorkspace,
   isPreviewAuthBypassEnabled,
@@ -19,8 +20,39 @@ export default function LoginPage() {
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const previewBypassEnabled = isPreviewAuthBypassEnabled();
   const { canResend, secondsLeft, startCooldown } = useOtpCooldown();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function resolveSession() {
+      if (previewBypassEnabled) {
+        setCheckingSession(false);
+        return;
+      }
+      try {
+        const response = await apiFetch(`${API_BASE_URL}/api/auth/me`, {
+          method: "GET",
+        });
+        if (!response.ok) {
+          if (!cancelled) setCheckingSession(false);
+          return;
+        }
+        const payload = (await response.json()) as { onboarding_required?: boolean };
+        if (cancelled) return;
+        router.replace(payload.onboarding_required ? "/onboarding" : "/dashboard");
+      } catch {
+        if (!cancelled) setCheckingSession(false);
+      }
+    }
+
+    void resolveSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [previewBypassEnabled, router]);
 
   async function handlePhoneSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -89,7 +121,16 @@ export default function LoginPage() {
         </div>
 
         <div className="settings-card">
-          {step === "phone" ? (
+          {checkingSession ? (
+            <>
+              <div className="settings-card-header">Checking your session</div>
+              <div className="settings-card-body">
+                <div style={{ fontSize: "0.8rem", color: "var(--muted)", textAlign: "center" }}>
+                  If you already signed in recently, we&rsquo;ll take you straight into Backfill.
+                </div>
+              </div>
+            </>
+          ) : step === "phone" ? (
             <>
               <div className="settings-card-header">Sign in</div>
               <div className="settings-card-body">
