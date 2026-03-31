@@ -506,6 +506,61 @@ def test_dashboard_access_verification_can_bootstrap_first_time_signup(client, p
     assert bootstrapped.status_code == 200
 
 
+def test_twilio_runtime_debug_reports_loaded_env_state(public_client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_account_sid", "AC123456789")
+    monkeypatch.setattr(settings, "twilio_auth_token", "")
+    monkeypatch.setattr(settings, "twilio_verify_service_sid", "VA123456789")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "backfill-api")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("RAILWAY_REPLICA_ID", "replica-1")
+
+    response = public_client.get("/api/auth/debug/twilio-runtime?step=exchange")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["step"] == "exchange"
+    assert payload["twilio_account_sid_present"] is True
+    assert payload["twilio_account_sid_prefix"] == "AC"
+    assert payload["twilio_auth_token_present"] is False
+    assert payload["twilio_verify_service_sid_present"] is True
+    assert payload["twilio_verify_service_sid_prefix"] == "VA"
+    assert payload["railway_service_name"] == "backfill-api"
+    assert payload["railway_environment_name"] == "production"
+    assert payload["railway_replica_id"] == "replica-1"
+
+
+def test_dashboard_access_runtime_error_includes_runtime_state(public_client, monkeypatch):
+    monkeypatch.setattr(settings, "twilio_account_sid", "AC123456789")
+    monkeypatch.setattr(settings, "twilio_auth_token", "")
+    monkeypatch.setattr(settings, "twilio_verify_service_sid", "VA123456789")
+    monkeypatch.setenv("RAILWAY_SERVICE_NAME", "backfill-api")
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    monkeypatch.setenv("RAILWAY_REPLICA_ID", "replica-2")
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": (_ for _ in ()).throw(
+            RuntimeError(
+                "Twilio Verify is not configured. Set TWILIO_ACCOUNT_SID, "
+                "TWILIO_AUTH_TOKEN, and TWILIO_VERIFY_SERVICE_SID."
+            )
+        ),
+    )
+
+    response = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": "+13105550444"},
+    )
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "step=request-access" in detail
+    assert "service=backfill-api" in detail
+    assert "env=production" in detail
+    assert "replica=replica-2" in detail
+    assert "twilio_account_sid_present=true" in detail
+    assert "twilio_auth_token_present=false" in detail
+    assert "twilio_verify_service_sid_present=true" in detail
+    assert "twilio_verify_service_sid_prefix=VA" in detail
+
+
 def test_ai_web_action_can_return_schedule_exceptions_and_history(client, public_client, monkeypatch):
     auth_messages = []
     monkeypatch.setattr(

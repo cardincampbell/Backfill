@@ -7,6 +7,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
+import socket
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
@@ -459,6 +461,23 @@ class DashboardAuthResponse(BaseModel):
     locations: list[dict] = Field(default_factory=list)
 
 
+class TwilioRuntimeDebugResponse(BaseModel):
+    step: Optional[str] = None
+    host: str
+    process_id: int
+    railway_project_name: Optional[str] = None
+    railway_service_name: Optional[str] = None
+    railway_environment_name: Optional[str] = None
+    railway_replica_id: Optional[str] = None
+    railway_deployment_id: Optional[str] = None
+    commit_sha: Optional[str] = None
+    twilio_account_sid_present: bool
+    twilio_account_sid_prefix: Optional[str] = None
+    twilio_auth_token_present: bool
+    twilio_verify_service_sid_present: bool
+    twilio_verify_service_sid_prefix: Optional[str] = None
+
+
 class SignupSessionResponse(BaseModel):
     id: int
     status: str
@@ -798,6 +817,46 @@ def _ops_job_idempotency_key(job_type: str, **parts: object) -> str:
     return f"ops:{job_type}:{serialized}:{bucket}"
 
 
+def _twilio_runtime_debug_payload(step: Optional[str] = None) -> dict:
+    account_sid = settings.twilio_account_sid or ""
+    verify_service_sid = settings.twilio_verify_service_sid or ""
+    return {
+        "step": step,
+        "host": socket.gethostname(),
+        "process_id": os.getpid(),
+        "railway_project_name": os.environ.get("RAILWAY_PROJECT_NAME"),
+        "railway_service_name": os.environ.get("RAILWAY_SERVICE_NAME"),
+        "railway_environment_name": os.environ.get("RAILWAY_ENVIRONMENT_NAME"),
+        "railway_replica_id": os.environ.get("RAILWAY_REPLICA_ID"),
+        "railway_deployment_id": os.environ.get("RAILWAY_DEPLOYMENT_ID"),
+        "commit_sha": os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or os.environ.get("VERCEL_GIT_COMMIT_SHA"),
+        "twilio_account_sid_present": bool(account_sid),
+        "twilio_account_sid_prefix": account_sid[:2] if account_sid else None,
+        "twilio_auth_token_present": bool(settings.twilio_auth_token),
+        "twilio_verify_service_sid_present": bool(verify_service_sid),
+        "twilio_verify_service_sid_prefix": verify_service_sid[:2] if verify_service_sid else None,
+    }
+
+
+def _twilio_runtime_error_detail(detail: str, *, step: str) -> str:
+    payload = _twilio_runtime_debug_payload(step)
+    parts = [
+        detail,
+        f"step={payload['step']}",
+        f"host={payload['host']}",
+        f"pid={payload['process_id']}",
+        f"service={payload['railway_service_name'] or 'unknown'}",
+        f"env={payload['railway_environment_name'] or 'unknown'}",
+        f"replica={payload['railway_replica_id'] or 'unknown'}",
+        f"twilio_account_sid_present={str(payload['twilio_account_sid_present']).lower()}",
+        f"twilio_auth_token_present={str(payload['twilio_auth_token_present']).lower()}",
+        f"twilio_verify_service_sid_present={str(payload['twilio_verify_service_sid_present']).lower()}",
+        f"twilio_verify_service_sid_prefix={payload['twilio_verify_service_sid_prefix'] or 'missing'}",
+    ]
+    return " ".join(parts)
+
+
 @router.post(
     "/auth/request-access",
     response_model=DashboardAccessRequestResponse,
@@ -812,7 +871,10 @@ async def request_dashboard_access(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=_twilio_runtime_error_detail(str(exc), step="request-access"),
+        ) from exc
 
 
 @router.post(
@@ -841,12 +903,20 @@ async def exchange_dashboard_access(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=_twilio_runtime_error_detail(str(exc), step="exchange"),
+        ) from exc
     payload = await auth_svc.build_auth_response_payload(db, principal)
     return {
         **payload,
         "session_token": session_token,
     }
+
+
+@router.get("/auth/debug/twilio-runtime", response_model=TwilioRuntimeDebugResponse)
+async def get_twilio_runtime_debug(step: Optional[str] = Query(default=None, max_length=64)):
+    return _twilio_runtime_debug_payload(step)
 
 
 @router.get("/auth/me", response_model=DashboardAuthResponse)
