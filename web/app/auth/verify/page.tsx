@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { exchangeToken } from "@/lib/api/auth";
-import { SESSION_COOKIE } from "@/lib/auth/constants";
+import { persistBrowserSessionToken } from "@/lib/auth/browser-session";
 
 function VerifyContent() {
   const searchParams = useSearchParams();
@@ -29,12 +29,8 @@ function VerifyContent() {
           return;
         }
 
-        // Store session token as a cookie (secure, same-site, 30-day expiry)
-        const maxAge = 30 * 24 * 60 * 60;
-        const secure = window.location.protocol === "https:" ? "; Secure" : "";
-        document.cookie = `${SESSION_COOKIE}=${result.session_token}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`;
-
-        router.replace("/onboarding");
+        persistBrowserSessionToken(result.session_token);
+        router.replace(result.onboarding_required ? "/onboarding" : "/dashboard");
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Verification failed");
@@ -63,7 +59,7 @@ function VerifyContent() {
         ) : (
           <div style={{ textAlign: "center", padding: "8px 0" }}>
             <p style={{ fontSize: "0.8rem", color: "var(--muted)" }}>
-              Verifying your access link...
+              Verifying your sign-in...
             </p>
           </div>
         )}

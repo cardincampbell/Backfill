@@ -14,6 +14,7 @@ export type AccessRequestResponse = {
   destination: string;
   expires_at: string;
   message_sid: string | null;
+  channel: string;
   organization_id: number | null;
   location_ids: number[];
 };
@@ -23,6 +24,8 @@ export type AuthResponse = {
   session_token: string | null;
   session_id: number | null;
   subject_phone: string | null;
+  session_expires_at: string | null;
+  onboarding_required: boolean;
   organization: {
     id: number;
     name: string;
@@ -39,7 +42,7 @@ export type AuthResponse = {
 // ── API calls ────────────────────────────────────────────────────────────
 
 /**
- * Request an SMS access link for the given phone number.
+ * Request an SMS verification code for the given phone number.
  * POST /api/auth/request-access
  */
 export async function requestAccess(phone: string): Promise<AccessRequestResponse> {
@@ -50,13 +53,33 @@ export async function requestAccess(phone: string): Promise<AccessRequestRespons
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.detail ?? "Failed to send access link");
+    throw new Error(body?.detail ?? "Failed to send verification code");
   }
   return (await res.json()) as AccessRequestResponse;
 }
 
 /**
- * Exchange a one-time access token for a session.
+ * Verify a one-time SMS code for a session.
+ * POST /api/auth/exchange
+ */
+export async function verifyAccessCode(
+  requestId: number,
+  code: string,
+): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/exchange`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request_id: requestId, code }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? "Failed to verify code");
+  }
+  return (await res.json()) as AuthResponse;
+}
+
+/**
+ * Exchange a legacy one-time access token for a session.
  * POST /api/auth/exchange
  */
 export async function exchangeToken(token: string): Promise<AuthResponse> {

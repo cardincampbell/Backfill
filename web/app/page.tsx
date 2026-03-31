@@ -315,7 +315,7 @@ export default function HomePage() {
       <footer className="lp-footer">
         <div className="lp-footer-inner">
           <span className="lp-footer-logo">Backfill</span>
-          <span className="lp-footer-copy">&copy; 2026 Backfill Technologies, Inc.</span>
+          <span className="lp-footer-copy">&copy; 2026 Backfill Works, Inc.</span>
         </div>
       </footer>
     </main>

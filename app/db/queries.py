@@ -221,7 +221,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
         f"""INSERT INTO {_LOCATION_TABLE}
            (name, organization_id, vertical, address, place_inferred_vertical,
             place_provider, place_id, place_resource_name, place_display_name, place_brand_name, place_location_label,
-            place_formatted_address, place_primary_type, place_primary_type_display_name, place_business_status,
+           place_formatted_address, place_primary_type, place_primary_type_display_name, place_business_status,
             place_latitude, place_longitude, place_google_maps_uri, place_website_uri,
             place_national_phone_number, place_international_phone_number, place_utc_offset_minutes,
             place_rating, place_user_rating_count, place_city, place_state_region, place_postal_code,
@@ -2075,18 +2075,23 @@ async def insert_dashboard_access_request(db: aiosqlite.Connection, data: dict) 
     cur = await db.execute(
         """
         INSERT INTO dashboard_access_requests
-        (phone, organization_id, location_ids_json, token_hash, status, expires_at, used_at,
-         requested_at, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        (phone, organization_id, location_ids_json, token_hash, verification_sid, channel, status,
+         expires_at, used_at, verified_at, check_count, last_check_at, requested_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             encoded["phone"],
             encoded.get("organization_id"),
             encoded.get("location_ids_json", "[]"),
             encoded["token_hash"],
+            encoded.get("verification_sid"),
+            encoded.get("channel", "sms"),
             encoded.get("status", "pending"),
             encoded["expires_at"],
             encoded.get("used_at"),
+            encoded.get("verified_at"),
+            encoded.get("check_count", 0),
+            encoded.get("last_check_at"),
             encoded.get("requested_at", now),
             encoded.get("created_at", now),
             encoded.get("updated_at", now),
@@ -2108,6 +2113,34 @@ async def get_dashboard_access_request_by_token_hash(
     return _decode("dashboard_access_requests", row) if row else None
 
 
+async def get_dashboard_access_request(
+    db: aiosqlite.Connection,
+    request_id: int,
+) -> Optional[dict]:
+    async with db.execute(
+        "SELECT * FROM dashboard_access_requests WHERE id=?",
+        (request_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _decode("dashboard_access_requests", row) if row else None
+
+
+async def supersede_pending_dashboard_access_requests_for_phone(
+    db: aiosqlite.Connection,
+    phone: str,
+) -> None:
+    now = datetime.utcnow().isoformat()
+    await db.execute(
+        """
+        UPDATE dashboard_access_requests
+        SET status='superseded', updated_at=?
+        WHERE phone=? AND status='pending'
+        """,
+        (now, phone),
+    )
+    await db.commit()
+
+
 async def update_dashboard_access_request(
     db: aiosqlite.Connection,
     request_id: int,
@@ -2118,9 +2151,14 @@ async def update_dashboard_access_request(
         "organization_id",
         "location_ids_json",
         "token_hash",
+        "verification_sid",
+        "channel",
         "status",
         "expires_at",
         "used_at",
+        "verified_at",
+        "check_count",
+        "last_check_at",
         "requested_at",
         "created_at",
         "updated_at",

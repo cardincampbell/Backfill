@@ -31,6 +31,66 @@ def _get_twilio():
     return _twilio_client
 
 
+def send_sms_verification(
+    to: str,
+    *,
+    locale: str = "en",
+) -> dict:
+    if (
+        not settings.twilio_account_sid
+        or not settings.twilio_auth_token
+        or not settings.twilio_verify_service_sid
+    ):
+        raise RuntimeError(
+            "Twilio Verify is not configured. Set TWILIO_ACCOUNT_SID, "
+            "TWILIO_AUTH_TOKEN, and TWILIO_VERIFY_SERVICE_SID."
+        )
+
+    client = _get_twilio()
+    verification = client.verify.v2.services(
+        settings.twilio_verify_service_sid
+    ).verifications.create(
+        to=to,
+        channel="sms",
+        locale=locale,
+    )
+    return {
+        "sid": getattr(verification, "sid", None),
+        "status": getattr(verification, "status", None),
+        "channel": getattr(verification, "channel", "sms"),
+        "to": getattr(verification, "to", to),
+    }
+
+
+def check_sms_verification(
+    to: str,
+    code: str,
+) -> dict:
+    if (
+        not settings.twilio_account_sid
+        or not settings.twilio_auth_token
+        or not settings.twilio_verify_service_sid
+    ):
+        raise RuntimeError(
+            "Twilio Verify is not configured. Set TWILIO_ACCOUNT_SID, "
+            "TWILIO_AUTH_TOKEN, and TWILIO_VERIFY_SERVICE_SID."
+        )
+
+    client = _get_twilio()
+    verification_check = client.verify.v2.services(
+        settings.twilio_verify_service_sid
+    ).verification_checks.create(
+        to=to,
+        code=code,
+    )
+    return {
+        "sid": getattr(verification_check, "sid", None),
+        "status": getattr(verification_check, "status", None),
+        "valid": getattr(verification_check, "valid", None),
+        "to": getattr(verification_check, "to", to),
+    }
+
+
 def send_sms(
     to: str,
     body: str,

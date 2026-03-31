@@ -2,9 +2,8 @@
  * Auth session module — wired to Codex's SMS-based dashboard auth.
  *
  * Flow:
- * 1. POST /api/auth/request-access  { phone } → sends SMS with magic link
- * 2. User clicks link → /auth/verify?token=bflink_xxx
- * 3. POST /api/auth/exchange  { token } → returns session_token + principal
+ * 1. POST /api/auth/request-access  { phone } → sends SMS verification code
+ * 2. POST /api/auth/exchange  { request_id, code } → returns session_token + principal
  * 4. Browser stores session_token in cookie
  * 5. All subsequent server-side fetches read the cookie and pass Bearer header
  */
@@ -14,7 +13,7 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE } from "./constants";
 
 const AUTH_REQUIRED =
-  process.env.NEXT_PUBLIC_BACKFILL_DASHBOARD_AUTH_REQUIRED === "true";
+  process.env.NEXT_PUBLIC_BACKFILL_PREVIEW_AUTH_BYPASS !== "true";
 
 const API_BASE_URL =
   process.env.BACKFILL_API_BASE_URL?.replace(/\/$/, "") ??
@@ -28,6 +27,8 @@ export type Session = {
   principal_type: string;
   session_id: number | null;
   subject_phone: string | null;
+  session_expires_at?: string | null;
+  onboarding_required?: boolean;
   organization: {
     id: number;
     name: string;
@@ -67,21 +68,23 @@ export async function getSession(): Promise<Session | null> {
  * Redirects to /login if no session exists.
  */
 export async function requireAuth(): Promise<Session> {
+  const session = await getSession();
+  if (session) {
+    return session;
+  }
   if (!AUTH_REQUIRED) {
     return {
       principal_type: "preview",
       session_id: null,
       subject_phone: null,
+      session_expires_at: null,
+      onboarding_required: false,
       organization: null,
       location_ids: [],
       locations: [],
     };
   }
-  const session = await getSession();
-  if (!session) {
-    redirect("/login");
-  }
-  return session;
+  redirect("/login");
 }
 
 /**

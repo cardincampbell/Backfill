@@ -38,17 +38,17 @@ def _create_backfill_shifts_import_job(client, location_id: int, csv_text: str):
     return job, uploaded.json()
 
 
-def _exchange_dashboard_session(public_client, phone: str, sent_messages):
+def _exchange_dashboard_session(public_client, phone: str, sent_verifications):
     requested = public_client.post(
         "/api/auth/request-access",
         json={"phone": phone},
     )
     assert requested.status_code == 200
-    assert sent_messages
-    token_match = re.search(r"token=([^\s]+)", sent_messages[-1][1])
-    assert token_match is not None
-    access_token = token_match.group(1)
-    exchanged = public_client.post("/api/auth/exchange", json={"token": access_token})
+    request_payload = requested.json()
+    exchanged = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": request_payload["request_id"], "code": "123456"},
+    )
     assert exchanged.status_code == 200
     session_token = exchanged.json()["session_token"]
     return {"Authorization": f"Bearer {session_token}"}
@@ -218,6 +218,7 @@ def test_location_create_persists_place_profile(client):
     assert payload["place_location_label"] == "Venice"
     assert payload["place_primary_type"] == "grocery_store"
     assert payload["place_types"] == ["grocery_store", "food", "point_of_interest"]
+    assert payload["place_regular_opening_hours"]["openNow"] is True
     assert payload["place_metadata"]["source"] == "google"
     assert payload["created_at"]
     assert payload["updated_at"]
@@ -231,6 +232,31 @@ def test_location_create_persists_place_profile(client):
     assert fetched_payload["place_inferred_vertical"] == "retail"
     assert fetched_payload["created_at"]
     assert fetched_payload["updated_at"]
+
+
+def test_locations_list_does_not_leak_rows_without_principal_when_auth_is_optional(
+    client,
+    public_client,
+    monkeypatch,
+):
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Scoped Test Site",
+            "organization_name": "Scoped Test Org",
+            "manager_name": "Morgan",
+            "manager_email": "morgan@example.com",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    assert created.status_code == 201
+
+    monkeypatch.setattr(settings, "backfill_dashboard_auth_required", False)
+
+    listed = public_client.get("/api/locations")
+    assert listed.status_code == 200
+    assert listed.json() == []
 
 
 def test_location_create_preserves_explicit_vertical_over_place_inference(client):
@@ -308,11 +334,15 @@ def test_places_autocomplete_accepts_location_bias(public_client, monkeypatch):
 
 
 def test_dashboard_access_sms_exchange_and_location_scope(client, public_client, monkeypatch):
-    sent_messages = []
+    sent_verifications = []
     monkeypatch.setattr(settings, "backfill_dashboard_auth_required", True)
     monkeypatch.setattr(
-        "app.services.messaging.send_sms",
-        lambda to, body, metadata=None, dynamic_variables=None: sent_messages.append((to, body)) or "SM-AUTH",
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": sent_verifications.append((to, locale)) or {"sid": "VE-AUTH", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-AUTH-CHECK", "status": "approved", "valid": code == "123456", "to": to},
     )
 
     allowed = client.post(
@@ -346,22 +376,19 @@ def test_dashboard_access_sms_exchange_and_location_scope(client, public_client,
     assert requested.status_code == 200
     request_payload = requested.json()
     assert request_payload["destination"].endswith("0410")
-    assert request_payload["location_ids"] == [allowed["id"]]
-    assert sent_messages and sent_messages[0][0] == "+13105550410"
-
-    token_match = re.search(r"token=([^\s]+)", sent_messages[0][1])
-    assert token_match is not None
-    access_token = token_match.group(1)
+    assert request_payload["location_ids"] == []
+    assert sent_verifications and sent_verifications[0][0] == "+13105550410"
 
     exchanged = public_client.post(
         "/api/auth/exchange",
-        json={"token": access_token},
+        json={"request_id": request_payload["request_id"], "code": "123456"},
     )
     assert exchanged.status_code == 200
     exchange_payload = exchanged.json()
     session_token = exchange_payload["session_token"]
     assert session_token.startswith("bfsess_")
     assert exchange_payload["location_ids"] == [allowed["id"]]
+    assert exchange_payload["onboarding_required"] is False
 
     session_headers = {"Authorization": f"Bearer {session_token}"}
     me = public_client.get("/api/auth/me", headers=session_headers)
@@ -392,8 +419,8 @@ def test_dashboard_access_sms_exchange_and_location_scope(client, public_client,
 
 def test_dashboard_access_request_is_rate_limited(client, public_client, monkeypatch):
     monkeypatch.setattr(
-        "app.services.messaging.send_sms",
-        lambda to, body, metadata=None, dynamic_variables=None: "SM-AUTH",
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-AUTH", "status": "pending", "channel": "sms"},
     )
 
     client.post(
@@ -420,6 +447,63 @@ def test_dashboard_access_request_is_rate_limited(client, public_client, monkeyp
     )
     assert limited.status_code == 429
     assert limited.json()["detail"] == "Rate limit exceeded"
+
+
+def test_dashboard_access_verification_can_bootstrap_first_time_signup(client, public_client, monkeypatch):
+    monkeypatch.setattr(settings, "backfill_dashboard_auth_required", True)
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-FIRST", "status": "pending", "channel": "sms"},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-FIRST-CHECK", "status": "approved", "valid": code == "123456", "to": to},
+    )
+
+    requested = public_client.post(
+        "/api/auth/request-access",
+        json={"phone": "+13105550777"},
+    )
+    assert requested.status_code == 200
+    request_payload = requested.json()
+    assert request_payload["location_ids"] == []
+
+    exchanged = public_client.post(
+        "/api/auth/exchange",
+        json={"request_id": request_payload["request_id"], "code": "123456"},
+    )
+    assert exchanged.status_code == 200
+    auth_payload = exchanged.json()
+    assert auth_payload["onboarding_required"] is True
+    session_headers = {"Authorization": f"Bearer {auth_payload['session_token']}"}
+
+    created = public_client.post(
+        "/api/locations",
+        headers=session_headers,
+        json={
+            "name": "OTP Signup Location",
+            "organization_name": "OTP Signup Business",
+            "manager_name": "First Time Lead",
+            "manager_email": "lead@example.com",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+        },
+    )
+    assert created.status_code == 201
+    created_payload = created.json()
+    assert created_payload["manager_phone"] == "+13105550777"
+
+    me = public_client.get("/api/auth/me", headers=session_headers)
+    assert me.status_code == 200
+    me_payload = me.json()
+    assert me_payload["onboarding_required"] is False
+    assert [item["id"] for item in me_payload["locations"]] == [created_payload["id"]]
+
+    bootstrapped = public_client.post(
+        f"/api/locations/{created_payload['id']}/preview-bootstrap",
+        headers=session_headers,
+    )
+    assert bootstrapped.status_code == 200
 
 
 def test_ai_web_action_can_return_schedule_exceptions_and_history(client, public_client, monkeypatch):

@@ -13,7 +13,6 @@ const NAV_ITEMS = [
   { key: "schedule", label: "Schedule", icon: "▦" },
   { key: "coverage", label: "Coverage", icon: "◔" },
   { key: "actions", label: "Actions", icon: "◎" },
-  { key: "exceptions", label: "Issues", icon: "!" },
   { key: "roster", label: "Team", icon: "◉" },
   { key: "imports", label: "Imports", icon: "↥" },
   { key: "overview", label: "Overview", icon: "◌" },
@@ -31,11 +30,28 @@ function buildActiveBasePath(pathname: string, fallbackBasePath: string): string
   return fallbackBasePath;
 }
 
+export function DashboardRailHomeLink({
+  fallbackBasePath,
+}: DashboardRailNavProps) {
+  const pathname = usePathname();
+  const basePath = buildActiveBasePath(pathname, fallbackBasePath);
+  const href = pathname === "/dashboard/ops" ? "/dashboard" : `${basePath}?tab=schedule`;
+
+  return (
+    <Link className="dashboard-rail-brand" href={href}>
+      <span className="dashboard-rail-brand-mark">B</span>
+      <span className="dashboard-rail-brand-copy">
+        <strong>Backfill</strong>
+      </span>
+    </Link>
+  );
+}
+
 export function DashboardRailNav({ fallbackBasePath }: DashboardRailNavProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const basePath = buildActiveBasePath(pathname, fallbackBasePath);
-  const currentTab = pathname === "/dashboard/ops" ? "ops" : searchParams.get("tab") ?? "schedule";
+  const currentTab = pathname === "/dashboard/ops" ? "locations" : searchParams.get("tab") ?? "schedule";
 
   return (
     <>
@@ -69,9 +85,9 @@ export function DashboardRailNav({ fallbackBasePath }: DashboardRailNavProps) {
       </nav>
 
       <div className="dashboard-rail-nav dashboard-rail-nav-secondary">
-        <Link className="dashboard-rail-link" data-active={currentTab === "ops"} href="/dashboard/ops">
+        <Link className="dashboard-rail-link" data-active={currentTab === "locations"} href="/dashboard/ops">
           <span className="dashboard-rail-link-icon">≡</span>
-          <span>All locations</span>
+          <span>Your locations</span>
         </Link>
       </div>
     </>

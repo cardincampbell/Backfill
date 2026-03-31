@@ -376,9 +376,14 @@ async def init_db():
                 organization_id   INTEGER REFERENCES organizations(id),
                 location_ids_json TEXT NOT NULL DEFAULT '[]',
                 token_hash        TEXT NOT NULL UNIQUE,
+                verification_sid  TEXT,
+                channel           TEXT NOT NULL DEFAULT 'sms',
                 status            TEXT NOT NULL DEFAULT 'pending',
                 expires_at        TEXT NOT NULL,
                 used_at           TEXT,
+                verified_at       TEXT,
+                check_count       INTEGER NOT NULL DEFAULT 0,
+                last_check_at     TEXT,
                 requested_at      TEXT NOT NULL,
                 created_at        TEXT NOT NULL,
                 updated_at        TEXT NOT NULL
@@ -1246,6 +1251,36 @@ async def init_db():
             db,
             "webhook_receipts",
             "last_seen_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "verification_sid",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "channel",
+            "TEXT NOT NULL DEFAULT 'sms'",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "verified_at",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "check_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        await _ensure_column(
+            db,
+            "dashboard_access_requests",
+            "last_check_at",
             "TEXT",
         )
         await _ensure_column(

@@ -24,6 +24,19 @@ def disable_ops_worker_by_default(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def fake_twilio_verify_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE-TEST", "status": "pending", "channel": "sms", "to": to},
+    )
+    monkeypatch.setattr(
+        "app.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE-CHECK", "status": "approved" if code == "123456" else "pending", "valid": code == "123456", "to": to},
+    )
+    yield
+
+
 @pytest_asyncio.fixture
 async def db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_backfill.db"

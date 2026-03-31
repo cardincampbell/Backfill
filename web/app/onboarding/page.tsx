@@ -13,6 +13,7 @@ import {
 import {
   clearStoredPreviewPhone,
   getStoredPreviewPhone,
+  storePreviewWorkspace,
 } from "@/lib/auth/preview";
 import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
 
@@ -448,10 +449,11 @@ export default function OnboardingPage() {
       }
 
       const additionalLocations = hydratedLocations.slice(1);
+      const createdLocationIds = [location.id];
       if (additionalLocations.length > 0) {
-        await Promise.allSettled(
-          additionalLocations.map((locationChoice) =>
-            apiFetch(`${API_BASE_URL}/api/locations`, {
+        const results = await Promise.allSettled(
+          additionalLocations.map(async (locationChoice) => {
+            const response = await apiFetch(`${API_BASE_URL}/api/locations`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(
@@ -464,11 +466,25 @@ export default function OnboardingPage() {
                   onboardingInfo,
                 }),
               ),
-            }),
-          ),
+            });
+            if (!response.ok) {
+              return null;
+            }
+            const created = (await response.json()) as { id: number };
+            return created.id;
+          }),
         );
+        for (const result of results) {
+          if (result.status === "fulfilled" && typeof result.value === "number") {
+            createdLocationIds.push(result.value);
+          }
+        }
       }
 
+      storePreviewWorkspace({
+        primaryLocationId: location.id,
+        locationIds: createdLocationIds,
+      });
       clearStoredPreviewPhone();
       router.replace(buildDashboardLocationPath(location, { tab: "schedule" }));
     } catch (error) {

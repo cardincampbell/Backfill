@@ -13,7 +13,6 @@ import { ManagerActionsPanel } from "@/components/manager-actions-panel";
 import { LocationSettingsPanel } from "@/components/location-settings-panel";
 import { PilotMetricsPanel } from "@/components/pilot-metrics-panel";
 import AiPromptPanel from "@/components/ai-prompt-panel";
-import { ExceptionsFeed } from "@/components/exceptions-feed";
 import { AddEmployeeForm } from "@/components/add-employee-form";
 import { ScheduleActions } from "@/components/schedule-actions";
 import { ScheduleReviewPanel } from "@/components/schedule-review-panel";
@@ -32,13 +31,11 @@ import {
   getEligibleWorkers,
   getManagerActions,
   getLocationSettings,
-  getScheduleExceptions,
   getScheduleTemplates,
 } from "@/lib/shifts-api";
 import type {
   LocationStatusResponse,
   ManagerActionsResponse,
-  ScheduleExceptionQueueResponse,
   ScheduleShift,
 } from "@/lib/types";
 
@@ -262,7 +259,8 @@ export async function renderLocationDetailPage({
     notFound();
   }
 
-  const activeTab = queryValue(query.tab) ?? "schedule";
+  const requestedTab = queryValue(query.tab) ?? "schedule";
+  const activeTab = requestedTab === "exceptions" ? "schedule" : requestedTab;
   const action = queryValue(query.action) ?? "";
   const detail = queryValue(query.detail) ? decodeURIComponent(queryValue(query.detail) ?? "") : "";
   const weekStart = queryValue(query.week_start);
@@ -347,10 +345,6 @@ export async function renderLocationDetailPage({
 
       {activeTab === "actions" && (
         <ManagerActionsTabContent locationId={locationId} weekStart={weekStart} />
-      )}
-
-      {activeTab === "exceptions" && (
-        <ExceptionsTabContent locationId={locationId} />
       )}
 
       {activeTab === "settings" && (
@@ -962,27 +956,6 @@ async function ManagerActionsTabContent({ locationId, weekStart }: { locationId:
         </div>
       </div>
       <ManagerActionsPanel data={actions ?? emptyManagerActions(locationId)} />
-    </section>
-  );
-}
-
-async function ExceptionsTabContent({ locationId }: { locationId: number }) {
-  const data = await getScheduleExceptions(locationId);
-  const empty: ScheduleExceptionQueueResponse = {
-    location_id: locationId,
-    summary: { total: 0, action_required: 0, critical: 0 },
-    exceptions: [],
-  };
-
-  return (
-    <section className="section">
-      <div className="section-head">
-        <div>
-          <h2>Schedule exceptions</h2>
-          <p className="muted">Open shifts, coverage alerts, attendance issues, and other exceptions across all schedules.</p>
-        </div>
-      </div>
-      <ExceptionsFeed data={data ?? empty} />
     </section>
   );
 }

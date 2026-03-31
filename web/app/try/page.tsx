@@ -2,36 +2,63 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { requestAccess } from "@/lib/api/auth";
+import { requestAccess, verifyAccessCode } from "@/lib/api/auth";
 import {
+  clearStoredPreviewWorkspace,
   isPreviewAuthBypassEnabled,
   storePreviewPhone,
 } from "@/lib/auth/preview";
+import { persistBrowserSessionToken } from "@/lib/auth/browser-session";
 
 export default function TryPage() {
   const router = useRouter();
   const [phone, setPhone] = useState("");
   const [consented, setConsented] = useState(false);
-  const [step, setStep] = useState<"form" | "sent">("form");
+  const [step, setStep] = useState<"form" | "code">("form");
+  const [requestId, setRequestId] = useState<number | null>(null);
+  const [code, setCode] = useState("");
   const [destination, setDestination] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const previewBypassEnabled = isPreviewAuthBypassEnabled();
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handlePhoneSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!phone.trim() || !consented || loading) return;
     setError("");
     setLoading(true);
     try {
       if (previewBypassEnabled) {
+        clearStoredPreviewWorkspace();
         storePreviewPhone(phone.trim());
         router.push("/onboarding");
         return;
       }
       const result = await requestAccess(phone.trim());
+      setRequestId(result.request_id);
       setDestination(result.destination);
-      setStep("sent");
+      setCode("");
+      setStep("code");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCodeSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!requestId || !code.trim() || loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const result = await verifyAccessCode(requestId, code.trim());
+      if (!result.session_token) {
+        throw new Error("No session returned. Please try again.");
+      }
+      persistBrowserSessionToken(result.session_token);
+      clearStoredPreviewWorkspace();
+      router.replace(result.onboarding_required ? "/onboarding" : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
     } finally {
@@ -53,9 +80,9 @@ export default function TryPage() {
               <p className="lp-signup-sub">
                 {previewBypassEnabled
                   ? "Drop your number and we’ll carry it into setup so you can get into Backfill without re-entering it."
-                  : "Drop your number and we’ll text you a link to get into Backfill — no passwords, no friction. Just the product."}
+                  : "Drop your number and we’ll text you a code to get into Backfill — no passwords, no friction. Just the product."}
               </p>
-              <form onSubmit={handleSubmit} className="lp-signup-form">
+              <form onSubmit={handlePhoneSubmit} className="lp-signup-form">
                 <div className="lp-signup-field">
                   <label htmlFor="phone">Phone number</label>
                   <input
@@ -79,7 +106,7 @@ export default function TryPage() {
                   <span>
                     {previewBypassEnabled
                       ? "By checking this box, you agree that Backfill may use this number for your setup and future account communications. View our "
-                      : "By checking this box, you agree to receive text messages from Backfill Technologies, Inc. at the number provided above, including marketing and account messages. Message and data rates may apply. Reply STOP at any time to unsubscribe. View our "}
+                      : "By checking this box, you agree to receive text messages from Backfill Works, Inc. at the number provided above, including marketing and account messages. Message and data rates may apply. Reply STOP at any time to unsubscribe. View our "}
                     <a href="/privacy" className="lp-signup-text-link">Privacy Policy</a>.
                   </span>
                 </label>
@@ -91,14 +118,14 @@ export default function TryPage() {
                   className="lp-signup-submit"
                   disabled={!phone.trim() || !consented || loading}
                 >
-                  {loading ? (previewBypassEnabled ? "Continuing..." : "Sending...") : (previewBypassEnabled ? "Continue" : "Get access")}
+                  {loading ? (previewBypassEnabled ? "Continuing..." : "Sending...") : (previewBypassEnabled ? "Continue" : "Send code")}
                 </button>
               </form>
 
               <p className="lp-signup-footer-note">
                 {previewBypassEnabled
                   ? "We’ll carry this number into your setup so you don’t have to enter it again."
-                  : "We’ll text you a one-time link. Standard messaging rates may apply. No spam — ever."}
+                  : "We’ll text you a one-time code. Standard messaging rates may apply. No spam — ever."}
               </p>
             </div>
           </>
@@ -109,15 +136,42 @@ export default function TryPage() {
             </div>
             <div className="lp-signup-body lp-signup-body-sent">
               <div className="lp-signup-check" aria-hidden="true">✓</div>
-              <h1 className="lp-signup-headline">You&rsquo;re in.</h1>
+              <h1 className="lp-signup-headline">Enter your code.</h1>
               <p className="lp-signup-sub">
-                Check your phone &mdash; we just sent a link to <strong>{destination}</strong>
-                to get started with Backfill. See you on the inside.
+                We just texted a verification code to <strong>{destination}</strong>.
               </p>
+              <form onSubmit={handleCodeSubmit} className="lp-signup-form">
+                <div className="lp-signup-field">
+                  <label htmlFor="code">Verification code</label>
+                  <input
+                    id="code"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="123456"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                    autoFocus
+                  />
+                </div>
+                {error && <p className="lp-signup-error">{error}</p>}
+                <button
+                  type="submit"
+                  className="lp-signup-submit"
+                  disabled={!code.trim() || loading}
+                >
+                  {loading ? "Verifying..." : "Verify code"}
+                </button>
+              </form>
               <p className="lp-signup-resend">
                 Didn&rsquo;t get it?{" "}
                 <button
-                  onClick={() => { setStep("form"); setError(""); }}
+                  onClick={() => {
+                    setStep("form");
+                    setRequestId(null);
+                    setCode("");
+                    setError("");
+                  }}
                   className="lp-signup-text-link"
                 >
                   Try again

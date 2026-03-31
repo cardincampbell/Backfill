@@ -8,6 +8,10 @@ import {
   ShiftStatusResponse,
   Worker
 } from "./types";
+import {
+  PREVIEW_WORKSPACE_COOKIE,
+  parsePreviewWorkspace,
+} from "./auth/preview";
 import { getAuthHeaders } from "./auth/session";
 
 const API_BASE_URL =
@@ -34,12 +38,50 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   }
 }
 
+async function getPreviewWorkspaceCookieValue(): Promise<string | null> {
+  if (typeof window !== "undefined") {
+    const match = document.cookie.match(
+      new RegExp(`(?:^|;\\s*)${PREVIEW_WORKSPACE_COOKIE}=([^;]*)`)
+    );
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  }
+
+  const { cookies } = await import("next/headers");
+  const cookieStore = await cookies();
+  return cookieStore.get(PREVIEW_WORKSPACE_COOKIE)?.value ?? null;
+}
+
 export async function getDashboardSummary(): Promise<DashboardSummary | null> {
   return fetchJson<DashboardSummary>("/api/dashboard");
 }
 
 export async function getLocations(): Promise<Location[]> {
-  return (await fetchJson<Location[]>("/api/locations")) ?? [];
+  const rows = (await fetchJson<Location[]>("/api/locations")) ?? [];
+  const authHeaders = await getAuthHeaders();
+  if (authHeaders.Authorization) {
+    return rows;
+  }
+
+  const previewWorkspace = parsePreviewWorkspace(
+    await getPreviewWorkspaceCookieValue(),
+  );
+  if (!previewWorkspace) {
+    return [];
+  }
+
+  const rank = new Map(
+    previewWorkspace.locationIds.map((locationId, index) => [locationId, index]),
+  );
+  const filtered = rows.filter((location) => rank.has(location.id));
+  if (!filtered.length) {
+    return [];
+  }
+
+  return [...filtered].sort(
+    (left, right) =>
+      (rank.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+  );
 }
 
 export async function getLocationStatus(locationId: number): Promise<LocationStatusResponse | null> {

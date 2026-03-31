@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const locations = await getLocations();
+  const previewBypassEnabled =
+    process.env.NEXT_PUBLIC_BACKFILL_PREVIEW_AUTH_BYPASS === "true";
 
   if (!locations.length) {
     return (
@@ -32,9 +34,11 @@ export default async function DashboardPage() {
     );
   }
 
-  const latestLocation = locations.reduce((latest, location) =>
-    location.id > latest.id ? location : latest,
-  );
+  const preferredLocation = previewBypassEnabled
+    ? locations[0]
+    : locations.reduce((latest, location) =>
+        location.id > latest.id ? location : latest,
+      );
 
-  redirect(buildDashboardLocationPath(latestLocation, { tab: "schedule" }));
+  redirect(buildDashboardLocationPath(preferredLocation, { tab: "schedule" }));
 }

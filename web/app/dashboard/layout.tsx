@@ -1,6 +1,7 @@
-import Link from "next/link";
-
-import { DashboardRailNav } from "@/components/dashboard-rail-nav";
+import {
+  DashboardRailHomeLink,
+  DashboardRailNav,
+} from "@/components/dashboard-rail-nav";
 import { getLocations } from "@/lib/api";
 import { requireAuth } from "@/lib/auth/session";
 import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
@@ -43,12 +44,7 @@ export default async function DashboardLayout({
 
       <div className="dashboard-app-shell">
         <aside className="dashboard-rail">
-          <Link className="dashboard-rail-brand" href={primaryHref}>
-            <span className="dashboard-rail-brand-mark">B</span>
-            <span className="dashboard-rail-brand-copy">
-              <strong>Backfill</strong>
-            </span>
-          </Link>
+          <DashboardRailHomeLink fallbackBasePath={primaryBasePath} />
 
           <DashboardRailNav fallbackBasePath={primaryBasePath} />
         </aside>

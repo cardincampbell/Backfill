@@ -436,12 +436,15 @@ class DashboardAccessRequestResponse(BaseModel):
     destination: str
     expires_at: str
     message_sid: Optional[str] = None
+    channel: str = "sms"
     organization_id: Optional[int] = None
     location_ids: list[int] = Field(default_factory=list)
 
 
 class DashboardAccessExchangeBody(BaseModel):
-    token: str
+    token: Optional[str] = None
+    request_id: Optional[int] = None
+    code: Optional[str] = None
 
 
 class DashboardAuthResponse(BaseModel):
@@ -449,6 +452,8 @@ class DashboardAuthResponse(BaseModel):
     session_token: Optional[str] = None
     session_id: Optional[int] = None
     subject_phone: Optional[str] = None
+    session_expires_at: Optional[str] = None
+    onboarding_required: bool = False
     organization: Optional[dict] = None
     location_ids: list[int] = Field(default_factory=list)
     locations: list[dict] = Field(default_factory=list)
@@ -806,20 +811,37 @@ async def request_dashboard_access(
         return await auth_svc.request_dashboard_access(db, phone=body.phone)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/auth/exchange", response_model=DashboardAuthResponse)
+@router.post(
+    "/auth/exchange",
+    response_model=DashboardAuthResponse,
+    dependencies=[Depends(rate_limit.limit_by_request_key("auth_exchange", limit=12, window_seconds=300))],
+)
 async def exchange_dashboard_access(
     body: DashboardAccessExchangeBody,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     try:
-        session_token, principal = await auth_svc.exchange_dashboard_access_token(
-            db,
-            token=body.token,
-        )
+        if body.token:
+            session_token, principal = await auth_svc.exchange_dashboard_access_token(
+                db,
+                token=body.token,
+            )
+        elif body.request_id is not None and body.code is not None:
+            session_token, principal = await auth_svc.verify_dashboard_access_code(
+                db,
+                request_id=body.request_id,
+                code=body.code,
+            )
+        else:
+            raise ValueError("Provide either an access token or a request_id and verification code")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     payload = await auth_svc.build_auth_response_payload(db, principal)
     return {
         **payload,
@@ -1214,6 +1236,11 @@ async def create_location(
     if principal is not None and principal.is_setup:
         raise HTTPException(status_code=403, detail="Setup token cannot create a new location")
     data = body.model_dump(mode="json")
+    if principal is not None and principal.is_session and principal.subject_phone:
+        submitted_manager_phone = auth_svc.normalize_phone(data.get("manager_phone"))
+        if submitted_manager_phone and submitted_manager_phone != principal.subject_phone:
+            raise HTTPException(status_code=400, detail="Verified phone number must match the manager phone on the location")
+        data["manager_phone"] = principal.subject_phone
     inferred_vertical = _infer_vertical_from_place(data)
     if inferred_vertical:
         data["place_inferred_vertical"] = inferred_vertical
@@ -1230,6 +1257,8 @@ async def create_location(
     )
     data.pop("organization_name", None)
     location_id = await queries.insert_location(db, data)
+    if principal is not None and principal.is_session:
+        await auth_svc.refresh_dashboard_session_access(db, principal)
     await audit_svc.append(
         db,
         AuditAction.location_created,
@@ -1244,10 +1273,14 @@ async def create_location(
 @router.post("/locations/{location_id}/preview-bootstrap")
 async def bootstrap_preview_location(
     location_id: int,
+    request: Request,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    if settings.backfill_dashboard_auth_required:
-        raise HTTPException(status_code=403, detail="Preview bootstrap is disabled")
+    principal = auth_svc.get_request_principal(request)
+    if principal is not None and not principal.is_internal:
+        await auth_svc.ensure_location_access(db, principal, location_id)
+    elif settings.backfill_dashboard_auth_required:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         return await preview_bootstrap_svc.bootstrap_preview_location(
             db,
@@ -1266,7 +1299,9 @@ async def list_locations(
 ):
     rows = await queries.list_locations(db)
     principal = auth_svc.get_request_principal(request)
-    if principal is None or principal.is_internal:
+    if principal is None:
+        return []
+    if principal.is_internal:
         return rows
     if principal.organization_id is not None:
         return [

@@ -43,6 +43,7 @@ _DASHBOARD_PROTECTED_PATTERNS = (
     re.compile(r"^/api/auth/(me|logout)$"),
     re.compile(r"^/api/locations$"),
     re.compile(r"^/api/locations/\d+$"),
+    re.compile(r"^/api/locations/\d+/preview-bootstrap$"),
     re.compile(r"^/api/locations/\d+/(connect-sync|sync-roster|sync-schedule)$"),
     re.compile(r"^/api/locations/\d+/(settings|status|roster|eligible-workers|enrollment-invite-preview|enrollment-invites)$"),
     re.compile(r"^/api/locations/\d+/backfill-shifts-(metrics|activity)$"),
@@ -142,6 +143,11 @@ def _is_public_api_path(path: str) -> bool:
     return any(pattern.match(path) for pattern in _PUBLIC_API_PATTERNS)
 
 
+def _is_valid_otp_code(value: object | None) -> bool:
+    text = _trim_text(value)
+    return bool(text and text.isdigit() and 4 <= len(text) <= 10)
+
+
 def _is_internal_only_path(path: str) -> bool:
     return any(pattern.match(path) for pattern in _INTERNAL_ONLY_PATTERNS)
 
@@ -170,6 +176,24 @@ def _build_access_sms_body(*, raw_token: str) -> str:
         "Backfill: your dashboard access link is ready. "
         f"Open {link} within {settings.backfill_dashboard_access_request_ttl_minutes} minutes."
     )
+
+
+async def _resolve_phone_access(
+    db: aiosqlite.Connection,
+    phone: str,
+) -> tuple[Optional[int], list[int]]:
+    locations = await queries.list_locations_by_contact_phone(db, phone)
+    organizations = await queries.list_organizations_by_contact_phone(db, phone)
+
+    location_ids = sorted({int(location["id"]) for location in locations})
+    organization_ids = {
+        int(location["organization_id"])
+        for location in locations
+        if location.get("organization_id") is not None
+    }
+    organization_ids.update(int(item["id"]) for item in organizations)
+    organization_id = next(iter(organization_ids)) if len(organization_ids) == 1 else None
+    return organization_id, location_ids
 
 
 def _request_principal(request: Request) -> Optional[AuthPrincipal]:
@@ -210,17 +234,38 @@ async def _authenticate_request(
         if session_token:
             session = await queries.get_dashboard_session_by_token_hash(db, _hash_token(session_token))
             if session is not None and session.get("status") == "active" and not _is_expired(session.get("expires_at")):
+                organization_id = session.get("organization_id")
+                location_ids = [int(value) for value in session.get("location_ids_json") or []]
+                subject_phone = session.get("subject_phone")
+                refresh_updates: dict[str, object] = {
+                    "last_seen_at": datetime.utcnow().isoformat(),
+                }
+
+                if subject_phone and organization_id is None and not location_ids:
+                    refreshed_org_id, refreshed_location_ids = await _resolve_phone_access(
+                        db,
+                        subject_phone,
+                    )
+                    if refreshed_org_id != organization_id or refreshed_location_ids != location_ids:
+                        organization_id = refreshed_org_id
+                        location_ids = refreshed_location_ids
+                        refresh_updates["organization_id"] = organization_id
+                        refresh_updates["location_ids_json"] = location_ids
+
+                refresh_updates["expires_at"] = _expires_at(
+                    hours=settings.backfill_dashboard_session_ttl_hours
+                )
                 await queries.update_dashboard_session(
                     db,
                     int(session["id"]),
-                    {"last_seen_at": datetime.utcnow().isoformat()},
+                    refresh_updates,
                 )
                 return AuthPrincipal(
                     principal_type="session",
-                    organization_id=session.get("organization_id"),
-                    location_ids=[int(value) for value in session.get("location_ids_json") or []],
+                    organization_id=organization_id,
+                    location_ids=location_ids,
                     session_id=int(session["id"]),
-                    subject_phone=session.get("subject_phone"),
+                    subject_phone=subject_phone,
                 )
 
     setup_token = _trim_text(request.headers.get("x-backfill-setup-token"))
@@ -358,13 +403,15 @@ async def require_dashboard_session(
     request: Request,
     db: aiosqlite.Connection = Depends(get_db),
 ) -> AuthPrincipal:
-    if not settings.backfill_dashboard_auth_required:
-        return AuthPrincipal(principal_type="internal")
     principal = _request_principal(request)
     if principal is None:
         principal = await _authenticate_request(request, db)
         if principal is not None:
             request.state.backfill_principal = principal
+    if principal is not None and principal.is_session:
+        return principal
+    if not settings.backfill_dashboard_auth_required:
+        return AuthPrincipal(principal_type="internal")
     if principal is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     if not principal.is_session:
@@ -380,6 +427,61 @@ async def ensure_location_access(
     await _ensure_location_access(db, principal, location_id)
 
 
+async def refresh_dashboard_session_access(
+    db: aiosqlite.Connection,
+    principal: AuthPrincipal,
+) -> AuthPrincipal:
+    if not principal.is_session or principal.session_id is None or not principal.subject_phone:
+        return principal
+
+    organization_id, location_ids = await _resolve_phone_access(db, principal.subject_phone)
+    if organization_id == principal.organization_id and location_ids == principal.location_ids:
+        return principal
+
+    await queries.update_dashboard_session(
+        db,
+        principal.session_id,
+        {
+            "organization_id": organization_id,
+            "location_ids_json": location_ids,
+        },
+    )
+    principal.organization_id = organization_id
+    principal.location_ids = location_ids
+    return principal
+
+
+async def _create_dashboard_session(
+    db: aiosqlite.Connection,
+    *,
+    phone: str,
+    organization_id: Optional[int],
+    location_ids: list[int],
+    access_request_id: Optional[int],
+) -> tuple[str, AuthPrincipal]:
+    session_token = _new_raw_token("bfsess")
+    session_id = await queries.insert_dashboard_session(
+        db,
+        {
+            "organization_id": organization_id,
+            "location_ids_json": location_ids,
+            "subject_phone": phone,
+            "session_token_hash": _hash_token(session_token),
+            "access_request_id": access_request_id,
+            "expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours),
+            "last_seen_at": datetime.utcnow().isoformat(),
+        },
+    )
+    principal = AuthPrincipal(
+        principal_type="session",
+        organization_id=organization_id,
+        location_ids=location_ids,
+        session_id=session_id,
+        subject_phone=phone,
+    )
+    return session_token, principal
+
+
 async def request_dashboard_access(
     db: aiosqlite.Connection,
     *,
@@ -389,46 +491,115 @@ async def request_dashboard_access(
     if normalized_phone is None:
         raise ValueError("Phone number must be a valid mobile number")
 
-    locations = await queries.list_locations_by_contact_phone(db, normalized_phone)
-    organizations = await queries.list_organizations_by_contact_phone(db, normalized_phone)
-    if not locations and not organizations:
-        raise ValueError("No dashboard access is configured for that phone number")
+    organization_id, location_ids = await _resolve_phone_access(db, normalized_phone)
+    await queries.supersede_pending_dashboard_access_requests_for_phone(db, normalized_phone)
 
-    location_ids = sorted({int(location["id"]) for location in locations})
-    organization_ids = {
-        int(location["organization_id"])
-        for location in locations
-        if location.get("organization_id") is not None
-    }
-    organization_ids.update(int(item["id"]) for item in organizations)
-    if len(organization_ids) > 1:
-        raise ValueError("Phone number is linked to multiple organizations; contact support to finish setup")
-    organization_id = next(iter(organization_ids)) if organization_ids else None
-
-    raw_token = _new_raw_token("bflink")
+    try:
+        verification = messaging.send_sms_verification(normalized_phone)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Could not send verification code") from exc
     request_id = await queries.insert_dashboard_access_request(
         db,
         {
             "phone": normalized_phone,
             "organization_id": organization_id,
             "location_ids_json": location_ids,
-            "token_hash": _hash_token(raw_token),
+            "token_hash": _hash_token(_new_raw_token("bfreq")),
+            "verification_sid": verification.get("sid"),
+            "channel": verification.get("channel") or "sms",
             "expires_at": _expires_at(minutes=settings.backfill_dashboard_access_request_ttl_minutes),
             "requested_at": datetime.utcnow().isoformat(),
         },
-    )
-    message_sid = messaging.send_sms(
-        normalized_phone,
-        _build_access_sms_body(raw_token=raw_token),
     )
     return {
         "request_id": request_id,
         "destination": _mask_phone(normalized_phone),
         "expires_at": _expires_at(minutes=settings.backfill_dashboard_access_request_ttl_minutes),
-        "message_sid": message_sid,
-        "organization_id": organization_id,
-        "location_ids": location_ids,
+        "message_sid": verification.get("sid"),
+        "organization_id": None,
+        "location_ids": [],
+        "channel": verification.get("channel") or "sms",
     }
+
+
+async def verify_dashboard_access_code(
+    db: aiosqlite.Connection,
+    *,
+    request_id: int,
+    code: str,
+) -> tuple[str, AuthPrincipal]:
+    if not _is_valid_otp_code(code):
+        raise ValueError("Verification code must be 4 to 10 digits")
+
+    access_request = await queries.get_dashboard_access_request(db, request_id)
+    if access_request is None:
+        raise ValueError("Verification request not found")
+    if access_request.get("status") != "pending" or _is_expired(access_request.get("expires_at")):
+        raise ValueError("Verification code has expired")
+    if int(access_request.get("check_count") or 0) >= settings.backfill_dashboard_access_max_attempts:
+        await queries.update_dashboard_access_request(
+            db,
+            request_id,
+            {
+                "status": "blocked",
+                "last_check_at": datetime.utcnow().isoformat(),
+            },
+        )
+        raise ValueError("Too many verification attempts. Request a new code.")
+
+    try:
+        verification_check = messaging.check_sms_verification(
+            access_request["phone"],
+            code,
+        )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Could not verify code") from exc
+    status = str(verification_check.get("status") or "").lower()
+    approved = bool(verification_check.get("valid")) or status == "approved"
+
+    if not approved:
+        check_count = int(access_request.get("check_count") or 0) + 1
+        update_payload: dict[str, object] = {
+            "check_count": check_count,
+            "last_check_at": datetime.utcnow().isoformat(),
+        }
+        if check_count >= settings.backfill_dashboard_access_max_attempts:
+            update_payload["status"] = "blocked"
+        await queries.update_dashboard_access_request(
+            db,
+            request_id,
+            update_payload,
+        )
+        if check_count >= settings.backfill_dashboard_access_max_attempts:
+            raise ValueError("Too many verification attempts. Request a new code.")
+        raise ValueError("Invalid verification code")
+
+    organization_id, location_ids = await _resolve_phone_access(db, access_request["phone"])
+    session_token, principal = await _create_dashboard_session(
+        db,
+        phone=access_request["phone"],
+        organization_id=organization_id,
+        location_ids=location_ids,
+        access_request_id=int(access_request["id"]),
+    )
+    await queries.update_dashboard_access_request(
+        db,
+        int(access_request["id"]),
+        {
+            "organization_id": organization_id,
+            "location_ids_json": location_ids,
+            "status": "used",
+            "used_at": datetime.utcnow().isoformat(),
+            "verified_at": datetime.utcnow().isoformat(),
+            "last_check_at": datetime.utcnow().isoformat(),
+            "check_count": int(access_request.get("check_count") or 0) + 1,
+        },
+    )
+    return session_token, principal
 
 
 async def exchange_dashboard_access_token(
@@ -445,18 +616,12 @@ async def exchange_dashboard_access_token(
     if access_request.get("status") != "pending" or _is_expired(access_request.get("expires_at")):
         raise ValueError("Access link has expired")
 
-    session_token = _new_raw_token("bfsess")
-    session_id = await queries.insert_dashboard_session(
+    session_token, principal = await _create_dashboard_session(
         db,
-        {
-            "organization_id": access_request.get("organization_id"),
-            "location_ids_json": access_request.get("location_ids_json") or [],
-            "subject_phone": access_request["phone"],
-            "session_token_hash": _hash_token(session_token),
-            "access_request_id": access_request["id"],
-            "expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours),
-            "last_seen_at": datetime.utcnow().isoformat(),
-        },
+        phone=access_request["phone"],
+        organization_id=access_request.get("organization_id"),
+        location_ids=[int(value) for value in access_request.get("location_ids_json") or []],
+        access_request_id=int(access_request["id"]),
     )
     await queries.update_dashboard_access_request(
         db,
@@ -464,14 +629,8 @@ async def exchange_dashboard_access_token(
         {
             "status": "used",
             "used_at": datetime.utcnow().isoformat(),
+            "verified_at": datetime.utcnow().isoformat(),
         },
-    )
-    principal = AuthPrincipal(
-        principal_type="session",
-        organization_id=access_request.get("organization_id"),
-        location_ids=[int(value) for value in access_request.get("location_ids_json") or []],
-        session_id=session_id,
-        subject_phone=access_request.get("phone"),
     )
     return session_token, principal
 
@@ -493,6 +652,7 @@ async def build_auth_response_payload(
     db: aiosqlite.Connection,
     principal: AuthPrincipal,
 ) -> dict:
+    principal = await refresh_dashboard_session_access(db, principal)
     organization = (
         await queries.get_organization(db, principal.organization_id)
         if principal.organization_id is not None
@@ -516,6 +676,10 @@ async def build_auth_response_payload(
         "principal_type": principal.principal_type,
         "session_id": principal.session_id,
         "subject_phone": principal.subject_phone,
+        "session_expires_at": _expires_at(hours=settings.backfill_dashboard_session_ttl_hours)
+        if principal.is_session
+        else None,
+        "onboarding_required": not accessible_locations,
         "organization": organization,
         "location_ids": principal.location_ids,
         "locations": accessible_locations,

@@ -32,6 +32,7 @@ class Settings:
     # Twilio
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    twilio_verify_service_sid: str = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "")
     backfill_phone_number: str = os.environ.get("BACKFILL_PHONE_NUMBER", "+18002225345")
 
     # Backend
@@ -41,7 +42,7 @@ class Settings:
     backfill_internal_api_key: str = os.environ.get("BACKFILL_INTERNAL_API_KEY", "")
     backfill_dashboard_auth_required: bool = os.environ.get(
         "BACKFILL_DASHBOARD_AUTH_REQUIRED",
-        "0",
+        "1",
     ).strip().lower() in {"1", "true", "yes", "on"}
     backfill_ai_provider: str = os.environ.get("BACKFILL_AI_PROVIDER", "rules")
     backfill_ai_model: str = os.environ.get("BACKFILL_AI_MODEL", "rules-v1")
@@ -107,10 +108,13 @@ class Settings:
         if value.strip()
     ]
     backfill_dashboard_session_ttl_hours: int = int(
-        os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "24")
+        os.environ.get("BACKFILL_DASHBOARD_SESSION_TTL_HOURS", "720")
     )
     backfill_dashboard_access_request_ttl_minutes: int = int(
-        os.environ.get("BACKFILL_DASHBOARD_ACCESS_REQUEST_TTL_MINUTES", "20")
+        os.environ.get("BACKFILL_DASHBOARD_ACCESS_REQUEST_TTL_MINUTES", "10")
+    )
+    backfill_dashboard_access_max_attempts: int = int(
+        os.environ.get("BACKFILL_DASHBOARD_ACCESS_MAX_ATTEMPTS", "5")
     )
     backfill_setup_access_ttl_hours: int = int(
         os.environ.get("BACKFILL_SETUP_ACCESS_TTL_HOURS", "72")
