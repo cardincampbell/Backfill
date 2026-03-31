@@ -138,10 +138,11 @@ async def list_organizations_by_contact_phone(
 
 
 async def insert_organization(db: aiosqlite.Connection, data: dict) -> int:
+    now = datetime.utcnow().isoformat()
     cur = await db.execute(
         """INSERT INTO organizations
-           (name, vertical, contact_name, contact_phone, contact_email, location_count_estimate)
-           VALUES (?,?,?,?,?,?)""",
+           (name, vertical, contact_name, contact_phone, contact_email, location_count_estimate, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (
             data["name"],
             data.get("vertical"),
@@ -149,6 +150,8 @@ async def insert_organization(db: aiosqlite.Connection, data: dict) -> int:
             data.get("contact_phone"),
             data.get("contact_email"),
             data.get("location_count_estimate"),
+            data.get("created_at", now),
+            data.get("updated_at", now),
         ),
     )
     await db.commit()
@@ -173,6 +176,7 @@ async def update_organization(db: aiosqlite.Connection, organization_id: int, da
     updates = {k: v for k, v in data.items() if k in allowed}
     if not updates:
         return
+    updates["updated_at"] = datetime.utcnow().isoformat()
     cols = ", ".join(f"{key}=?" for key in updates)
     await db.execute(
         f"UPDATE organizations SET {cols} WHERE id=?",
@@ -212,6 +216,7 @@ async def list_locations_by_contact_phone(db: aiosqlite.Connection, phone: str) 
 
 async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("locations", data)
+    now = datetime.utcnow().isoformat()
     cur = await db.execute(
         f"""INSERT INTO {_LOCATION_TABLE}
            (name, organization_id, vertical, address, place_inferred_vertical,
@@ -233,7 +238,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             coverage_requires_manager_approval,
             late_arrival_policy, missed_check_in_policy, timezone, operating_mode,
             onboarding_info,
-            agency_supply_approved, preferred_agency_partners)
+            agency_supply_approved, preferred_agency_partners, created_at, updated_at)
            VALUES (:name,:organization_id,:vertical,:address,:place_inferred_vertical,
                    :place_provider,:place_id,:place_resource_name,:place_display_name,:place_brand_name,:place_location_label,
                    :place_formatted_address,:place_primary_type,:place_primary_type_display_name,:place_business_status,
@@ -252,7 +257,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
                    :backfill_shifts_launch_state,:backfill_shifts_beta_eligible,:coverage_requires_manager_approval,
                    :late_arrival_policy,:missed_check_in_policy,:timezone,:operating_mode,
                    :onboarding_info,
-                   :agency_supply_approved,:preferred_agency_partners)""",
+                   :agency_supply_approved,:preferred_agency_partners,:created_at,:updated_at)""",
         {
             "name": d.get("name"),
             "organization_id": d.get("organization_id"),
@@ -320,6 +325,8 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             "onboarding_info": d.get("onboarding_info"),
             "agency_supply_approved": int(d.get("agency_supply_approved", False)),
             "preferred_agency_partners": d.get("preferred_agency_partners", "[]"),
+            "created_at": d.get("created_at", now),
+            "updated_at": d.get("updated_at", now),
         },
     )
     await db.commit()
@@ -405,6 +412,7 @@ async def update_location(db: aiosqlite.Connection, location_id: int, data: dict
     if not updates:
         return
     encoded = _encode_json("locations", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
     if "agency_supply_approved" in encoded:
         encoded["agency_supply_approved"] = int(bool(encoded["agency_supply_approved"]))
     if "writeback_enabled" in encoded:
@@ -497,6 +505,7 @@ async def list_workers(db: aiosqlite.Connection, location_id: Optional[int] = No
 
 async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("workers", data)
+    now = datetime.utcnow().isoformat()
     name = d["name"]
     first_name = d.get("first_name")
     last_name = d.get("last_name")
@@ -525,12 +534,12 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
             priority_rank, location_id, location_assignments, locations_worked, source,
             source_id, employment_status, max_hours_per_week,
             sms_consent_status, voice_consent_status, consent_text_version,
-            consent_timestamp, consent_channel)
+            consent_timestamp, consent_channel, created_at, updated_at)
            VALUES (:name,:first_name,:last_name,:phone,:email,:worker_type,:preferred_channel,:roles,:certifications,
                    :priority_rank,:location_id,:location_assignments,:locations_worked,:source,
                    :source_id,:employment_status,:max_hours_per_week,
                    :sms_consent_status,:voice_consent_status,:consent_text_version,
-                   :consent_timestamp,:consent_channel)""",
+                   :consent_timestamp,:consent_channel,:created_at,:updated_at)""",
         {
             "name": name,
             "first_name": first_name,
@@ -554,6 +563,8 @@ async def insert_worker(db: aiosqlite.Connection, data: dict) -> int:
             "consent_text_version": d.get("consent_text_version"),
             "consent_timestamp": d.get("consent_timestamp"),
             "consent_channel": d.get("consent_channel"),
+            "created_at": d.get("created_at", now),
+            "updated_at": d.get("updated_at", now),
         },
     )
     await db.commit()
@@ -611,6 +622,7 @@ async def update_worker(db: aiosqlite.Connection, worker_id: int, data: dict) ->
     if not updates:
         return
     encoded = _encode_json("workers", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
     cols = ", ".join(f"{key}=?" for key in encoded)
     await db.execute(
         f"UPDATE workers SET {cols} WHERE id=?",
@@ -653,9 +665,17 @@ async def update_worker_consent(
     await db.execute(
         """UPDATE workers SET
            sms_consent_status=?, voice_consent_status=?,
-           consent_text_version=?, consent_timestamp=?, consent_channel=?
+           consent_text_version=?, consent_timestamp=?, consent_channel=?, updated_at=?
            WHERE id=?""",
-        (sms_status, voice_status, version, datetime.utcnow().isoformat(), channel, worker_id),
+        (
+            sms_status,
+            voice_status,
+            version,
+            datetime.utcnow().isoformat(),
+            channel,
+            datetime.utcnow().isoformat(),
+            worker_id,
+        ),
     )
     await db.commit()
 
@@ -666,9 +686,9 @@ async def record_opt_out(
     await db.execute(
         """UPDATE workers SET
            sms_consent_status='revoked', voice_consent_status='revoked',
-           opt_out_timestamp=?, opt_out_channel=?
+           opt_out_timestamp=?, opt_out_channel=?, updated_at=?
            WHERE id=?""",
-        (datetime.utcnow().isoformat(), channel, worker_id),
+        (datetime.utcnow().isoformat(), channel, datetime.utcnow().isoformat(), worker_id),
     )
     await db.commit()
 
@@ -683,18 +703,19 @@ async def get_shift(db: aiosqlite.Connection, shift_id: int) -> Optional[dict]:
 
 async def insert_shift(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("shifts", data)
+    now = datetime.utcnow().isoformat()
     cur = await db.execute(
         """INSERT INTO shifts
            (location_id, schedule_id, scheduling_platform_id, role, date, start_time, end_time, spans_midnight, pay_rate,
             requirements, status, source_platform, shift_label, notes, published_state, escalated_from_worker_id, reminder_sent_at,
             confirmation_requested_at, worker_confirmed_at, worker_declined_at, confirmation_escalated_at,
             check_in_requested_at, checked_in_at, late_reported_at, late_eta_minutes, check_in_escalated_at,
-            attendance_action_state, attendance_action_updated_at)
+            attendance_action_state, attendance_action_updated_at, created_at, updated_at)
            VALUES (:location_id,:schedule_id,:scheduling_platform_id,:role,:date,:start_time,:end_time,:spans_midnight,:pay_rate,
                    :requirements,:status,:source_platform,:shift_label,:notes,:published_state,:escalated_from_worker_id,:reminder_sent_at,
                    :confirmation_requested_at,:worker_confirmed_at,:worker_declined_at,:confirmation_escalated_at,
                    :check_in_requested_at,:checked_in_at,:late_reported_at,:late_eta_minutes,:check_in_escalated_at,
-                   :attendance_action_state,:attendance_action_updated_at)""",
+                   :attendance_action_state,:attendance_action_updated_at,:created_at,:updated_at)""",
         {
             "location_id": d.get("location_id"),
             "schedule_id": d.get("schedule_id"),
@@ -724,6 +745,8 @@ async def insert_shift(db: aiosqlite.Connection, data: dict) -> int:
             "check_in_escalated_at": d.get("check_in_escalated_at"),
             "attendance_action_state": d.get("attendance_action_state"),
             "attendance_action_updated_at": d.get("attendance_action_updated_at"),
+            "created_at": d.get("created_at", now),
+            "updated_at": d.get("updated_at", now),
         },
     )
     await db.commit()
@@ -811,6 +834,7 @@ async def update_shift(db: aiosqlite.Connection, shift_id: int, data: dict) -> N
         key: str(value) if key in {"date", "start_time", "end_time"} and value is not None else value
         for key, value in encoded.items()
     }
+    normalized["updated_at"] = datetime.utcnow().isoformat()
     if "spans_midnight" in normalized:
         normalized["spans_midnight"] = int(bool(normalized["spans_midnight"]))
     cols = ", ".join(f"{key}=?" for key in normalized)
@@ -831,8 +855,9 @@ async def update_shift_status(
 ) -> None:
     await db.execute(
         """UPDATE shifts SET status=?, filled_by=?, fill_tier=?, called_out_by=?
+           , updated_at=?
            WHERE id=?""",
-        (status, filled_by, fill_tier, called_out_by, shift_id),
+        (status, filled_by, fill_tier, called_out_by, datetime.utcnow().isoformat(), shift_id),
     )
     await db.commit()
 
@@ -1525,9 +1550,10 @@ async def insert_cascade(
     shift_id: int,
     outreach_mode: str = "cascade",
 ) -> int:
+    now = datetime.utcnow().isoformat()
     cur = await db.execute(
-        "INSERT INTO cascades (shift_id, outreach_mode) VALUES (?, ?)",
-        (shift_id, outreach_mode),
+        "INSERT INTO cascades (shift_id, outreach_mode, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (shift_id, outreach_mode, now, now),
     )
     await db.commit()
     return cur.lastrowid
@@ -1550,6 +1576,7 @@ async def update_cascade(db: aiosqlite.Connection, cascade_id: int, **kwargs: An
     if not updates:
         return
     encoded = _encode_json("cascades", updates)
+    encoded["updated_at"] = datetime.utcnow().isoformat()
     cols = ", ".join(f"{k}=?" for k in encoded)
     await db.execute(
         f"UPDATE cascades SET {cols} WHERE id=?", (*encoded.values(), cascade_id)
@@ -1684,11 +1711,12 @@ async def get_outreach_attempt(db: aiosqlite.Connection, attempt_id: int) -> Opt
 
 
 async def insert_outreach_attempt(db: aiosqlite.Connection, data: dict) -> int:
+    now = datetime.utcnow().isoformat()
     cur = await db.execute(
         """INSERT INTO outreach_attempts
            (cascade_id, worker_id, tier, channel, status, outcome, standby_position,
-            promoted_at, sent_at, responded_at, conversation_summary)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            promoted_at, sent_at, responded_at, conversation_summary, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data["cascade_id"],
             data["worker_id"],
@@ -1698,9 +1726,11 @@ async def insert_outreach_attempt(db: aiosqlite.Connection, data: dict) -> int:
             data.get("outcome"),
             data.get("standby_position"),
             data.get("promoted_at"),
-            data.get("sent_at", datetime.utcnow().isoformat()),
+            data.get("sent_at", now),
             data.get("responded_at"),
             data.get("conversation_summary"),
+            data.get("created_at", now),
+            data.get("updated_at", now),
         ),
     )
     await db.commit()
@@ -1724,6 +1754,7 @@ async def update_outreach_attempt(
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
+    updates["updated_at"] = datetime.utcnow().isoformat()
     cols = ", ".join(f"{key}=?" for key in updates)
     await db.execute(
         f"UPDATE outreach_attempts SET {cols} WHERE id=?",

@@ -65,5 +65,7 @@ class Shift(ShiftCreate):
     check_in_escalated_at: Optional[str] = None
     attendance_action_state: Optional[str] = None
     attendance_action_updated_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

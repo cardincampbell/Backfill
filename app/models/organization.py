@@ -16,5 +16,7 @@ class OrganizationCreate(BaseModel):
 
 class Organization(OrganizationCreate):
     id: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

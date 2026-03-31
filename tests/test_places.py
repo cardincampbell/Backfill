@@ -73,9 +73,23 @@ async def test_autocomplete_places_uses_text_search_for_address_queries(monkeypa
             },
         ),
         _FakeResponse(
-            "https://places.googleapis.com/v1/places:searchText",
+            "https://places.googleapis.com/v1/places:searchNearby",
             {
                 "places": [
+                    {
+                        "id": "place-999",
+                        "name": "places/place-999",
+                        "displayName": {"text": "Other Nearby Business"},
+                        "formattedAddress": "227 Lincoln Blvd, Venice, CA 90291, USA",
+                        "location": {"latitude": 33.9901, "longitude": -118.4702},
+                        "primaryType": "restaurant",
+                        "primaryTypeDisplayName": {"text": "Restaurant"},
+                        "addressComponents": [
+                            {"longText": "Venice", "shortText": "Venice", "types": ["neighborhood"]},
+                            {"longText": "Los Angeles", "shortText": "Los Angeles", "types": ["locality"]},
+                            {"longText": "CA", "shortText": "CA", "types": ["administrative_area_level_1"]},
+                        ],
+                    },
                     {
                         "id": "place-123",
                         "name": "places/place-123",
@@ -114,6 +128,7 @@ async def test_autocomplete_places_uses_text_search_for_address_queries(monkeypa
     assert calls[1][2]["rankPreference"] == "DISTANCE"
     assert calls[1][2]["locationBias"]["circle"]["radius"] == 50000
     assert calls[2][0].endswith("places:searchNearby")
+    assert "grocery_store" in calls[2][2]["includedTypes"]
     assert calls[2][2]["locationRestriction"]["circle"]["radius"] == 500.0
 
 
@@ -179,3 +194,78 @@ async def test_autocomplete_places_prioritizes_local_text_search_results(monkeyp
     assert payload["provider"] == "google"
     assert [item["place_id"] for item in payload["suggestions"]] == ["local-1"]
     assert calls[1][2]["textQuery"] == "whole foods"
+
+
+@pytest.mark.asyncio
+async def test_autocomplete_places_prioritizes_same_street_number_business(monkeypatch):
+    monkeypatch.setattr(settings, "google_places_api_key", "test-google-key")
+    monkeypatch.setattr(settings, "backfill_google_places_enabled", True)
+
+    calls = []
+    responses = [
+        _FakeResponse(
+            "https://places.googleapis.com/v1/places:autocomplete",
+            {"suggestions": []},
+        ),
+        _FakeResponse(
+            "https://places.googleapis.com/v1/places:searchText",
+            {
+                "places": [
+                    {
+                        "id": "addr-777",
+                        "name": "places/addr-777",
+                        "displayName": {"text": "21347 Ventura Blvd"},
+                        "formattedAddress": "21347 Ventura Blvd, Woodland Hills, CA 91364, USA",
+                        "location": {"latitude": 34.1688, "longitude": -118.5895},
+                        "primaryType": "street_address",
+                        "primaryTypeDisplayName": {"text": "Street Address"},
+                        "addressComponents": [
+                            {"longText": "Woodland Hills", "shortText": "Woodland Hills", "types": ["locality"]},
+                            {"longText": "CA", "shortText": "CA", "types": ["administrative_area_level_1"]},
+                        ],
+                    }
+                ]
+            },
+        ),
+        _FakeResponse(
+            "https://places.googleapis.com/v1/places:searchNearby",
+            {
+                "places": [
+                    {
+                        "id": "other-1",
+                        "name": "places/other-1",
+                        "displayName": {"text": "Coffee Spot"},
+                        "formattedAddress": "21345 Ventura Blvd, Woodland Hills, CA 91364, USA",
+                        "location": {"latitude": 34.16881, "longitude": -118.58949},
+                        "primaryType": "cafe",
+                        "primaryTypeDisplayName": {"text": "Cafe"},
+                        "addressComponents": [],
+                    },
+                    {
+                        "id": "wholefoods-1",
+                        "name": "places/wholefoods-1",
+                        "displayName": {"text": "Whole Foods Market"},
+                        "formattedAddress": "21347 Ventura Blvd, Woodland Hills, CA 91364, USA",
+                        "location": {"latitude": 34.16882, "longitude": -118.58948},
+                        "primaryType": "grocery_store",
+                        "primaryTypeDisplayName": {"text": "Grocery Store"},
+                        "addressComponents": [],
+                    },
+                ]
+            },
+        ),
+    ]
+    monkeypatch.setattr(
+        places_svc.httpx,
+        "AsyncClient",
+        lambda timeout=6.0: _FakeAsyncClient(responses, calls),
+    )
+
+    payload = await places_svc.autocomplete_places(
+        "21347 Ventura Blvd, Woodland Hills",
+        latitude=34.1688,
+        longitude=-118.5895,
+        radius_meters=50000,
+    )
+
+    assert payload["suggestions"][0]["place_id"] == "wholefoods-1"

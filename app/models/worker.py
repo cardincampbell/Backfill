@@ -71,5 +71,7 @@ class Worker(WorkerCreate):
     show_up_rate: Optional[float] = None
     rating: Optional[float] = None
     total_shifts_filled: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)

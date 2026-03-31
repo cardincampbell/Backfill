@@ -219,6 +219,8 @@ def test_location_create_persists_place_profile(client):
     assert payload["place_primary_type"] == "grocery_store"
     assert payload["place_types"] == ["grocery_store", "food", "point_of_interest"]
     assert payload["place_metadata"]["source"] == "google"
+    assert payload["created_at"]
+    assert payload["updated_at"]
 
     fetched = client.get(f"/api/locations/{payload['id']}")
     assert fetched.status_code == 200
@@ -227,6 +229,8 @@ def test_location_create_persists_place_profile(client):
     assert fetched_payload["place_state_region"] == "CA"
     assert fetched_payload["place_google_maps_uri"] == "https://maps.google.com/?cid=123"
     assert fetched_payload["place_inferred_vertical"] == "retail"
+    assert fetched_payload["created_at"]
+    assert fetched_payload["updated_at"]
 
 
 def test_location_create_preserves_explicit_vertical_over_place_inference(client):
@@ -2011,6 +2015,10 @@ def test_native_lite_read_update_export_and_dashboard(client):
         },
     ).json()
     shift = client.post("/api/shifts", json=_make_shift_payload(location_id)).json()
+    assert worker["created_at"]
+    assert worker["updated_at"]
+    assert shift["created_at"]
+    assert shift["updated_at"]
 
     updated_worker = client.patch(
         f"/api/workers/{worker['id']}",

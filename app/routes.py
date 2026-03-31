@@ -3116,13 +3116,10 @@ async def create_shift(
             raise HTTPException(status_code=400, detail="location_id is required")
         await auth_svc.ensure_location_access(db, principal, int(location_id))
     sid = await queries.insert_shift(db, data)
-    return {
-        **data,
-        "id": sid,
-        "called_out_by": None,
-        "filled_by": None,
-        "fill_tier": None,
-    }
+    created = await queries.get_shift(db, sid)
+    if created is None:
+        raise HTTPException(status_code=404, detail="Shift not found")
+    return created
 
 
 @router.get("/shifts", response_model=List[Shift])

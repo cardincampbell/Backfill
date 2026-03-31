@@ -13,6 +13,26 @@ _NEARBY_SEARCH_URL = "https://places.googleapis.com/v1/places:searchNearby"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 _MAX_GOOGLE_SUGGESTIONS = 8
 _NEARBY_ADDRESS_SEARCH_RADIUS_METERS = 500.0
+_NEARBY_BUSINESS_TYPES = [
+    "corporate_office",
+    "restaurant",
+    "cafe",
+    "bakery",
+    "bar",
+    "coffee_shop",
+    "meal_takeaway",
+    "grocery_store",
+    "shopping_mall",
+    "department_store",
+    "pharmacy",
+    "hospital",
+    "doctor",
+    "dentist",
+    "drugstore",
+    "bank",
+    "gas_station",
+    "hotel",
+]
 _ADDRESS_HINTS = (
     "st",
     "street",
@@ -306,6 +326,36 @@ def _is_address_like_suggestion(suggestion: dict[str, Any]) -> bool:
     return bool(name) and name[0].isdigit()
 
 
+def _extract_street_number(text: str | None) -> str | None:
+    value = (text or "").strip()
+    if not value:
+        return None
+    match = re.match(r"^\s*(\d+[A-Za-z]?)\b", value)
+    if not match:
+        return None
+    return match.group(1).lower()
+
+
+def _prioritize_same_street_number(
+    query: str,
+    suggestions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    expected_number = _extract_street_number(query)
+    if not expected_number:
+        return suggestions
+    exact_matches: list[dict[str, Any]] = []
+    others: list[dict[str, Any]] = []
+    for suggestion in suggestions:
+        candidate_number = _extract_street_number(
+            suggestion.get("formatted_address") or suggestion.get("name")
+        )
+        if candidate_number == expected_number:
+            exact_matches.append(suggestion)
+        else:
+            others.append(suggestion)
+    return exact_matches + others
+
+
 def _filter_local_suggestions(
     suggestions: list[dict[str, Any]],
     *,
@@ -444,6 +494,7 @@ async def _run_nearby_search(
         "regionCode": settings.google_places_region_code,
         "maxResultCount": max_result_count,
         "rankPreference": "DISTANCE",
+        "includedTypes": _NEARBY_BUSINESS_TYPES,
         "locationRestriction": {
             "circle": {
                 "center": {
@@ -635,6 +686,10 @@ async def autocomplete_places(
                             for suggestion in nearby_results
                             if not _is_address_like_suggestion(suggestion)
                         ]
+                        nearby_business_suggestions = _prioritize_same_street_number(
+                            normalized,
+                            nearby_business_suggestions,
+                        )
                     except httpx.HTTPError:
                         nearby_business_suggestions = []
                 text_search_suggestions = _dedupe_suggestions(

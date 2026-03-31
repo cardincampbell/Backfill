@@ -1,5 +1,6 @@
 import aiosqlite
 from pathlib import Path
+from datetime import datetime
 from app.config import settings
 
 DB_PATH = Path(settings.database_url)
@@ -30,7 +31,9 @@ async def init_db():
                 contact_name  TEXT,
                 contact_phone TEXT,
                 contact_email TEXT,
-                location_count_estimate INTEGER
+                location_count_estimate INTEGER,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
             )
         """)
 
@@ -100,7 +103,9 @@ async def init_db():
                 missed_check_in_policy  TEXT NOT NULL DEFAULT 'start_coverage',
                 onboarding_info           TEXT,
                 agency_supply_approved    INTEGER NOT NULL DEFAULT 0,
-                preferred_agency_partners TEXT NOT NULL DEFAULT '[]'
+                preferred_agency_partners TEXT NOT NULL DEFAULT '[]',
+                created_at                TEXT NOT NULL,
+                updated_at                TEXT NOT NULL
             )
         """)
 
@@ -131,7 +136,9 @@ async def init_db():
                 consent_timestamp     TEXT,
                 consent_channel       TEXT,
                 opt_out_timestamp     TEXT,
-                opt_out_channel       TEXT
+                opt_out_channel       TEXT,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL
             )
         """)
 
@@ -164,7 +171,9 @@ async def init_db():
                 check_in_escalated_at TEXT,
                 attendance_action_state TEXT,
                 attendance_action_updated_at TEXT,
-                source_platform TEXT NOT NULL DEFAULT 'backfill_native'
+                source_platform TEXT NOT NULL DEFAULT 'backfill_native',
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
             )
         """)
 
@@ -181,7 +190,9 @@ async def init_db():
                 pending_claim_worker_id INTEGER REFERENCES workers(id),
                 pending_claim_at      TEXT,
                 standby_queue         TEXT NOT NULL DEFAULT '[]',
-                manager_approved_tier3 INTEGER NOT NULL DEFAULT 0
+                manager_approved_tier3 INTEGER NOT NULL DEFAULT 0,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL
             )
         """)
 
@@ -198,7 +209,9 @@ async def init_db():
                 promoted_at          TEXT,
                 sent_at              TEXT,
                 responded_at         TEXT,
-                conversation_summary TEXT
+                conversation_summary TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL
             )
         """)
         await db.execute("""
@@ -241,6 +254,7 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_retell_conversations_worker
             ON retell_conversations(worker_id, id DESC)
         """)
+        await _ensure_legacy_timestamps(db)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS app_state (
                 key        TEXT PRIMARY KEY,
@@ -1405,4 +1419,28 @@ async def _normalize_location_json_fields(db: aiosqlite.Connection) -> None:
                 place_plus_code = COALESCE(NULLIF(place_plus_code, ''), '{}'),
                 place_metadata = COALESCE(NULLIF(place_metadata, ''), '{}')
             """
+        )
+
+
+async def _ensure_legacy_timestamps(db: aiosqlite.Connection) -> None:
+    tables = [
+        "organizations",
+        "locations",
+        "workers",
+        "shifts",
+        "cascades",
+        "outreach_attempts",
+    ]
+    now = datetime.utcnow().isoformat()
+    for table_name in tables:
+        await _ensure_column(db, table_name, "created_at", "TEXT")
+        await _ensure_column(db, table_name, "updated_at", "TEXT")
+        await db.execute(
+            f"""
+            UPDATE "{table_name}"
+            SET created_at = COALESCE(created_at, ?),
+                updated_at = COALESCE(updated_at, created_at, ?)
+            WHERE created_at IS NULL OR updated_at IS NULL
+            """,
+            (now, now),
         )
