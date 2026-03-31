@@ -66,7 +66,7 @@ class Settings:
     )
     backfill_google_places_enabled: bool = os.environ.get(
         "BACKFILL_GOOGLE_PLACES_ENABLED",
-        "0",
+        "1",
     ).strip().lower() in {"1", "true", "yes", "on"}
     google_places_region_code: str = os.environ.get(
         "BACKFILL_GOOGLE_PLACES_REGION_CODE",

@@ -41,6 +41,36 @@ async def init_db():
                 organization_id           INTEGER REFERENCES organizations(id),
                 vertical                  TEXT NOT NULL DEFAULT 'restaurant',
                 address                   TEXT,
+                place_provider            TEXT,
+                place_id                  TEXT,
+                place_resource_name       TEXT,
+                place_display_name        TEXT,
+                place_brand_name          TEXT,
+                place_location_label      TEXT,
+                place_formatted_address   TEXT,
+                place_primary_type        TEXT,
+                place_primary_type_display_name TEXT,
+                place_business_status     TEXT,
+                place_latitude            REAL,
+                place_longitude           REAL,
+                place_google_maps_uri     TEXT,
+                place_website_uri         TEXT,
+                place_national_phone_number TEXT,
+                place_international_phone_number TEXT,
+                place_utc_offset_minutes  INTEGER,
+                place_rating              REAL,
+                place_user_rating_count   INTEGER,
+                place_city                TEXT,
+                place_state_region        TEXT,
+                place_postal_code         TEXT,
+                place_country_code        TEXT,
+                place_neighborhood        TEXT,
+                place_sublocality         TEXT,
+                place_types               TEXT NOT NULL DEFAULT '[]',
+                place_address_components  TEXT NOT NULL DEFAULT '[]',
+                place_regular_opening_hours TEXT NOT NULL DEFAULT '{}',
+                place_plus_code           TEXT NOT NULL DEFAULT '{}',
+                place_metadata            TEXT NOT NULL DEFAULT '{}',
                 employee_count            INTEGER,
                 manager_name              TEXT,
                 manager_phone             TEXT,
@@ -851,6 +881,186 @@ async def init_db():
         )
         await _ensure_column(
             db,
+            "locations",
+            "place_provider",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_id",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_resource_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_display_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_brand_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_location_label",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_formatted_address",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_primary_type",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_primary_type_display_name",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_business_status",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_latitude",
+            "REAL",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_longitude",
+            "REAL",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_google_maps_uri",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_website_uri",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_national_phone_number",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_international_phone_number",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_utc_offset_minutes",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_rating",
+            "REAL",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_user_rating_count",
+            "INTEGER",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_city",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_state_region",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_postal_code",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_country_code",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_neighborhood",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_sublocality",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_types",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_address_components",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_regular_opening_hours",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_plus_code",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_metadata",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
+        await _ensure_column(
+            db,
             "workers",
             "source_id",
             "TEXT",
@@ -1176,5 +1386,16 @@ async def _normalize_location_json_fields(db: aiosqlite.Connection) -> None:
             UPDATE workers
             SET location_assignments = REPLACE(location_assignments, '"restaurant_id"', '"location_id"')
             WHERE location_assignments LIKE '%"restaurant_id"%'
+            """
+        )
+    if await _column_exists(db, "locations", "place_types"):
+        await db.execute(
+            """
+            UPDATE locations
+            SET place_types = COALESCE(NULLIF(place_types, ''), '[]'),
+                place_address_components = COALESCE(NULLIF(place_address_components, ''), '[]'),
+                place_regular_opening_hours = COALESCE(NULLIF(place_regular_opening_hours, ''), '{}'),
+                place_plus_code = COALESCE(NULLIF(place_plus_code, ''), '{}'),
+                place_metadata = COALESCE(NULLIF(place_metadata, ''), '{}')
             """
         )

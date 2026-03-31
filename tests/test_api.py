@@ -152,12 +152,103 @@ def test_places_autocomplete_and_details_work_without_dashboard_auth(public_clie
     assert details_payload["provider"] == "fallback"
     assert details_payload["place"]["place_id"] == place_id
     assert details_payload["place"]["name"]
+    assert details_payload["place"]["brand_name"]
+    assert "metadata" in details_payload["place"]
 
     custom = public_client.get("/api/places/autocomplete?q=whole%20foods")
     assert custom.status_code == 200
     custom_payload = custom.json()
     assert custom_payload["provider"] == "fallback"
     assert custom_payload["suggestions"][0]["label"] == "whole foods"
+
+
+def test_location_create_persists_place_profile(client):
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "Whole Foods · Venice",
+            "organization_name": "Whole Foods",
+            "address": "225 Lincoln Blvd, Venice, CA 90291",
+            "manager_name": "Marcus",
+            "manager_email": "marcus@example.com",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+            "place_provider": "google",
+            "place_id": "test-place-id",
+            "place_resource_name": "places/test-place-id",
+            "place_display_name": "Whole Foods Market",
+            "place_brand_name": "Whole Foods Market",
+            "place_location_label": "Venice",
+            "place_formatted_address": "225 Lincoln Blvd, Venice, CA 90291",
+            "place_primary_type": "grocery_store",
+            "place_primary_type_display_name": "Grocery Store",
+            "place_business_status": "OPERATIONAL",
+            "place_latitude": 33.987,
+            "place_longitude": -118.47,
+            "place_google_maps_uri": "https://maps.google.com/?cid=123",
+            "place_website_uri": "https://example.com",
+            "place_national_phone_number": "(310) 555-0101",
+            "place_international_phone_number": "+1 310-555-0101",
+            "place_utc_offset_minutes": -420,
+            "place_rating": 4.5,
+            "place_user_rating_count": 128,
+            "place_city": "Los Angeles",
+            "place_state_region": "CA",
+            "place_postal_code": "90291",
+            "place_country_code": "US",
+            "place_neighborhood": "Venice",
+            "place_sublocality": "Westside",
+            "place_types": ["grocery_store", "food", "point_of_interest"],
+            "place_address_components": [
+                {"longText": "Venice", "shortText": "Venice", "types": ["neighborhood"]}
+            ],
+            "place_regular_opening_hours": {"openNow": True},
+            "place_plus_code": {"globalCode": "85633Q5M+X2"},
+            "place_metadata": {"source": "google", "confidence": "high"},
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["organization_name"] == "Whole Foods"
+    assert payload["place_provider"] == "google"
+    assert payload["place_id"] == "test-place-id"
+    assert payload["place_brand_name"] == "Whole Foods Market"
+    assert payload["place_location_label"] == "Venice"
+    assert payload["place_types"] == ["grocery_store", "food", "point_of_interest"]
+    assert payload["place_metadata"]["source"] == "google"
+
+    fetched = client.get(f"/api/locations/{payload['id']}")
+    assert fetched.status_code == 200
+    fetched_payload = fetched.json()
+    assert fetched_payload["place_city"] == "Los Angeles"
+    assert fetched_payload["place_state_region"] == "CA"
+    assert fetched_payload["place_google_maps_uri"] == "https://maps.google.com/?cid=123"
+
+
+def test_places_autocomplete_surfaces_google_error_details(public_client, monkeypatch):
+    request = httpx.Request("POST", "https://places.googleapis.com/v1/places:autocomplete")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={
+            "error": {
+                "status": "PERMISSION_DENIED",
+                "message": "API key not valid. Please pass a valid API key.",
+            }
+        },
+    )
+
+    async def _raise(*args, **kwargs):
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    monkeypatch.setattr("app.services.places.autocomplete_places", _raise)
+
+    result = public_client.get("/api/places/autocomplete?q=whole%20foods")
+    assert result.status_code == 502
+    detail = result.json()["detail"]
+    assert "PERMISSION_DENIED" in detail
+    assert "API key not valid" in detail
+    assert "Places API (New)" in detail
 
 
 def test_dashboard_access_sms_exchange_and_location_scope(client, public_client, monkeypatch):

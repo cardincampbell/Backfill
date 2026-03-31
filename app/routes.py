@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
@@ -50,6 +51,7 @@ from app.services import (
     notifications as notifications_svc,
     ops_queue,
     places as places_svc,
+    preview_bootstrap as preview_bootstrap_svc,
     rate_limit,
     roster as roster_svc,
 )
@@ -74,6 +76,48 @@ router = APIRouter(
     ],
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _google_places_error_detail(exc: httpx.HTTPStatusError, operation: str) -> str:
+    default = (
+        f"{operation} failed. Verify GOOGLE_PLACES_API_KEY, billing, "
+        "Places API (New) access, and key restrictions."
+    )
+    try:
+        payload = exc.response.json()
+    except Exception:  # pragma: no cover - defensive parsing
+        payload = None
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    status = error.get("status") if isinstance(error, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+
+    if status or message:
+        logger.warning(
+            "Google Places %s error: status=%s message=%s http_status=%s",
+            operation,
+            status,
+            message,
+            exc.response.status_code,
+        )
+        parts = [f"{operation} failed"]
+        if status:
+            parts.append(str(status))
+        if message:
+            parts.append(str(message))
+        parts.append(
+            "Check GOOGLE_PLACES_API_KEY, billing, Places API (New), and key restrictions."
+        )
+        return ". ".join(parts)
+
+    logger.warning(
+        "Google Places %s error with undecodable payload: http_status=%s",
+        operation,
+        exc.response.status_code,
+    )
+    return default
+
 
 # ── response models ───────────────────────────────────────────────────────────
 
@@ -95,6 +139,36 @@ class LocationUpdate(BaseModel):
     organization_name: Optional[str] = None
     vertical: Optional[str] = None
     address: Optional[str] = None
+    place_provider: Optional[str] = None
+    place_id: Optional[str] = None
+    place_resource_name: Optional[str] = None
+    place_display_name: Optional[str] = None
+    place_brand_name: Optional[str] = None
+    place_location_label: Optional[str] = None
+    place_formatted_address: Optional[str] = None
+    place_primary_type: Optional[str] = None
+    place_primary_type_display_name: Optional[str] = None
+    place_business_status: Optional[str] = None
+    place_latitude: Optional[float] = None
+    place_longitude: Optional[float] = None
+    place_google_maps_uri: Optional[str] = None
+    place_website_uri: Optional[str] = None
+    place_national_phone_number: Optional[str] = None
+    place_international_phone_number: Optional[str] = None
+    place_utc_offset_minutes: Optional[int] = None
+    place_rating: Optional[float] = None
+    place_user_rating_count: Optional[int] = None
+    place_city: Optional[str] = None
+    place_state_region: Optional[str] = None
+    place_postal_code: Optional[str] = None
+    place_country_code: Optional[str] = None
+    place_neighborhood: Optional[str] = None
+    place_sublocality: Optional[str] = None
+    place_types: Optional[list[str]] = None
+    place_address_components: Optional[list[dict]] = None
+    place_regular_opening_hours: Optional[dict] = None
+    place_plus_code: Optional[dict] = None
+    place_metadata: Optional[dict] = None
     employee_count: Optional[int] = None
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = None
@@ -733,10 +807,7 @@ async def get_places_autocomplete(
     try:
         payload = await places_svc.autocomplete_places(q, session_token=session_token)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Places autocomplete failed. Verify GOOGLE_PLACES_API_KEY, billing, and Places API access.",
-        ) from exc
+        raise HTTPException(status_code=502, detail=_google_places_error_detail(exc, "Places autocomplete")) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Places autocomplete unavailable") from exc
     return {
@@ -767,10 +838,7 @@ async def get_place_details(
     try:
         place = await places_svc.get_place_details(place_id, session_token=session_token)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Place lookup failed. Verify GOOGLE_PLACES_API_KEY, billing, and Places API access.",
-        ) from exc
+        raise HTTPException(status_code=502, detail=_google_places_error_detail(exc, "Place lookup")) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Place lookup unavailable") from exc
     if place is None:
@@ -1099,6 +1167,24 @@ async def create_location(
     created = await queries.get_location(db, location_id)
     assert created is not None
     return created
+
+
+@router.post("/locations/{location_id}/preview-bootstrap")
+async def bootstrap_preview_location(
+    location_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    if settings.backfill_dashboard_auth_required:
+        raise HTTPException(status_code=403, detail="Preview bootstrap is disabled")
+    try:
+        return await preview_bootstrap_svc.bootstrap_preview_location(
+            db,
+            location_id=location_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.get("/locations", response_model=List[Location])

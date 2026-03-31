@@ -267,9 +267,45 @@ export async function getManagerActions(
   weekStart?: string
 ): Promise<ManagerActionsResponse | null> {
   const qs = weekStart ? `?week_start=${weekStart}` : "";
-  return fetchJson<ManagerActionsResponse>(
-    `/api/locations/${locationId}/manager-actions${qs}`
-  );
+  const payload = await fetchJson<
+    | ManagerActionsResponse
+    | {
+        location_id: number;
+        summary?: {
+          total?: number;
+          approve_fill?: number;
+          approve_agency?: number;
+          pending_actions?: number;
+          fill_approvals?: number;
+          agency_approvals?: number;
+          attendance_reviews?: number;
+        };
+        actions: import("../types").ManagerAction[];
+      }
+  >(`/api/locations/${locationId}/manager-actions${qs}`);
+  if (!payload) return null;
+  const rawSummary = payload.summary as
+    | {
+        total?: number;
+        approve_fill?: number;
+        approve_agency?: number;
+        attendance_reviews?: number;
+        pending_actions?: number;
+        fill_approvals?: number;
+        agency_approvals?: number;
+      }
+    | undefined;
+  const summary = rawSummary ?? {};
+  return {
+    location_id: payload.location_id,
+    summary: {
+      total: summary.total ?? summary.pending_actions ?? 0,
+      approve_fill: summary.approve_fill ?? summary.fill_approvals ?? 0,
+      approve_agency: summary.approve_agency ?? summary.agency_approvals ?? 0,
+      attendance_reviews: summary.attendance_reviews ?? 0,
+    },
+    actions: payload.actions ?? [],
+  };
 }
 
 export async function approveFill(cascadeId: number): Promise<boolean> {

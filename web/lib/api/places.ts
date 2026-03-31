@@ -8,6 +8,31 @@ export type PlaceSuggestion = {
   resource_name?: string | null;
   secondary_text?: string | null;
   formatted_address?: string | null;
+  brand_name?: string | null;
+  location_label?: string | null;
+  primary_type?: string | null;
+  primary_type_display_name?: string | null;
+  business_status?: string | null;
+  national_phone_number?: string | null;
+  international_phone_number?: string | null;
+  website_uri?: string | null;
+  google_maps_uri?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  utc_offset_minutes?: number | null;
+  rating?: number | null;
+  user_rating_count?: number | null;
+  city?: string | null;
+  state_region?: string | null;
+  postal_code?: string | null;
+  country_code?: string | null;
+  neighborhood?: string | null;
+  sublocality?: string | null;
+  types?: string[];
+  address_components?: Array<Record<string, unknown>>;
+  regular_opening_hours?: Record<string, unknown>;
+  plus_code?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 
 export type PlaceAutocompleteResponse = {

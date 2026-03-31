@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,36 @@ class LocationCreate(BaseModel):
     organization_name: Optional[str] = None
     vertical: BusinessVertical = BusinessVertical.restaurant
     address: Optional[str] = None
+    place_provider: Optional[str] = None
+    place_id: Optional[str] = None
+    place_resource_name: Optional[str] = None
+    place_display_name: Optional[str] = None
+    place_brand_name: Optional[str] = None
+    place_location_label: Optional[str] = None
+    place_formatted_address: Optional[str] = None
+    place_primary_type: Optional[str] = None
+    place_primary_type_display_name: Optional[str] = None
+    place_business_status: Optional[str] = None
+    place_latitude: Optional[float] = None
+    place_longitude: Optional[float] = None
+    place_google_maps_uri: Optional[str] = None
+    place_website_uri: Optional[str] = None
+    place_national_phone_number: Optional[str] = None
+    place_international_phone_number: Optional[str] = None
+    place_utc_offset_minutes: Optional[int] = None
+    place_rating: Optional[float] = None
+    place_user_rating_count: Optional[int] = None
+    place_city: Optional[str] = None
+    place_state_region: Optional[str] = None
+    place_postal_code: Optional[str] = None
+    place_country_code: Optional[str] = None
+    place_neighborhood: Optional[str] = None
+    place_sublocality: Optional[str] = None
+    place_types: list[str] = Field(default_factory=list)
+    place_address_components: list[dict[str, Any]] = Field(default_factory=list)
+    place_regular_opening_hours: dict[str, Any] = Field(default_factory=dict)
+    place_plus_code: dict[str, Any] = Field(default_factory=dict)
+    place_metadata: dict[str, Any] = Field(default_factory=dict)
     employee_count: Optional[int] = Field(default=None, ge=1)
     manager_name: Optional[str] = None
     manager_phone: Optional[str] = Field(None, description="E.164 format")
