@@ -29,6 +29,7 @@ class LocationCreate(BaseModel):
     organization_name: Optional[str] = None
     vertical: BusinessVertical = BusinessVertical.restaurant
     address: Optional[str] = None
+    place_inferred_vertical: Optional[BusinessVertical] = None
     place_provider: Optional[str] = None
     place_id: Optional[str] = None
     place_resource_name: Optional[str] = None

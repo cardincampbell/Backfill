@@ -17,7 +17,7 @@ import httpx
 from app.config import settings
 from app.db.database import get_db
 from app.db import queries
-from app.models.location import Location, LocationCreate
+from app.models.location import BusinessVertical, Location, LocationCreate
 from app.models.organization import Organization, OrganizationCreate
 from app.models.worker import Worker, WorkerCreate
 from app.models.shift import Shift, ShiftCreate
@@ -77,6 +77,63 @@ router = APIRouter(
 )
 
 logger = logging.getLogger(__name__)
+
+_PLACE_TYPE_VERTICAL_MAP: dict[str, BusinessVertical] = {
+    "restaurant": BusinessVertical.restaurant,
+    "cafe": BusinessVertical.restaurant,
+    "coffee_shop": BusinessVertical.restaurant,
+    "bakery": BusinessVertical.restaurant,
+    "bar": BusinessVertical.restaurant,
+    "meal_takeaway": BusinessVertical.restaurant,
+    "meal_delivery": BusinessVertical.restaurant,
+    "fast_food_restaurant": BusinessVertical.restaurant,
+    "grocery_store": BusinessVertical.retail,
+    "supermarket": BusinessVertical.retail,
+    "store": BusinessVertical.retail,
+    "clothing_store": BusinessVertical.retail,
+    "department_store": BusinessVertical.retail,
+    "electronics_store": BusinessVertical.retail,
+    "shoe_store": BusinessVertical.retail,
+    "furniture_store": BusinessVertical.retail,
+    "convenience_store": BusinessVertical.retail,
+    "discount_store": BusinessVertical.retail,
+    "home_goods_store": BusinessVertical.retail,
+    "warehouse_store": BusinessVertical.retail,
+    "hospital": BusinessVertical.healthcare,
+    "doctor": BusinessVertical.healthcare,
+    "medical_lab": BusinessVertical.healthcare,
+    "dental_clinic": BusinessVertical.healthcare,
+    "pharmacy": BusinessVertical.healthcare,
+    "lodging": BusinessVertical.hospitality,
+    "hotel": BusinessVertical.hospitality,
+    "motel": BusinessVertical.hospitality,
+    "inn": BusinessVertical.hospitality,
+    "resort_hotel": BusinessVertical.hospitality,
+    "warehouse": BusinessVertical.warehouse,
+    "storage": BusinessVertical.warehouse,
+    "self_storage": BusinessVertical.warehouse,
+    "moving_company": BusinessVertical.warehouse,
+    "shipping_company": BusinessVertical.warehouse,
+}
+
+
+def _infer_vertical_from_place(data: dict) -> str | None:
+    raw_types: list[str] = []
+    primary_type = data.get("place_primary_type")
+    if isinstance(primary_type, str) and primary_type.strip():
+        raw_types.append(primary_type.strip().lower())
+    for value in data.get("place_types") or []:
+        if isinstance(value, str) and value.strip():
+            raw_types.append(value.strip().lower())
+    seen: set[str] = set()
+    for place_type in raw_types:
+        if place_type in seen:
+            continue
+        seen.add(place_type)
+        mapped = _PLACE_TYPE_VERTICAL_MAP.get(place_type)
+        if mapped is not None:
+            return mapped.value
+    return None
 
 
 def _google_places_error_detail(exc: httpx.HTTPStatusError, operation: str) -> str:
@@ -139,6 +196,7 @@ class LocationUpdate(BaseModel):
     organization_name: Optional[str] = None
     vertical: Optional[str] = None
     address: Optional[str] = None
+    place_inferred_vertical: Optional[str] = None
     place_provider: Optional[str] = None
     place_id: Optional[str] = None
     place_resource_name: Optional[str] = None
@@ -1156,6 +1214,11 @@ async def create_location(
     if principal is not None and principal.is_setup:
         raise HTTPException(status_code=403, detail="Setup token cannot create a new location")
     data = body.model_dump(mode="json")
+    inferred_vertical = _infer_vertical_from_place(data)
+    if inferred_vertical:
+        data["place_inferred_vertical"] = inferred_vertical
+        if "vertical" not in body.model_fields_set:
+            data["vertical"] = inferred_vertical
     data["organization_id"] = await _resolve_organization_id(
         db,
         organization_id=data.get("organization_id"),
@@ -1341,6 +1404,11 @@ async def update_location(
     if row is None:
         raise HTTPException(status_code=404, detail="Location not found")
     payload = body.model_dump(mode="json", exclude_none=True)
+    inferred_vertical = _infer_vertical_from_place(payload)
+    if inferred_vertical:
+        payload["place_inferred_vertical"] = inferred_vertical
+        if "vertical" not in body.model_fields_set and not row.get("vertical"):
+            payload["vertical"] = inferred_vertical
     if "organization_id" in payload or "organization_name" in payload:
         payload["organization_id"] = await _resolve_organization_id(
             db,

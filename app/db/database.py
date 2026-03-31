@@ -41,6 +41,7 @@ async def init_db():
                 organization_id           INTEGER REFERENCES organizations(id),
                 vertical                  TEXT NOT NULL DEFAULT 'restaurant',
                 address                   TEXT,
+                place_inferred_vertical   TEXT,
                 place_provider            TEXT,
                 place_id                  TEXT,
                 place_resource_name       TEXT,
@@ -877,6 +878,12 @@ async def init_db():
             db,
             "locations",
             "operating_mode",
+            "TEXT",
+        )
+        await _ensure_column(
+            db,
+            "locations",
+            "place_inferred_vertical",
             "TEXT",
         )
         await _ensure_column(

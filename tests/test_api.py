@@ -210,10 +210,13 @@ def test_location_create_persists_place_profile(client):
     assert created.status_code == 201
     payload = created.json()
     assert payload["organization_name"] == "Whole Foods"
+    assert payload["vertical"] == "retail"
+    assert payload["place_inferred_vertical"] == "retail"
     assert payload["place_provider"] == "google"
     assert payload["place_id"] == "test-place-id"
     assert payload["place_brand_name"] == "Whole Foods Market"
     assert payload["place_location_label"] == "Venice"
+    assert payload["place_primary_type"] == "grocery_store"
     assert payload["place_types"] == ["grocery_store", "food", "point_of_interest"]
     assert payload["place_metadata"]["source"] == "google"
 
@@ -223,6 +226,28 @@ def test_location_create_persists_place_profile(client):
     assert fetched_payload["place_city"] == "Los Angeles"
     assert fetched_payload["place_state_region"] == "CA"
     assert fetched_payload["place_google_maps_uri"] == "https://maps.google.com/?cid=123"
+    assert fetched_payload["place_inferred_vertical"] == "retail"
+
+
+def test_location_create_preserves_explicit_vertical_over_place_inference(client):
+    created = client.post(
+        "/api/locations",
+        json={
+            "name": "City Clinic",
+            "organization_name": "City Clinic",
+            "vertical": "healthcare",
+            "manager_name": "Ava",
+            "manager_email": "ava@example.com",
+            "scheduling_platform": "backfill_native",
+            "operating_mode": "backfill_shifts",
+            "place_primary_type": "grocery_store",
+            "place_types": ["grocery_store"],
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["vertical"] == "healthcare"
+    assert payload["place_inferred_vertical"] == "retail"
 
 
 def test_places_autocomplete_surfaces_google_error_details(public_client, monkeypatch):

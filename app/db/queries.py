@@ -214,7 +214,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
     d = _encode_json("locations", data)
     cur = await db.execute(
         f"""INSERT INTO {_LOCATION_TABLE}
-           (name, organization_id, vertical, address,
+           (name, organization_id, vertical, address, place_inferred_vertical,
             place_provider, place_id, place_resource_name, place_display_name, place_brand_name, place_location_label,
             place_formatted_address, place_primary_type, place_primary_type_display_name, place_business_status,
             place_latitude, place_longitude, place_google_maps_uri, place_website_uri,
@@ -234,7 +234,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             late_arrival_policy, missed_check_in_policy, timezone, operating_mode,
             onboarding_info,
             agency_supply_approved, preferred_agency_partners)
-           VALUES (:name,:organization_id,:vertical,:address,
+           VALUES (:name,:organization_id,:vertical,:address,:place_inferred_vertical,
                    :place_provider,:place_id,:place_resource_name,:place_display_name,:place_brand_name,:place_location_label,
                    :place_formatted_address,:place_primary_type,:place_primary_type_display_name,:place_business_status,
                    :place_latitude,:place_longitude,:place_google_maps_uri,:place_website_uri,
@@ -258,6 +258,7 @@ async def insert_location(db: aiosqlite.Connection, data: dict) -> int:
             "organization_id": d.get("organization_id"),
             "vertical": d.get("vertical", "restaurant"),
             "address": d.get("address"),
+            "place_inferred_vertical": d.get("place_inferred_vertical"),
             "place_provider": d.get("place_provider"),
             "place_id": d.get("place_id"),
             "place_resource_name": d.get("place_resource_name"),
@@ -337,6 +338,7 @@ async def update_location(db: aiosqlite.Connection, location_id: int, data: dict
         "organization_id",
         "vertical",
         "address",
+        "place_inferred_vertical",
         "place_provider",
         "place_id",
         "place_resource_name",
