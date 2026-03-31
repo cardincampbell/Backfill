@@ -308,9 +308,7 @@ export default function HomePage() {
       <section className="lp-section lp-final-cta">
         <div className="lp-section-inner lp-final-cta-inner">
           <h2>Ready to stop making those 6 AM calls?</h2>
-          <p>One call to us, and you&rsquo;ll never have to make that call again.</p>
-          <a href="tel:18002225345" className="lp-btn-primary lp-btn-lg">1-800-BACKFILL</a>
-          <span className="lp-final-note">Mon&ndash;Fri 8am&ndash;6pm PT &middot; Or leave us a message</span>
+          <a href="/try" className="lp-btn-primary lp-btn-lg">Try Backfill Free</a>
         </div>
       </section>
 

@@ -124,10 +124,8 @@ export default function LoginPage() {
           {checkingSession ? (
             <>
               <div className="settings-card-header">Checking your session</div>
-              <div className="settings-card-body">
-                <div style={{ fontSize: "0.8rem", color: "var(--muted)", textAlign: "center" }}>
-                  If you already signed in recently, we&rsquo;ll take you straight into Backfill.
-                </div>
+              <div className="settings-card-body" style={{ display: "flex", justifyContent: "center", padding: "32px 0" }}>
+                <div className="lp-signup-check" aria-hidden="true">Backfill</div>
               </div>
             </>
           ) : step === "phone" ? (
