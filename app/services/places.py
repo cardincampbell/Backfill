@@ -11,6 +11,7 @@ _AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 _MAX_GOOGLE_SUGGESTIONS = 8
+_NEARBY_ADDRESS_SEARCH_RADIUS_METERS = 1500.0
 _ADDRESS_HINTS = (
     "st",
     "street",
@@ -36,6 +37,20 @@ _ADDRESS_HINTS = (
     "hwy",
     "highway",
 )
+_ADDRESS_LIKE_PRIMARY_TYPES = {
+    "street_address",
+    "route",
+    "premise",
+    "subpremise",
+    "intersection",
+    "postal_code",
+    "plus_code",
+    "locality",
+    "neighborhood",
+    "sublocality",
+    "administrative_area_level_1",
+    "administrative_area_level_2",
+}
 
 _FALLBACK_SUGGESTIONS = [
     {"name": "Mission District", "formatted_address": "San Francisco, CA, USA"},
@@ -242,6 +257,83 @@ def _build_location_bias(
     }
 
 
+def _haversine_meters(
+    latitude_a: float,
+    longitude_a: float,
+    latitude_b: float,
+    longitude_b: float,
+) -> float:
+    from math import asin, cos, radians, sin, sqrt
+
+    earth_radius = 6371000.0
+    delta_lat = radians(latitude_b - latitude_a)
+    delta_lng = radians(longitude_b - longitude_a)
+    lat_a = radians(latitude_a)
+    lat_b = radians(latitude_b)
+    inner = (
+        sin(delta_lat / 2) ** 2
+        + cos(lat_a) * cos(lat_b) * sin(delta_lng / 2) ** 2
+    )
+    return 2 * earth_radius * asin(sqrt(inner))
+
+
+def _distance_from_point(
+    suggestion: dict[str, Any],
+    *,
+    latitude: float | None,
+    longitude: float | None,
+) -> float | None:
+    if latitude is None or longitude is None:
+        return None
+    suggestion_lat = suggestion.get("latitude")
+    suggestion_lng = suggestion.get("longitude")
+    if not isinstance(suggestion_lat, (int, float)) or not isinstance(
+        suggestion_lng, (int, float)
+    ):
+        return None
+    return _haversine_meters(latitude, longitude, float(suggestion_lat), float(suggestion_lng))
+
+
+def _is_address_like_suggestion(suggestion: dict[str, Any]) -> bool:
+    primary_type = str(suggestion.get("primary_type") or "").strip().lower()
+    types = {str(value).strip().lower() for value in suggestion.get("types") or []}
+    name = str(suggestion.get("name") or "").strip()
+    if primary_type in _ADDRESS_LIKE_PRIMARY_TYPES:
+        return True
+    if types.intersection(_ADDRESS_LIKE_PRIMARY_TYPES):
+        return True
+    return bool(name) and name[0].isdigit()
+
+
+def _filter_local_suggestions(
+    suggestions: list[dict[str, Any]],
+    *,
+    latitude: float | None,
+    longitude: float | None,
+    radius_meters: float | None,
+) -> list[dict[str, Any]]:
+    if latitude is None or longitude is None or not suggestions:
+        return suggestions
+    max_distance = max(float(radius_meters or 50000.0) * 1.5, 10000.0)
+    local: list[tuple[float, dict[str, Any]]] = []
+    unknown_distance: list[dict[str, Any]] = []
+    for suggestion in suggestions:
+        distance = _distance_from_point(
+            suggestion,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        if distance is None:
+            unknown_distance.append(suggestion)
+            continue
+        if distance <= max_distance:
+            local.append((distance, suggestion))
+    if not local:
+        return suggestions
+    local.sort(key=lambda item: item[0])
+    return [item[1] for item in local] + unknown_distance
+
+
 def _parse_autocomplete_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
     suggestions: list[dict[str, Any]] = []
     for entry in payload.get("suggestions") or []:
@@ -297,6 +389,45 @@ def _dedupe_suggestions(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(key)
             deduped.append(suggestion)
     return deduped
+
+
+async def _run_text_search(
+    client: httpx.AsyncClient,
+    *,
+    query: str,
+    location_bias: dict[str, Any] | None,
+    rank_by_distance: bool,
+) -> list[dict[str, Any]]:
+    text_search_body: dict[str, Any] = {
+        "textQuery": query,
+        "languageCode": "en",
+        "regionCode": settings.google_places_region_code,
+    }
+    if location_bias:
+        text_search_body["locationBias"] = location_bias
+    if rank_by_distance:
+        text_search_body["rankPreference"] = "DISTANCE"
+    if settings.google_places_country_codes:
+        text_search_body["includedRegionCodes"] = settings.google_places_country_codes
+
+    response = await client.post(
+        _TEXT_SEARCH_URL,
+        headers=_google_headers(
+            "places.id,"
+            "places.name,"
+            "places.displayName,"
+            "places.formattedAddress,"
+            "places.location,"
+            "places.businessStatus,"
+            "places.types,"
+            "places.primaryType,"
+            "places.primaryTypeDisplayName,"
+            "places.addressComponents"
+        ),
+        json=text_search_body,
+    )
+    response.raise_for_status()
+    return _parse_text_search_response(response.json())
 
 
 def _build_google_place_response(payload: dict[str, Any]) -> dict[str, Any]:
@@ -393,7 +524,8 @@ async def autocomplete_places(
         longitude=longitude,
         radius_meters=radius_meters,
     )
-    should_run_text_search = bool(location_bias) or _looks_like_address(normalized)
+    query_looks_like_address = _looks_like_address(normalized)
+    should_run_text_search = bool(location_bias) or query_looks_like_address
 
     body: dict[str, Any] = {
         "input": normalized,
@@ -424,40 +556,58 @@ async def autocomplete_places(
 
         text_search_suggestions: list[dict[str, Any]] = []
         if should_run_text_search:
-            text_search_body: dict[str, Any] = {
-                "textQuery": normalized,
-                "languageCode": "en",
-                "regionCode": settings.google_places_region_code,
-            }
-            if location_bias:
-                text_search_body["locationBias"] = location_bias
-                text_search_body["rankPreference"] = "DISTANCE"
-            if settings.google_places_country_codes:
-                text_search_body["includedRegionCodes"] = settings.google_places_country_codes
             try:
-                text_search_response = await client.post(
-                    _TEXT_SEARCH_URL,
-                    headers=_google_headers(
-                        "places.id,"
-                        "places.name,"
-                        "places.displayName,"
-                        "places.formattedAddress,"
-                        "places.location,"
-                        "places.businessStatus,"
-                        "places.types,"
-                        "places.primaryType,"
-                        "places.primaryTypeDisplayName,"
-                        "places.addressComponents"
-                    ),
-                    json=text_search_body,
+                text_search_suggestions = await _run_text_search(
+                    client,
+                    query=normalized,
+                    location_bias=location_bias,
+                    rank_by_distance=bool(location_bias),
                 )
-                text_search_response.raise_for_status()
-                text_search_suggestions = _parse_text_search_response(text_search_response.json())
             except httpx.HTTPError:
                 text_search_suggestions = []
 
-    if should_run_text_search:
-        suggestions = _dedupe_suggestions(text_search_suggestions, autocomplete_suggestions)
+            text_search_suggestions = _filter_local_suggestions(
+                text_search_suggestions,
+                latitude=latitude,
+                longitude=longitude,
+                radius_meters=radius_meters,
+            )
+
+            if query_looks_like_address and text_search_suggestions:
+                first_match = text_search_suggestions[0]
+                nearby_business_suggestions: list[dict[str, Any]] = []
+                anchor_bias = _build_location_bias(
+                    latitude=first_match.get("latitude"),
+                    longitude=first_match.get("longitude"),
+                    radius_meters=_NEARBY_ADDRESS_SEARCH_RADIUS_METERS,
+                )
+                if anchor_bias:
+                    try:
+                        nearby_results = await _run_text_search(
+                            client,
+                            query=f"businesses near {normalized}",
+                            location_bias=anchor_bias,
+                            rank_by_distance=True,
+                        )
+                        nearby_business_suggestions = [
+                            suggestion
+                            for suggestion in nearby_results
+                            if not _is_address_like_suggestion(suggestion)
+                        ]
+                    except httpx.HTTPError:
+                        nearby_business_suggestions = []
+                text_search_suggestions = _dedupe_suggestions(
+                    nearby_business_suggestions,
+                    [
+                        suggestion
+                        for suggestion in text_search_suggestions
+                        if not _is_address_like_suggestion(suggestion)
+                    ],
+                    text_search_suggestions,
+                )
+
+    if text_search_suggestions:
+        suggestions = text_search_suggestions
     else:
         suggestions = autocomplete_suggestions
     return {"provider": "google", "suggestions": suggestions[:_MAX_GOOGLE_SUGGESTIONS]}

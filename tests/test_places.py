@@ -56,11 +56,32 @@ async def test_autocomplete_places_uses_text_search_for_address_queries(monkeypa
             {
                 "places": [
                     {
+                        "id": "addr-123",
+                        "name": "places/addr-123",
+                        "displayName": {"text": "225 Lincoln Blvd"},
+                        "formattedAddress": "225 Lincoln Blvd, Venice, CA 90291, USA",
+                        "location": {"latitude": 33.99, "longitude": -118.47},
+                        "primaryType": "street_address",
+                        "primaryTypeDisplayName": {"text": "Street Address"},
+                        "addressComponents": [
+                            {"longText": "Venice", "shortText": "Venice", "types": ["neighborhood"]},
+                            {"longText": "Los Angeles", "shortText": "Los Angeles", "types": ["locality"]},
+                            {"longText": "CA", "shortText": "CA", "types": ["administrative_area_level_1"]},
+                        ],
+                    }
+                ]
+            },
+        ),
+        _FakeResponse(
+            "https://places.googleapis.com/v1/places:searchText",
+            {
+                "places": [
+                    {
                         "id": "place-123",
                         "name": "places/place-123",
                         "displayName": {"text": "Whole Foods Market"},
                         "formattedAddress": "225 Lincoln Blvd, Venice, CA 90291, USA",
-                        "location": {"latitude": 33.99, "longitude": -118.47},
+                        "location": {"latitude": 33.9902, "longitude": -118.4701},
                         "primaryType": "grocery_store",
                         "primaryTypeDisplayName": {"text": "Grocery Store"},
                         "addressComponents": [
@@ -92,6 +113,8 @@ async def test_autocomplete_places_uses_text_search_for_address_queries(monkeypa
     assert calls[1][0].endswith("places:searchText")
     assert calls[1][2]["rankPreference"] == "DISTANCE"
     assert calls[1][2]["locationBias"]["circle"]["radius"] == 50000
+    assert calls[2][2]["textQuery"] == "businesses near 225 Lincoln Blvd"
+    assert calls[2][2]["locationBias"]["circle"]["radius"] == 1500.0
 
 
 @pytest.mark.asyncio
@@ -154,5 +177,5 @@ async def test_autocomplete_places_prioritizes_local_text_search_results(monkeyp
     )
 
     assert payload["provider"] == "google"
-    assert [item["place_id"] for item in payload["suggestions"][:2]] == ["local-1", "remote-1"]
+    assert [item["place_id"] for item in payload["suggestions"]] == ["local-1"]
     assert calls[1][2]["textQuery"] == "whole foods"
