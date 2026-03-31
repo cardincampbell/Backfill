@@ -113,8 +113,8 @@ async def test_autocomplete_places_uses_text_search_for_address_queries(monkeypa
     assert calls[1][0].endswith("places:searchText")
     assert calls[1][2]["rankPreference"] == "DISTANCE"
     assert calls[1][2]["locationBias"]["circle"]["radius"] == 50000
-    assert calls[2][2]["textQuery"] == "businesses near 225 Lincoln Blvd"
-    assert calls[2][2]["locationBias"]["circle"]["radius"] == 1500.0
+    assert calls[2][0].endswith("places:searchNearby")
+    assert calls[2][2]["locationRestriction"]["circle"]["radius"] == 500.0
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,10 @@ from app.config import settings
 
 _AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+_NEARBY_SEARCH_URL = "https://places.googleapis.com/v1/places:searchNearby"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 _MAX_GOOGLE_SUGGESTIONS = 8
-_NEARBY_ADDRESS_SEARCH_RADIUS_METERS = 1500.0
+_NEARBY_ADDRESS_SEARCH_RADIUS_METERS = 500.0
 _ADDRESS_HINTS = (
     "st",
     "street",
@@ -430,6 +431,49 @@ async def _run_text_search(
     return _parse_text_search_response(response.json())
 
 
+async def _run_nearby_search(
+    client: httpx.AsyncClient,
+    *,
+    latitude: float,
+    longitude: float,
+    radius_meters: float,
+    max_result_count: int = _MAX_GOOGLE_SUGGESTIONS,
+) -> list[dict[str, Any]]:
+    body: dict[str, Any] = {
+        "languageCode": "en",
+        "regionCode": settings.google_places_region_code,
+        "maxResultCount": max_result_count,
+        "rankPreference": "DISTANCE",
+        "locationRestriction": {
+            "circle": {
+                "center": {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                },
+                "radius": radius_meters,
+            }
+        },
+    }
+    response = await client.post(
+        _NEARBY_SEARCH_URL,
+        headers=_google_headers(
+            "places.id,"
+            "places.name,"
+            "places.displayName,"
+            "places.formattedAddress,"
+            "places.location,"
+            "places.businessStatus,"
+            "places.types,"
+            "places.primaryType,"
+            "places.primaryTypeDisplayName,"
+            "places.addressComponents"
+        ),
+        json=body,
+    )
+    response.raise_for_status()
+    return _parse_text_search_response(response.json())
+
+
 def _build_google_place_response(payload: dict[str, Any]) -> dict[str, Any]:
     display_name = ((payload.get("displayName") or {}).get("text") or "").strip()
     formatted_address = (payload.get("formattedAddress") or "").strip()
@@ -576,18 +620,15 @@ async def autocomplete_places(
             if query_looks_like_address and text_search_suggestions:
                 first_match = text_search_suggestions[0]
                 nearby_business_suggestions: list[dict[str, Any]] = []
-                anchor_bias = _build_location_bias(
-                    latitude=first_match.get("latitude"),
-                    longitude=first_match.get("longitude"),
-                    radius_meters=_NEARBY_ADDRESS_SEARCH_RADIUS_METERS,
-                )
-                if anchor_bias:
+                anchor_latitude = first_match.get("latitude")
+                anchor_longitude = first_match.get("longitude")
+                if isinstance(anchor_latitude, (int, float)) and isinstance(anchor_longitude, (int, float)):
                     try:
-                        nearby_results = await _run_text_search(
+                        nearby_results = await _run_nearby_search(
                             client,
-                            query=f"businesses near {normalized}",
-                            location_bias=anchor_bias,
-                            rank_by_distance=True,
+                            latitude=float(anchor_latitude),
+                            longitude=float(anchor_longitude),
+                            radius_meters=_NEARBY_ADDRESS_SEARCH_RADIUS_METERS,
                         )
                         nearby_business_suggestions = [
                             suggestion
