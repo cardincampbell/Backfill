@@ -25,15 +25,22 @@ export async function apiFetchV2(
   pathOrUrl: string,
   init?: RequestInit,
 ): Promise<Response> {
+  const url = resolveUrl(pathOrUrl);
+  const method = (init?.method ?? "GET").toUpperCase();
   const token = await getV2SessionToken();
   const authHeaders: Record<string, string> = token
     ? { Authorization: `Bearer ${token}` }
     : {};
-  return fetch(resolveUrl(pathOrUrl), {
-    ...init,
-    credentials: typeof window !== "undefined" ? "include" : init?.credentials,
-    headers: { ...authHeaders, ...init?.headers },
-  });
+  try {
+    return await fetch(url, {
+      ...init,
+      credentials: typeof window !== "undefined" ? "include" : init?.credentials,
+      headers: { ...authHeaders, ...init?.headers },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown network error";
+    throw new Error(`Network request failed for ${method} ${url}: ${reason}`);
+  }
 }
 
 export async function fetchV2Json<T>(path: string): Promise<T | null> {
@@ -43,7 +50,10 @@ export async function fetchV2Json<T>(path: string): Promise<T | null> {
     });
     if (!response.ok) return null;
     return (await response.json()) as T;
-  } catch {
+  } catch (error) {
+    if (typeof window !== "undefined") {
+      console.error(`Backfill V2 fetch failed for ${path}`, error);
+    }
     return null;
   }
 }

@@ -4,12 +4,14 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import alembic.command
 import psycopg
 from alembic.config import Config as AlembicConfig
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 from app_v2.api import router as api_router
 from app_v2.config import v2_settings
@@ -53,6 +55,38 @@ def create_app() -> FastAPI:
         version="2.0.0",
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def attach_request_id(request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid4().hex
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Backfill-Request-ID"] = request_id
+        return response
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_exception(request: Request, exc: Exception):
+        request_id = getattr(request.state, "request_id", uuid4().hex)
+        logger.exception(
+            "Unhandled V2 exception request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            exc_info=exc,
+        )
+        payload: dict[str, str] = {
+            "detail": "Internal server error",
+            "request_id": request_id,
+        }
+        if v2_settings.expose_internal_errors:
+            payload["debug"] = f"{exc.__class__.__name__}: {exc}"
+            payload["path"] = request.url.path
+            payload["method"] = request.method
+        return JSONResponse(
+            status_code=500,
+            content=payload,
+            headers={"X-Backfill-Request-ID": request_id},
+        )
 
     if v2_settings.backfill_allowed_origins:
         app.add_middleware(

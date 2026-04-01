@@ -79,6 +79,15 @@ class V2Settings:
         "yes",
         "on",
     }
+    expose_internal_errors: bool = os.environ.get(
+        "BACKFILL_V2_EXPOSE_INTERNAL_ERRORS",
+        "1",
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     @property
     def has_database_url(self) -> bool:

@@ -1,11 +1,55 @@
 import { apiFetchV2, fetchV2Json, V2_API_PREFIX } from "./v2-client";
 
 async function parseError(response: Response): Promise<string> {
+  const requestId = response.headers.get("X-Backfill-Request-ID");
   try {
-    const payload = (await response.json()) as { detail?: string };
-    return payload.detail ?? `Request failed with status ${response.status}`;
+    const payload = (await response.clone().json()) as {
+      detail?: string;
+      debug?: string;
+      request_id?: string;
+      method?: string;
+      path?: string;
+    };
+    const detail = payload.detail?.trim();
+    if (detail && /^[a-z0-9_]+$/i.test(detail)) {
+      return detail;
+    }
+
+    const parts = [detail ?? `Request failed with status ${response.status}`];
+    if (payload.debug) {
+      parts.push(payload.debug);
+    }
+    if (payload.method && payload.path) {
+      parts.push(`${payload.method} ${payload.path}`);
+    }
+    if (payload.request_id ?? requestId) {
+      parts.push(`request_id=${payload.request_id ?? requestId}`);
+    }
+    return parts.join(" · ");
   } catch {
-    return `Request failed with status ${response.status}`;
+    try {
+      const text = (await response.clone().text()).trim();
+      const parts = [`Request failed with status ${response.status}`];
+      if (text) {
+        parts.push(text.slice(0, 300));
+      }
+      if (requestId) {
+        parts.push(`request_id=${requestId}`);
+      }
+      if (response.url) {
+        parts.push(response.url);
+      }
+      return parts.join(" · ");
+    } catch {
+      const parts = [`Request failed with status ${response.status}`];
+      if (requestId) {
+        parts.push(`request_id=${requestId}`);
+      }
+      if (response.url) {
+        parts.push(response.url);
+      }
+      return parts.join(" · ");
+    }
   }
 }
 
