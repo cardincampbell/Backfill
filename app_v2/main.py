@@ -1,13 +1,34 @@
 from __future__ import annotations
 
+import logging
+import os
+
+import alembic.command
+from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app_v2.api import router as api_router
 from app_v2.config import v2_settings
 
+logger = logging.getLogger(__name__)
+
+
+def _run_migrations() -> None:
+    """Run alembic upgrade head at startup so the schema is always current."""
+    try:
+        ini_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alembic.ini")
+        alembic_cfg = AlembicConfig(ini_path)
+        alembic_cfg.set_main_option("sqlalchemy.url", v2_settings.sync_database_url)
+        alembic.command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic migrations applied successfully")
+    except Exception:
+        logger.exception("Alembic migration failed — continuing app startup")
+
 
 def create_app() -> FastAPI:
+    _run_migrations()
+
     app = FastAPI(
         title="Backfill",
         description="Postgres-first operations, staffing, and coverage platform for Backfill",
