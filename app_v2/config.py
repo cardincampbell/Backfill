@@ -10,6 +10,35 @@ from sqlalchemy.engine import make_url
 load_dotenv()
 
 
+def _default_allowed_origins() -> list[str]:
+    configured = [
+        value.strip()
+        for value in os.environ.get("BACKFILL_ALLOWED_ORIGINS", "").split(",")
+        if value.strip()
+    ]
+    if configured:
+        return configured
+
+    web_base_url = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
+    parsed = urlparse(web_base_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    scheme = parsed.scheme or "https"
+
+    origins: list[str] = []
+    if hostname:
+        origins.append(f"{scheme}://{hostname}")
+        if hostname.startswith("www."):
+            origins.append(f"{scheme}://{hostname[4:]}")
+        else:
+            origins.append(f"{scheme}://www.{hostname}")
+
+    for local_origin in ("http://localhost:3000", "http://127.0.0.1:3000"):
+        if local_origin not in origins:
+            origins.append(local_origin)
+
+    return origins
+
+
 @dataclass(frozen=True)
 class V2Settings:
     database_url: str = os.environ.get("V2_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
@@ -27,13 +56,7 @@ class V2Settings:
     backfill_email_from: str = os.environ.get("BACKFILL_EMAIL_FROM", "")
     backfill_email_from_name: str = os.environ.get("BACKFILL_EMAIL_FROM_NAME", "Backfill")
     worker_api_key: str = os.environ.get("BACKFILL_V2_WORKER_API_KEY", "")
-    backfill_allowed_origins: list[str] = field(
-        default_factory=lambda: [
-            value.strip()
-            for value in os.environ.get("BACKFILL_ALLOWED_ORIGINS", "").split(",")
-            if value.strip()
-        ]
-    )
+    backfill_allowed_origins: list[str] = field(default_factory=_default_allowed_origins)
     sql_echo: bool = os.environ.get("BACKFILL_V2_SQL_ECHO", "").strip().lower() in {
         "1",
         "true",
