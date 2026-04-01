@@ -10,6 +10,18 @@ from sqlalchemy.engine import make_url
 load_dotenv()
 
 
+def _normalized_env_value(name: str) -> str:
+    raw_value = os.environ.get(name, "")
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1].strip()
+    return value
+
+
+def _database_url_from_env() -> str:
+    return _normalized_env_value("V2_DATABASE_URL") or _normalized_env_value("DATABASE_URL")
+
+
 def _default_allowed_origins() -> list[str]:
     configured = [
         value.strip()
@@ -41,7 +53,7 @@ def _default_allowed_origins() -> list[str]:
 
 @dataclass(frozen=True)
 class V2Settings:
-    database_url: str = os.environ.get("V2_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+    database_url: str = field(default_factory=_database_url_from_env)
     api_prefix: str = os.environ.get("BACKFILL_V2_API_PREFIX", "/api/v2")
     web_base_url: str = os.environ.get("BACKFILL_WEB_BASE_URL", "https://usebackfill.com").rstrip("/")
     api_base_url: str = os.environ.get("BACKFILL_API_BASE_URL", "https://api.usebackfill.com").rstrip("/")
