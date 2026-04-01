@@ -22,6 +22,9 @@ import { buildV2LocationPayloadFromPlace } from "@/lib/place-location-v2";
 import { inferOrganizationName } from "@/lib/place-location";
 
 type InviteStep = "identity" | "code" | "profile";
+type OwnerStep = "name" | "email" | "location";
+
+const OWNER_STEPS: OwnerStep[] = ["name", "email", "location"];
 
 function inThirtySeconds(): string {
   return new Date(Date.now() + 30_000).toISOString();
@@ -48,6 +51,7 @@ function OnboardingV2Body() {
   const [code, setCode] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [inviteStep, setInviteStep] = useState<InviteStep>("identity");
+  const [ownerStep, setOwnerStep] = useState<OwnerStep>("name");
   const [selectedPlace, setSelectedPlace] = useState<PlaceSuggestion | null>(null);
   const [locationQuery, setLocationQuery] = useState("");
   const [error, setError] = useState("");
@@ -66,6 +70,9 @@ function OnboardingV2Body() {
         return;
       }
       if (!inviteToken && authMe?.user.full_name) {
+        setName((current) => current || authMe.user.full_name || "");
+      }
+      if (inviteToken && authMe?.user.full_name) {
         setName((current) => current || authMe.user.full_name || "");
       }
       if (!inviteToken && authMe?.user.email) {
@@ -118,13 +125,19 @@ function OnboardingV2Body() {
     Boolean(selectedPlace) &&
     !loading;
 
+  const ownerStepIndex = OWNER_STEPS.indexOf(ownerStep);
+  const ownerStepNumber = ownerStepIndex + 1;
+  const ownerProgressPercent = (ownerStepNumber / OWNER_STEPS.length) * 100;
+  const ownerIsLastStep = ownerStep === "location";
+  const inviteNeedsName = !name.trim();
+  const inviteNeedsEmail = !isValidEmail(email);
+
   const inviteLocationLabel = useMemo(() => {
     if (!invitePreview) return "";
     return `${invitePreview.business_name} · ${invitePreview.location_name}`;
   }, [invitePreview]);
 
-  async function handleOwnerSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function submitOwnerWorkspace() {
     if (!session || !selectedPlace || loading) return;
     setLoading(true);
     setError("");
@@ -152,9 +165,7 @@ function OnboardingV2Body() {
         },
         location: buildV2LocationPayloadFromPlace(selectedPlace),
       });
-      router.replace(
-        "/dashboard",
-      );
+      router.replace("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish onboarding.");
     } finally {
@@ -162,16 +173,50 @@ function OnboardingV2Body() {
     }
   }
 
+  function ownerStepCanContinue(): boolean {
+    if (loading) {
+      return false;
+    }
+    if (ownerStep === "name") {
+      return Boolean(name.trim());
+    }
+    if (ownerStep === "email") {
+      return isValidEmail(email);
+    }
+    return ownerCanSubmit;
+  }
+
+  function goToPreviousOwnerStep() {
+    if (ownerStepIndex <= 0 || loading) {
+      return;
+    }
+    setError("");
+    setOwnerStep(OWNER_STEPS[ownerStepIndex - 1]);
+  }
+
+  async function handleOwnerStepSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!ownerStepCanContinue()) {
+      return;
+    }
+    setError("");
+    if (ownerIsLastStep) {
+      await submitOwnerWorkspace();
+      return;
+    }
+    setOwnerStep(OWNER_STEPS[ownerStepIndex + 1]);
+  }
+
   async function handleInviteIdentitySubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!inviteToken || !phone.trim() || !name.trim() || loading) return;
+    if (!inviteToken || !phone.trim() || loading) return;
     setLoading(true);
     setError("");
     try {
       const response = await requestV2ManagerInviteChallenge({
         inviteToken,
         phone_e164: phone.trim(),
-        manager_name: name.trim(),
+        manager_name: name.trim() || undefined,
       });
       setChallengeId(response.challenge.id);
       setInviteStep("code");
@@ -197,6 +242,8 @@ function OnboardingV2Body() {
       });
       const authMe = await getV2AuthMe();
       setSession(authMe);
+      setName((current) => current || authMe?.user.full_name || "");
+      setEmail((current) => current || authMe?.user.email || invitePreview?.invite_email || "");
       if (!response.onboarding_required) {
         router.replace("/dashboard");
         return;
@@ -211,7 +258,9 @@ function OnboardingV2Body() {
 
   async function handleInviteProfileSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!name.trim() || !isValidEmail(email) || loading) return;
+    if ((inviteNeedsName && !name.trim()) || (inviteNeedsEmail && !isValidEmail(email)) || loading) {
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -311,16 +360,6 @@ function OnboardingV2Body() {
             {inviteStep === "identity" ? (
               <form onSubmit={handleInviteIdentitySubmit} className="lp-signup-form">
                 <div className="lp-signup-field">
-                  <label htmlFor="name">Full name</label>
-                  <input
-                    id="name"
-                    type="text"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="lp-signup-field">
                   <label htmlFor="phone">Phone number</label>
                   <input
                     id="phone"
@@ -330,6 +369,7 @@ function OnboardingV2Body() {
                     placeholder="(555) 123-4567"
                     value={phone}
                     onChange={(event) => setPhone(event.target.value)}
+                    autoFocus
                   />
                 </div>
                 <div className="lp-signup-field">
@@ -341,11 +381,16 @@ function OnboardingV2Body() {
                     disabled
                   />
                 </div>
+                {invitePreview?.manager_name ? (
+                  <p className="lp-signup-sub" style={{ marginTop: -4, marginBottom: 0 }}>
+                    You&apos;re being invited as {invitePreview.manager_name}.
+                  </p>
+                ) : null}
                 {error ? <p className="lp-signup-error">{error}</p> : null}
                 <button
                   type="submit"
                   className="lp-signup-submit"
-                  disabled={!name.trim() || !phone.trim() || loading}
+                  disabled={!phone.trim() || loading}
                 >
                   {loading ? "Sending..." : "Send code"}
                 </button>
@@ -395,30 +440,39 @@ function OnboardingV2Body() {
 
             {inviteStep === "profile" ? (
               <form onSubmit={handleInviteProfileSubmit} className="lp-signup-form">
-                <div className="lp-signup-field">
-                  <label htmlFor="profile-name">Full name</label>
-                  <input
-                    id="profile-name"
-                    type="text"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    autoFocus
-                  />
-                </div>
-                <div className="lp-signup-field">
-                  <label htmlFor="profile-email">Email</label>
-                  <input
-                    id="profile-email"
-                    type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                </div>
+                {inviteNeedsName ? (
+                  <div className="lp-signup-field">
+                    <label htmlFor="profile-name">Full name</label>
+                    <input
+                      id="profile-name"
+                      type="text"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      autoFocus
+                    />
+                  </div>
+                ) : null}
+                {inviteNeedsEmail ? (
+                  <div className="lp-signup-field">
+                    <label htmlFor="profile-email">Email</label>
+                    <input
+                      id="profile-email"
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      autoFocus={!inviteNeedsName}
+                    />
+                  </div>
+                ) : null}
                 {error ? <p className="lp-signup-error">{error}</p> : null}
                 <button
                   type="submit"
                   className="lp-signup-submit"
-                  disabled={!name.trim() || !isValidEmail(email) || loading}
+                  disabled={
+                    (inviteNeedsName && !name.trim()) ||
+                    (inviteNeedsEmail && !isValidEmail(email)) ||
+                    loading
+                  }
                 >
                   {loading ? "Saving..." : "Finish setup"}
                 </button>
@@ -431,75 +485,101 @@ function OnboardingV2Body() {
   }
 
   return (
-    <main className="lp-signup">
-      <div className="lp-signup-card">
-        <div className="lp-signup-header">
-          <Link href="/" className="lp-signup-logo">Backfill</Link>
+    <main className="lp-onboarding">
+      <div className="ob-card">
+        <div className="ob-header">
+          <Link href="/" className="ob-logo">Backfill</Link>
+          <span className="ob-step-label">Owner setup · {ownerStepNumber} of {OWNER_STEPS.length}</span>
         </div>
-        <div className="lp-signup-body">
-          <p className="lp-eyebrow" style={{ marginBottom: 12 }}>OWNER SETUP</p>
-          <h1 className="lp-signup-headline">Set up your first business and location.</h1>
-          <p className="lp-signup-sub">
-            This creates your first live workspace in Backfill.
-          </p>
-          <form onSubmit={handleOwnerSubmit} className="lp-signup-form">
-            <div className="lp-signup-field">
-              <label htmlFor="name">Full name</label>
-              <input
-                id="name"
-                type="text"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                autoFocus
-              />
-            </div>
-            <div className="lp-signup-field">
-              <label htmlFor="email">Email</label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-            <div className="lp-signup-field">
-              <label htmlFor="location-search">Location</label>
-              <PlaceAutocomplete
-                value={locationQuery}
-                selectedPlace={selectedPlace}
-                onInputChange={(value) => {
-                  setLocationQuery(value);
-                  if (selectedPlace && value !== selectedPlace.label) {
-                    setSelectedPlace(null);
-                  }
-                }}
-                onSelect={(place) => {
-                  setSelectedPlace(place);
-                  setLocationQuery(place.label);
-                }}
-                placeholder="Search for your location"
-              />
-            </div>
-            {selectedPlace ? (
-              <div className="place-selected-meta">
-                <span className="place-selected-badge">
-                  Business: {inferOrganizationName(selectedPlace)}
-                </span>
-                <span className="place-selected-address">
-                  {selectedPlace.formatted_address ?? "Address unavailable"}
-                </span>
+        <div className="ob-progress-bar">
+          <div className="ob-progress-fill" style={{ width: `${ownerProgressPercent}%` }} />
+        </div>
+        <form onSubmit={handleOwnerStepSubmit}>
+          <div className="ob-body">
+            {ownerStep === "name" ? (
+              <div className="ob-step-pane" key="owner-name">
+                <h1 className="ob-question">What should we call the first workspace owner?</h1>
+                <p className="ob-sub">
+                  This becomes the default operator profile for your first Backfill workspace.
+                </p>
+                <input
+                  id="name"
+                  className="ob-input ob-input-underline"
+                  type="text"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Cardin Campbell"
+                  autoFocus
+                />
               </div>
             ) : null}
-            {error ? <p className="lp-signup-error">{error}</p> : null}
+
+            {ownerStep === "email" ? (
+              <div className="ob-step-pane" key="owner-email">
+                <h1 className="ob-question">Where should workspace alerts and invites go?</h1>
+                <p className="ob-sub">
+                  We&apos;ll use this email for admin access and important workspace updates.
+                </p>
+                <input
+                  id="email"
+                  className="ob-input ob-input-underline"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  autoFocus
+                />
+              </div>
+            ) : null}
+
+            {ownerStep === "location" ? (
+              <div className="ob-step-pane" key="owner-location">
+                <h1 className="ob-question">Which location should we start with?</h1>
+                <p className="ob-sub">
+                  Search the real place so Backfill can prefill the address and business details.
+                </p>
+                <div className="lp-signup-field">
+                  <label htmlFor="location-search">Location</label>
+                  <PlaceAutocomplete
+                    value={locationQuery}
+                    selectedPlace={selectedPlace}
+                    onInputChange={(value) => {
+                      setLocationQuery(value);
+                      if (selectedPlace && value !== selectedPlace.label) {
+                        setSelectedPlace(null);
+                      }
+                    }}
+                    onSelect={(place) => {
+                      setSelectedPlace(place);
+                      setLocationQuery(place.label);
+                    }}
+                    placeholder="Search for your location"
+                    autoFocus
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {error ? <p className="ob-error">{error}</p> : null}
+          </div>
+          <div className="ob-footer">
+            <button
+              type="button"
+              className="ob-btn-back"
+              onClick={goToPreviousOwnerStep}
+              disabled={ownerStepIndex === 0 || loading}
+            >
+              Back
+            </button>
             <button
               type="submit"
-              className="lp-signup-submit"
-              disabled={!ownerCanSubmit}
+              className="ob-btn-next"
+              disabled={!ownerStepCanContinue()}
             >
-              {loading ? "Creating workspace..." : "Create workspace"}
+              {ownerIsLastStep ? (loading ? "Creating workspace..." : "Create workspace") : "Continue"}
             </button>
-          </form>
-        </div>
+          </div>
+        </form>
       </div>
     </main>
   );

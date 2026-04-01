@@ -151,7 +151,7 @@ async def test_v2_create_manager_invite_uses_business_name_in_email_subject(monk
 
 
 @pytest.mark.asyncio
-async def test_v2_verify_invite_acceptance_creates_active_membership(monkeypatch):
+async def test_v2_verify_invite_acceptance_uses_invited_name_to_complete_onboarding(monkeypatch):
     session = FakeInviteSession()
     challenge_id = uuid4()
     business_id = uuid4()
@@ -216,13 +216,86 @@ async def test_v2_verify_invite_acceptance_creates_active_membership(monkeypatch
     assert result.token is not None
     assert result.user.email == "manager@example.com"
     assert result.user.primary_phone_e164 == "+15555550123"
-    assert result.onboarding_required is True
+    assert result.onboarding_required is False
+    assert result.user.full_name == "Jamie Rivera"
+    assert result.user.onboarding_completed_at is not None
     assert invite.status == InviteStatus.accepted
     assert invite.accepted_at is not None
     assert len(memberships) == 1
     assert memberships[0].business_id == business_id
     assert memberships[0].location_id == location_id
     assert memberships[0].status == MembershipStatus.active
+
+
+@pytest.mark.asyncio
+async def test_v2_verify_invite_acceptance_requires_onboarding_when_name_missing(monkeypatch):
+    session = FakeInviteSession()
+    challenge_id = uuid4()
+    business_id = uuid4()
+    location_id = uuid4()
+    invite_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    challenge = OTPChallenge(
+        id=challenge_id,
+        phone_e164="+15555550124",
+        channel="sms",
+        purpose=ChallengePurpose.invite_acceptance,
+        status=ChallengeStatus.pending,
+        attempt_count=0,
+        max_attempts=5,
+        requested_for_business_id=business_id,
+        requested_for_location_id=location_id,
+        expires_at=now + timedelta(minutes=10),
+        challenge_metadata={
+            "invite_id": str(invite_id),
+            "invite_email": "manager@example.com",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    invite = ManagerInvite(
+        id=invite_id,
+        business_id=business_id,
+        location_id=location_id,
+        role=MembershipRole.manager,
+        recipient_email="manager@example.com",
+        token_hash="hashed",
+        status=InviteStatus.pending,
+        expires_at=now + timedelta(hours=24),
+        invite_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    session.get_map[(OTPChallenge, challenge_id)] = challenge
+    session.get_map[(ManagerInvite, invite_id)] = invite
+    session.scalar_queue = [None, None, None]
+
+    monkeypatch.setattr(
+        "app_v2.services.auth.check_sms_verification",
+        lambda to, code: {"sid": "VE124", "status": "approved", "valid": True, "to": to},
+    )
+
+    result = await auth.verify_otp_challenge(
+        session,
+        OTPChallengeVerifyRequest(
+            challenge_id=challenge_id,
+            phone_e164="+1 (555) 555-0124",
+            code="123456",
+        ),
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    memberships = [obj for obj in session.added if isinstance(obj, Membership)]
+    assert result.session is not None
+    assert result.token is not None
+    assert result.user.email == "manager@example.com"
+    assert result.user.full_name is None
+    assert result.user.onboarding_completed_at is None
+    assert result.onboarding_required is True
+    assert invite.status == InviteStatus.accepted
+    assert len(memberships) == 1
 
 
 def test_v2_request_manager_invite_challenge_sets_invite_acceptance_purpose(monkeypatch):

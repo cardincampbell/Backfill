@@ -3624,7 +3624,8 @@ body:has(.lp-onboarding) .site-main {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg), 0 0 0 1px rgba(13, 232, 255, 0.04);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 
 .lp-signup-header {
@@ -4141,6 +4142,11 @@ body:has(.lp-onboarding) .site-main {
 .place-field {
   position: relative;
   flex: 1 1 auto;
+  z-index: 1;
+}
+
+.place-field:focus-within {
+  z-index: 40;
 }
 
 .place-dropdown {
@@ -4148,7 +4154,7 @@ body:has(.lp-onboarding) .site-main {
   top: calc(100% + 8px);
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: 50;
   border-radius: calc(var(--radius-lg) - 4px);
   border: 1px solid var(--line-strong);
   background: var(--panel-raised);

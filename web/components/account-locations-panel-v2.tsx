@@ -449,8 +449,9 @@ export function AccountLocationsPanelV2({
                   <div className="account-location-invite-copy">
                     <strong>Add a manager to this location</strong>
                     <span>
-                      Invited managers open the email invite, enter their name and phone,
-                      then verify a code before they can access this location.
+                      Invited managers open the email invite, verify the phone number they
+                      will use to sign in, and only enter profile details that are still
+                      missing.
                     </span>
                   </div>
                   <div className="account-location-membership-groups">
@@ -566,7 +567,7 @@ export function AccountLocationsPanelV2({
 
                   <div className="account-location-invite-form">
                     <label className="field">
-                      <span>Manager name</span>
+                      <span>Manager name (optional)</span>
                       <input
                         value={inviteDraft.manager_name}
                         onChange={(event) =>

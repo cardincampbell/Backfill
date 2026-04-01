@@ -78,6 +78,12 @@ def onboarding_required_for_user(user: User) -> bool:
     return not bool(user.full_name and user.email and user.onboarding_completed_at)
 
 
+def maybe_complete_onboarding(user: User, *, completed_at: datetime | None = None) -> bool:
+    if user.full_name and user.email and user.onboarding_completed_at is None:
+        user.onboarding_completed_at = completed_at or datetime.now(timezone.utc)
+    return user.onboarding_completed_at is not None
+
+
 def membership_for_scope(
     auth: AuthContext,
     business_id: UUID,
@@ -497,6 +503,7 @@ async def verify_otp_challenge(
         )
         challenge.requested_for_business_id = invite_record.business_id
         challenge.requested_for_location_id = invite_record.location_id
+        maybe_complete_onboarding(user, completed_at=now)
 
     if _is_step_up_purpose(challenge.purpose):
         assert auth_ctx is not None
