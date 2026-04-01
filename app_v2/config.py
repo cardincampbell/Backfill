@@ -56,6 +56,10 @@ class V2Settings:
     backfill_email_from: str = os.environ.get("BACKFILL_EMAIL_FROM", "")
     backfill_email_from_name: str = os.environ.get("BACKFILL_EMAIL_FROM_NAME", "Backfill")
     worker_api_key: str = os.environ.get("BACKFILL_V2_WORKER_API_KEY", "")
+    run_migrations_on_startup: bool = os.environ.get(
+        "BACKFILL_V2_RUN_MIGRATIONS_ON_STARTUP",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     backfill_allowed_origins: list[str] = field(default_factory=_default_allowed_origins)
     sql_echo: bool = os.environ.get("BACKFILL_V2_SQL_ECHO", "").strip().lower() in {
         "1",
@@ -87,6 +91,13 @@ class V2Settings:
         url = make_url(self.async_database_url)
         if url.drivername == "postgresql+asyncpg":
             return str(url.set(drivername="postgresql+psycopg"))
+        return str(url)
+
+    @property
+    def advisory_lock_database_url(self) -> str:
+        url = make_url(self.sync_database_url)
+        if "+" in url.drivername:
+            return str(url.set(drivername="postgresql"))
         return str(url)
 
     @property
