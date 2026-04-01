@@ -13,6 +13,7 @@ type DashboardRailProfileProps = DashboardRailNavProps & {
   displayName: string;
   subjectPhone: string | null;
   locationCount: number;
+  signOutRedirectTo?: string;
 };
 
 const RESERVED_SEGMENTS = new Set(["ops", "locations", "shifts"]);
@@ -119,6 +120,7 @@ export function DashboardRailProfile({
   displayName,
   subjectPhone,
   locationCount,
+  signOutRedirectTo = "/login",
 }: DashboardRailProfileProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -154,7 +156,7 @@ export function DashboardRailProfile({
 
   function handleSignOut() {
     startSignOutTransition(async () => {
-      await signOutClientSession("/login");
+      await signOutClientSession(signOutRedirectTo);
     });
   }
 

@@ -32,7 +32,7 @@ export default function RootLayout({
             </Link>
             <nav className="nav">
               <Link href="/dashboard">Dashboard</Link>
-              <Link href="/setup/choose">Setup</Link>
+              <Link href="/try">Setup</Link>
               <Link href="/login">Sign in</Link>
             </nav>
           </div>

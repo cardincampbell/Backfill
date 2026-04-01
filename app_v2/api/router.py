@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app_v2.config import v2_settings
+from app_v2.api.routes import (
+    audit_router,
+    auth_router,
+    businesses_router,
+    coverage_router,
+    identity_router,
+    internal_router,
+    invites_router,
+    onboarding_router,
+    providers_router,
+    scheduling_router,
+    workspace_router,
+    workforce_router,
+)
+
+router = APIRouter(prefix=v2_settings.api_prefix, tags=["v2"])
+
+
+@router.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok", "version": "v2"}
+
+
+@router.get("/meta")
+async def meta() -> dict[str, str]:
+    return {
+        "environment": v2_settings.environment,
+        "database_backend": "postgresql",
+        "api_prefix": v2_settings.api_prefix,
+    }
+
+
+router.include_router(identity_router)
+router.include_router(auth_router)
+router.include_router(internal_router)
+router.include_router(invites_router)
+router.include_router(onboarding_router)
+router.include_router(providers_router)
+router.include_router(workspace_router)
+router.include_router(audit_router)
+router.include_router(businesses_router)
+router.include_router(workforce_router)
+router.include_router(scheduling_router)
+router.include_router(coverage_router)

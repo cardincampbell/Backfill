@@ -2,17 +2,18 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
-import { getLocations } from "@/lib/api";
-import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
+import { getV2Workspace } from "@/lib/api/v2-workspace";
+import { buildDashboardLocationPathFromAny } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const locations = await getLocations();
-  const previewBypassEnabled =
-    process.env.NEXT_PUBLIC_BACKFILL_PREVIEW_AUTH_BYPASS === "true";
+  const v2Workspace = await getV2Workspace();
+  if (!v2Workspace) {
+    redirect("/login");
+  }
 
-  if (!locations.length) {
+  if (!v2Workspace.locations.length) {
     return (
       <main className="section">
         <div className="workspace-shell-head">
@@ -23,7 +24,7 @@ export default async function DashboardPage() {
         </div>
         <EmptyState
           title="Start with one location"
-          body="Onboarding creates the first schedule workspace automatically. If you skipped it, run setup to create a location."
+          body="Bootstrap your first business and location through onboarding."
         />
         <section className="section">
           <Link className="button" href="/onboarding">
@@ -34,11 +35,9 @@ export default async function DashboardPage() {
     );
   }
 
-  const preferredLocation = previewBypassEnabled
-    ? locations[0]
-    : locations.reduce((latest, location) =>
-        location.id > latest.id ? location : latest,
-      );
-
-  redirect(buildDashboardLocationPath(preferredLocation, { tab: "schedule" }));
+  redirect(
+    buildDashboardLocationPathFromAny(v2Workspace.locations[0], {
+      tab: "schedule",
+    }),
+  );
 }

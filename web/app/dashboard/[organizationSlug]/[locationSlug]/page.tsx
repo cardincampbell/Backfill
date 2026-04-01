@@ -1,11 +1,11 @@
 import { notFound } from "next/navigation";
 
-import { getLocations } from "@/lib/api";
+import { getV2Workspace } from "@/lib/api/v2-workspace";
 import {
-  buildDashboardLocationBasePath,
-  findLocationByDashboardSlugs,
+  buildDashboardLocationBasePathFromAny,
+  findLocationByDashboardSlugsFromAny,
 } from "@/lib/dashboard-paths";
-import { renderLocationDetailPage } from "../../location-detail";
+import { renderV2LocationDetailPage } from "../../location-detail-v2";
 
 type DashboardLocationSlugRouteProps = {
   params: Promise<{ organizationSlug: string; locationSlug: string }>;
@@ -18,20 +18,26 @@ export default async function DashboardLocationSlugRoute({
 }: DashboardLocationSlugRouteProps) {
   const { organizationSlug, locationSlug } = await params;
   const query = searchParams ? await searchParams : {};
-  const locations = await getLocations();
-  const location = findLocationByDashboardSlugs(
-    locations,
+  const v2Workspace = await getV2Workspace();
+
+  if (!v2Workspace?.locations.length) {
+    notFound();
+  }
+
+  const v2Location = findLocationByDashboardSlugsFromAny(
+    v2Workspace.locations,
     organizationSlug,
     locationSlug,
   );
 
-  if (!location) {
+  if (!v2Location) {
     notFound();
   }
 
-  return renderLocationDetailPage({
-    locationId: location.id,
+  return renderV2LocationDetailPage({
+    workspace: v2Workspace,
+    location: v2Location,
     query,
-    basePath: buildDashboardLocationBasePath(location),
+    basePath: buildDashboardLocationBasePathFromAny(v2Location),
   });
 }

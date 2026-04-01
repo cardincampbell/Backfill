@@ -308,7 +308,7 @@ export default function HomePage() {
       <section className="lp-section lp-final-cta">
         <div className="lp-section-inner lp-final-cta-inner">
           <h2>Ready to stop making those 6 AM calls?</h2>
-          <a href="/try" className="lp-btn-primary lp-btn-lg">Try Backfill Free</a>
+          <Link href="/try" className="lp-btn-primary lp-btn-lg">Try Backfill Free</Link>
         </div>
       </section>
 

@@ -3,9 +3,10 @@ import {
   DashboardRailNav,
   DashboardRailProfile,
 } from "@/components/dashboard-rail-nav";
-import { getLocations } from "@/lib/api";
-import { requireAuth } from "@/lib/auth/session";
-import { buildDashboardLocationPath } from "@/lib/dashboard-paths";
+import { getV2Workspace } from "@/lib/api/v2-workspace";
+import {
+  buildDashboardLocationPathFromAny,
+} from "@/lib/dashboard-paths";
 import { redirect } from "next/navigation";
 
 export default async function DashboardLayout({
@@ -13,22 +14,32 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await requireAuth();
-  if (session.onboarding_required) {
-    redirect("/onboarding");
-  }
+  const v2Workspace = await getV2Workspace();
 
-  const locations = await getLocations();
-  const primaryLocation = locations[0] ?? null;
-  const primaryBasePath = primaryLocation
-    ? buildDashboardLocationPath(primaryLocation)
-    : "/dashboard";
-  const profileDisplayName =
-    session.organization?.name ??
-    primaryLocation?.organization_name ??
-    primaryLocation?.place_brand_name ??
-    primaryLocation?.name ??
-    "Backfill";
+  let primaryBasePath = "/dashboard";
+  let profileDisplayName = "Backfill";
+  let subjectPhone: string | null = null;
+  let locationCount = 0;
+  let signOutRedirectTo = "/login";
+
+  if (v2Workspace) {
+    if (v2Workspace.onboarding_required) {
+      redirect("/onboarding");
+    }
+    const primaryLocation = v2Workspace.locations[0] ?? null;
+    primaryBasePath = primaryLocation
+      ? buildDashboardLocationPathFromAny(primaryLocation)
+      : "/dashboard/ops";
+    profileDisplayName =
+      v2Workspace.user.full_name ??
+      v2Workspace.user.email ??
+      primaryLocation?.business_name ??
+      "Backfill";
+    subjectPhone = v2Workspace.user.primary_phone_e164 ?? null;
+    locationCount = v2Workspace.locations.length;
+  } else {
+    redirect("/login");
+  }
 
   return (
     <>
@@ -59,8 +70,9 @@ export default async function DashboardLayout({
           <DashboardRailProfile
             displayName={profileDisplayName}
             fallbackBasePath={primaryBasePath}
-            locationCount={locations.length}
-            subjectPhone={session.subject_phone}
+            locationCount={locationCount}
+            signOutRedirectTo={signOutRedirectTo}
+            subjectPhone={subjectPhone}
           />
         </aside>
 
