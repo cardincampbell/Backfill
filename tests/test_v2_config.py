@@ -32,3 +32,26 @@ def test_database_url_prefers_v2_database_url(monkeypatch: pytest.MonkeyPatch) -
 
     assert _database_url_from_env() == "postgresql://postgres:v2@db.example.com:5432/backfill_v2"
     assert V2Settings().database_url == "postgresql://postgres:v2@db.example.com:5432/backfill_v2"
+
+
+def test_derived_database_urls_preserve_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("V2_DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://postgres:secret-password@db.example.com:5432/backfill",
+    )
+
+    settings = V2Settings()
+
+    assert settings.async_database_url == (
+        "postgresql+asyncpg://postgres:secret-password@db.example.com:5432/backfill"
+    )
+    assert settings.sync_database_url == (
+        "postgresql+psycopg://postgres:secret-password@db.example.com:5432/backfill"
+    )
+    assert settings.advisory_lock_database_url == (
+        "postgresql://postgres:secret-password@db.example.com:5432/backfill"
+    )
+    assert "***" not in settings.async_database_url
+    assert "***" not in settings.sync_database_url
+    assert "***" not in settings.advisory_lock_database_url

@@ -22,6 +22,10 @@ def _database_url_from_env() -> str:
     return _normalized_env_value("V2_DATABASE_URL") or _normalized_env_value("DATABASE_URL")
 
 
+def _render_database_url(url) -> str:
+    return url.render_as_string(hide_password=False)
+
+
 def _default_allowed_origins() -> list[str]:
     configured = [
         value.strip()
@@ -104,22 +108,22 @@ class V2Settings:
                 f"Backfill V2 requires PostgreSQL. Received backend {url.get_backend_name()!r}."
             )
         if url.drivername == "postgresql":
-            return str(url.set(drivername="postgresql+asyncpg"))
-        return self.database_url
+            return _render_database_url(url.set(drivername="postgresql+asyncpg"))
+        return _render_database_url(url)
 
     @property
     def sync_database_url(self) -> str:
         url = make_url(self.async_database_url)
         if url.drivername == "postgresql+asyncpg":
-            return str(url.set(drivername="postgresql+psycopg"))
-        return str(url)
+            return _render_database_url(url.set(drivername="postgresql+psycopg"))
+        return _render_database_url(url)
 
     @property
     def advisory_lock_database_url(self) -> str:
         url = make_url(self.sync_database_url)
         if "+" in url.drivername:
-            return str(url.set(drivername="postgresql"))
-        return str(url)
+            return _render_database_url(url.set(drivername="postgresql"))
+        return _render_database_url(url)
 
     @property
     def session_cookie_secure(self) -> bool:
