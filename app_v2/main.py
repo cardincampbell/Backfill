@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 MIGRATION_ADVISORY_LOCK_KEY = 2_420_401_001
 
 
+def _cors_error_headers(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin", "").strip()
+    if not origin or origin not in v2_settings.backfill_allowed_origins:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
+
+
 def _run_migrations_with_advisory_lock() -> None:
     alembic_ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
     logger.info("Running V2 migrations with advisory lock")
@@ -82,10 +93,11 @@ def create_app() -> FastAPI:
             payload["debug"] = f"{exc.__class__.__name__}: {exc}"
             payload["path"] = request.url.path
             payload["method"] = request.method
+        headers = {"X-Backfill-Request-ID": request_id, **_cors_error_headers(request)}
         return JSONResponse(
             status_code=500,
             content=payload,
-            headers={"X-Backfill-Request-ID": request_id},
+            headers=headers,
         )
 
     if v2_settings.backfill_allowed_origins:
