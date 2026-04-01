@@ -12,6 +12,7 @@ from app_v2.api.routes import (
     internal_router,
     invites_router,
     onboarding_router,
+    places_router,
     providers_router,
     scheduling_router,
     workspace_router,
@@ -40,6 +41,7 @@ router.include_router(auth_router)
 router.include_router(internal_router)
 router.include_router(invites_router)
 router.include_router(onboarding_router)
+router.include_router(places_router)
 router.include_router(providers_router)
 router.include_router(workspace_router)
 router.include_router(audit_router)

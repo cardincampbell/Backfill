@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-from app_v2.api import router as api_router
+from app_v2.api import legacy_places_router, router as api_router
 from app_v2.config import v2_settings
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(api_router)
+    app.include_router(legacy_places_router)
     return app
 
 
