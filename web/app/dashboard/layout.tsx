@@ -29,7 +29,7 @@ export default async function DashboardLayout({
     const primaryLocation = v2Workspace.locations[0] ?? null;
     primaryBasePath = primaryLocation
       ? buildDashboardLocationPathFromAny(primaryLocation)
-      : "/dashboard/ops";
+      : "/dashboard/locations";
     profileDisplayName =
       v2Workspace.user.full_name ??
       v2Workspace.user.email ??

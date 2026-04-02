@@ -10,6 +10,7 @@ from app_v2.api.deps import AuthDep, SessionDep
 from app_v2.models.common import MembershipRole
 from app_v2.schemas.workspace import WorkspaceBusinessRead, WorkspaceLocationRead, WorkspaceRead
 from app_v2.services import auth as auth_service
+from app_v2.services import businesses as businesses_service
 from app_v2.services import workspace as workspace_service
 from app_v2.services import workspace_board as workspace_board_service
 from app_v2.schemas.workspace_board import WorkspaceLocationBoardRead
@@ -26,6 +27,8 @@ READ_ROLES = {
 @router.get("", response_model=WorkspaceRead)
 async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
     workspace_locations = await workspace_service.list_workspace_locations(session, auth_ctx)
+    business_ids = list({membership.business_id for membership in auth_ctx.memberships})
+    business_rows = await businesses_service.list_businesses(session, business_ids=business_ids)
     location_rows = [
         WorkspaceLocationRead(
             membership_id=item.membership.id,
@@ -52,16 +55,24 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
     for row in location_rows:
         business_groups[str(row.business_id)].append(row)
 
+    membership_rank = {"viewer": 1, "manager": 2, "admin": 3, "owner": 4}
+    membership_roles_by_business = defaultdict(list)
+    for membership in auth_ctx.memberships:
+        membership_roles_by_business[str(membership.business_id)].append(membership.role.value)
+
     businesses = [
         WorkspaceBusinessRead(
-            business_id=rows[0].business_id,
-            business_name=rows[0].business_name,
-            business_slug=rows[0].business_slug,
-            membership_role=max(rows, key=lambda row: {"viewer": 1, "manager": 2, "admin": 3, "owner": 4}.get(row.membership_role, 0)).membership_role,
-            location_count=len(rows),
-            locations=rows,
+            business_id=business.id,
+            business_name=business.brand_name or business.legal_name,
+            business_slug=business.slug,
+            membership_role=max(
+                membership_roles_by_business.get(str(business.id), ["viewer"]),
+                key=lambda role: membership_rank.get(role, 0),
+            ),
+            location_count=len(business_groups.get(str(business.id), [])),
+            locations=business_groups.get(str(business.id), []),
         )
-        for rows in business_groups.values()
+        for business in business_rows
     ]
     businesses.sort(key=lambda item: item.business_name.lower())
 

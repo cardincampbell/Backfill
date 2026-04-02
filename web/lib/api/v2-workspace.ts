@@ -46,6 +46,13 @@ export type V2WorkspaceBusiness = {
   locations: V2WorkspaceLocation[];
 };
 
+export type V2BusinessCreatePayload = {
+  legal_name: string;
+  brand_name?: string;
+  timezone?: string;
+  primary_email?: string | null;
+};
+
 export type V2Workspace = {
   user: V2WorkspaceUser;
   onboarding_required: boolean;
@@ -264,6 +271,24 @@ export type V2EmployeeEnrollmentPayload = {
 
 export async function getV2Workspace(): Promise<V2Workspace | null> {
   return fetchV2Json<V2Workspace>(`${V2_API_PREFIX}/workspace`);
+}
+
+export async function createV2Business(payload: V2BusinessCreatePayload) {
+  const response = await apiFetchV2(`${V2_API_PREFIX}/businesses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as {
+    id: string;
+    legal_name: string;
+    brand_name?: string | null;
+    slug: string;
+    timezone: string;
+  };
 }
 
 export async function createV2LocationFromPlace(

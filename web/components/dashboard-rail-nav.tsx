@@ -23,7 +23,7 @@ const NAV_ITEMS = [
   { key: "coverage", label: "Coverage", icon: "◔" },
   { key: "actions", label: "Actions", icon: "◎" },
   { key: "roster", label: "Team", icon: "◉" },
-  { key: "settings", label: "Location", icon: "▣" },
+  { key: "locations", label: "Locations", icon: "▣" },
 ] as const;
 
 function buildActiveBasePath(pathname: string, fallbackBasePath: string): string {
@@ -46,14 +46,15 @@ function resolveCurrentRailView(
   pathname: string,
   searchParams: { get(key: string): string | null },
 ): string | null {
-  if (pathname === "/dashboard/ops") {
-    return "workspace";
+  if (pathname === "/dashboard/ops" || pathname === "/dashboard/locations") {
+    return "locations";
   }
   if (pathname === "/dashboard/account") {
     return "account";
   }
   if (isLocationDashboardPath(pathname)) {
-    return searchParams.get("tab") ?? "schedule";
+    const tab = searchParams.get("tab") ?? "schedule";
+    return tab === "settings" ? "locations" : tab;
   }
   return null;
 }
@@ -82,7 +83,10 @@ export function DashboardRailHomeLink({
 }: DashboardRailNavProps) {
   const pathname = usePathname();
   const basePath = buildActiveBasePath(pathname, fallbackBasePath);
-  const href = pathname === "/dashboard/ops" ? "/dashboard" : `${basePath}?tab=schedule`;
+  const href =
+    pathname === "/dashboard/ops" || pathname === "/dashboard/locations"
+      ? "/dashboard/locations"
+      : `${basePath}?tab=schedule`;
 
   return (
     <Link className="dashboard-rail-brand" href={href}>
@@ -101,47 +105,38 @@ export function DashboardRailNav({ fallbackBasePath }: DashboardRailNavProps) {
   const currentView = resolveCurrentRailView(pathname, searchParams);
 
   return (
-    <>
-      <nav className="dashboard-rail-nav">
-        {NAV_ITEMS.map((item) => {
-          const params = new URLSearchParams();
-          for (const key of ["week_start", "job_id", "row", "shift_id"]) {
-            const value = searchParams.get(key);
-            if (value) {
-              params.set(key, value);
-            }
-          }
-          if (item.key !== "schedule") {
-            params.set("tab", item.key);
-          }
+    <nav className="dashboard-rail-nav">
+      {NAV_ITEMS.map((item) => {
+        const href =
+          item.key === "locations"
+            ? "/dashboard/locations"
+            : (() => {
+                const params = new URLSearchParams();
+                for (const key of ["week_start", "job_id", "row", "shift_id"]) {
+                  const value = searchParams.get(key);
+                  if (value) {
+                    params.set(key, value);
+                  }
+                }
+                if (item.key !== "schedule") {
+                  params.set("tab", item.key);
+                }
+                return params.toString() ? `${basePath}?${params.toString()}` : basePath;
+              })();
 
-          const href = params.toString() ? `${basePath}?${params.toString()}` : basePath;
-
-          return (
-            <Link
-              key={item.key}
-              className="dashboard-rail-link"
-              data-active={currentView === item.key}
-              href={href}
-            >
-              <span className="dashboard-rail-link-icon">{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-
-      <nav className="dashboard-rail-nav dashboard-rail-nav-utility">
-        <Link
-          className="dashboard-rail-link"
-          data-active={currentView === "workspace"}
-          href="/dashboard/ops"
-        >
-          <span className="dashboard-rail-link-icon">⌂</span>
-          <span>Workspace</span>
-        </Link>
-      </nav>
-    </>
+        return (
+          <Link
+            key={item.key}
+            className="dashboard-rail-link"
+            data-active={currentView === item.key}
+            href={href}
+          >
+            <span className="dashboard-rail-link-icon">{item.icon}</span>
+            <span>{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 

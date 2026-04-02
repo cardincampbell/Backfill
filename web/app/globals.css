@@ -4941,11 +4941,6 @@ body:has(.lp-onboarding) .site-main {
   width: 100%;
 }
 
-.dashboard-rail-nav-utility {
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
 .dashboard-rail-link {
   display: flex;
   flex-direction: column;
@@ -5513,6 +5508,191 @@ body:has(.lp-onboarding) .site-main {
   color: var(--accent);
 }
 
+.account-locations-hero {
+  align-items: stretch;
+}
+
+.account-locations-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: min(420px, 100%);
+}
+
+.account-locations-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.account-locations-summary-item span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.account-locations-summary-item strong {
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.account-business-create {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.account-business-create-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.account-business-create-copy strong {
+  font-size: 1rem;
+  letter-spacing: -0.03em;
+}
+
+.account-business-create-copy span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.account-business-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.account-business-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.account-business-cluster {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border-radius: 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.account-business-cluster-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-business-cluster-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.account-business-kicker {
+  color: var(--brand);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-business-cluster-copy h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 2vw, 1.7rem);
+  letter-spacing: -0.05em;
+  line-height: 1.02;
+}
+
+.account-business-cluster-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.account-business-cluster-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-business-location-create {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+}
+
+.account-business-location-create-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.account-business-location-create-copy strong {
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+
+.account-business-location-create-copy span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.account-business-location-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.account-business-location-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.account-business-empty {
+  display: grid;
+  gap: 6px;
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--line-strong);
+}
+
+.account-business-empty strong {
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+
+.account-business-empty span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.account-business-empty-root {
+  padding: 22px;
+}
+
 .account-locations-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5588,6 +5768,10 @@ body:has(.lp-onboarding) .site-main {
   box-shadow: var(--shadow-sm);
 }
 
+.account-location-card-rich {
+  gap: 16px;
+}
+
 .account-location-card-main {
   display: grid;
   gap: 10px;
@@ -5611,6 +5795,14 @@ body:has(.lp-onboarding) .site-main {
 .account-location-card-copy strong {
   font-size: 1rem;
   letter-spacing: -0.03em;
+}
+
+.account-location-card-kicker {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .account-location-card-copy span,
@@ -5648,6 +5840,13 @@ body:has(.lp-onboarding) .site-main {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.5;
+}
+
+.account-location-invite-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
 }
 
 .account-location-invite-fields {
@@ -5994,6 +6193,17 @@ body:has(.lp-onboarding) .site-main {
     grid-template-columns: 1fr;
   }
 
+  .account-locations-summary,
+  .account-business-location-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-business-create-form,
+  .account-business-location-create-form,
+  .account-location-invite-form {
+    grid-template-columns: 1fr;
+  }
+
   .account-location-create-grid {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -6027,11 +6237,6 @@ body:has(.lp-onboarding) .site-main {
     flex-direction: row;
     overflow-x: auto;
     padding-bottom: 2px;
-  }
-
-  .dashboard-rail-nav-utility {
-    padding-top: 0;
-    border-top: none;
   }
 
   .dashboard-rail-link {
@@ -6073,6 +6278,14 @@ body:has(.lp-onboarding) .site-main {
 
   .account-settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .account-business-cluster-head {
+    display: grid;
+  }
+
+  .account-locations-summary {
+    min-width: 0;
   }
 
   .workspace-shell-head h1 {
@@ -6126,6 +6339,10 @@ body:has(.lp-onboarding) .site-main {
   .account-settings-summary {
     grid-template-columns: 1fr;
     align-items: flex-start;
+  }
+
+  .account-locations-summary-item {
+    min-width: 0;
   }
 
   .account-settings-info-row {

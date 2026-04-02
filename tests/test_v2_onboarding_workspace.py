@@ -320,3 +320,78 @@ def test_v2_workspace_route_returns_locations(monkeypatch):
         assert payload["locations"][0]["membership_scope"] == "location"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_v2_workspace_route_includes_business_without_locations(monkeypatch):
+    auth_ctx = _make_auth_context()
+    business_id = uuid4()
+    membership = Membership(
+        id=uuid4(),
+        user_id=auth_ctx.user.id,
+        business_id=business_id,
+        role=MembershipRole.owner,
+        status=MembershipStatus.active,
+        membership_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    auth_ctx.user.full_name = "Operator"
+    auth_ctx.user.email = "operator@example.com"
+    auth_ctx.user.onboarding_completed_at = datetime.now(timezone.utc)
+    auth_ctx.memberships = [membership]
+
+    async def override_db():
+        yield FakeSession()
+
+    async def override_auth():
+        return auth_ctx
+
+    async def fake_list_workspace_locations(_session, _auth_ctx):
+        return []
+
+    async def fake_list_businesses(_session, business_ids=None):
+        assert business_ids == [business_id]
+        return [
+            Business(
+                id=business_id,
+                legal_name="Urth Caffe LLC",
+                brand_name="Urth Caffe",
+                slug="urth-caffe",
+                timezone="America/Los_Angeles",
+                status="active",
+                settings={},
+                place_metadata={},
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app_v2.api.routes.workspace.workspace_service.list_workspace_locations",
+        fake_list_workspace_locations,
+    )
+    monkeypatch.setattr(
+        "app_v2.api.routes.workspace.businesses_service.list_businesses",
+        fake_list_businesses,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.get("/api/v2/workspace")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["businesses"] == [
+            {
+                "business_id": str(business_id),
+                "business_name": "Urth Caffe",
+                "business_slug": "urth-caffe",
+                "membership_role": "owner",
+                "location_count": 0,
+                "locations": [],
+            }
+        ]
+        assert payload["locations"] == []
+    finally:
+        app.dependency_overrides.clear()
