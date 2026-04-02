@@ -284,6 +284,24 @@ export async function completeV2OnboardingProfile(input: {
   };
 }
 
+export async function updateV2AccountProfile(input: {
+  full_name: string;
+  email: string;
+}) {
+  const response = await apiFetchV2(`${V2_API_PREFIX}/account/profile`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as {
+    user: V2AuthUser;
+    onboarding_required: boolean;
+  };
+}
+
 export async function bootstrapV2OwnerWorkspace(input: {
   profile: { full_name: string; email: string };
   business: {

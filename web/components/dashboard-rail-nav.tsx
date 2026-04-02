@@ -9,20 +9,21 @@ type DashboardRailNavProps = {
   fallbackBasePath: string;
 };
 
-type DashboardRailProfileProps = DashboardRailNavProps & {
+type DashboardRailProfileProps = {
   displayName: string;
   subjectPhone: string | null;
-  locationCount: number;
+  subjectEmail: string | null;
   signOutRedirectTo?: string;
 };
 
-const RESERVED_SEGMENTS = new Set(["ops", "locations", "shifts"]);
+const RESERVED_SEGMENTS = new Set(["account", "ops", "locations", "shifts"]);
 
 const NAV_ITEMS = [
   { key: "schedule", label: "Schedule", icon: "▦" },
   { key: "coverage", label: "Coverage", icon: "◔" },
   { key: "actions", label: "Actions", icon: "◎" },
   { key: "roster", label: "Team", icon: "◉" },
+  { key: "settings", label: "Location", icon: "▣" },
 ] as const;
 
 function buildActiveBasePath(pathname: string, fallbackBasePath: string): string {
@@ -36,8 +37,25 @@ function buildActiveBasePath(pathname: string, fallbackBasePath: string): string
   return fallbackBasePath;
 }
 
-function buildSettingsHref(basePath: string): string {
-  return `${basePath}?tab=settings`;
+function isLocationDashboardPath(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.length >= 3 && segments[0] === "dashboard" && !RESERVED_SEGMENTS.has(segments[1]);
+}
+
+function resolveCurrentRailView(
+  pathname: string,
+  searchParams: { get(key: string): string | null },
+): string | null {
+  if (pathname === "/dashboard/ops") {
+    return "workspace";
+  }
+  if (pathname === "/dashboard/account") {
+    return "account";
+  }
+  if (isLocationDashboardPath(pathname)) {
+    return searchParams.get("tab") ?? "schedule";
+  }
+  return null;
 }
 
 function getInitials(label: string): string {
@@ -80,55 +98,66 @@ export function DashboardRailNav({ fallbackBasePath }: DashboardRailNavProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const basePath = buildActiveBasePath(pathname, fallbackBasePath);
-  const currentTab =
-    pathname === "/dashboard/ops" ? "locations" : searchParams.get("tab") ?? "schedule";
+  const currentView = resolveCurrentRailView(pathname, searchParams);
 
   return (
-    <nav className="dashboard-rail-nav">
-      {NAV_ITEMS.map((item) => {
-        const params = new URLSearchParams();
-        for (const key of ["week_start", "job_id", "row", "shift_id"]) {
-          const value = searchParams.get(key);
-          if (value) {
-            params.set(key, value);
+    <>
+      <nav className="dashboard-rail-nav">
+        {NAV_ITEMS.map((item) => {
+          const params = new URLSearchParams();
+          for (const key of ["week_start", "job_id", "row", "shift_id"]) {
+            const value = searchParams.get(key);
+            if (value) {
+              params.set(key, value);
+            }
           }
-        }
-        if (item.key !== "schedule") {
-          params.set("tab", item.key);
-        }
+          if (item.key !== "schedule") {
+            params.set("tab", item.key);
+          }
 
-        const href = params.toString() ? `${basePath}?${params.toString()}` : basePath;
+          const href = params.toString() ? `${basePath}?${params.toString()}` : basePath;
 
-        return (
-          <Link
-            key={item.key}
-            className="dashboard-rail-link"
-            data-active={currentTab === item.key}
-            href={href}
-          >
-            <span className="dashboard-rail-link-icon">{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        );
-      })}
-    </nav>
+          return (
+            <Link
+              key={item.key}
+              className="dashboard-rail-link"
+              data-active={currentView === item.key}
+              href={href}
+            >
+              <span className="dashboard-rail-link-icon">{item.icon}</span>
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
+
+      <nav className="dashboard-rail-nav dashboard-rail-nav-utility">
+        <Link
+          className="dashboard-rail-link"
+          data-active={currentView === "workspace"}
+          href="/dashboard/ops"
+        >
+          <span className="dashboard-rail-link-icon">⌂</span>
+          <span>Workspace</span>
+        </Link>
+      </nav>
+    </>
   );
 }
 
 export function DashboardRailProfile({
-  fallbackBasePath,
   displayName,
   subjectPhone,
-  locationCount,
+  subjectEmail,
   signOutRedirectTo = "/login",
 }: DashboardRailProfileProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const basePath = buildActiveBasePath(pathname, fallbackBasePath);
-  const currentTab =
-    pathname === "/dashboard/ops" ? "locations" : searchParams.get("tab") ?? "schedule";
-  const settingsHref = buildSettingsHref(basePath);
+  const currentView = resolveCurrentRailView(pathname, searchParams);
   const maskedPhone = formatPhone(subjectPhone);
+  const secondaryLabel =
+    maskedPhone ??
+    (subjectEmail && subjectEmail !== displayName ? subjectEmail : "Backfill account");
   const [signingOut, startSignOutTransition] = useTransition();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -170,7 +199,7 @@ export function DashboardRailProfile({
         <div className="dashboard-rail-profile-avatar">{getInitials(displayName)}</div>
         <div className="dashboard-rail-profile-copy">
           <strong>{displayName}</strong>
-          <span>{maskedPhone ?? `${locationCount} ${locationCount === 1 ? "location" : "locations"}`}</span>
+          <span>{secondaryLabel}</span>
         </div>
         <span className="dashboard-rail-profile-caret" aria-hidden="true">
           {menuOpen ? "▴" : "▾"}
@@ -181,19 +210,11 @@ export function DashboardRailProfile({
         <div className="dashboard-rail-profile-menu">
           <Link
             className="dashboard-rail-profile-item"
-            data-active={pathname === "/dashboard/ops"}
-            href="/dashboard/ops"
+            data-active={currentView === "account"}
+            href="/dashboard/account"
             onClick={() => setMenuOpen(false)}
           >
-            Locations
-          </Link>
-          <Link
-            className="dashboard-rail-profile-item"
-            data-active={currentTab === "settings" && pathname !== "/dashboard/ops"}
-            href={settingsHref}
-            onClick={() => setMenuOpen(false)}
-          >
-            Settings
+            Account
           </Link>
           <button
             className="dashboard-rail-profile-item dashboard-rail-profile-signout"
@@ -205,9 +226,6 @@ export function DashboardRailProfile({
           </button>
         </div>
       ) : null}
-      <div className="dashboard-rail-profile-meta">
-        {locationCount} {locationCount === 1 ? "location" : "locations"}
-      </div>
     </div>
   );
 }

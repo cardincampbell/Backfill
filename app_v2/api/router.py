@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app_v2.config import v2_settings
 from app_v2.api.routes import (
+    account_router,
     audit_router,
     auth_router,
     businesses_router,
@@ -38,6 +39,7 @@ async def meta() -> dict[str, str]:
 
 router.include_router(identity_router)
 router.include_router(auth_router)
+router.include_router(account_router)
 router.include_router(internal_router)
 router.include_router(invites_router)
 router.include_router(onboarding_router)

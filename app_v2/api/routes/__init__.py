@@ -1,3 +1,4 @@
+from app_v2.api.routes.account import router as account_router
 from app_v2.api.routes.audit import router as audit_router
 from app_v2.api.routes.auth import router as auth_router
 from app_v2.api.routes.businesses import router as businesses_router
@@ -13,6 +14,7 @@ from app_v2.api.routes.workspace import router as workspace_router
 from app_v2.api.routes.workforce import router as workforce_router
 
 __all__ = [
+    "account_router",
     "audit_router",
     "auth_router",
     "businesses_router",

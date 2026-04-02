@@ -217,19 +217,6 @@ export function V2LocationSettingsPanel({
           </div>
         </div>
       </div>
-
-      <div className="settings-card" style={{ opacity: 0.74 }}>
-        <div className="settings-card-header">Context</div>
-        <div className="settings-card-body" style={{ gap: 8 }}>
-          <div className="muted">Scheduling platform: {settings.scheduling_platform ?? "backfill_native"}</div>
-          <div className="muted">Integration status: {settings.integration_status ?? "n/a"}</div>
-          <div className="muted">Timezone: {settings.timezone ?? "America/Los_Angeles"}</div>
-          <div className="muted">
-            Beta eligible: {settings.backfill_shifts_beta_eligible ? "Yes" : "No"}
-          </div>
-        </div>
-      </div>
-
       {feedback ? (
         <div className="account-locations-feedback" data-tone={feedback.type} role="status">
           {feedback.message}
@@ -238,7 +225,7 @@ export function V2LocationSettingsPanel({
 
       {hasChanges ? (
         <div className="v2-manager-panel-actions">
-          <span className="muted">These settings update the live location profile.</span>
+          <span className="muted">These settings update the live location configuration.</span>
           <button className="button button-small" disabled={saving} onClick={handleSave} type="button">
             {saving ? "Saving…" : "Save settings"}
           </button>

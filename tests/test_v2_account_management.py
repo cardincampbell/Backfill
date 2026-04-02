@@ -228,3 +228,89 @@ def test_v2_revoke_location_manager_access_route_revokes_membership():
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_v2_account_profile_route_updates_current_user():
+    fake_session = FakeAccountSession()
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    original_completed_at = auth_ctx.user.onboarding_completed_at
+    fake_session.scalar_queue = [None]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            "/api/v2/account/profile",
+            json={
+                "full_name": "Cardin Campbell",
+                "email": "cardin@example.com",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["user"]["full_name"] == "Cardin Campbell"
+        assert payload["user"]["email"] == "cardin@example.com"
+        assert payload["onboarding_required"] is False
+        assert auth_ctx.user.full_name == "Cardin Campbell"
+        assert auth_ctx.user.email == "cardin@example.com"
+        assert auth_ctx.user.onboarding_completed_at == original_completed_at
+        assert fake_session.commits == 1
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "account.profile.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_v2_account_profile_route_rejects_duplicate_email():
+    fake_session = FakeAccountSession()
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    now = datetime.now(timezone.utc)
+    fake_session.scalar_queue = [
+        User(
+            id=uuid4(),
+            full_name="Existing User",
+            email="taken@example.com",
+            primary_phone_e164="+15555550123",
+            is_phone_verified=True,
+            onboarding_completed_at=now,
+            profile_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            "/api/v2/account/profile",
+            json={
+                "full_name": "Owner Operator",
+                "email": "taken@example.com",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {"detail": "email_already_in_use"}
+        assert fake_session.commits == 0
+    finally:
+        app.dependency_overrides.clear()

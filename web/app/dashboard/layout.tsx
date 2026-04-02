@@ -19,7 +19,7 @@ export default async function DashboardLayout({
   let primaryBasePath = "/dashboard";
   let profileDisplayName = "Backfill";
   let subjectPhone: string | null = null;
-  let locationCount = 0;
+  let subjectEmail: string | null = null;
   let signOutRedirectTo = "/login";
 
   if (v2Workspace) {
@@ -35,8 +35,8 @@ export default async function DashboardLayout({
       v2Workspace.user.email ??
       primaryLocation?.business_name ??
       "Backfill";
+    subjectEmail = v2Workspace.user.email ?? null;
     subjectPhone = v2Workspace.user.primary_phone_e164 ?? null;
-    locationCount = v2Workspace.locations.length;
   } else {
     redirect("/login");
   }
@@ -69,9 +69,8 @@ export default async function DashboardLayout({
 
           <DashboardRailProfile
             displayName={profileDisplayName}
-            fallbackBasePath={primaryBasePath}
-            locationCount={locationCount}
             signOutRedirectTo={signOutRedirectTo}
+            subjectEmail={subjectEmail}
             subjectPhone={subjectPhone}
           />
         </aside>

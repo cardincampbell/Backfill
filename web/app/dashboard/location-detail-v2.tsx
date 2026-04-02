@@ -392,27 +392,6 @@ export async function renderV2LocationDetailPage({
         )
       ) : null}
 
-      <section className="settings-card" style={{ display: "grid", gap: 12 }}>
-        <div className="settings-card-header">Locations in this workspace</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", padding: "0 20px 20px" }}>
-          {workspace.locations.map((workspaceLocation) => {
-            const href = buildLocationHref(
-              `/dashboard/${workspaceLocation.business_slug}/${workspaceLocation.location_slug}`,
-              { tab: activeTab },
-            );
-            const active = workspaceLocation.location_id === location.location_id;
-            return (
-              <Link
-                key={workspaceLocation.location_id}
-                className={active ? "button button-small" : "button-secondary button-small"}
-                href={href}
-              >
-                {workspaceLocation.business_name} · {workspaceLocation.location_name}
-              </Link>
-            );
-          })}
-        </div>
-      </section>
     </main>
   );
 }
