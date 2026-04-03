@@ -1,6 +1,4 @@
-def test_home_dashboard_page_renders(client):
+def test_backend_root_is_not_a_web_route(client):
     response = client.get("/")
 
-    assert response.status_code == 200
-    assert "Backfill Native Lite" in response.text
-    assert "Support-layer dashboard" in response.text
+    assert response.status_code == 404

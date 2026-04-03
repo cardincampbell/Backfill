@@ -8,7 +8,7 @@ from app_v2 import main as main_module
 from app_v2.api.routes import places as places_routes
 
 
-def test_places_routes_support_v2_and_legacy_paths(monkeypatch) -> None:
+def test_places_routes_support_v2_path(monkeypatch) -> None:
     monkeypatch.setattr(
         main_module,
         "v2_settings",
@@ -58,12 +58,8 @@ def test_places_routes_support_v2_and_legacy_paths(monkeypatch) -> None:
     app = main_module.create_app()
     client = TestClient(app)
 
-    for path in (
-        "/api/places/autocomplete?q=starbucks&session_token=sess_123",
-        "/api/v2/places/autocomplete?q=starbucks&session_token=sess_123",
-    ):
-        response = client.get(path)
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["provider"] == "google"
-        assert payload["suggestions"][0]["place_id"] == "abc123"
+    response = client.get("/api/v2/places/autocomplete?q=starbucks&session_token=sess_123")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"] == "google"
+    assert payload["suggestions"][0]["place_id"] == "abc123"

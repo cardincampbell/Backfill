@@ -9,7 +9,6 @@ from app_v2.schemas.places import PlaceAutocompleteResponse, PlaceDetailsRespons
 from app_v2.services import places as places_service
 
 places_router = APIRouter(prefix="/places", tags=["v2-places"])
-legacy_places_router = APIRouter(prefix="/api/places", tags=["legacy-places"])
 
 
 def _google_places_error_detail(exc: httpx.HTTPStatusError, operation: str) -> str:
@@ -93,7 +92,6 @@ async def _details_impl(
 
 
 @places_router.get("/autocomplete", response_model=PlaceAutocompleteResponse)
-@legacy_places_router.get("/autocomplete", response_model=PlaceAutocompleteResponse)
 async def get_places_autocomplete(
     q: str = Query(..., min_length=2, max_length=120),
     session_token: Optional[str] = Query(default=None, max_length=256),
@@ -111,7 +109,6 @@ async def get_places_autocomplete(
 
 
 @places_router.get("/details", response_model=PlaceDetailsResponse)
-@legacy_places_router.get("/details", response_model=PlaceDetailsResponse)
 async def get_place_details(
     place_id: str = Query(..., min_length=2, max_length=256),
     session_token: Optional[str] = Query(default=None, max_length=256),

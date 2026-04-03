@@ -1,4 +1,3 @@
-import { logout } from "@/lib/api/auth";
 import { logoutV2 } from "@/lib/api/v2-auth";
 import {
   clearStoredPreviewPhone,
@@ -7,7 +6,7 @@ import {
 
 export async function signOutClientSession(redirectTo: string = "/login") {
   try {
-    await Promise.allSettled([logout(), logoutV2()]);
+    await logoutV2();
   } catch {
     // Best-effort server revoke; clear local state regardless.
   } finally {
