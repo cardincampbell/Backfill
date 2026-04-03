@@ -84,8 +84,8 @@ export default function LandingPage() {
       <section className="relative pt-28 sm:pt-36 pb-20 sm:pb-32 px-5 sm:px-6 lg:px-8 overflow-hidden">
         {/* Background layers */}
         <div className="absolute inset-0 bg-[#fafbfd]" />
-        <div className="absolute top-[-400px] right-[-300px] w-[1000px] h-[1000px] bg-gradient-to-bl from-[#635BFF]/[0.08] via-[#80b3ff]/[0.06] to-transparent rounded-full blur-[100px]" />
-        <div className="absolute bottom-[-200px] left-[-200px] w-[700px] h-[700px] bg-gradient-to-tr from-[#635BFF]/[0.05] via-transparent to-transparent rounded-full blur-[80px]" />
+        <div className="absolute top-[-400px] right-[-300px] w-[1000px] h-[1000px] bg-gradient-to-bl from-[#635BFF]/[0.13] via-[#80b3ff]/[0.11] to-transparent rounded-full blur-[100px]" />
+        <div className="absolute bottom-[-200px] left-[-200px] w-[700px] h-[700px] bg-gradient-to-tr from-[#635BFF]/[0.10] via-transparent to-transparent rounded-full blur-[80px]" />
         <DotGrid className="opacity-50" />
         {/* Bottom edge fade */}
         <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-white to-transparent" />
