@@ -290,7 +290,62 @@ def _standby_queue_for_case(coverage_case: CoverageCase) -> list[dict]:
     raw_queue = metadata.get("standby_queue")
     if not isinstance(raw_queue, list):
         return []
-    return [dict(item) for item in raw_queue if isinstance(item, dict)]
+    queue = [dict(item) for item in raw_queue if isinstance(item, dict)]
+    queue.sort(key=lambda item: int(item.get("position", 0) or 0))
+    return queue
+
+
+def _standby_entry_status(entry: dict) -> str:
+    return str(entry.get("status") or "ready").strip().lower() or "ready"
+
+
+def _parse_uuid(value: object | None) -> UUID | None:
+    if value in (None, ""):
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_standby_activation_offer(offer: CoverageOffer) -> bool:
+    return bool((offer.offer_metadata or {}).get("standby_activation"))
+
+
+def _record_standby_queue_result(
+    coverage_case: CoverageCase,
+    offer: CoverageOffer,
+    *,
+    status: str,
+    occurred_at: datetime,
+    assignment: ShiftAssignment | None = None,
+) -> None:
+    standby_queue = _standby_queue_for_case(coverage_case)
+    if not standby_queue:
+        return
+
+    source_offer_id = str((offer.offer_metadata or {}).get("standby_source_offer_id") or "").strip()
+    updated = False
+    for entry in standby_queue:
+        activation_offer_id = str(entry.get("activation_offer_id") or "").strip()
+        original_offer_id = str(entry.get("offer_id") or "").strip()
+        if activation_offer_id == str(offer.id) or (
+            source_offer_id and original_offer_id == source_offer_id
+        ):
+            entry["status"] = status
+            entry["last_status_at"] = occurred_at.isoformat()
+            if status == "promoted":
+                entry["promoted_at"] = occurred_at.isoformat()
+                entry["promotion_offer_id"] = str(offer.id)
+                if assignment is not None:
+                    entry["promotion_assignment_id"] = str(assignment.id)
+            else:
+                entry["last_terminal_offer_id"] = str(offer.id)
+            updated = True
+            break
+
+    if updated:
+        _update_case_metadata(coverage_case, standby_queue=standby_queue)
 
 
 def _update_case_metadata(coverage_case: CoverageCase, **updates: object) -> None:
@@ -323,6 +378,135 @@ async def _next_undispatched_candidates(
         query.order_by(CoverageCandidate.rank.asc()).limit(max(1, batch_size))
     )
     return list(candidate_result.scalars().all())
+
+
+async def activate_standby_queue(
+    session: AsyncSession,
+    *,
+    coverage_case: CoverageCase,
+    shift: Shift,
+    reference_time: datetime,
+    channel: str | None = None,
+    dispatch_limit: int = 1,
+) -> list[CoverageOffer]:
+    standby_queue = _standby_queue_for_case(coverage_case)
+    if not standby_queue:
+        return []
+
+    offers_result = await session.execute(
+        select(CoverageOffer).where(CoverageOffer.coverage_case_id == coverage_case.id)
+    )
+    existing_offers = list(offers_result.scalars().all())
+    offers_by_id = {offer.id: offer for offer in existing_offers}
+
+    created: list[CoverageOffer] = []
+    for entry in standby_queue:
+        if len(created) >= max(1, dispatch_limit):
+            break
+
+        status = _standby_entry_status(entry)
+        if status not in {"ready", "accepted"}:
+            continue
+
+        employee_id = _parse_uuid(entry.get("employee_id"))
+        source_offer = offers_by_id.get(_parse_uuid(entry.get("offer_id")) or UUID(int=0))
+        if source_offer is None:
+            source_offer = next(
+                (
+                    item
+                    for item in existing_offers
+                    if str(item.employee_id) == str(employee_id)
+                    and item.offer_metadata.get("accepted_as_standby") is True
+                ),
+                None,
+            )
+        if employee_id is None or source_offer is None:
+            entry["status"] = "invalid"
+            continue
+
+        active_offer = next(
+            (
+                item
+                for item in existing_offers
+                if item.employee_id == employee_id
+                and item.status in {OfferStatus.pending, OfferStatus.delivered}
+            ),
+            None,
+        )
+        if active_offer is not None:
+            continue
+
+        channel_value = channel or (
+            source_offer.channel.value if hasattr(source_offer.channel, "value") else str(source_offer.channel)
+        )
+        premium_cents = int((source_offer.offer_metadata or {}).get("premium_cents", 0) or 0)
+        standby_position = int(entry.get("position", len(created) + 1) or (len(created) + 1))
+        activation_count = sum(
+            1
+            for item in existing_offers
+            if str((item.offer_metadata or {}).get("standby_source_offer_id") or "") == str(source_offer.id)
+        ) + 1
+        expires_at = reference_time + timedelta(minutes=5)
+        reactivation_offer = CoverageOffer(
+            coverage_case_id=coverage_case.id,
+            coverage_case_run_id=source_offer.coverage_case_run_id,
+            coverage_candidate_id=source_offer.coverage_candidate_id,
+            employee_id=employee_id,
+            channel=OutboxChannel(channel_value),
+            status=OfferStatus.pending,
+            idempotency_key=f"{coverage_case.id}:standby:{source_offer.id}:{activation_count}:{channel_value}",
+            expires_at=expires_at,
+            offer_metadata={
+                **(source_offer.offer_metadata or {}),
+                "operating_mode": "standby_queue",
+                "standby_activation": True,
+                "standby_source_offer_id": str(source_offer.id),
+                "standby_position": standby_position,
+                "reactivated_from_standby": True,
+                "premium_cents": premium_cents,
+            },
+        )
+        session.add(reactivation_offer)
+        await session.flush()
+        session.add(
+            OutboxEvent(
+                aggregate_type="coverage_offer",
+                aggregate_id=reactivation_offer.id,
+                topic="coverage.offer.created",
+                channel=OutboxChannel(channel_value),
+                status=OutboxStatus.pending,
+                available_at=reference_time,
+                payload={
+                    "offer_id": str(reactivation_offer.id),
+                    "coverage_case_id": str(coverage_case.id),
+                    "coverage_case_run_id": str(source_offer.coverage_case_run_id)
+                    if source_offer.coverage_case_run_id is not None
+                    else None,
+                    "employee_id": str(employee_id),
+                    "shift_id": str(shift.id),
+                    "channel": channel_value,
+                    "operating_mode": "standby_queue",
+                    "premium_cents": premium_cents,
+                    "phone_e164": reactivation_offer.offer_metadata.get("phone_e164"),
+                },
+            )
+        )
+        entry["status"] = "activated"
+        entry["activation_offer_id"] = str(reactivation_offer.id)
+        entry["activation_requested_at"] = reference_time.isoformat()
+        entry["activation_count"] = int(entry.get("activation_count", 0) or 0) + 1
+        created.append(reactivation_offer)
+
+    if created:
+        coverage_case.status = CoverageCaseStatus.running
+        coverage_case.closed_at = None
+        _update_case_metadata(
+            coverage_case,
+            standby_queue=standby_queue,
+            standby_last_activated_at=reference_time.isoformat(),
+        )
+        await session.flush()
+    return created
 
 
 async def _dispatch_next_offer_batch(
@@ -402,6 +586,27 @@ async def advance_case_after_terminal_offer(
     )
     if list(pending_result.scalars().all()):
         return [], None
+
+    if _is_standby_activation_offer(offer):
+        terminal_status = str(offer.status.value if hasattr(offer.status, "value") else offer.status)
+        _record_standby_queue_result(
+            coverage_case,
+            offer,
+            status=terminal_status,
+            occurred_at=reference_time,
+        )
+
+    standby_offers = await activate_standby_queue(
+        session,
+        coverage_case=coverage_case,
+        shift=shift,
+        reference_time=reference_time,
+        channel=offer.channel.value if hasattr(offer.channel, "value") else str(offer.channel),
+        dispatch_limit=1,
+    )
+    if standby_offers:
+        coverage_case.status = CoverageCaseStatus.running
+        return standby_offers, None
 
     if offer.coverage_case_run_id is None:
         coverage_case.status = CoverageCaseStatus.exhausted
@@ -1376,6 +1581,7 @@ async def respond_to_offer(
                         "offer_id": str(offer.id),
                         "responded_at": responded_at.isoformat(),
                         "response_channel": payload.response_channel,
+                        "status": "ready",
                     }
                 )
             _update_case_metadata(coverage_case, standby_queue=standby_queue)
@@ -1405,6 +1611,15 @@ async def respond_to_offer(
             )
             session.add(assignment)
             assignment_status = AssignmentStatus.accepted.value
+
+            if _is_standby_activation_offer(offer):
+                _record_standby_queue_result(
+                    coverage_case,
+                    offer,
+                    status="promoted",
+                    occurred_at=responded_at,
+                    assignment=assignment,
+                )
 
             shift.seats_filled += 1
             if shift.seats_filled >= shift.seats_requested:
@@ -1443,6 +1658,14 @@ async def respond_to_offer(
     else:
         offer.status = OfferStatus.declined
         offer.declined_at = responded_at
+
+        if _is_standby_activation_offer(offer):
+            _record_standby_queue_result(
+                coverage_case,
+                offer,
+                status="declined",
+                occurred_at=responded_at,
+            )
 
         next_offers, exhausted_case_id = await advance_case_after_terminal_offer(
             session,

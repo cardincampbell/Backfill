@@ -906,10 +906,20 @@ async def create_vacancy_for_shift(
     shift.status = ShiftStatus.filling if shift.seats_filled > 0 else ShiftStatus.open
 
     coverage_case = await session.scalar(
-        select(CoverageCase).where(
+        select(CoverageCase)
+        .where(
             CoverageCase.shift_id == shift.id,
-            CoverageCase.status.in_([CoverageCaseStatus.queued, CoverageCaseStatus.running]),
+            CoverageCase.status.in_(
+                [
+                    CoverageCaseStatus.queued,
+                    CoverageCaseStatus.running,
+                    CoverageCaseStatus.filled,
+                    CoverageCaseStatus.exhausted,
+                ]
+            ),
         )
+        .order_by(CoverageCase.created_at.desc())
+        .limit(1)
     )
     if coverage_case is None:
         coverage_case = CoverageCase(
@@ -927,23 +937,41 @@ async def create_vacancy_for_shift(
         )
         session.add(coverage_case)
         await session.flush()
+    else:
+        coverage_case.status = CoverageCaseStatus.queued
+        coverage_case.closed_at = None
 
     dispatch_result = None
+    standby_offers = []
     if auto_execute:
-        dispatch_result = await coverage_service.execute_next_coverage_phase(
+        standby_offers = await coverage_service.activate_standby_queue(
             session,
-            shift.business_id,
-            coverage_case.id,
-            CoverageExecutionDispatchRequest(
-                channel=default_dispatch_channel(),
-                run_metadata={"triggered_by": triggered_by},
-            ),
+            coverage_case=coverage_case,
+            shift=shift,
+            reference_time=now,
+            channel=default_dispatch_channel(),
+            dispatch_limit=1,
         )
+        if not standby_offers:
+            dispatch_result = await coverage_service.execute_next_coverage_phase(
+                session,
+                shift.business_id,
+                coverage_case.id,
+                CoverageExecutionDispatchRequest(
+                    channel=default_dispatch_channel(),
+                    run_metadata={"triggered_by": triggered_by},
+                ),
+            )
     await session.flush()
     return {
         "shift_id": shift.id,
         "coverage_case_id": coverage_case.id,
-        "offers": [str(offer.id) for offer in (dispatch_result.offers if dispatch_result is not None else [])],
+        "offers": [
+            str(offer.id)
+            for offer in (
+                standby_offers if standby_offers else (dispatch_result.offers if dispatch_result is not None else [])
+            )
+        ],
     }
 
 

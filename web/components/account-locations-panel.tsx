@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  ArrowUpRight,
+  Building2,
+  MapPin,
+  Smartphone,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -85,6 +91,9 @@ export function AccountLocationsPanel({
     message: string;
   } | null>(null);
   const [isPending, startTransition] = useTransition();
+  const businessesWithoutLocations = businesses.filter(
+    (business) => business.location_count === 0,
+  ).length;
 
   async function handleCreateBusiness() {
     const trimmedName = businessName.trim();
@@ -453,6 +462,67 @@ export function AccountLocationsPanel({
         </div>
       ) : null}
 
+      <section className="dashboard-kpi-grid account-dashboard-kpi-grid">
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Businesses</span>
+          <strong>{businesses.length}</strong>
+          <span className="dashboard-kpi-detail">
+            Multi-business account structure is active.
+          </span>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Locations</span>
+          <strong>{workspace.locations.length}</strong>
+          <span className="dashboard-kpi-detail">
+            Live locations available from this dashboard.
+          </span>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Needs setup</span>
+          <strong>{businessesWithoutLocations}</strong>
+          <span className="dashboard-kpi-detail">
+            Businesses still waiting for their first location.
+          </span>
+        </article>
+        <article className="dashboard-kpi-card">
+          <span className="dashboard-kpi-label">Phone sign-in</span>
+          <strong>{workspace.user.primary_phone_e164 ?? "Backfill"}</strong>
+          <span className="dashboard-kpi-detail">
+            Your phone number remains the account username.
+          </span>
+        </article>
+      </section>
+
+      <section className="dashboard-action-grid account-dashboard-actions">
+        <button
+          className="dashboard-action-card"
+          onClick={() => {
+            void handleCreateBusiness();
+          }}
+          type="button"
+        >
+          <span className="dashboard-action-card-icon">
+            <Building2 size={16} />
+          </span>
+          <strong>Create business</strong>
+          <span>Spin up another parent business shell.</span>
+        </button>
+        <Link className="dashboard-action-card" href="/dashboard/account">
+          <span className="dashboard-action-card-icon">
+            <Smartphone size={16} />
+          </span>
+          <strong>Account settings</strong>
+          <span>Update your personal profile and sign-in details.</span>
+        </Link>
+        <div className="dashboard-action-card" aria-hidden="true">
+          <span className="dashboard-action-card-icon">
+            <MapPin size={16} />
+          </span>
+          <strong>Location URLs</strong>
+          <span>Every location gets clean schedule, team, and settings routes.</span>
+        </div>
+      </section>
+
       <div className="account-business-stack">
         {businesses.length ? (
           businesses.map((business) => {
@@ -603,9 +673,9 @@ export function AccountLocationsPanel({
                           <div className="account-location-card-main">
                             <div className="account-location-card-copy">
                               <span className="account-location-card-kicker">
-                                {location.location_name}
+                                {location.business_name}
                               </span>
-                              <strong>{location.business_name}</strong>
+                              <strong>{location.location_name}</strong>
                             </div>
                             <div className="account-location-card-meta">
                               <span>{formatAddress(location) || "No address yet"}</span>
@@ -621,6 +691,9 @@ export function AccountLocationsPanel({
                             </Link>
                             <Link className="button-secondary button-small" href={settingsHref}>
                               Settings
+                            </Link>
+                            <Link className="button-secondary button-small" href={scheduleHref}>
+                              Ops <ArrowUpRight size={14} />
                             </Link>
                             <button
                               className="button-secondary button-small"

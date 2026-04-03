@@ -69,8 +69,22 @@ class FakeCoverageSession:
         self.added: list[object] = []
         self.execute_queue: list[list[object]] = []
         self.scalar_queue: list[object] = []
+        self.get_map: dict[tuple[type, object], object] = {}
+        if shift is not None:
+            self.get_map[(Shift, shift.id)] = shift
+        if case is not None:
+            self.get_map[(CoverageCase, case.id)] = case
+        if offer is not None:
+            self.get_map[(CoverageOffer, offer.id)] = offer
+        if run is not None:
+            self.get_map[(CoverageCaseRun, run.id)] = run
+        if business is not None:
+            self.get_map[(Business, business.id)] = business
 
     async def get(self, model, object_id):
+        stored = self.get_map.get((model, object_id))
+        if stored is not None:
+            return stored
         if model is Shift and object_id == self.shift.id:
             return self.shift
         if model is CoverageCase and object_id == self.case.id:
@@ -105,6 +119,7 @@ class FakeCoverageSession:
         if hasattr(obj, "updated_at") and getattr(obj, "updated_at", None) is None:
             obj.updated_at = now
         self.added.append(obj)
+        self.get_map[(type(obj), obj.id)] = obj
 
     async def flush(self):
         return None
@@ -481,6 +496,299 @@ async def test_respond_to_offer_accepts_as_standby_when_shift_is_already_filled(
     assert case.case_metadata["standby_queue"][0]["employee_id"] == str(employee_id)
     assert result.assignment_id is None
     assert result.assignment_status == "standby"
+
+
+@pytest.mark.asyncio
+async def test_activate_standby_queue_creates_reactivation_offer():
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    source_offer_id = uuid4()
+    employee_id = uuid4()
+    reference_time = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=reference_time + timedelta(hours=2),
+        ends_at=reference_time + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.filled,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={
+            "standby_queue": [
+                {
+                    "position": 1,
+                    "employee_id": str(employee_id),
+                    "offer_id": str(source_offer_id),
+                    "status": "ready",
+                }
+            ]
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+    source_offer = CoverageOffer(
+        id=source_offer_id,
+        coverage_case_id=case_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.accepted,
+        idempotency_key="standby-source",
+        offer_metadata={
+            "accepted_as_standby": True,
+            "phase_no": 1,
+            "premium_cents": 500,
+            "phone_e164": "+15555550123",
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case)
+    session.execute_queue = [[source_offer]]
+
+    offers = await coverage.activate_standby_queue(
+        session,
+        coverage_case=case,
+        shift=shift,
+        reference_time=reference_time,
+        channel="sms",
+    )
+
+    outbox = [obj for obj in session.added if isinstance(obj, OutboxEvent)]
+
+    assert len(offers) == 1
+    assert offers[0].status == OfferStatus.pending
+    assert offers[0].offer_metadata["standby_activation"] is True
+    assert offers[0].offer_metadata["standby_source_offer_id"] == str(source_offer_id)
+    assert offers[0].offer_metadata["standby_position"] == 1
+    assert case.status == CoverageCaseStatus.running
+    assert case.case_metadata["standby_queue"][0]["status"] == "activated"
+    assert case.case_metadata["standby_queue"][0]["activation_offer_id"] == str(offers[0].id)
+    assert len(outbox) == 1
+
+
+@pytest.mark.asyncio
+async def test_respond_to_offer_promotes_standby_activation_assignment():
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    offer_id = uuid4()
+    source_offer_id = uuid4()
+    employee_id = uuid4()
+    reference_time = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=reference_time + timedelta(hours=2),
+        ends_at=reference_time + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={
+            "standby_queue": [
+                {
+                    "position": 1,
+                    "employee_id": str(employee_id),
+                    "offer_id": str(source_offer_id),
+                    "status": "activated",
+                    "activation_offer_id": str(offer_id),
+                }
+            ]
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.delivered,
+        idempotency_key="standby-activation",
+        offer_metadata={
+            "standby_activation": True,
+            "standby_source_offer_id": str(source_offer_id),
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case, offer=offer)
+    session.execute_queue = [[]]
+
+    result = await coverage.respond_to_offer(
+        session,
+        business_id,
+        offer_id,
+        CoverageOfferResponseCreate(response="accepted", response_channel="web"),
+    )
+
+    assignments = [obj for obj in session.added if isinstance(obj, ShiftAssignment)]
+
+    assert assignments
+    assert result.assignment_status == AssignmentStatus.accepted
+    assert case.case_metadata["standby_queue"][0]["status"] == "promoted"
+    assert case.case_metadata["standby_queue"][0]["promotion_offer_id"] == str(offer_id)
+    assert case.case_metadata["standby_queue"][0]["promotion_assignment_id"] == str(assignments[0].id)
+
+
+@pytest.mark.asyncio
+async def test_respond_to_offer_declined_standby_activation_advances_to_next_standby():
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    run_id = uuid4()
+    declined_offer_id = uuid4()
+    source_offer_1_id = uuid4()
+    source_offer_2_id = uuid4()
+    employee_1_id = uuid4()
+    employee_2_id = uuid4()
+    reference_time = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=reference_time + timedelta(hours=2),
+        ends_at=reference_time + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={
+            "standby_queue": [
+                {
+                    "position": 1,
+                    "employee_id": str(employee_1_id),
+                    "offer_id": str(source_offer_1_id),
+                    "status": "activated",
+                    "activation_offer_id": str(declined_offer_id),
+                },
+                {
+                    "position": 2,
+                    "employee_id": str(employee_2_id),
+                    "offer_id": str(source_offer_2_id),
+                    "status": "ready",
+                },
+            ]
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+    run = CoverageCaseRun(
+        id=run_id,
+        coverage_case_id=case_id,
+        phase_no=1,
+        strategy="phase_1_blast",
+        status=CoverageRunStatus.completed,
+        run_metadata={"dispatch_limit": 2, "offer_ttl_minutes": 2},
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+    declined_offer = CoverageOffer(
+        id=declined_offer_id,
+        coverage_case_id=case_id,
+        coverage_case_run_id=run_id,
+        employee_id=employee_1_id,
+        channel="sms",
+        status=OfferStatus.pending,
+        idempotency_key="standby-activation-1",
+        offer_metadata={
+            "standby_activation": True,
+            "standby_source_offer_id": str(source_offer_1_id),
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+    source_offer_2 = CoverageOffer(
+        id=source_offer_2_id,
+        coverage_case_id=case_id,
+        coverage_case_run_id=run_id,
+        employee_id=employee_2_id,
+        channel="sms",
+        status=OfferStatus.accepted,
+        idempotency_key="standby-source-2",
+        offer_metadata={
+            "accepted_as_standby": True,
+            "phase_no": 1,
+            "phone_e164": "+15555550124",
+        },
+        created_at=reference_time,
+        updated_at=reference_time,
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case, offer=declined_offer, run=run)
+    session.execute_queue = [
+        [],
+        [declined_offer, source_offer_2],
+    ]
+
+    result = await coverage.respond_to_offer(
+        session,
+        business_id,
+        declined_offer_id,
+        CoverageOfferResponseCreate(response="declined", response_channel="web"),
+    )
+
+    new_offers = [
+        obj
+        for obj in session.added
+        if isinstance(obj, CoverageOffer) and obj.id not in {declined_offer_id, source_offer_2_id}
+    ]
+
+    assert declined_offer.status == OfferStatus.declined
+    assert len(new_offers) == 1
+    assert new_offers[0].employee_id == employee_2_id
+    assert new_offers[0].offer_metadata["standby_activation"] is True
+    assert case.case_metadata["standby_queue"][0]["status"] == "declined"
+    assert case.case_metadata["standby_queue"][1]["status"] == "activated"
+    assert result.coverage_case.status == CoverageCaseStatus.running
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
 from app.models.business import Location
-from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
+from app.models.common import CoverageCaseStatus, MembershipRole, MembershipStatus, SessionRiskLevel, ShiftStatus
+from app.models.coverage import CoverageCase
 from app.models.identity import Membership, Session, User
 from app.models.integrations import SchedulerConnection
+from app.models.scheduling import Shift
+from app.services import scheduler_sync
 from app.services.auth import AuthContext
 
 
@@ -188,3 +193,102 @@ def test_scheduler_webhook_route_delegates_vacancy_processing(monkeypatch):
         assert response.json()["job_id"] == "job_123"
     finally:
         app.dependency_overrides.clear()
+
+
+class _ScalarResult:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return list(self._values)
+
+
+class _ExecuteResult:
+    def __init__(self, values):
+        self._values = values
+
+    def scalars(self):
+        return _ScalarResult(self._values)
+
+
+class FakeVacancySession:
+    def __init__(self, *, shift: Shift, coverage_case: CoverageCase):
+        self.shift = shift
+        self.coverage_case = coverage_case
+        self.scalar_queue: list[object] = [0, coverage_case]
+        self.execute_queue: list[list[object]] = [[]]
+
+    async def get(self, model, object_id):
+        if model is Shift and object_id == self.shift.id:
+            return self.shift
+        if model is CoverageCase and object_id == self.coverage_case.id:
+            return self.coverage_case
+        return None
+
+    async def scalar(self, _query):
+        if self.scalar_queue:
+            return self.scalar_queue.pop(0)
+        return None
+
+    async def execute(self, _query):
+        values = self.execute_queue.pop(0) if self.execute_queue else []
+        return _ExecuteResult(values)
+
+    async def flush(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_create_vacancy_activates_standby_before_general_dispatch(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    standby_offer_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+    )
+    coverage_case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.filled,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={"standby_queue": [{"position": 1, "employee_id": str(uuid4()), "offer_id": str(uuid4())}]},
+        created_at=now,
+        updated_at=now,
+    )
+    session = FakeVacancySession(shift=shift, coverage_case=coverage_case)
+
+    async def fake_activate(*args, **kwargs):
+        return [SimpleNamespace(id=standby_offer_id)]
+
+    async def fail_execute(*args, **kwargs):
+        raise AssertionError("general coverage dispatch should not run when standby activates first")
+
+    monkeypatch.setattr(scheduler_sync.coverage_service, "activate_standby_queue", fake_activate)
+    monkeypatch.setattr(scheduler_sync.coverage_service, "execute_next_coverage_phase", fail_execute)
+
+    result = await scheduler_sync.create_vacancy_for_shift(
+        session,
+        shift_id=shift_id,
+        triggered_by="scheduler:test",
+    )
+
+    assert result["coverage_case_id"] == case_id
+    assert result["offers"] == [str(standby_offer_id)]

@@ -1,8 +1,4 @@
-import {
-  DashboardRailHomeLink,
-  DashboardRailNav,
-  DashboardRailProfile,
-} from "@/components/dashboard-rail-nav";
+import { DashboardShell } from "@/components/dashboard-shell";
 import { getWorkspace } from "@/lib/api/workspace";
 import {
   buildDashboardLocationPathFromAny,
@@ -61,24 +57,15 @@ export default async function DashboardLayout({
         }
       `}</style>
 
-      <div className="dashboard-app-shell">
-        <aside className="dashboard-rail">
-          <DashboardRailHomeLink fallbackBasePath={primaryBasePath} />
-
-          <DashboardRailNav fallbackBasePath={primaryBasePath} />
-
-          <DashboardRailProfile
-            displayName={profileDisplayName}
-            signOutRedirectTo={signOutRedirectTo}
-            subjectEmail={subjectEmail}
-            subjectPhone={subjectPhone}
-          />
-        </aside>
-
-        <div className="dashboard-stage">
-          <div className="dashboard-stage-content">{children}</div>
-        </div>
-      </div>
+      <DashboardShell
+        fallbackBasePath={primaryBasePath}
+        profileDisplayName={profileDisplayName}
+        signOutRedirectTo={signOutRedirectTo}
+        subjectEmail={subjectEmail}
+        subjectPhone={subjectPhone}
+      >
+        {children}
+      </DashboardShell>
     </>
   );
 }

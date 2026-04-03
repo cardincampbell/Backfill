@@ -1,5 +1,14 @@
 "use client";
 
+import {
+  Building2,
+  CalendarDays,
+  Layers3,
+  MoonStar,
+  SunMedium,
+  Users,
+  Waves,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
@@ -16,14 +25,21 @@ type DashboardRailProfileProps = {
   signOutRedirectTo?: string;
 };
 
+export type DashboardTheme = "light" | "dark";
+
+type DashboardRailThemeToggleProps = {
+  theme: DashboardTheme;
+  onChange(theme: DashboardTheme): void;
+};
+
 const RESERVED_SEGMENTS = new Set(["account", "ops", "locations", "shifts"]);
 
 const NAV_ITEMS = [
-  { key: "schedule", label: "Schedule", icon: "▦" },
-  { key: "coverage", label: "Coverage", icon: "◔" },
-  { key: "actions", label: "Actions", icon: "◎" },
-  { key: "roster", label: "Team", icon: "◉" },
-  { key: "locations", label: "Locations", icon: "▣" },
+  { key: "schedule", label: "Schedule", icon: CalendarDays },
+  { key: "coverage", label: "Coverage", icon: Waves },
+  { key: "actions", label: "Actions", icon: Layers3 },
+  { key: "roster", label: "Team", icon: Users },
+  { key: "locations", label: "Locations", icon: Building2 },
 ] as const;
 
 function buildActiveBasePath(pathname: string, fallbackBasePath: string): string {
@@ -79,17 +95,10 @@ function formatPhone(phone: string | null): string | null {
 }
 
 export function DashboardRailHomeLink({
-  fallbackBasePath,
+  fallbackBasePath: _fallbackBasePath,
 }: DashboardRailNavProps) {
-  const pathname = usePathname();
-  const basePath = buildActiveBasePath(pathname, fallbackBasePath);
-  const href =
-    pathname === "/dashboard/ops" || pathname === "/dashboard/locations"
-      ? "/dashboard/locations"
-      : `${basePath}?tab=schedule`;
-
   return (
-    <Link className="dashboard-rail-brand" href={href}>
+    <Link className="dashboard-rail-brand" href="/dashboard">
       <span className="dashboard-rail-brand-mark">B</span>
       <span className="dashboard-rail-brand-copy">
         <strong>Backfill</strong>
@@ -131,12 +140,44 @@ export function DashboardRailNav({ fallbackBasePath }: DashboardRailNavProps) {
             data-active={currentView === item.key}
             href={href}
           >
-            <span className="dashboard-rail-link-icon">{item.icon}</span>
+            <span className="dashboard-rail-link-icon">
+              <item.icon size={17} strokeWidth={1.9} />
+            </span>
             <span>{item.label}</span>
           </Link>
         );
       })}
     </nav>
+  );
+}
+
+export function DashboardRailThemeToggle({
+  theme,
+  onChange,
+}: DashboardRailThemeToggleProps) {
+  return (
+    <div className="dashboard-rail-theme">
+      <button
+        aria-pressed={theme === "light"}
+        className="dashboard-rail-theme-button"
+        data-active={theme === "light"}
+        onClick={() => onChange("light")}
+        type="button"
+      >
+        <SunMedium size={15} strokeWidth={1.8} />
+        <span>Light</span>
+      </button>
+      <button
+        aria-pressed={theme === "dark"}
+        className="dashboard-rail-theme-button"
+        data-active={theme === "dark"}
+        onClick={() => onChange("dark")}
+        type="button"
+      >
+        <MoonStar size={15} strokeWidth={1.8} />
+        <span>Dark</span>
+      </button>
+    </div>
   );
 }
 

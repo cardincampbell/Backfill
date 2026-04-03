@@ -14,6 +14,10 @@ export default async function DashboardPage() {
     redirect("/dashboard/locations");
   }
 
+  if (workspace.locations.length > 1 || workspace.businesses.length > 1) {
+    redirect("/dashboard/locations");
+  }
+
   redirect(
     buildDashboardLocationPathFromAny(workspace.locations[0], {
       tab: "schedule",

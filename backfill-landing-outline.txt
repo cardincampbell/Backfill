@@ -8,7 +8,8 @@ Primary CTA throughout: Call 1-800-BACKFILL
 SECTION 1 — NAV
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Logo: Backfill (wordmark)
-- CTA button (top right): 1-800-BACKFILL
+- CTA button (top right): Sign In
+- CTA button (top right): Try Backfill
 - Sticky on scroll
 
 
@@ -34,8 +35,6 @@ SIGNUP MODAL (triggered by "Try Backfill Free"):
 - Submit: Get access
 - Disclaimer: We'll text you a one-time link. Standard messaging rates may apply. No spam — ever.
 - Success state: "You're in. Check your phone — we just sent you a link to get started with Backfill. See you on the inside."
-
-NOTE: 1-800-BACKFILL is reserved for offline/OOH marketing (billboards, etc.) — not featured on the landing page.
 
 Stats row (4 stats):
 - $20 / per shift filled, flat
@@ -211,10 +210,6 @@ A: You pay $20 per successfully filled shift, plus a one-time location setup fee
 Q: How long does setup take?
 A: Most customers are live within 24 hours of their first call with us. That's it.
 
-Q: Is Backfill only for restaurants?
-A: Backfill was built with restaurant and hospitality operators in mind — environments where shift coverage is mission-critical and time-sensitive. If that sounds like your operation, we're a fit.
-Section label: Pricing
-
 Headline:
 You pay when we deliver.
 
@@ -241,11 +236,7 @@ SECTION 9 — FINAL CTA (dark/full-width treatment)
 Headline:
 Ready to stop making those 6 AM calls?
 
-Subheadline:
-One call to us, and you'll never have to make that call again.
-
-CTA: 1-800-BACKFILL (large, linked to tel:)
-Supporting note: Mon–Fri 8am–6pm PT · Or leave us a message
+CTA: Try Backfill Free
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

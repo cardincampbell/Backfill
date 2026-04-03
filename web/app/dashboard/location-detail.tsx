@@ -306,100 +306,371 @@ export async function renderLocationDetailPage({
       shift.delivered_offer_count > 0,
   );
   const canManageTeam = ["owner", "admin"].includes(location.membership_role);
+  const totalShifts = board.shifts.length;
+  const coveredShifts = board.shifts.filter(
+    (shift) =>
+      Boolean(shift.current_assignment) ||
+      shift.seats_filled >= shift.seats_requested,
+  ).length;
+  const fillRate = totalShifts
+    ? Math.round((coveredShifts / totalShifts) * 100)
+    : 100;
+  const standbyDepth = board.shifts.reduce(
+    (sum, shift) => sum + shift.standby_depth,
+    0,
+  );
+  const topWorkers = [...board.workers]
+    .sort((left, right) => right.reliability_score - left.reliability_score)
+    .slice(0, 4);
+  const hotspotShifts = [...board.shifts]
+    .filter(
+      (shift) =>
+        shift.manager_action_required ||
+        shift.pending_offer_count > 0 ||
+        shift.delivered_offer_count > 0 ||
+        shift.standby_depth > 0 ||
+        shift.status !== "covered",
+    )
+    .sort((left, right) => {
+      const leftWeight =
+        Number(left.manager_action_required) * 100 +
+        left.pending_offer_count * 10 +
+        left.standby_depth;
+      const rightWeight =
+        Number(right.manager_action_required) * 100 +
+        right.pending_offer_count * 10 +
+        right.standby_depth;
+      return rightWeight - leftWeight;
+    })
+    .slice(0, 4);
+  const tabHref = (tab: string) =>
+    buildLocationHref(basePath, {
+      tab,
+      week_start: weekStart ?? board.week_start_date,
+    });
+  const quickLinks = [
+    { label: "Open coverage", href: tabHref("coverage") },
+    { label: "Manage team", href: tabHref("roster") },
+    { label: "Location settings", href: tabHref("settings") },
+  ];
+  const metricCards = [
+    {
+      label: "Fill rate",
+      value: `${fillRate}%`,
+      detail: `${coveredShifts} of ${totalShifts} shifts staffed`,
+    },
+    {
+      label: "Open shifts",
+      value: String(board.action_summary.open_shifts),
+      detail: `${actionItems.length} need attention now`,
+    },
+    {
+      label: "Active coverage",
+      value: String(board.action_summary.active_coverage),
+      detail: `${coverageItems.length} cases in motion`,
+    },
+    {
+      label: "Standby depth",
+      value: String(standbyDepth),
+      detail: `${board.workers.length} workers on this board`,
+    },
+  ];
 
   return (
     <main className="section">
-      <div className="workspace-shell-head">
-        <div className="workspace-shell-head-copy">
-          <span className="workspace-shell-brand">{location.business_name}</span>
-          <h1>{location.location_name}</h1>
-          {locationMeta(location) ? <p>{locationMeta(location)}</p> : null}
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Link
-            className="button-secondary button-small"
-            href={buildLocationHref(basePath, {
-              tab: activeTab,
-              week_start: weekShift(board.week_start_date, -7),
-            })}
-          >
-            Previous week
-          </Link>
-          <Link
-            className="button-secondary button-small"
-            href={buildLocationHref(basePath, {
-              tab: activeTab,
-              week_start: weekShift(board.week_start_date, 7),
-            })}
-          >
-            Next week
-          </Link>
+      <div className="dashboard-page-shell">
+        <header className="dashboard-page-hero">
+          <div className="dashboard-page-hero-main">
+            <div className="dashboard-page-mark" aria-hidden="true">
+              {location.location_name.slice(0, 1).toUpperCase()}
+            </div>
+            <div className="dashboard-page-copy">
+              <span className="dashboard-page-kicker">{location.business_name}</span>
+              <h1>{location.location_name}</h1>
+              <p>
+                {locationMeta(location) || "Live operating view for this location."}
+              </p>
+            </div>
+          </div>
+
+          <div className="dashboard-page-actions">
+            <Link
+              className="button-secondary button-small"
+              href={buildLocationHref(basePath, {
+                tab: activeTab,
+                week_start: weekShift(board.week_start_date, -7),
+              })}
+            >
+              Previous week
+            </Link>
+            <Link
+              className="button-secondary button-small"
+              href={buildLocationHref(basePath, {
+                tab: activeTab,
+                week_start: weekShift(board.week_start_date, 7),
+              })}
+            >
+              Next week
+            </Link>
+          </div>
+        </header>
+
+        <section className="dashboard-kpi-grid">
+          {metricCards.map((metric) => (
+            <article className="dashboard-kpi-card" key={metric.label}>
+              <span className="dashboard-kpi-label">{metric.label}</span>
+              <strong>{metric.value}</strong>
+              <span className="dashboard-kpi-detail">{metric.detail}</span>
+            </article>
+          ))}
+        </section>
+
+        <nav className="dashboard-tabbar" aria-label="Location dashboard views">
+          {[
+            ["schedule", "Schedule"],
+            ["coverage", "Coverage"],
+            ["actions", "Actions"],
+            ["roster", "Team"],
+            ["settings", "Settings"],
+          ].map(([key, label]) => (
+            <Link
+              key={key}
+              className="dashboard-tablink"
+              data-active={activeTab === key}
+              href={tabHref(key)}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="dashboard-layout-grid">
+          <div className="dashboard-primary-stack">
+            {activeTab === "schedule" ? (
+              <>
+                <section className="dashboard-surface">
+                  <div className="dashboard-surface-head">
+                    <div>
+                      <span className="dashboard-surface-kicker">Board</span>
+                      <h3>Live schedule</h3>
+                    </div>
+                    <span className="dashboard-surface-meta">
+                      Week of {board.week_start_date}
+                    </span>
+                  </div>
+                  <ScheduleBoard board={board} />
+                </section>
+
+                <section className="dashboard-surface dashboard-surface-panel">
+                  <div className="dashboard-surface-head">
+                    <div>
+                      <span className="dashboard-surface-kicker">Execution</span>
+                      <h3>Shift manager</h3>
+                    </div>
+                    <span className="dashboard-surface-meta">
+                      Create, edit, and review live shifts
+                    </span>
+                  </div>
+                  <ShiftManagerPanel
+                    businessId={location.business_id}
+                    locationId={location.location_id}
+                    timezone={board.timezone}
+                    weekStartDate={board.week_start_date}
+                    roles={board.roles}
+                    shifts={board.shifts}
+                  />
+                </section>
+              </>
+            ) : null}
+
+            {activeTab === "coverage" ? (
+              <section className="dashboard-surface dashboard-surface-panel">
+                <div className="dashboard-surface-head">
+                  <div>
+                    <span className="dashboard-surface-kicker">Queue</span>
+                    <h3>Coverage queue</h3>
+                  </div>
+                  <span className="dashboard-surface-meta">
+                    Launch or advance coverage directly from the live queue.
+                  </span>
+                </div>
+                <CoverageControlPanel
+                  businessId={location.business_id}
+                  description="Launch or advance coverage directly from the live queue."
+                  emptyBody="There are no open or actively filling shifts for this location right now."
+                  emptyTitle="No active coverage"
+                  shifts={coverageItems}
+                  title="Coverage queue"
+                />
+              </section>
+            ) : null}
+
+            {activeTab === "actions" ? (
+              <section className="dashboard-surface dashboard-surface-panel">
+                <div className="dashboard-surface-head">
+                  <div>
+                    <span className="dashboard-surface-kicker">Attention</span>
+                    <h3>Manager actions</h3>
+                  </div>
+                  <span className="dashboard-surface-meta">
+                    Resolve approvals and push the next action from one place.
+                  </span>
+                </div>
+                <CoverageControlPanel
+                  businessId={location.business_id}
+                  description="Use this queue for the shifts that still need a manager decision or coverage push."
+                  emptyBody="Manager approvals and action-required shifts will appear here."
+                  emptyTitle="Nothing needs your attention"
+                  shifts={actionItems}
+                  title="Manager actions"
+                />
+              </section>
+            ) : null}
+
+            {activeTab === "roster" ? (
+              <section className="dashboard-surface dashboard-surface-panel">
+                <div className="dashboard-surface-head">
+                  <div>
+                    <span className="dashboard-surface-kicker">Team</span>
+                    <h3>Roster manager</h3>
+                  </div>
+                  <span className="dashboard-surface-meta">
+                    Staff, enrollments, roles, and reliability by location.
+                  </span>
+                </div>
+                <RosterManagerPanel
+                  businessId={location.business_id}
+                  canManageTeam={canManageTeam}
+                  locationId={location.location_id}
+                  roles={board.roles}
+                  workers={board.workers}
+                />
+              </section>
+            ) : null}
+
+            {activeTab === "settings" ? (
+              settings ? (
+                <section className="dashboard-surface dashboard-surface-panel">
+                  <div className="dashboard-surface-head">
+                    <div>
+                      <span className="dashboard-surface-kicker">Configuration</span>
+                      <h3>Location settings</h3>
+                    </div>
+                    <span className="dashboard-surface-meta">
+                      Coverage policies, integrations, and Backfill Shifts.
+                    </span>
+                  </div>
+                  <LocationSettingsPanel
+                    businessId={location.business_id}
+                    locationId={location.location_id}
+                    settings={settings}
+                  />
+                </section>
+              ) : (
+                <section className="dashboard-surface dashboard-surface-panel">
+                  <div className="settings-card">
+                    <div className="settings-card-body">
+                      <EmptyState
+                        title="Settings unavailable"
+                        body="Location settings could not be loaded for this workspace."
+                      />
+                    </div>
+                  </div>
+                </section>
+              )
+            ) : null}
+          </div>
+
+          <aside className="dashboard-side-stack">
+            <section className="dashboard-surface">
+              <div className="dashboard-surface-head">
+                <div>
+                  <span className="dashboard-surface-kicker">Hotspots</span>
+                  <h3>Shifts to watch</h3>
+                </div>
+              </div>
+              {hotspotShifts.length ? (
+                <div className="dashboard-list">
+                  {hotspotShifts.map((shift) => (
+                    <div className="dashboard-list-item" key={shift.shift_id}>
+                      <div>
+                        <strong>{shift.role_name}</strong>
+                        <span>
+                          {formatTimeRange(shift.starts_at, shift.ends_at)}
+                        </span>
+                      </div>
+                      <span className="dashboard-list-pill">
+                        {shift.manager_action_required
+                          ? "Needs review"
+                          : shift.pending_offer_count > 0
+                            ? `${shift.pending_offer_count} pending`
+                            : shift.standby_depth > 0
+                              ? `${shift.standby_depth} standby`
+                              : shift.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="dashboard-empty-note">
+                  No active hotspots right now.
+                </div>
+              )}
+            </section>
+
+            <section className="dashboard-surface">
+              <div className="dashboard-surface-head">
+                <div>
+                  <span className="dashboard-surface-kicker">Reliability</span>
+                  <h3>Top staff</h3>
+                </div>
+              </div>
+              {topWorkers.length ? (
+                <div className="dashboard-list">
+                  {topWorkers.map((worker) => (
+                    <div className="dashboard-list-item" key={worker.employee_id}>
+                      <div>
+                        <strong>
+                          {worker.preferred_name || worker.full_name}
+                        </strong>
+                        <span>{worker.role_names.join(" · ")}</span>
+                      </div>
+                      <span className="dashboard-list-pill">
+                        {worker.reliability_score.toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="dashboard-empty-note">
+                  Team data will appear here once workers are enrolled.
+                </div>
+              )}
+            </section>
+
+            <section className="dashboard-surface">
+              <div className="dashboard-surface-head">
+                <div>
+                  <span className="dashboard-surface-kicker">Quick links</span>
+                  <h3>Jump to</h3>
+                </div>
+              </div>
+              <div className="dashboard-action-grid">
+                {quickLinks.map((link) => (
+                  <Link
+                    className="dashboard-action-card"
+                    href={link.href}
+                    key={link.label}
+                  >
+                    <strong>{link.label}</strong>
+                    <span>Open this view</span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          </aside>
         </div>
       </div>
-
-      {activeTab === "schedule" ? <ScheduleBoard board={board} /> : null}
-      {activeTab === "schedule" ? (
-        <ShiftManagerPanel
-          businessId={location.business_id}
-          locationId={location.location_id}
-          timezone={board.timezone}
-          weekStartDate={board.week_start_date}
-          roles={board.roles}
-          shifts={board.shifts}
-        />
-      ) : null}
-
-      {activeTab === "coverage" ? (
-        <CoverageControlPanel
-          businessId={location.business_id}
-          description="Launch or advance coverage directly from the live queue."
-          emptyBody="There are no open or actively filling shifts for this location right now."
-          emptyTitle="No active coverage"
-          shifts={coverageItems}
-          title="Coverage queue"
-        />
-      ) : null}
-
-      {activeTab === "actions" ? (
-        <CoverageControlPanel
-          businessId={location.business_id}
-          description="Use this queue for the shifts that still need a manager decision or coverage push."
-          emptyBody="Manager approvals and action-required shifts will appear here."
-          emptyTitle="Nothing needs your attention"
-          shifts={actionItems}
-          title="Manager actions"
-        />
-      ) : null}
-
-      {activeTab === "roster" ? (
-        <RosterManagerPanel
-          businessId={location.business_id}
-          canManageTeam={canManageTeam}
-          locationId={location.location_id}
-          roles={board.roles}
-          workers={board.workers}
-        />
-      ) : null}
-
-      {activeTab === "settings" ? (
-        settings ? (
-          <LocationSettingsPanel
-            businessId={location.business_id}
-            locationId={location.location_id}
-            settings={settings}
-          />
-        ) : (
-          <section className="settings-card">
-            <div className="settings-card-body">
-              <EmptyState
-                title="Settings unavailable"
-                body="Location settings could not be loaded for this workspace."
-              />
-            </div>
-          </section>
-        )
-      ) : null}
-
     </main>
   );
 }
