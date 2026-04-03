@@ -3,7 +3,7 @@ import {
   DashboardRailNav,
   DashboardRailProfile,
 } from "@/components/dashboard-rail-nav";
-import { getV2Workspace } from "@/lib/api/v2-workspace";
+import { getWorkspace } from "@/lib/api/workspace";
 import {
   buildDashboardLocationPathFromAny,
 } from "@/lib/dashboard-paths";
@@ -14,7 +14,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const v2Workspace = await getV2Workspace();
+  const workspace = await getWorkspace();
 
   let primaryBasePath = "/dashboard";
   let profileDisplayName = "Backfill";
@@ -22,21 +22,21 @@ export default async function DashboardLayout({
   let subjectEmail: string | null = null;
   let signOutRedirectTo = "/login";
 
-  if (v2Workspace) {
-    if (v2Workspace.onboarding_required) {
+  if (workspace) {
+    if (workspace.onboarding_required) {
       redirect("/onboarding");
     }
-    const primaryLocation = v2Workspace.locations[0] ?? null;
+    const primaryLocation = workspace.locations[0] ?? null;
     primaryBasePath = primaryLocation
       ? buildDashboardLocationPathFromAny(primaryLocation)
       : "/dashboard/locations";
     profileDisplayName =
-      v2Workspace.user.full_name ??
-      v2Workspace.user.email ??
+      workspace.user.full_name ??
+      workspace.user.email ??
       primaryLocation?.business_name ??
       "Backfill";
-    subjectEmail = v2Workspace.user.email ?? null;
-    subjectPhone = v2Workspace.user.primary_phone_e164 ?? null;
+    subjectEmail = workspace.user.email ?? null;
+    subjectPhone = workspace.user.primary_phone_e164 ?? null;
   } else {
     redirect("/login");
   }

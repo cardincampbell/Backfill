@@ -1,4 +1,4 @@
-import { logoutV2 } from "@/lib/api/v2-auth";
+import { logout } from "@/lib/api/auth";
 import {
   clearStoredPreviewPhone,
   clearStoredPreviewWorkspace,
@@ -6,7 +6,7 @@ import {
 
 export async function signOutClientSession(redirectTo: string = "/login") {
   try {
-    await logoutV2();
+    await logout();
   } catch {
     // Best-effort server revoke; clear local state regardless.
   } finally {

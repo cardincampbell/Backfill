@@ -1,19 +1,19 @@
 import { redirect } from "next/navigation";
 
-import { AccountLocationsPanelV2 } from "@/components/account-locations-panel-v2";
-import { getV2Workspace } from "@/lib/api/v2-workspace";
+import { AccountLocationsPanel } from "@/components/account-locations-panel";
+import { getWorkspace } from "@/lib/api/workspace";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardLocationsPage() {
-  const v2Workspace = await getV2Workspace();
-  if (!v2Workspace) {
+  const workspace = await getWorkspace();
+  if (!workspace) {
     redirect("/login");
   }
 
   return (
     <main className="section">
-      <AccountLocationsPanelV2 workspace={v2Workspace} />
+      <AccountLocationsPanel workspace={workspace} />
     </main>
   );
 }

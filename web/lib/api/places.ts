@@ -73,7 +73,7 @@ export async function autocompletePlaces(
     }
   }
   try {
-    const response = await apiFetch(`${API_BASE_URL}/api/v2/places/autocomplete?${params.toString()}`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/places/autocomplete?${params.toString()}`, {
       method: "GET",
       cache: "no-store",
     });
@@ -105,7 +105,7 @@ export async function getPlaceDetails(
     params.set("session_token", sessionToken);
   }
   try {
-    const response = await apiFetch(`${API_BASE_URL}/api/v2/places/details?${params.toString()}`, {
+    const response = await apiFetch(`${API_BASE_URL}/api/places/details?${params.toString()}`, {
       method: "GET",
       cache: "no-store",
     });

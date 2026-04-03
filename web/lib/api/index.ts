@@ -1,4 +1,4 @@
-// Barrel re-export for shared V2 domain API modules.
+// Barrel re-export for shared Backfill domain API modules.
 
 export { API_BASE_URL, USE_MOCKS, apiFetch, fetchJson } from "./client";
 export * from "./schedules";

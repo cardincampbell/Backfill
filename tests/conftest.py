@@ -1,14 +1,14 @@
 import pytest
-from app_v2.main import app
+from app.main import app
 
 
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
-    import app_v2.services.rate_limit as v2_rate_limit_mod
+    import app.services.rate_limit as v2_rate_limit_mod
 
-    v2_rate_limit_mod._WINDOWS.clear()
+    v2_rate_limit_mod.reset_state_for_tests()
     yield
-    v2_rate_limit_mod._WINDOWS.clear()
+    v2_rate_limit_mod.reset_state_for_tests()
 
 
 @pytest.fixture

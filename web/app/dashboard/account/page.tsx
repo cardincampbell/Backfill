@@ -1,19 +1,19 @@
 import { redirect } from "next/navigation";
 
-import { AccountSettingsPanelV2 } from "@/components/account-settings-panel-v2";
-import { getV2AuthMe } from "@/lib/api/v2-auth";
+import { AccountSettingsPanel } from "@/components/account-settings-panel";
+import { getAuthMe } from "@/lib/api/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardAccountPage() {
-  const authMe = await getV2AuthMe();
+  const authMe = await getAuthMe();
   if (!authMe) {
     redirect("/login");
   }
 
   return (
     <main className="section">
-      <AccountSettingsPanelV2 session={authMe} />
+      <AccountSettingsPanel session={authMe} />
     </main>
   );
 }

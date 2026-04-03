@@ -1,8 +1,8 @@
-from app_v2.main import app
+from app.main import app
 
 
 def test_healthz(client):
     response = client.get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "v2"}
+    assert response.json() == {"status": "ok"}
