@@ -59,21 +59,28 @@ export default function LandingPage() {
                 Backfill
               </motion.div>
             </Link>
-            <div className="hidden md:flex items-center gap-8 mr-auto ml-12">
+            <div className="hidden md:flex items-center gap-2 mr-auto ml-12 rounded-full border border-[#d9e2ec] bg-white/80 px-2 py-2 shadow-[0_6px_18px_rgba(10,37,64,0.05)] backdrop-blur-xl">
               {['Product', 'Pricing', 'FAQ'].map((item) => (
                 <a
                   key={item}
                   href={`#${item.toLowerCase()}`}
-                  className="text-[15px] text-[#425466] hover:text-[#0A2540] transition-colors"
-                  style={{ fontWeight: 450 }}
+                  className="rounded-full px-4 py-2 text-[14px] text-[#0A2540]/85 hover:bg-[#635BFF]/[0.08] hover:text-[#0A2540] transition-colors"
+                  style={{ fontWeight: 500 }}
                 >
                   {item}
                 </a>
               ))}
             </div>
-            <div className="flex items-center gap-2 sm:gap-4">
-              <Link href="/login" className="px-4 py-2 text-[#425466] hover:text-[#0A2540] transition-colors text-[15px]" style={{ fontWeight: 450 }}>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Link href="/login" className="px-4 py-2 text-[#0A2540] hover:bg-[#635BFF]/[0.08] rounded-full transition-colors text-[15px]" style={{ fontWeight: 500 }}>
                 Sign In
+              </Link>
+              <Link
+                href="/try"
+                className="hidden sm:inline-flex items-center justify-center rounded-full bg-[#0A2540] px-5 py-2.5 text-[15px] text-white shadow-[0_10px_24px_rgba(10,37,64,0.18)] transition-all duration-300 hover:translate-y-[-1px] hover:shadow-[0_14px_30px_rgba(10,37,64,0.24)]"
+                style={{ fontWeight: 500 }}
+              >
+                Try Backfill
               </Link>
             </div>
           </div>

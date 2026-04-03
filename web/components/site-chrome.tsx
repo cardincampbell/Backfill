@@ -27,14 +27,22 @@ export function SiteChrome({ children }: SiteChromeProps) {
             <span className="brand-mark">B</span>
             <span className="brand-wordmark">
               <strong>Backfill</strong>
-              <small>Shift operations</small>
+              <small>Callout to covered</small>
             </span>
           </Link>
           <nav className="nav">
+            <Link href="/">Home</Link>
             <Link href="/dashboard">Dashboard</Link>
             <Link href="/try">Setup</Link>
-            <Link href="/login">Sign in</Link>
           </nav>
+          <div className="site-header-actions">
+            <Link href="/login" className="site-header-link">
+              Sign in
+            </Link>
+            <Link href="/try" className="site-header-button">
+              Try Backfill
+            </Link>
+          </div>
         </div>
       </header>
       <div className="site-main">
