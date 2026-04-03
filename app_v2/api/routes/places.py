@@ -5,8 +5,8 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.places import PlaceAutocompleteResponse, PlaceDetailsResponse
-from app.services import places as places_service
+from app_v2.schemas.places import PlaceAutocompleteResponse, PlaceDetailsResponse
+from app_v2.services import places as places_service
 
 places_router = APIRouter(prefix="/places", tags=["v2-places"])
 legacy_places_router = APIRouter(prefix="/api/places", tags=["legacy-places"])

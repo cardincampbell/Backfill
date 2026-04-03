@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app_v2.api.deps import AuthDep, SessionDep
 from app_v2.models.common import AuditActorType, MembershipRole
-from app_v2.schemas.identity import MembershipCreate, MembershipRead, UserRead, UserUpsert
+from app_v2.schemas.identity import MembershipCreate, MembershipRead, UserRead
 from app_v2.services import audit as audit_service
 from app_v2.services import auth as auth_service, identity
 
@@ -17,15 +17,6 @@ ADMIN_ROLES = {MembershipRole.owner, MembershipRole.admin}
 @router.get("/users", response_model=list[UserRead])
 async def list_users(session: SessionDep, auth_ctx: AuthDep):
     return [auth_ctx.user]
-
-
-@router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-async def upsert_user(payload: UserUpsert, session: SessionDep):
-    try:
-        return await identity.upsert_user(session, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
 
 @router.get("/users/{user_id}", response_model=UserRead)
 async def get_user(user_id: UUID, session: SessionDep, auth_ctx: AuthDep):

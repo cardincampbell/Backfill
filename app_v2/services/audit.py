@@ -56,6 +56,9 @@ async def append(
         occurred_at=datetime.now(timezone.utc),
     )
     session.add(entry)
+    from app_v2.services import webhooks
+
+    await webhooks.enqueue_audit_event(session, entry)
     return entry
 
 

@@ -122,8 +122,6 @@ export type V2OTPChallenge = {
 
 export type V2OTPChallengeRequestResponse = {
   challenge: V2OTPChallenge;
-  user_exists: boolean;
-  user_id?: string | null;
 };
 
 export type V2OTPChallengeVerifyResponse = {
@@ -176,31 +174,21 @@ export async function requestV2ChallengeAuto(
   phone_e164: string,
   locale: string = "en",
 ) {
-  try {
-    const response = await requestV2Challenge({
-      phone_e164,
-      purpose: "sign_in",
-      locale,
-    });
-    return { ...response, requestedPurpose: "sign_in" as const };
-  } catch (error) {
-    if (error instanceof Error && error.message === "user_not_found") {
-      const response = await requestV2Challenge({
-        phone_e164,
-        purpose: "sign_up",
-        locale,
-      });
-      return { ...response, requestedPurpose: "sign_up" as const };
-    }
-    throw error;
-  }
+  const response = await requestV2Challenge({
+    phone_e164,
+    purpose: "sign_in",
+    locale,
+  });
+  return {
+    ...response,
+    requestedPurpose: "sign_in" as const,
+  };
 }
 
 export async function verifyV2Challenge(input: {
   challenge_id: string;
   phone_e164: string;
   code: string;
-  ttl_hours?: number;
 }) {
   const response = await apiFetchV2(`${V2_API_PREFIX}/auth/challenges/verify`, {
     method: "POST",
@@ -209,7 +197,6 @@ export async function verifyV2Challenge(input: {
       challenge_id: input.challenge_id,
       phone_e164: input.phone_e164,
       code: input.code,
-      ttl_hours: input.ttl_hours ?? 336,
     }),
   });
   if (!response.ok) {

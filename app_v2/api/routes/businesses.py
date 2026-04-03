@@ -317,6 +317,8 @@ async def attach_role_to_location(
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        return await businesses.attach_role_to_location(session, business_id, location_id, role_id, payload)
+        location_role = await businesses.attach_role_to_location(session, business_id, location_id, role_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    return location_role

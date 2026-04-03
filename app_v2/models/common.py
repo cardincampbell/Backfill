@@ -153,3 +153,57 @@ class AuditActorType(str, Enum):
     system = "system"
     user = "user"
     service = "service"
+
+
+class WebhookSubscriptionStatus(str, Enum):
+    active = "active"
+    paused = "paused"
+
+
+class WebhookDeliveryStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class SchedulerProvider(str, Enum):
+    backfill_native = "backfill_native"
+    seven_shifts = "7shifts"
+    deputy = "deputy"
+    when_i_work = "wheniwork"
+    homebase = "homebase"
+
+
+class SchedulerConnectionStatus(str, Enum):
+    pending = "pending"
+    active = "active"
+    degraded = "degraded"
+    disabled = "disabled"
+
+
+class SchedulerSyncEventStatus(str, Enum):
+    received = "received"
+    queued = "queued"
+    processed = "processed"
+    retrying = "retrying"
+    failed = "failed"
+
+
+class SchedulerSyncJobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class SchedulerSyncRunStatus(str, Enum):
+    completed = "completed"
+    retrying = "retrying"
+    failed = "failed"
+
+
+class RetellConversationType(str, Enum):
+    call = "call"
+    chat = "chat"

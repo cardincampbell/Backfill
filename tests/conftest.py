@@ -12,10 +12,13 @@ from main import app
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
     import app.services.rate_limit as rate_limit_mod
+    import app_v2.services.rate_limit as v2_rate_limit_mod
 
     rate_limit_mod._WINDOWS.clear()
+    v2_rate_limit_mod._WINDOWS.clear()
     yield
     rate_limit_mod._WINDOWS.clear()
+    v2_rate_limit_mod._WINDOWS.clear()
 
 
 @pytest.fixture(autouse=True)

@@ -63,7 +63,7 @@ async def create_employee(session: AsyncSession, business_id: UUID, payload: Emp
         employee_metadata=payload.employee_metadata,
     )
     session.add(employee)
-    await session.commit()
+    await session.flush()
     await session.refresh(employee)
     return employee
 
@@ -117,7 +117,7 @@ async def enroll_employee_at_location(
         session.add(employee_role)
         employee_roles.append(employee_role)
 
-    await session.commit()
+    await session.flush()
     await session.refresh(employee)
     for employee_role in employee_roles:
         await session.refresh(employee_role)
@@ -144,7 +144,7 @@ async def add_employee_role(
         role_metadata=payload.role_metadata,
     )
     session.add(record)
-    await session.commit()
+    await session.flush()
     await session.refresh(record)
     return record
 
@@ -171,7 +171,7 @@ async def add_employee_location_clearance(
         clearance_metadata=payload.clearance_metadata,
     )
     session.add(record)
-    await session.commit()
+    await session.flush()
     await session.refresh(record)
     return record
 
@@ -199,6 +199,6 @@ async def add_employee_availability_rule(
         availability_metadata=payload.availability_metadata,
     )
     session.add(record)
-    await session.commit()
+    await session.flush()
     await session.refresh(record)
     return record

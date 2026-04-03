@@ -148,6 +148,18 @@ def _make_auth_context(*, with_membership: bool) -> AuthContext:
     return AuthContext(user=user, session=session, memberships=memberships)
 
 
+def _make_step_up_auth_context(*, verified_at: datetime | None) -> AuthContext:
+    auth_ctx = _make_auth_context(with_membership=True)
+    if verified_at is not None:
+        auth_ctx.session.session_metadata = {
+            "step_up_verified_at": {
+                "step_up_export": verified_at.isoformat(),
+            }
+        }
+        auth_ctx.session.elevated_actions = ["step_up_export"]
+    return auth_ctx
+
+
 def test_v2_auth_me_requires_session():
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -245,7 +257,7 @@ async def test_v2_request_otp_challenge_records_audit(monkeypatch):
     session.scalar_queue = [existing_user]
 
     monkeypatch.setattr(
-        "app_v2.services.auth.send_sms_verification",
+        "app_v2.services.messaging.send_sms_verification",
         lambda to, locale="en": {"sid": "VE123", "status": "pending", "channel": "sms", "to": to},
     )
 
@@ -262,6 +274,117 @@ async def test_v2_request_otp_challenge_records_audit(monkeypatch):
     assert challenge.status == ChallengeStatus.pending
     assert audits[-1].event_name == "auth.challenge.requested"
     assert audits[-1].actor_type == AuditActorType.user
+
+
+def test_v2_request_challenge_route_hides_user_existence_and_rate_limits(monkeypatch):
+    session = FakeAuthSession()
+    existing_user = User(
+        id=uuid4(),
+        full_name="Existing User",
+        email="existing@example.com",
+        primary_phone_e164="+15555550123",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.scalar_queue = [existing_user, existing_user]
+
+    async def override_db():
+        yield session
+
+    monkeypatch.setattr(
+        "app_v2.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE123", "status": "pending", "channel": "sms", "to": to},
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    try:
+        client = TestClient(app)
+        first = client.post(
+            "/api/v2/auth/challenges/request",
+            json={"phone_e164": "+15555550123", "purpose": "sign_in"},
+        )
+        assert first.status_code == 201
+        assert "user_exists" not in first.json()
+        assert "user_id" not in first.json()
+
+        second = client.post(
+            "/api/v2/auth/challenges/request",
+            json={"phone_e164": "+15555550123", "purpose": "sign_in"},
+        )
+        assert second.status_code == 429
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_v2_request_sign_in_for_unknown_phone_preserves_public_purpose(monkeypatch):
+    session = FakeAuthSession()
+    session.scalar_queue = [None]
+
+    monkeypatch.setattr(
+        "app_v2.services.messaging.send_sms_verification",
+        lambda to, locale="en": {"sid": "VE999", "status": "pending", "channel": "sms", "to": to},
+    )
+
+    challenge, user_exists = await auth.request_otp_challenge(
+        session,
+        OTPChallengeRequest(phone_e164="+1 (555) 555-0199", purpose="sign_in"),
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    assert user_exists is False
+    assert challenge.purpose == ChallengePurpose.sign_in
+
+
+@pytest.mark.asyncio
+async def test_v2_verify_otp_challenge_sign_in_creates_user_and_session_when_missing(monkeypatch):
+    session = FakeAuthSession()
+    challenge = OTPChallenge(
+        id=uuid4(),
+        phone_e164="+15555550160",
+        channel=ChallengeChannel.sms,
+        purpose=ChallengePurpose.sign_in,
+        status=ChallengeStatus.pending,
+        attempt_count=0,
+        max_attempts=5,
+        challenge_metadata={},
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.get_map[(OTPChallenge, challenge.id)] = challenge
+    session.scalar_queue = [None]
+
+    monkeypatch.setattr(
+        "app_v2.services.messaging.check_sms_verification",
+        lambda to, code: {"sid": "VE789", "status": "approved", "valid": True, "to": to},
+    )
+
+    result = await auth.verify_otp_challenge(
+        session,
+        OTPChallengeVerifyRequest(
+            challenge_id=challenge.id,
+            phone_e164="+15555550160",
+            code="123456",
+            device_fingerprint="device-1",
+        ),
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    users = [obj for obj in session.added if isinstance(obj, User)]
+    sessions = [obj for obj in session.added if isinstance(obj, Session)]
+
+    assert result.token is not None
+    assert result.session is not None
+    assert challenge.status == ChallengeStatus.approved
+    assert len(users) == 1
+    assert users[0].primary_phone_e164 == "+15555550160"
+    assert len(sessions) == 1
 
 
 @pytest.mark.asyncio
@@ -284,7 +407,7 @@ async def test_v2_verify_otp_challenge_sign_up_creates_user_and_session(monkeypa
     session.scalar_queue = [None]
 
     monkeypatch.setattr(
-        "app_v2.services.auth.check_sms_verification",
+        "app_v2.services.messaging.check_sms_verification",
         lambda to, code: {"sid": "VE456", "status": "approved", "valid": True, "to": to},
     )
 
@@ -318,6 +441,69 @@ async def test_v2_verify_otp_challenge_sign_up_creates_user_and_session(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_v2_resolve_auth_context_refreshes_all_active_sessions_for_user():
+    user = User(
+        id=uuid4(),
+        full_name="Session User",
+        email="session@example.com",
+        primary_phone_e164="+15555550177",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    current_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash=auth.hash_session_token("raw-token"),
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(days=1),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    current_session.user = user
+    sibling_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash="sibling",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(days=2),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    membership = Membership(
+        id=uuid4(),
+        user_id=user.id,
+        business_id=uuid4(),
+        role=MembershipRole.owner,
+        status=MembershipStatus.active,
+        membership_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    session = FakeAuthSession()
+    session.scalar_queue = [current_session]
+    session.execute_queue = [[current_session, sibling_session], [membership]]
+
+    auth_ctx = await auth.resolve_auth_context(session, "raw-token")
+
+    assert auth_ctx is not None
+    assert auth_ctx.session.id == current_session.id
+    assert auth_ctx.memberships[0].id == membership.id
+    assert sibling_session.last_seen_at is not None
+    assert sibling_session.expires_at is not None
+    assert sibling_session.expires_at > datetime.now(timezone.utc) + timedelta(days=13)
+
+
+@pytest.mark.asyncio
 async def test_v2_verify_otp_step_up_marks_session(monkeypatch):
     auth_ctx = _make_auth_context(with_membership=True)
     session = FakeAuthSession()
@@ -340,7 +526,7 @@ async def test_v2_verify_otp_step_up_marks_session(monkeypatch):
     session.get_map[(User, auth_ctx.user.id)] = auth_ctx.user
 
     monkeypatch.setattr(
-        "app_v2.services.auth.check_sms_verification",
+        "app_v2.services.messaging.check_sms_verification",
         lambda to, code: {"sid": "VE789", "status": "approved", "valid": True, "to": to},
     )
 
@@ -360,7 +546,21 @@ async def test_v2_verify_otp_step_up_marks_session(monkeypatch):
     assert result.step_up_granted is True
     assert result.token is None
     assert "step_up_export" in auth_ctx.session.elevated_actions
+    assert "step_up_export" in auth_ctx.session.session_metadata["step_up_verified_at"]
+    assert auth.has_recent_step_up(auth_ctx, ChallengePurpose.step_up_export)
     assert audits[-1].event_name == "auth.step_up.granted"
+
+
+def test_v2_require_recent_step_up_enforces_recency():
+    fresh_auth_ctx = _make_step_up_auth_context(verified_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    stale_auth_ctx = _make_step_up_auth_context(
+        verified_at=datetime.now(timezone.utc) - timedelta(minutes=v2_settings.step_up_ttl_minutes + 1)
+    )
+
+    auth.require_recent_step_up(fresh_auth_ctx, ChallengePurpose.step_up_export)
+
+    with pytest.raises(PermissionError, match="step_up_required"):
+        auth.require_recent_step_up(stale_auth_ctx, ChallengePurpose.step_up_export)
 
 
 def test_v2_verify_route_sets_http_only_cookie(monkeypatch):

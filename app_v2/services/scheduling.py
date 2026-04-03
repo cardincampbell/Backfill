@@ -65,7 +65,7 @@ async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftC
         shift_metadata=payload.shift_metadata,
     )
     session.add(shift)
-    await session.commit()
+    await session.flush()
     await session.refresh(shift)
     return shift
 
@@ -124,7 +124,7 @@ async def update_shift(
     else:
         shift.status = ShiftStatus.open
 
-    await session.commit()
+    await session.flush()
     await session.refresh(shift)
     return shift
 
@@ -158,5 +158,5 @@ async def delete_shift(
         raise ValueError("shift_has_coverage_history")
 
     await session.delete(shift)
-    await session.commit()
+    await session.flush()
     return shift

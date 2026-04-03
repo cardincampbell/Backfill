@@ -25,7 +25,6 @@ export default function LoginV2Page() {
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
-  const [phoneNotFound, setPhoneNotFound] = useState(false);
   const [loading, setLoading] = useState(false);
   const { canResend, secondsLeft, startCooldown } = useOtpCooldown();
 
@@ -53,7 +52,6 @@ export default function LoginV2Page() {
     if (!phone.trim() || loading) return;
     setLoading(true);
     setError("");
-    setPhoneNotFound(false);
     try {
       const response = await requestV2Challenge({
         phone_e164: phone.trim(),
@@ -64,9 +62,7 @@ export default function LoginV2Page() {
       setCode("");
       startCooldown(inThirtySeconds());
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not send your code.";
-      setError(message);
-      setPhoneNotFound(message === "user_not_found");
+      setError(err instanceof Error ? err.message : "Could not send your code.");
     } finally {
       setLoading(false);
     }
@@ -148,12 +144,7 @@ export default function LoginV2Page() {
                   autoFocus
                 />
               </div>
-              {error && !phoneNotFound ? <p className="lp-signup-error">{error}</p> : null}
-              {phoneNotFound ? (
-                <p className="lp-signup-error">
-                  Phone not found. <Link href="/try" className="lp-signup-text-link">Start setup instead.</Link>
-                </p>
-              ) : null}
+              {error ? <p className="lp-signup-error">{error}</p> : null}
               <button
                 type="submit"
                 className="lp-signup-submit"

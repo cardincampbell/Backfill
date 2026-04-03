@@ -196,7 +196,7 @@ async def test_v2_verify_invite_acceptance_uses_invited_name_to_complete_onboard
     session.scalar_queue = [None, None, None]
 
     monkeypatch.setattr(
-        "app_v2.services.auth.check_sms_verification",
+        "app_v2.services.messaging.check_sms_verification",
         lambda to, code: {"sid": "VE123", "status": "approved", "valid": True, "to": to},
     )
 
@@ -272,7 +272,7 @@ async def test_v2_verify_invite_acceptance_requires_onboarding_when_name_missing
     session.scalar_queue = [None, None, None]
 
     monkeypatch.setattr(
-        "app_v2.services.auth.check_sms_verification",
+        "app_v2.services.messaging.check_sms_verification",
         lambda to, code: {"sid": "VE124", "status": "approved", "valid": True, "to": to},
     )
 

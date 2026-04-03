@@ -10,35 +10,11 @@ from app_v2.schemas.auth import (
     OTPChallengeRequestResponse,
     OTPChallengeVerifyRequest,
     OTPChallengeVerifyResponse,
-    SessionCreateRequest,
-    SessionCreateResponse,
 )
 from app_v2.services import audit as audit_service
-from app_v2.services import auth
+from app_v2.services import auth, rate_limit
 
 router = APIRouter(prefix="/auth", tags=["v2-auth"])
-
-
-@router.post("/sessions", response_model=SessionCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_session(payload: SessionCreateRequest, session: SessionDep, response: Response):
-    try:
-        raw_token, record = await auth.create_session(session, payload)
-    except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    response.set_cookie(
-        v2_settings.session_cookie_name,
-        raw_token,
-        httponly=True,
-        secure=v2_settings.session_cookie_secure,
-        samesite="lax",
-        max_age=payload.ttl_hours * 3600,
-        domain=v2_settings.session_cookie_domain,
-        path="/",
-    )
-    return SessionCreateResponse(token=raw_token, session=record)
 
 
 @router.post("/challenges/request", response_model=OTPChallengeRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -49,7 +25,7 @@ async def request_challenge(
     auth_ctx: OptionalAuthDep,
 ):
     try:
-        challenge, user_exists = await auth.request_otp_challenge(
+        challenge, _user_exists = await auth.request_otp_challenge(
             session,
             payload,
             ip_address=audit_service.request_client_ip(request),
@@ -62,12 +38,14 @@ async def request_challenge(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except rate_limit.RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.detail,
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
 
-    return OTPChallengeRequestResponse(
-        challenge=challenge,
-        user_exists=user_exists,
-        user_id=challenge.user_id,
-    )
+    return OTPChallengeRequestResponse(challenge=challenge)
 
 
 @router.post("/challenges/verify", response_model=OTPChallengeVerifyResponse)
@@ -92,6 +70,12 @@ async def verify_challenge(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except rate_limit.RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.detail,
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
 
     if result.token:
         response.set_cookie(
@@ -100,7 +84,7 @@ async def verify_challenge(
             httponly=True,
             secure=v2_settings.session_cookie_secure,
             samesite="lax",
-            max_age=payload.ttl_hours * 3600,
+            max_age=v2_settings.session_ttl_hours * 3600,
             domain=v2_settings.session_cookie_domain,
             path="/",
         )

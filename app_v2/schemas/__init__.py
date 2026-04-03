@@ -40,9 +40,18 @@ from app_v2.schemas.invites import (
     ManagerInviteChallengeResponse,
     ManagerInvitePreviewResponse,
 )
-from app_v2.schemas.internal import OfferExpiryResponse, OutboxProcessResponse, WorkerBatchRequest
+from app_v2.schemas.internal import OfferExpiryResponse, OutboxProcessResponse, WebhookProcessResponse, WorkerBatchRequest
 from app_v2.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
 from app_v2.schemas.scheduling import ShiftCreate, ShiftRead
+from app_v2.schemas.webhooks import (
+    WebhookDeliveryRead,
+    WebhookEventCatalogResponse,
+    WebhookSecretRotateResponse,
+    WebhookSubscriptionCreate,
+    WebhookSubscriptionCreateResponse,
+    WebhookSubscriptionRead,
+    WebhookSubscriptionUpdate,
+)
 from app_v2.schemas.workforce import (
     EmployeeAvailabilityRuleCreate,
     EmployeeAvailabilityRuleRead,
@@ -120,6 +129,14 @@ __all__ = [
     "UserRead",
     "UserUpsert",
     "WorkerBatchRequest",
+    "WebhookProcessResponse",
+    "WebhookDeliveryRead",
+    "WebhookEventCatalogResponse",
+    "WebhookSecretRotateResponse",
+    "WebhookSubscriptionCreate",
+    "WebhookSubscriptionCreateResponse",
+    "WebhookSubscriptionRead",
+    "WebhookSubscriptionUpdate",
     "WorkspaceBoardActionSummaryRead",
     "WorkspaceBoardRoleRead",
     "WorkspaceBoardShiftAssignmentRead",

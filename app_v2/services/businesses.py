@@ -89,7 +89,6 @@ async def create_business_record(session: AsyncSession, payload: BusinessCreate)
 
 async def create_business(session: AsyncSession, payload: BusinessCreate) -> Business:
     business = await create_business_record(session, payload)
-    await session.commit()
     await session.refresh(business)
     return business
 
@@ -142,7 +141,6 @@ async def create_location_record(session: AsyncSession, business_id: UUID, paylo
 
 async def create_location(session: AsyncSession, business_id: UUID, payload: LocationCreate) -> Location:
     location = await create_location_record(session, business_id, payload)
-    await session.commit()
     await session.refresh(location)
     return location
 
@@ -192,7 +190,7 @@ async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCre
         metadata_json=payload.metadata_json,
     )
     session.add(role)
-    await session.commit()
+    await session.flush()
     await session.refresh(role)
     return role
 
@@ -229,6 +227,6 @@ async def attach_role_to_location(
         existing.premium_rules = payload.premium_rules
         existing.coverage_settings = payload.coverage_settings
 
-    await session.commit()
+    await session.flush()
     await session.refresh(existing)
     return existing

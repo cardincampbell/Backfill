@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.services.messaging import check_sms_verification, send_sms_verification
 from app_v2.config import v2_settings
 from app_v2.models.common import (
     AuditActorType,
@@ -26,6 +25,7 @@ from app_v2.models.common import (
 from app_v2.models.identity import Membership, OTPChallenge, Session, User
 from app_v2.schemas.auth import OTPChallengeRequest, OTPChallengeVerifyRequest, SessionCreateRequest
 from app_v2.services import audit as audit_service
+from app_v2.services import messaging, rate_limit
 
 
 def hash_session_token(token: str) -> str:
@@ -82,6 +82,60 @@ def maybe_complete_onboarding(user: User, *, completed_at: datetime | None = Non
     if user.full_name and user.email and user.onboarding_completed_at is None:
         user.onboarding_completed_at = completed_at or datetime.now(timezone.utc)
     return user.onboarding_completed_at is not None
+
+
+def _normalize_step_up_purpose(purpose: ChallengePurpose | str) -> str:
+    raw = purpose.value if isinstance(purpose, ChallengePurpose) else str(purpose).strip()
+    if raw not in {
+        ChallengePurpose.step_up_billing.value,
+        ChallengePurpose.step_up_export.value,
+        ChallengePurpose.step_up_phone_change.value,
+    }:
+        raise ValueError("invalid_step_up_purpose")
+    return raw
+
+
+def _parse_datetime(value: object | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _recent_step_up_map(session: Session) -> dict[str, str]:
+    metadata = session.session_metadata or {}
+    raw = metadata.get("step_up_verified_at")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in raw.items()
+        if str(key).strip() and str(value).strip()
+    }
+
+
+def has_recent_step_up(
+    auth: AuthContext,
+    purpose: ChallengePurpose | str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    normalized_purpose = _normalize_step_up_purpose(purpose)
+    verified_at = _parse_datetime(_recent_step_up_map(auth.session).get(normalized_purpose))
+    if verified_at is None:
+        return False
+    reference_time = now or datetime.now(timezone.utc)
+    return verified_at >= reference_time - timedelta(minutes=v2_settings.step_up_ttl_minutes)
+
+
+def require_recent_step_up(auth: AuthContext, purpose: ChallengePurpose | str) -> None:
+    if not has_recent_step_up(auth, purpose):
+        raise PermissionError("step_up_required")
 
 
 def membership_for_scope(
@@ -146,6 +200,24 @@ async def _issue_session_record(
     return raw_token, record
 
 
+async def _touch_active_sessions_for_user(
+    session_db: AsyncSession,
+    *,
+    user_id: UUID,
+    now: datetime | None = None,
+) -> None:
+    current_time = now or datetime.now(timezone.utc)
+    next_expiry = current_time + timedelta(hours=v2_settings.session_ttl_hours)
+    result = await session_db.execute(
+        select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
+    )
+    for record in result.scalars().all():
+        if record.expires_at is not None and record.expires_at < current_time:
+            continue
+        record.last_seen_at = current_time
+        record.expires_at = next_expiry
+
+
 async def create_session(session_db: AsyncSession, payload: SessionCreateRequest) -> tuple[str, Session]:
     user = await session_db.get(User, payload.user_id)
     if user is None:
@@ -192,6 +264,11 @@ async def resolve_auth_context(session_db: AsyncSession, raw_token: str) -> Opti
     if record.expires_at is not None and record.expires_at < now:
         return None
 
+    await _touch_active_sessions_for_user(
+        session_db,
+        user_id=record.user_id,
+        now=now,
+    )
     memberships_result = await session_db.execute(
         select(Membership)
         .where(
@@ -202,10 +279,6 @@ async def resolve_auth_context(session_db: AsyncSession, raw_token: str) -> Opti
         .order_by(Membership.created_at.desc())
     )
     memberships = list(memberships_result.scalars().all())
-
-    record.last_seen_at = now
-    if record.expires_at is not None:
-        record.expires_at = now + timedelta(hours=v2_settings.session_ttl_hours)
     await session_db.commit()
     await session_db.refresh(record)
     return AuthContext(user=record.user, session=record, memberships=memberships)
@@ -284,9 +357,29 @@ async def request_otp_challenge(
         raise ValueError("phone_must_be_e164_or_10_digit_us")
 
     purpose = ChallengePurpose(payload.purpose)
+    ip_key = ip_address or "unknown"
+    rate_limit.assert_within_limit(
+        "otp_request_ip",
+        ip_key,
+        limit=5,
+        window_seconds=300,
+        detail="Too many verification requests. Please wait and try again.",
+    )
+    rate_limit.assert_within_limit(
+        "otp_request_phone_cooldown",
+        phone_e164,
+        limit=1,
+        window_seconds=30,
+        detail="Please wait before requesting another code.",
+    )
+    rate_limit.assert_within_limit(
+        "otp_request_phone_window",
+        phone_e164,
+        limit=5,
+        window_seconds=900,
+        detail="Too many verification requests for this phone. Please wait and try again.",
+    )
     user = await session_db.scalar(select(User).where(User.primary_phone_e164 == phone_e164))
-    if purpose == ChallengePurpose.sign_in and user is None:
-        raise LookupError("user_not_found")
     if _is_step_up_purpose(purpose):
         if auth_ctx is None:
             raise PermissionError("step_up_auth_required")
@@ -299,6 +392,8 @@ async def request_otp_challenge(
         channel=ChallengeChannel(payload.channel),
         purpose=purpose,
         status=ChallengeStatus.pending,
+        attempt_count=0,
+        max_attempts=5,
         requested_for_business_id=payload.business_id,
         requested_for_location_id=payload.location_id,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
@@ -315,7 +410,7 @@ async def request_otp_challenge(
         actor_membership_id = membership.id if membership is not None else None
 
     try:
-        verification = send_sms_verification(phone_e164, locale=payload.locale)
+        verification = messaging.send_sms_verification(phone_e164, locale=payload.locale)
     except Exception as exc:
         challenge.status = ChallengeStatus.failed
         challenge.challenge_metadata = {
@@ -366,7 +461,7 @@ async def request_otp_challenge(
             "purpose": purpose.value,
             "channel": payload.channel,
             "phone_e164": phone_e164,
-            "user_exists": user is not None,
+            "requested_purpose": payload.purpose,
         },
     )
     await session_db.commit()
@@ -385,6 +480,14 @@ async def verify_otp_challenge(
     phone_e164 = normalize_phone(payload.phone_e164)
     if phone_e164 is None:
         raise ValueError("phone_must_be_e164_or_10_digit_us")
+
+    rate_limit.assert_within_limit(
+        "otp_verify_ip",
+        ip_address or "unknown",
+        limit=20,
+        window_seconds=300,
+        detail="Too many verification attempts. Please wait and try again.",
+    )
 
     challenge = await session_db.get(OTPChallenge, payload.challenge_id)
     if challenge is None or challenge.phone_e164 != phone_e164:
@@ -421,7 +524,7 @@ async def verify_otp_challenge(
         if normalize_phone(auth_ctx.user.primary_phone_e164) != phone_e164:
             raise PermissionError("step_up_phone_mismatch")
 
-    verification_check = check_sms_verification(phone_e164, payload.code)
+    verification_check = messaging.check_sms_verification(phone_e164, payload.code)
     challenge.attempt_count += 1
     challenge.external_sid = verification_check.get("sid") or challenge.external_sid
 
@@ -460,21 +563,6 @@ async def verify_otp_challenge(
         user = await session_db.scalar(select(User).where(User.primary_phone_e164 == phone_e164))
 
     if user is None:
-        if challenge.purpose == ChallengePurpose.sign_in:
-            await audit_service.append(
-                session_db,
-                event_name="auth.challenge.approved_but_user_missing",
-                target_type="otp_challenge",
-                target_id=challenge.id,
-                business_id=challenge.requested_for_business_id,
-                location_id=challenge.requested_for_location_id,
-                actor_type=AuditActorType.service,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                payload={"phone_e164": phone_e164, "purpose": challenge.purpose.value},
-            )
-            await session_db.commit()
-            raise LookupError("user_not_found")
         user = User(
             primary_phone_e164=phone_e164,
             is_phone_verified=True,
@@ -510,9 +598,16 @@ async def verify_otp_challenge(
         elevated_actions = set(auth_ctx.session.elevated_actions or [])
         elevated_actions.add(challenge.purpose.value)
         auth_ctx.session.elevated_actions = sorted(elevated_actions)
-        auth_ctx.session.last_seen_at = now
-        if auth_ctx.session.expires_at is not None:
-            auth_ctx.session.expires_at = now + timedelta(hours=v2_settings.session_ttl_hours)
+        next_session_metadata = dict(auth_ctx.session.session_metadata or {})
+        step_up_verified_at = _recent_step_up_map(auth_ctx.session)
+        step_up_verified_at[challenge.purpose.value] = now.isoformat()
+        next_session_metadata["step_up_verified_at"] = step_up_verified_at
+        auth_ctx.session.session_metadata = next_session_metadata
+        await _touch_active_sessions_for_user(
+            session_db,
+            user_id=auth_ctx.user.id,
+            now=now,
+        )
         membership = None
         if challenge.requested_for_business_id is not None:
             membership = membership_for_scope(
@@ -555,7 +650,7 @@ async def verify_otp_challenge(
         user_agent=user_agent,
         risk_level=payload.risk_level,
         elevated_actions=[],
-        ttl_hours=payload.ttl_hours,
+        ttl_hours=v2_settings.session_ttl_hours,
         session_metadata=payload.session_metadata,
     )
     await audit_service.append(

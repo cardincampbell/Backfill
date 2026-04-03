@@ -4,8 +4,14 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from app_v2.api.deps import SessionDep
 from app_v2.config import v2_settings
-from app_v2.schemas.internal import OfferExpiryResponse, OutboxProcessResponse, WorkerBatchRequest
-from app_v2.services import delivery
+from app_v2.schemas.internal import (
+    OfferExpiryResponse,
+    OutboxProcessResponse,
+    SchedulerSyncProcessResponse,
+    WebhookProcessResponse,
+    WorkerBatchRequest,
+)
+from app_v2.services import delivery, scheduler_sync, webhooks
 
 router = APIRouter(prefix="/internal", tags=["v2-internal"])
 
@@ -35,3 +41,30 @@ async def expire_coverage_offers(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await delivery.expire_due_offers(session, limit=payload.limit)
+
+
+@router.post("/webhooks/process", response_model=WebhookProcessResponse)
+async def process_webhook_outbox(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await webhooks.process_outbox_batch(session, limit=payload.limit)
+
+
+@router.post("/schedulers/process", response_model=SchedulerSyncProcessResponse)
+async def process_scheduler_jobs(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    results = await scheduler_sync.process_due_sync_jobs(session, limit=payload.limit)
+    return SchedulerSyncProcessResponse(
+        claimed_count=len(results),
+        completed_count=sum(1 for item in results if item.get("status") == "completed"),
+        failed_count=sum(1 for item in results if item.get("status") == "failed"),
+        retrying_count=sum(1 for item in results if item.get("status") == "retrying"),
+        processed_job_ids=[str(item["job_id"]) for item in results if item.get("job_id")],
+    )

@@ -16,7 +16,7 @@ from app_v2.config import v2_settings
 from app_v2.models.business import Business, Location
 from app_v2.models.common import InviteStatus, MembershipRole, MembershipStatus
 from app_v2.models.identity import ManagerInvite, Membership, User
-from app_v2.services import messaging
+from app_v2.services import messaging, rate_limit
 
 
 INVITE_TTL_HOURS = 72
@@ -276,6 +276,28 @@ async def create_manager_invite(
     normalized_email = email.strip().lower()
     if "@" not in normalized_email:
         raise ValueError("valid_email_required")
+
+    rate_limit.assert_within_limit(
+        "manager_invite_actor",
+        str(invited_by_user_id),
+        limit=20,
+        window_seconds=3600,
+        detail="Too many manager invites. Please wait and try again.",
+    )
+    rate_limit.assert_within_limit(
+        "manager_invite_location",
+        str(location_id),
+        limit=10,
+        window_seconds=3600,
+        detail="This location has sent too many invites recently. Please wait and try again.",
+    )
+    rate_limit.assert_within_limit(
+        "manager_invite_recipient",
+        normalized_email,
+        limit=3,
+        window_seconds=3600,
+        detail="This email has been invited too many times recently. Please wait and try again.",
+    )
 
     business, location = await get_business_location(
         session,

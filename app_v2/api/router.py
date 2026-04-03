@@ -15,8 +15,12 @@ from app_v2.api.routes import (
     onboarding_router,
     places_router,
     providers_router,
+    retell_provider_router,
+    scheduler_integrations_router,
+    scheduler_provider_webhooks_router,
     scheduling_router,
     workspace_router,
+    webhooks_router,
     workforce_router,
 )
 
@@ -45,9 +49,13 @@ router.include_router(invites_router)
 router.include_router(onboarding_router)
 router.include_router(places_router)
 router.include_router(providers_router)
+router.include_router(retell_provider_router)
+router.include_router(scheduler_integrations_router)
+router.include_router(scheduler_provider_webhooks_router)
 router.include_router(workspace_router)
 router.include_router(audit_router)
 router.include_router(businesses_router)
+router.include_router(webhooks_router)
 router.include_router(workforce_router)
 router.include_router(scheduling_router)
 router.include_router(coverage_router)

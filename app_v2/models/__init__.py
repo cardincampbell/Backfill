@@ -10,7 +10,15 @@ from app_v2.models.coverage import (
     OutboxEvent,
 )
 from app_v2.models.identity import ManagerInvite, Membership, OTPChallenge, Session, User
+from app_v2.models.integrations import (
+    RetellConversation,
+    SchedulerConnection,
+    SchedulerEvent,
+    SchedulerSyncJob,
+    SchedulerSyncRun,
+)
 from app_v2.models.scheduling import Shift, ShiftAssignment
+from app_v2.models.webhooks import WebhookDelivery, WebhookSubscription
 from app_v2.models.workforce import (
     Employee,
     EmployeeAvailabilityException,
@@ -39,9 +47,16 @@ __all__ = [
     "Membership",
     "OTPChallenge",
     "OutboxEvent",
+    "RetellConversation",
     "Role",
+    "SchedulerConnection",
+    "SchedulerEvent",
+    "SchedulerSyncJob",
+    "SchedulerSyncRun",
     "Session",
     "Shift",
     "ShiftAssignment",
     "User",
+    "WebhookDelivery",
+    "WebhookSubscription",
 ]

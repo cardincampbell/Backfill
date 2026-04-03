@@ -83,6 +83,6 @@ async def create_membership(session: AsyncSession, business_id: UUID, payload: M
         membership_metadata=payload.membership_metadata,
     )
     session.add(membership)
-    await session.commit()
+    await session.flush()
     await session.refresh(membership)
     return membership

@@ -16,7 +16,7 @@ from app_v2.models.coverage import CoverageCandidate, CoverageCase, CoverageCase
 from app_v2.models.scheduling import Shift
 from app_v2.models.workforce import Employee
 from app_v2.schemas.coverage import CoverageOfferResponseCreate
-from app_v2.services import messaging
+from app_v2.services import messaging, retell as retell_service
 
 
 @dataclass
@@ -100,6 +100,37 @@ class TwilioSMSDeliveryProvider:
         )
 
 
+class RetellVoiceDeliveryProvider:
+    async def send_coverage_offer(
+        self,
+        *,
+        outbox_event: OutboxEvent,
+        offer: CoverageOffer,
+        shift: Shift,
+    ) -> DeliverySendResult:
+        to_number = str(outbox_event.payload.get("phone_e164") or offer.offer_metadata.get("phone_e164") or "").strip()
+        if not to_number:
+            return DeliverySendResult(
+                success=False,
+                provider="retell",
+                error_message="missing_destination_phone",
+            )
+        metadata = build_coverage_offer_voice_metadata(offer=offer, shift=shift)
+        call_id = await retell_service.create_phone_call(
+            to_number=to_number,
+            metadata=metadata,
+            agent_kind="outbound",
+        )
+        now = datetime.now(timezone.utc)
+        return DeliverySendResult(
+            success=True,
+            provider="retell",
+            provider_message_id=call_id,
+            sent_at=now,
+            result_payload={"call_id": call_id, "metadata": metadata},
+        )
+
+
 @dataclass
 class ActionableOfferContext:
     offer: CoverageOffer
@@ -126,10 +157,33 @@ def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
     )
 
 
+def build_coverage_offer_voice_metadata(*, offer: CoverageOffer, shift: Shift) -> dict:
+    location_name = getattr(getattr(shift, "location", None), "name", None) or "your location"
+    role_name = getattr(getattr(shift, "role", None), "name", None) or "team member"
+    return {
+        "offer_id": str(offer.id),
+        "coverage_case_id": str(offer.coverage_case_id),
+        "coverage_case_run_id": str(offer.coverage_case_run_id) if offer.coverage_case_run_id else None,
+        "employee_id": str(offer.employee_id),
+        "shift_id": str(shift.id),
+        "location_id": str(shift.location_id),
+        "role_id": str(shift.role_id),
+        "location_name": location_name,
+        "role_name": role_name,
+        "shift_timezone": shift.timezone,
+        "shift_starts_at": shift.starts_at.isoformat(),
+        "shift_ends_at": shift.ends_at.isoformat(),
+        "premium_cents": int(offer.offer_metadata.get("premium_cents", 0) or 0),
+        "offer_channel": "voice",
+    }
+
+
 def _resolve_provider_for_channel(channel) -> DeliveryProvider:
     channel_value = channel.value if hasattr(channel, "value") else str(channel)
     if channel_value == "sms":
         return TwilioSMSDeliveryProvider()
+    if channel_value == "voice":
+        return RetellVoiceDeliveryProvider()
     return StubDeliveryProvider()
 
 

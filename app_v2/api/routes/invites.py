@@ -17,7 +17,7 @@ from app_v2.schemas.invites import (
     ManagerInvitePreviewResponse,
 )
 from app_v2.services import audit as audit_service
-from app_v2.services import auth as auth_service, invites
+from app_v2.services import auth as auth_service, invites, rate_limit
 
 router = APIRouter(tags=["v2-invites"])
 
@@ -109,6 +109,12 @@ async def invite_location_manager(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except rate_limit.RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.detail,
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
 
     if invite is None:
         raise HTTPException(
@@ -192,9 +198,16 @@ async def request_manager_invite_challenge(
     request: Request,
 ):
     try:
+        rate_limit.assert_within_limit(
+            "invite_challenge_token",
+            token,
+            limit=5,
+            window_seconds=900,
+            detail="Too many invite verification requests. Please wait and try again.",
+        )
         preview = await invites.get_invite_preview(session, raw_token=token)
         invites.assert_invite_is_usable(preview)
-        challenge, user_exists = await auth_service.request_otp_challenge(
+        challenge, _user_exists = await auth_service.request_otp_challenge(
             session,
             OTPChallengeRequest(
                 phone_e164=payload.phone_e164,
@@ -218,11 +231,15 @@ async def request_manager_invite_challenge(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except rate_limit.RateLimitExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.detail,
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
 
     return ManagerInviteChallengeResponse(
         challenge=challenge,
-        user_exists=user_exists,
-        user_id=challenge.user_id,
         invite_mode="existing_user" if preview.recipient_has_phone else "setup_new",
     )
 

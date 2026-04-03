@@ -80,8 +80,6 @@ class OTPChallengeRead(BaseSchema):
 
 class OTPChallengeRequestResponse(BaseSchema):
     challenge: OTPChallengeRead
-    user_exists: bool
-    user_id: Optional[UUID] = None
 
 
 class OTPChallengeVerifyRequest(BaseSchema):
@@ -90,7 +88,6 @@ class OTPChallengeVerifyRequest(BaseSchema):
     code: str
     device_fingerprint: Optional[str] = None
     risk_level: str = "low"
-    ttl_hours: int = 336
     session_metadata: dict = Field(default_factory=dict)
 
 

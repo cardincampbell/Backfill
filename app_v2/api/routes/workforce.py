@@ -38,9 +38,11 @@ async def create_employee(business_id: UUID, payload: EmployeeCreate, session: S
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        return await workforce.create_employee(session, business_id, payload)
+        employee = await workforce.create_employee(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    return employee
 
 
 @router.post("/enroll", response_model=EmployeeEnrollmentRead, status_code=status.HTTP_201_CREATED)
@@ -90,9 +92,11 @@ async def add_employee_role(
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        return await workforce.add_employee_role(session, business_id, employee_id, payload)
+        role = await workforce.add_employee_role(session, business_id, employee_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    return role
 
 
 @router.post(
@@ -110,9 +114,11 @@ async def add_employee_clearance(
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        return await workforce.add_employee_location_clearance(session, business_id, employee_id, payload)
+        clearance = await workforce.add_employee_location_clearance(session, business_id, employee_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    return clearance
 
 
 @router.post(
@@ -130,6 +136,8 @@ async def add_employee_availability_rule(
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        return await workforce.add_employee_availability_rule(session, business_id, employee_id, payload)
+        rule = await workforce.add_employee_availability_rule(session, business_id, employee_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    return rule

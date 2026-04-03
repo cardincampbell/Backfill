@@ -1249,6 +1249,10 @@ async def respond_to_offer(
                 occurred_at=responded_at,
             )
 
+        from app_v2.services import scheduler_sync
+
+        await scheduler_sync.enqueue_writeback(session, shift_id=shift.id)
+
     else:
         offer.status = OfferStatus.declined
         offer.declined_at = responded_at

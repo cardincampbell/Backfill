@@ -55,6 +55,18 @@ def _default_allowed_origins() -> list[str]:
     return origins
 
 
+def _default_expose_internal_errors() -> bool:
+    raw = os.environ.get("BACKFILL_V2_EXPOSE_INTERNAL_ERRORS")
+    if raw is not None:
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    environment = os.environ.get(
+        "RAILWAY_ENVIRONMENT_NAME",
+        os.environ.get("ENVIRONMENT", "development"),
+    ).strip().lower()
+    return environment in {"development", "dev", "local", "test", "testing"}
+
+
 @dataclass(frozen=True)
 class V2Settings:
     database_url: str = field(default_factory=_database_url_from_env)
@@ -63,14 +75,60 @@ class V2Settings:
     api_base_url: str = os.environ.get("BACKFILL_API_BASE_URL", "https://api.usebackfill.com").rstrip("/")
     environment: str = os.environ.get("RAILWAY_ENVIRONMENT_NAME", os.environ.get("ENVIRONMENT", "development"))
     session_ttl_hours: int = int(os.environ.get("BACKFILL_V2_SESSION_TTL_HOURS", "336"))
+    step_up_ttl_minutes: int = int(
+        os.environ.get(
+            "BACKFILL_V2_STEP_UP_TTL_MINUTES",
+            os.environ.get("BACKFILL_DASHBOARD_STEP_UP_TTL_MINUTES", "15"),
+        )
+    )
     session_cookie_name: str = os.environ.get("BACKFILL_V2_SESSION_COOKIE_NAME", "backfill_v2_session")
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
     twilio_verify_service_sid: str = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "")
+    google_places_api_key: str = os.environ.get(
+        "GOOGLE_PLACES_API_KEY",
+        os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+    )
+    backfill_google_places_enabled: bool = os.environ.get(
+        "BACKFILL_GOOGLE_PLACES_ENABLED",
+        "1",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    google_places_region_code: str = os.environ.get(
+        "BACKFILL_GOOGLE_PLACES_REGION_CODE",
+        "US",
+    )
+    google_places_country_codes: list[str] = field(
+        default_factory=lambda: [
+            value.strip().lower()
+            for value in os.environ.get("BACKFILL_GOOGLE_PLACES_COUNTRY_CODES", "us").split(",")
+            if value.strip()
+        ]
+    )
     backfill_phone_number: str = os.environ.get("BACKFILL_PHONE_NUMBER", "+18002225345")
     sendgrid_api_key: str = os.environ.get("SENDGRID_API_KEY", "")
     backfill_email_from: str = os.environ.get("BACKFILL_EMAIL_FROM", "")
     backfill_email_from_name: str = os.environ.get("BACKFILL_EMAIL_FROM_NAME", "Backfill")
+    retell_api_key: str = os.environ.get("RETELL_API_KEY", "")
+    retell_agent_id: str = os.environ.get("RETELL_AGENT_ID", "")
+    retell_agent_id_inbound: str = os.environ.get("RETELL_AGENT_ID_INBOUND", "")
+    retell_agent_id_outbound: str = os.environ.get("RETELL_AGENT_ID_OUTBOUND", "")
+    retell_chat_agent_id: str = os.environ.get("RETELL_CHAT_AGENT_ID", "")
+    retell_chat_agent_id_inbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_INBOUND", "")
+    retell_chat_agent_id_outbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_OUTBOUND", "")
+    retell_from_number: str = os.environ.get("RETELL_FROM_NUMBER", "")
+    sevenshifts_client_id: str = os.environ.get("SEVENSHIFTS_CLIENT_ID", "")
+    sevenshifts_client_secret: str = os.environ.get("SEVENSHIFTS_CLIENT_SECRET", "")
+    sevenshifts_webhook_secret: str = os.environ.get("SEVENSHIFTS_WEBHOOK_SECRET", "")
+    deputy_client_id: str = os.environ.get("DEPUTY_CLIENT_ID", "")
+    deputy_client_secret: str = os.environ.get("DEPUTY_CLIENT_SECRET", "")
+    deputy_webhook_secret: str = os.environ.get("DEPUTY_WEBHOOK_SECRET", "")
+    wheniwork_developer_key: str = os.environ.get("WHENIWORK_DEVELOPER_KEY", "")
+    wheniwork_webhook_secret: str = os.environ.get("WHENIWORK_WEBHOOK_SECRET", "")
+    homebase_api_key: str = os.environ.get("HOMEBASE_API_KEY", "")
+    webhook_timeout_seconds: float = float(os.environ.get("BACKFILL_V2_WEBHOOK_TIMEOUT_SECONDS", "10"))
+    webhook_max_attempts: int = int(os.environ.get("BACKFILL_V2_WEBHOOK_MAX_ATTEMPTS", "5"))
+    scheduler_webhook_limit_per_minute: int = int(os.environ.get("BACKFILL_V2_SCHEDULER_WEBHOOK_LIMIT_PER_MINUTE", "240"))
+    retell_webhook_limit_per_minute: int = int(os.environ.get("BACKFILL_V2_RETELL_WEBHOOK_LIMIT_PER_MINUTE", "240"))
     worker_api_key: str = os.environ.get("BACKFILL_V2_WORKER_API_KEY", "")
     run_migrations_on_startup: bool = os.environ.get(
         "BACKFILL_V2_RUN_MIGRATIONS_ON_STARTUP",
@@ -83,15 +141,7 @@ class V2Settings:
         "yes",
         "on",
     }
-    expose_internal_errors: bool = os.environ.get(
-        "BACKFILL_V2_EXPOSE_INTERNAL_ERRORS",
-        "1",
-    ).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    expose_internal_errors: bool = field(default_factory=_default_expose_internal_errors)
 
     @property
     def has_database_url(self) -> bool:
