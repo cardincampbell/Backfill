@@ -58,7 +58,9 @@ export default async function DashboardLayout({
       `}</style>
 
       <DashboardShell
+        businessCount={workspace.businesses.length}
         fallbackBasePath={primaryBasePath}
+        locationCount={workspace.locations.length}
         profileDisplayName={profileDisplayName}
         signOutRedirectTo={signOutRedirectTo}
         subjectEmail={subjectEmail}

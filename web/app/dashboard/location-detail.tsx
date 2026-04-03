@@ -319,6 +319,39 @@ export async function renderLocationDetailPage({
     (sum, shift) => sum + shift.standby_depth,
     0,
   );
+  const roleCoverage = board.roles
+    .map((role) => {
+      const shifts = board.shifts.filter((shift) => shift.role_id === role.role_id);
+      if (!shifts.length) {
+        return null;
+      }
+      const covered = shifts.filter(
+        (shift) =>
+          Boolean(shift.current_assignment) ||
+          shift.seats_filled >= shift.seats_requested,
+      ).length;
+      const filling = shifts.some(
+        (shift) =>
+          shift.manager_action_required ||
+          shift.pending_offer_count > 0 ||
+          shift.delivered_offer_count > 0 ||
+          shift.status !== "covered",
+      );
+      return {
+        label: role.role_name,
+        covered,
+        total: shifts.length,
+        status: covered === shifts.length ? "covered" : filling ? "filling" : "open",
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .slice(0, 4);
+  const upcomingShifts = [...board.shifts]
+    .sort(
+      (left, right) =>
+        new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+    )
+    .slice(0, 5);
   const topWorkers = [...board.workers]
     .sort((left, right) => right.reliability_score - left.reliability_score)
     .slice(0, 4);
@@ -375,6 +408,11 @@ export async function renderLocationDetailPage({
       detail: `${board.workers.length} workers on this board`,
     },
   ];
+  const todayLabel = new Date().toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  });
 
   return (
     <main className="section">
@@ -415,14 +453,94 @@ export async function renderLocationDetailPage({
           </div>
         </header>
 
-        <section className="dashboard-kpi-grid">
-          {metricCards.map((metric) => (
-            <article className="dashboard-kpi-card" key={metric.label}>
-              <span className="dashboard-kpi-label">{metric.label}</span>
-              <strong>{metric.value}</strong>
-              <span className="dashboard-kpi-detail">{metric.detail}</span>
-            </article>
-          ))}
+        <section className="dashboard-scenario-grid">
+          <article className="dashboard-scenario-card dashboard-scenario-card-coverage">
+            <div className="dashboard-scenario-card-head">
+              <div>
+                <span className="dashboard-surface-kicker">Today</span>
+                <h3>Coverage snapshot</h3>
+              </div>
+              <span className="dashboard-surface-meta">{todayLabel}</span>
+            </div>
+
+            {roleCoverage.length ? (
+              <div className="dashboard-scenario-list">
+                {roleCoverage.map((item) => (
+                  <div className="dashboard-scenario-list-row" key={item.label}>
+                    <div className="dashboard-scenario-list-copy">
+                      <strong>{item.label}</strong>
+                      <span>
+                        {item.covered}/{item.total} shifts covered
+                      </span>
+                    </div>
+                    <span
+                      className="dashboard-scenario-status"
+                      data-tone={item.status}
+                    >
+                      {item.status === "covered"
+                        ? "Covered"
+                        : item.status === "filling"
+                          ? "Filling"
+                          : "Open"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-empty-note">
+                Role coverage will appear once shifts are on the board.
+              </div>
+            )}
+
+            <div className="dashboard-scenario-foot">
+              <div className="dashboard-scenario-progress">
+                <strong>{fillRate}%</strong>
+                <span>{coveredShifts} of {totalShifts} shifts covered</span>
+              </div>
+              <div className="dashboard-scenario-progress-bar">
+                <div style={{ width: `${fillRate}%` }} />
+              </div>
+            </div>
+          </article>
+
+          <div className="dashboard-scenario-stat-grid">
+            {metricCards.map((metric) => (
+              <article className="dashboard-mini-stat" key={metric.label}>
+                <span className="dashboard-mini-stat-label">{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <span className="dashboard-mini-stat-detail">{metric.detail}</span>
+              </article>
+            ))}
+          </div>
+
+          <article className="dashboard-scenario-card dashboard-scenario-card-staff">
+            <div className="dashboard-scenario-card-head">
+              <div>
+                <span className="dashboard-surface-kicker">Reliability</span>
+                <h3>Top staff</h3>
+              </div>
+            </div>
+
+            {topWorkers.length ? (
+              <div className="dashboard-scenario-list">
+                {topWorkers.map((worker) => (
+                  <div className="dashboard-scenario-list-row" key={worker.employee_id}>
+                    <div className="dashboard-scenario-list-copy">
+                      <strong>{worker.preferred_name || worker.full_name}</strong>
+                      <span>{worker.role_names.join(" · ")}</span>
+                    </div>
+                    <span className="dashboard-scenario-score">
+                      {worker.reliability_score.toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-empty-note">
+                Team reliability will show up once workers are enrolled.
+              </div>
+            )}
+          </article>
         </section>
 
         <nav className="dashboard-tabbar" aria-label="Location dashboard views">
@@ -621,29 +739,42 @@ export async function renderLocationDetailPage({
             <section className="dashboard-surface">
               <div className="dashboard-surface-head">
                 <div>
-                  <span className="dashboard-surface-kicker">Reliability</span>
-                  <h3>Top staff</h3>
+                  <span className="dashboard-surface-kicker">Upcoming</span>
+                  <h3>Next shifts</h3>
                 </div>
               </div>
-              {topWorkers.length ? (
-                <div className="dashboard-list">
-                  {topWorkers.map((worker) => (
-                    <div className="dashboard-list-item" key={worker.employee_id}>
+              {upcomingShifts.length ? (
+                <div className="dashboard-upcoming-list">
+                  {upcomingShifts.map((shift) => (
+                    <div className="dashboard-upcoming-item" key={shift.shift_id}>
                       <div>
-                        <strong>
-                          {worker.preferred_name || worker.full_name}
-                        </strong>
-                        <span>{worker.role_names.join(" · ")}</span>
+                        <strong>{shift.role_name}</strong>
+                        <span>{formatTimeRange(shift.starts_at, shift.ends_at)}</span>
                       </div>
-                      <span className="dashboard-list-pill">
-                        {worker.reliability_score.toFixed(1)}
-                      </span>
+                      {shift.current_assignment?.employee_name ? (
+                        <span className="dashboard-upcoming-assignee">
+                          {shift.current_assignment.employee_name}
+                        </span>
+                      ) : (
+                        <span
+                          className="dashboard-scenario-status"
+                          data-tone={
+                            shift.pending_offer_count > 0 || shift.delivered_offer_count > 0
+                              ? "filling"
+                              : "open"
+                          }
+                        >
+                          {shift.pending_offer_count > 0 || shift.delivered_offer_count > 0
+                            ? "Filling"
+                            : "Open"}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="dashboard-empty-note">
-                  Team data will appear here once workers are enrolled.
+                  Upcoming shifts will appear here once the board is populated.
                 </div>
               )}
             </section>

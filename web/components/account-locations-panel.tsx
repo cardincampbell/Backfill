@@ -94,6 +94,13 @@ export function AccountLocationsPanel({
   const businessesWithoutLocations = businesses.filter(
     (business) => business.location_count === 0,
   ).length;
+  const spotlightLocations = useMemo(
+    () =>
+      [...workspace.locations]
+        .sort((left, right) => left.location_name.localeCompare(right.location_name))
+        .slice(0, 4),
+    [workspace.locations],
+  );
 
   async function handleCreateBusiness() {
     const trimmedName = businessName.trim();
@@ -461,6 +468,91 @@ export function AccountLocationsPanel({
           {feedback.message}
         </div>
       ) : null}
+
+      <section className="account-ops-grid">
+        <article className="account-ops-card">
+          <div className="dashboard-surface-head">
+            <div>
+              <span className="dashboard-surface-kicker">Network</span>
+              <h3>Business footprint</h3>
+            </div>
+            <span className="dashboard-surface-meta">
+              {workspace.locations.length} live locations
+            </span>
+          </div>
+          <div className="account-ops-list">
+            {businesses.length ? (
+              businesses.slice(0, 4).map((business) => (
+                <div className="account-ops-list-row" key={business.business_id}>
+                  <div className="account-ops-list-copy">
+                    <strong>{business.business_name}</strong>
+                    <span>{roleLabel(business.membership_role)} access</span>
+                  </div>
+                  <span className="account-ops-list-pill">
+                    {business.location_count}{" "}
+                    {business.location_count === 1 ? "location" : "locations"}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="dashboard-empty-note">
+                Create the first business to start operating locations here.
+              </div>
+            )}
+          </div>
+        </article>
+
+        <div className="account-ops-stat-grid">
+          <article className="account-ops-stat">
+            <span>Businesses</span>
+            <strong>{businesses.length}</strong>
+          </article>
+          <article className="account-ops-stat">
+            <span>Locations</span>
+            <strong>{workspace.locations.length}</strong>
+          </article>
+          <article className="account-ops-stat">
+            <span>Needs setup</span>
+            <strong>{businessesWithoutLocations}</strong>
+          </article>
+          <article className="account-ops-stat">
+            <span>Phone sign-in</span>
+            <strong>{workspace.user.primary_phone_e164 ?? "Backfill"}</strong>
+          </article>
+        </div>
+
+        <article className="account-ops-card">
+          <div className="dashboard-surface-head">
+            <div>
+              <span className="dashboard-surface-kicker">Live sites</span>
+              <h3>Locations to jump into</h3>
+            </div>
+          </div>
+          {spotlightLocations.length ? (
+            <div className="account-ops-list">
+              {spotlightLocations.map((location) => (
+                <Link
+                  className="account-ops-list-row account-ops-list-link"
+                  href={buildDashboardLocationPathFromAny(location, {
+                    tab: "schedule",
+                  })}
+                  key={location.location_id}
+                >
+                  <div className="account-ops-list-copy">
+                    <strong>{location.location_name}</strong>
+                    <span>{location.business_name}</span>
+                  </div>
+                  <span className="account-ops-list-pill">Open</span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="dashboard-empty-note">
+              Live locations will appear here once the first site is added.
+            </div>
+          )}
+        </article>
+      </section>
 
       <section className="dashboard-kpi-grid account-dashboard-kpi-grid">
         <article className="dashboard-kpi-card">
