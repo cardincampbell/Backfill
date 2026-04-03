@@ -9,6 +9,7 @@ type SiteChromeProps = {
 
 export function SiteChrome({ children }: SiteChromeProps) {
   const pathname = usePathname();
+  const currentYear = new Date().getFullYear();
 
   if (pathname === "/") {
     return <>{children}</>;
@@ -87,7 +88,9 @@ export function SiteChrome({ children }: SiteChromeProps) {
             </div>
           </div>
           <div className="flex flex-col items-start justify-between gap-4 border-t border-[#f0f0f5] pt-8 text-[13px] text-[#8898AA] md:flex-row md:items-center">
-            <div style={{ fontWeight: 400 }}>© 2025 Backfill Works, Inc. All rights reserved.</div>
+            <div style={{ fontWeight: 400 }}>
+              © <span suppressHydrationWarning>{currentYear}</span> Backfill Works, Inc. All rights reserved.
+            </div>
             <div className="flex items-center gap-6">
               <a className="transition-colors hover:text-[#425466]" href="tel:18002225345" style={{ fontWeight: 420 }}>
                 Call now

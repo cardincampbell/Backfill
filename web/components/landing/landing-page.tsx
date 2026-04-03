@@ -26,6 +26,7 @@ export default function LandingPage() {
   const { scrollY } = useScroll();
   const heroY = useTransform(scrollY, [0, 800], [0, 80]);
   const heroOpacity = useTransform(scrollY, [0, 500], [1, 0]);
+  const currentYear = new Date().getFullYear();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -702,7 +703,9 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="pt-8 border-t border-[#f0f0f5] flex flex-col md:flex-row justify-between items-center gap-4">
-            <div className="text-[13px] text-[#8898AA]" style={{ fontWeight: 400 }}>© 2025 Backfill Works, Inc. All rights reserved.</div>
+            <div className="text-[13px] text-[#8898AA]" style={{ fontWeight: 400 }}>
+              © <span suppressHydrationWarning>{currentYear}</span> Backfill Works, Inc. All rights reserved.
+            </div>
             <div className="flex items-center gap-6">
               {['Twitter', 'LinkedIn'].map((social) => (
                 <a key={social} href="#" className="text-[13px] text-[#8898AA] hover:text-[#425466] transition-colors" style={{ fontWeight: 420 }}>{social}</a>
