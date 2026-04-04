@@ -3,8 +3,10 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
-import { usePathname } from 'next/navigation';
-import { useSessionUserDisplay } from '@/components/app-session-gate';
+import {
+  useResolvedAppAppearance,
+  useSessionUserDisplay,
+} from '@/components/app-session-gate';
 import {
   Users,
   Bell,
@@ -18,8 +20,6 @@ import {
   Sparkles,
   Menu,
   X,
-  Sun,
-  Moon,
 } from 'lucide-react';
 
 /* ─── Shared Data ─── */
@@ -163,9 +163,23 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
   const [sidebarTab, setSidebarTab] = useState<'nav' | 'copilot'>('nav');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
-  const pathname = usePathname();
-  const darkMode = pathname === '/dashboard-dark';
+  const resolvedAppearance = useResolvedAppAppearance();
+  const isDark = resolvedAppearance === 'dark';
   const { fullName, email, phone, initials } = useSessionUserDisplay();
+
+  const shellBgClass = isDark ? 'bg-[#071B2F]' : 'bg-[#F7F8FA]';
+  const panelBgClass = isDark ? 'bg-[#0F2E4C]' : 'bg-white';
+  const panelBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#E5E7EB]';
+  const sectionBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
+  const textPrimaryClass = isDark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondaryClass = isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedTextClass = 'text-[#8898AA]';
+  const surfaceClass = isDark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]';
+  const subtleSurfaceClass = isDark ? 'bg-white/[0.03]' : 'bg-[#F0F0F5]';
+  const hoverSurfaceClass = isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]';
+  const searchFieldClass = isDark
+    ? 'bg-white/[0.04] border-white/[0.06] text-white placeholder-[#8898AA]/50'
+    : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#0A2540] placeholder-[#8898AA]/60';
 
   // Close sidebar on navigation
   const handleNav = (path: string) => {
@@ -174,7 +188,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
   };
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA] flex" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div className={`min-h-screen flex ${shellBgClass}`} style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {sidebarOpen && (
@@ -187,25 +201,27 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
       </AnimatePresence>
 
       {/* Left Sidebar */}
-      <aside className={`fixed top-0 left-0 h-full z-50 w-[280px] flex flex-col border-r border-[#E5E7EB] bg-white transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${
+      <aside className={`fixed top-0 left-0 h-full z-50 w-[280px] flex flex-col border-r ${panelBorderClass} ${panelBgClass} transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
       }`}>
         {/* Logo */}
-        <div className="flex items-center justify-between h-16 px-5 border-b border-[#F0F0F5]">
+        <div className={`flex items-center justify-between h-16 px-5 border-b ${sectionBorderClass}`}>
           <Link to="/" className="flex items-center gap-2.5">
-            <span className="text-[18px] tracking-[-0.02em] text-[#0A2540]" style={{ fontWeight: 620 }}>Backfill</span>
+            <span className={`text-[18px] tracking-[-0.02em] ${textPrimaryClass}`} style={{ fontWeight: 620 }}>Backfill</span>
           </Link>
-          <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors lg:hidden">
-            <X size={18} className="text-[#8898AA]" />
+          <button onClick={() => setSidebarOpen(false)} className={`p-1.5 rounded-lg ${hoverSurfaceClass} transition-colors lg:hidden`}>
+            <X size={18} className={mutedTextClass} />
           </button>
         </div>
 
         {/* Tab Switcher */}
         <div className="px-3 pt-3 pb-1">
-          <div className="flex items-center bg-[#F0F0F5] rounded-lg p-0.5">
+          <div className={`flex items-center ${subtleSurfaceClass} rounded-lg p-0.5`}>
             <button onClick={() => setSidebarTab('nav')}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
-                sidebarTab === 'nav' ? 'bg-white text-[#0A2540] shadow-sm' : 'text-[#8898AA] hover:text-[#0A2540]'
+                sidebarTab === 'nav'
+                  ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
+                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
               }`} style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}>
               <LayoutGrid size={13} />Navigate
             </button>
@@ -228,7 +244,9 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                   {navItems.map((item) => (
                     <button key={item.label} onClick={() => handleNav(item.path)}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                        activeNav === item.label ? 'bg-[#635BFF]/[0.08] text-[#635BFF]' : 'text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA]'
+                        activeNav === item.label
+                          ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                          : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                       }`}>
                       <item.icon size={18} className="shrink-0" />
                       <span className="text-[13px]" style={{ fontWeight: activeNav === item.label ? 540 : 440 }}>{item.label}</span>
@@ -236,10 +254,10 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                   ))}
 
                   {/* Location shortcuts */}
-                  <div className="pt-4 mt-3 border-t border-[#F0F0F5]">
-                    <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.06em] px-3 mb-2 block" style={{ fontWeight: 500 }}>Locations</span>
+                  <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
+                    <span className={`text-[10px] ${mutedTextClass} uppercase tracking-[0.06em] px-3 mb-2 block`} style={{ fontWeight: 500 }}>Locations</span>
                     {allLocations.map((loc) => (
-                      <button key={loc.id} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA] transition-all duration-200">
+                      <button key={loc.id} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'} transition-all duration-200`}>
                         <span className="text-[14px]">{loc.logo}</span>
                         <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
                         {loc.openShifts > 0 && (
@@ -249,10 +267,12 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                     ))}
                   </div>
                 </nav>
-                <div className="border-t border-[#F0F0F5] py-3 px-3 space-y-1">
+                <div className={`border-t ${sectionBorderClass} py-3 px-3 space-y-1`}>
                   <button onClick={() => handleNav('/settings')}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                      activeNav === 'Settings' ? 'bg-[#635BFF]/[0.08] text-[#635BFF]' : 'text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA]'
+                      activeNav === 'Settings'
+                        ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                        : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                     }`}>
                     <Settings size={18} className="shrink-0" />
                     <span className="text-[13px]" style={{ fontWeight: activeNav === 'Settings' ? 540 : 440 }}>Settings</span>
@@ -269,14 +289,14 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
         </div>
 
         {/* User */}
-        <div className="border-t border-[#F0F0F5] p-3">
-        <div className="flex items-center gap-3 rounded-lg p-2 bg-[#F7F8FA]">
+        <div className={`border-t ${sectionBorderClass} p-3`}>
+        <div className={`flex items-center gap-3 rounded-lg p-2 ${surfaceClass}`}>
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
             <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
           </div>
           <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>{fullName}</p>
-              <p className="text-[11px] text-[#8898AA] truncate">{email ?? phone ?? 'Phone sign-in'}</p>
+              <p className={`text-[12px] ${textPrimaryClass} truncate`} style={{ fontWeight: 520 }}>{fullName}</p>
+              <p className={`text-[11px] ${mutedTextClass} truncate`}>{phone ?? email ?? 'Phone sign-in'}</p>
           </div>
         </div>
       </div>
@@ -285,64 +305,47 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
       {/* Main Area */}
       <div className="flex-1 min-h-screen lg:ml-[280px]">
         {/* Top Bar */}
-        <header className="sticky top-0 z-20 border-b border-[#E5E7EB] bg-white/80 backdrop-blur-xl">
+        <header className={`sticky top-0 z-20 border-b ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'} backdrop-blur-xl`}>
           <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
             <div className="flex items-center gap-3">
-              <button onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors lg:hidden">
-                <Menu size={20} className="text-[#5E6D7A]" />
+              <button onClick={() => setSidebarOpen(true)} className={`p-2 rounded-lg ${hoverSurfaceClass} transition-colors lg:hidden`}>
+                <Menu size={20} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
               </button>
               <div className="relative hidden sm:block">
-                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
+                <Search size={15} className={`absolute left-3 top-1/2 -translate-y-1/2 ${mutedTextClass}`} />
                 <input
                   type="text"
                   placeholder="Search..."
-                  className="w-48 md:w-64 pl-9 pr-4 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                  className={`w-48 md:w-64 pl-9 pr-4 py-2 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${searchFieldClass}`}
                   style={{ fontWeight: 420 }}
                 />
               </div>
               {/* Mobile logo when sidebar is hidden */}
-              <span className="text-[16px] tracking-[-0.02em] text-[#0A2540] lg:hidden sm:hidden" style={{ fontWeight: 620 }}>Backfill</span>
+              <span className={`text-[16px] tracking-[-0.02em] ${textPrimaryClass} lg:hidden sm:hidden`} style={{ fontWeight: 620 }}>Backfill</span>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              <button className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors hidden sm:block">
-                <HelpCircle size={18} className="text-[#5E6D7A]" />
-              </button>
-              <button
-                onClick={() => navigate(darkMode ? '/dashboard-light' : '/dashboard-dark')}
-                className="relative p-2 rounded-lg hover:bg-[#F7F8FA] transition-all duration-300 group"
-                title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-              >
-                <AnimatePresence mode="wait">
-                  {darkMode ? (
-                    <motion.div key="moon" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: 90, opacity: 0 }} transition={{ duration: 0.2 }}>
-                      <Moon size={18} className="text-[#635BFF]" />
-                    </motion.div>
-                  ) : (
-                    <motion.div key="sun" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }} transition={{ duration: 0.2 }}>
-                      <Sun size={18} className="text-[#5E6D7A] group-hover:text-[#F59E0B]" />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+              <button className={`p-2 rounded-lg ${hoverSurfaceClass} transition-colors hidden sm:block`}>
+                <HelpCircle size={18} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
               </button>
               <div className="relative">
-                <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-                  <Bell size={18} className="text-[#5E6D7A]" />
+                <button onClick={() => setShowNotifications(!showNotifications)} className={`relative p-2 rounded-lg ${hoverSurfaceClass} transition-colors`}>
+                  <Bell size={18} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
                   <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E5484D] rounded-full" />
                 </button>
                 <AnimatePresence>
                   {showNotifications && (
                     <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.96 }} transition={{ duration: 0.2 }}
-                      className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-50">
-                      <div className="px-4 py-3 border-b border-[#F0F0F5]">
-                        <span className="text-[13px] text-[#0A2540]" style={{ fontWeight: 560 }}>Notifications</span>
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 ${panelBgClass} border ${panelBorderClass} rounded-xl shadow-xl overflow-hidden z-50`}>
+                      <div className={`px-4 py-3 border-b ${sectionBorderClass}`}>
+                        <span className={`text-[13px] ${textPrimaryClass}`} style={{ fontWeight: 560 }}>Notifications</span>
                       </div>
                       {notifications.map((n) => (
-                        <div key={n.id} className="px-4 py-3 hover:bg-[#F7F8FA] transition-colors border-b border-[#F0F0F5] last:border-0">
+                        <div key={n.id} className={`px-4 py-3 ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-[#F7F8FA]'} transition-colors border-b ${sectionBorderClass} last:border-0`}>
                           <div className="flex items-start gap-2.5">
                             {n.urgent ? <AlertCircle size={14} className="text-[#E5484D] mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="text-[#00B893] mt-0.5 shrink-0" />}
                             <div>
-                              <p className="text-[12px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{n.text}</p>
-                              <span className="text-[11px] text-[#8898AA]">{n.time} ago</span>
+                              <p className={`text-[12px] ${isDark ? 'text-[#C1CED8]' : 'text-[#3E4C59]'}`} style={{ fontWeight: 440 }}>{n.text}</p>
+                              <span className={`text-[11px] ${mutedTextClass}`}>{n.time} ago</span>
                             </div>
                           </div>
                         </div>

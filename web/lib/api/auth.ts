@@ -1,5 +1,7 @@
 import { apiFetchApp, fetchAppJson, API_PREFIX } from "./backend-client";
 
+export type AppearancePreference = "light" | "dark" | "system";
+
 async function parseError(response: Response): Promise<string> {
   const requestId = response.headers.get("X-Backfill-Request-ID");
   try {
@@ -319,6 +321,7 @@ export async function completeOnboardingProfile(input: {
 export async function updateAccountProfile(input: {
   full_name: string;
   email: string;
+  appearance_preference?: AppearancePreference;
 }) {
   const response = await apiFetchApp(`${API_PREFIX}/account/profile`, {
     method: "PATCH",

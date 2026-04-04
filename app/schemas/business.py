@@ -22,6 +22,14 @@ class BusinessCreate(BaseSchema):
     place_metadata: dict = Field(default_factory=dict)
 
 
+class BusinessProfileUpdate(BaseSchema):
+    brand_name: str
+    vertical: Optional[str] = None
+    primary_email: Optional[str] = None
+    timezone: str
+    company_address: Optional[str] = None
+
+
 class BusinessRead(BaseSchema):
     id: UUID
     legal_name: str

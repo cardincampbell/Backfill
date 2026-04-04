@@ -23,6 +23,7 @@ from app.schemas.webhooks import WebhookSubscriptionCreate, WebhookSubscriptionU
 
 SUPPORTED_WEBHOOK_EVENTS = [
     "business.created",
+    "business.profile.updated",
     "coverage.case.created",
     "coverage.dispatch.executed",
     "coverage.phase_1.executed",

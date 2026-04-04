@@ -31,6 +31,7 @@ async def update_profile(
 ) -> User:
     full_name = payload.full_name.strip()
     email = payload.email.strip().lower()
+    appearance_preference = payload.appearance_preference
     if not full_name:
         raise ValueError("full_name_required")
     if not email:
@@ -45,6 +46,12 @@ async def update_profile(
     if user.email != email:
         changes["email"] = email
         user.email = email
+    if appearance_preference is not None:
+        next_metadata = dict(user.profile_metadata or {})
+        if next_metadata.get("appearance_preference") != appearance_preference:
+            next_metadata["appearance_preference"] = appearance_preference
+            changes["appearance_preference"] = appearance_preference
+            user.profile_metadata = next_metadata
     if user.onboarding_completed_at is None:
         completed_at = datetime.now(timezone.utc)
         changes["onboarding_completed_at"] = completed_at.isoformat()

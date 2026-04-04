@@ -53,6 +53,30 @@ export type BusinessCreatePayload = {
   primary_email?: string | null;
 };
 
+export type BusinessProfile = {
+  id: string;
+  legal_name: string;
+  brand_name?: string | null;
+  slug: string;
+  vertical?: string | null;
+  primary_phone_e164?: string | null;
+  primary_email?: string | null;
+  timezone: string;
+  status: string;
+  settings: Record<string, unknown>;
+  place_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BusinessProfileUpdatePayload = {
+  brand_name: string;
+  vertical?: string | null;
+  primary_email?: string | null;
+  timezone: string;
+  company_address?: string | null;
+};
+
 export type Workspace = {
   user: WorkspaceUser;
   onboarding_required: boolean;
@@ -290,6 +314,29 @@ export async function createBusiness(payload: BusinessCreatePayload) {
     slug: string;
     timezone: string;
   };
+}
+
+export async function getBusinessProfile(businessId: string) {
+  const response = await apiFetchApp(`${API_PREFIX}/businesses/${businessId}`);
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as BusinessProfile;
+}
+
+export async function updateBusinessProfile(
+  businessId: string,
+  payload: BusinessProfileUpdatePayload,
+) {
+  const response = await apiFetchApp(`${API_PREFIX}/businesses/${businessId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as BusinessProfile;
 }
 
 export async function createLocationFromPlace(

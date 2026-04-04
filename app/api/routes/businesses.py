@@ -10,6 +10,7 @@ from app.models.common import AuditActorType, MembershipRole, MembershipStatus
 from app.models.identity import Membership
 from app.schemas.business import (
     BusinessCreate,
+    BusinessProfileUpdate,
     BusinessRead,
     LocationCreate,
     LocationDeleteResponse,
@@ -81,6 +82,43 @@ async def get_business(business_id: UUID, session: SessionDep, auth_ctx: AuthDep
     business = await businesses.get_business(session, business_id)
     if business is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    return business
+
+
+@router.patch("/{business_id}", response_model=BusinessRead)
+async def update_business(
+    business_id: UUID,
+    payload: BusinessProfileUpdate,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    try:
+        changes = await businesses.update_business_profile(session, business, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    if changes:
+        await audit_service.append(
+            session,
+            event_name="business.profile.updated",
+            target_type="business",
+            target_id=business.id,
+            business_id=business.id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=audit_service.request_client_ip(request),
+            user_agent=audit_service.request_user_agent(request),
+            payload=changes,
+        )
+        await session.commit()
+        await session.refresh(business)
     return business
 
 

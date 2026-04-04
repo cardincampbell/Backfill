@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSessionUserDisplay } from '@/components/app-session-gate';
+import { useSmartGreeting } from './use-smart-greeting';
 import {
   Plus,
   MoreHorizontal,
@@ -37,7 +38,6 @@ import {
   Loader,
   Menu,
   X,
-  Sun,
 } from 'lucide-react';
 
 /* ─── Data ─── */
@@ -519,7 +519,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 /* ─── Multi Location View ─── */
 function MultiLocationView({ locations }: { locations: typeof allLocations }) {
   const navigate = useNavigate();
-  const { firstName } = useSessionUserDisplay();
+  const { greeting } = useSmartGreeting();
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
@@ -536,7 +536,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
         <div className="flex items-end justify-between mb-6">
           <div>
             <h1 className="text-[28px] sm:text-[32px] text-white tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-              Good evening, {firstName}
+              {greeting}
             </h1>
             <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
               Here's what's happening across your business today.
@@ -986,13 +986,6 @@ export default function DashboardDark() {
             <div className="flex items-center gap-1.5 sm:gap-3">
               <button className="p-2 rounded-lg hover:bg-white/[0.06] transition-colors hidden sm:block">
                 <HelpCircle size={18} className="text-[#8898AA]" />
-              </button>
-              <button
-                onClick={() => navigate('/dashboard-light')}
-                className="p-2 rounded-lg hover:bg-white/[0.06] transition-colors"
-                title="Switch to light mode"
-              >
-                <Sun size={18} className="text-[#8898AA]" />
               </button>
               <div className="relative">
                 <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-lg hover:bg-white/[0.06] transition-colors">

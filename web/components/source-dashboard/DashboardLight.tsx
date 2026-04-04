@@ -3,8 +3,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
-import { useSessionUserDisplay } from '@/components/app-session-gate';
+import {
+  useResolvedAppAppearance,
+  useSessionUserDisplay,
+} from '@/components/app-session-gate';
 import DashboardShell from './DashboardShell';
+import { useSmartGreeting } from './use-smart-greeting';
 import {
   Plus,
   MoreHorizontal,
@@ -123,6 +127,33 @@ function buildInitialMessages(firstName: string): ChatMessage[] {
 
 /* ─── Components ─── */
 
+function useDashboardTheme() {
+  const resolvedAppearance = useResolvedAppAppearance();
+  const isDark = resolvedAppearance === 'dark';
+
+  return {
+    isDark,
+    headingClass: isDark ? 'text-white' : 'text-[#0A2540]',
+    bodyClass: isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]',
+    mutedClass: 'text-[#8898AA]',
+    strongBodyClass: isDark ? 'text-[#C1CED8]' : 'text-[#3E4C59]',
+    surfaceClass: isDark
+      ? 'bg-white/[0.03] border border-white/[0.06] shadow-[0_1px_3px_rgba(0,0,0,0.12)]'
+      : 'bg-white border border-[#E5E7EB] shadow-[0_1px_2px_rgba(0,0,0,0.03)]',
+    borderClass: isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]',
+    rowHoverClass: isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]',
+    pillClass: isDark
+      ? 'bg-white/[0.06] text-[#C1CED8]'
+      : 'bg-[#F0F0F5] text-[#8898AA]',
+    dashedCardClass: isDark
+      ? 'border-white/[0.12] bg-white/[0.02] hover:border-[#635BFF]/40 hover:bg-[#635BFF]/[0.06]'
+      : 'border-[#D1D5DB] bg-white hover:border-[#635BFF]/40 hover:bg-[#635BFF]/[0.02]',
+    subtleInputClass: isDark
+      ? 'bg-white/[0.04] border-white/[0.06] text-white placeholder-[#8898AA]/50'
+      : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#0A2540] placeholder-[#8898AA]/60',
+  };
+}
+
 function MiniBarChart({ data, color, height = 40 }: { data: number[]; color: string; height?: number }) {
   const max = Math.max(...data);
   return (
@@ -135,6 +166,13 @@ function MiniBarChart({ data, color, height = 40 }: { data: number[]; color: str
 }
 
 function LocationCard({ location, index, onClick }: { location: typeof allLocations[0]; index: number; onClick: () => void }) {
+  const {
+    isDark,
+    headingClass,
+    bodyClass,
+    mutedClass,
+    borderClass,
+  } = useDashboardTheme();
   const [hovered, setHovered] = useState(false);
   return (
     <motion.div
@@ -144,9 +182,23 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
       onClick={onClick} className="group relative cursor-pointer"
     >
       <div className="relative rounded-2xl border overflow-hidden transition-all duration-500" style={{
-        borderColor: hovered ? `${location.color}30` : '#E5E7EB',
-        backgroundColor: hovered ? '#FAFBFF' : '#FFFFFF',
-        boxShadow: hovered ? `0 20px 60px -12px ${location.color}18, 0 0 0 1px ${location.color}10` : '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)',
+        borderColor: hovered
+          ? `${location.color}30`
+          : isDark
+            ? 'rgba(255,255,255,0.06)'
+            : '#E5E7EB',
+        backgroundColor: hovered
+          ? isDark
+            ? 'rgba(255,255,255,0.05)'
+            : '#FAFBFF'
+          : isDark
+            ? 'rgba(255,255,255,0.03)'
+            : '#FFFFFF',
+        boxShadow: hovered
+          ? `0 20px 60px -12px ${location.color}18, 0 0 0 1px ${location.color}10`
+          : isDark
+            ? '0 1px 3px rgba(0,0,0,0.12)'
+            : '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)',
       }}>
         <div className="h-[2px] w-full transition-all duration-500" style={{
           background: hovered ? `linear-gradient(90deg, transparent, ${location.color}, transparent)` : `linear-gradient(90deg, transparent, ${location.color}30, transparent)`,
@@ -158,37 +210,37 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
                 {location.logo}
               </div>
               <div>
-                <h3 className="text-[15px] text-[#0A2540] tracking-[-0.01em]" style={{ fontWeight: 580 }}>{location.name}</h3>
-                <span className="text-[12px] text-[#8898AA] tracking-[0.02em] uppercase" style={{ fontWeight: 480 }}>{location.type}</span>
+                <h3 className={`text-[15px] tracking-[-0.01em] ${headingClass}`} style={{ fontWeight: 580 }}>{location.name}</h3>
+                <span className={`text-[12px] tracking-[0.02em] uppercase ${mutedClass}`} style={{ fontWeight: 480 }}>{location.type}</span>
               </div>
             </div>
-            <button className="p-1.5 rounded-lg hover:bg-black/[0.04] transition-colors opacity-0 group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
-              <MoreHorizontal size={16} className="text-[#8898AA]" />
+            <button className={`p-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100 ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`} onClick={(e) => e.stopPropagation()}>
+              <MoreHorizontal size={16} className={mutedClass} />
             </button>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-5">
             <div>
-              <div className="text-[11px] text-[#8898AA] mb-1 uppercase tracking-[0.04em]" style={{ fontWeight: 480 }}>Fill Rate</div>
+              <div className={`text-[11px] mb-1 uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>Fill Rate</div>
               <div className="flex items-baseline gap-2">
-                <span className="text-[22px] text-[#0A2540] tracking-[-0.02em]" style={{ fontWeight: 640 }}>{location.fillRate}%</span>
+                <span className={`text-[22px] tracking-[-0.02em] ${headingClass}`} style={{ fontWeight: 640 }}>{location.fillRate}%</span>
                 <span className="text-[11px] flex items-center gap-0.5" style={{ fontWeight: 520, color: location.trend >= 0 ? '#00B893' : '#E5484D' }}>
                   <TrendingUp size={10} />{location.trend > 0 ? '+' : ''}{location.trend}%
                 </span>
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-[#8898AA] mb-1 uppercase tracking-[0.04em]" style={{ fontWeight: 480 }}>This Period</div>
-              <span className="text-[22px] text-[#0A2540] tracking-[-0.02em]" style={{ fontWeight: 640 }}>{location.revenue}</span>
+              <div className={`text-[11px] mb-1 uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>This Period</div>
+              <span className={`text-[22px] tracking-[-0.02em] ${headingClass}`} style={{ fontWeight: 640 }}>{location.revenue}</span>
             </div>
           </div>
-          <div className="flex items-center gap-4 pt-4 border-t border-[#F0F0F5]">
+          <div className={`flex items-center gap-4 pt-4 border-t ${borderClass}`}>
             <div className="flex items-center gap-1.5">
-              <Users size={13} className="text-[#8898AA]" />
-              <span className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 460 }}>{location.totalStaff} staff</span>
+              <Users size={13} className={mutedClass} />
+              <span className={`text-[12px] ${bodyClass}`} style={{ fontWeight: 460 }}>{location.totalStaff} staff</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <CalendarDays size={13} className="text-[#8898AA]" />
-              <span className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 460 }}>{location.activeShifts} active</span>
+              <CalendarDays size={13} className={mutedClass} />
+              <span className={`text-[12px] ${bodyClass}`} style={{ fontWeight: 460 }}>{location.activeShifts} active</span>
             </div>
             {location.openShifts > 0 ? (
               <div className="flex items-center gap-1.5 ml-auto">
@@ -210,6 +262,16 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
 
 /* ─── Single Location Detail ─── */
 function SingleLocationView({ location }: { location: typeof allLocations[0] }) {
+  const {
+    isDark,
+    headingClass,
+    bodyClass,
+    mutedClass,
+    strongBodyClass,
+    surfaceClass,
+    borderClass,
+    rowHoverClass,
+  } = useDashboardTheme();
   const navigate = useNavigate();
   return (
     <div>
@@ -220,10 +282,10 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
               {location.logo}
             </div>
             <div>
-              <h1 className="text-[28px] sm:text-[32px] text-[#0A2540] tracking-[-0.025em] mb-0.5" style={{ fontWeight: 620 }}>
+              <h1 className={`text-[28px] sm:text-[32px] tracking-[-0.025em] mb-0.5 ${headingClass}`} style={{ fontWeight: 620 }}>
                 {location.name}
               </h1>
-              <p className="text-[14px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+              <p className={`text-[14px] ${mutedClass}`} style={{ fontWeight: 420 }}>
                 Here's what's happening across your business today.
               </p>
             </div>
@@ -238,17 +300,17 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Today's Coverage */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.05 }}
-            className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col overflow-hidden">
+            className={`${surfaceClass} rounded-xl p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
-                <span className="text-[42px] text-[#0A2540] tracking-[-0.04em] leading-none" style={{ fontWeight: 720 }}>3</span>
+                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>3</span>
                 <div className="flex flex-col">
-                  <span className="text-[13px] text-[#0A2540] leading-tight" style={{ fontWeight: 580 }}>April</span>
-                  <span className="text-[13px] text-[#8898AA] leading-tight" style={{ fontWeight: 440 }}>Friday</span>
+                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>April</span>
+                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>Friday</span>
                 </div>
               </div>
               <div className="ml-auto">
-                <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.06em]" style={{ fontWeight: 500 }}>Today's Coverage</span>
+                <span className={`text-[11px] uppercase tracking-[0.06em] ${mutedClass}`} style={{ fontWeight: 500 }}>Today's Coverage</span>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto min-h-0 space-y-2 mb-3 pr-1">
@@ -259,9 +321,9 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 { name: 'Pediatrics', covered: 4, total: 6, status: 'complete' as const },
               ].map((unit) => (
                 <div key={unit.name} className="flex items-center gap-2.5">
-                  <span className="text-[11px] text-[#C1CED8]" style={{ fontWeight: 420 }}>↳</span>
-                  <span className="text-[13px] text-[#3E4C59] flex-1" style={{ fontWeight: 480 }}>{unit.name}</span>
-                  <span className="text-[13px] text-[#5E6D7A] tabular-nums" style={{ fontWeight: 520 }}>{unit.covered}/{unit.total}</span>
+                  <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>↳</span>
+                  <span className={`text-[13px] flex-1 ${strongBodyClass}`} style={{ fontWeight: 480 }}>{unit.name}</span>
+                  <span className={`text-[13px] tabular-nums ${bodyClass}`} style={{ fontWeight: 520 }}>{unit.covered}/{unit.total}</span>
                   {unit.status === 'complete' ? (
                     <CircleCheck size={14} className="text-[#00B893]" />
                   ) : (
@@ -273,20 +335,20 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 </div>
               ))}
             </div>
-            <div className="pt-3 border-t border-[#F0F0F5] shrink-0">
+            <div className={`pt-3 border-t shrink-0 ${borderClass}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[22px] text-[#0A2540] tracking-[-0.03em]" style={{ fontWeight: 660 }}>88%</span>
-                  <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>covered</span>
+                  <span className={`text-[22px] tracking-[-0.03em] ${headingClass}`} style={{ fontWeight: 660 }}>88%</span>
+                  <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 440 }}>covered</span>
                 </div>
-                <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>21 of 24</span>
+                <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>21 of 24</span>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-[#F0F0F5] mb-2 overflow-hidden">
+              <div className={`w-full h-1.5 rounded-full mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
                 <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
-                <span className="text-[10px] text-[#5E6D7A]" style={{ fontWeight: 460 }}>1 filling now · ~4 min</span>
+                <span className={`text-[10px] ${bodyClass}`} style={{ fontWeight: 460 }}>1 filling now · ~4 min</span>
               </div>
             </div>
           </motion.div>
@@ -300,28 +362,28 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
               { label: 'Time Saved', value: '12 hrs', icon: Hourglass, color: '#8B5CF6' },
             ].map((stat, i) => (
               <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
-                className="bg-white border border-[#E5E7EB] rounded-xl px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col">
+                className={`${surfaceClass} rounded-xl px-4 py-4 flex flex-col`}>
                 <div className="flex items-center justify-between mb-auto">
-                  <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 480 }}>{stat.label}</span>
+                  <span className={`text-[11px] uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>{stat.label}</span>
                   <stat.icon size={14} style={{ color: stat.color }} />
                 </div>
-                <span className="text-[26px] text-[#0A2540] tracking-[-0.02em] mt-1 whitespace-nowrap" style={{ fontWeight: 660 }}>{stat.value}</span>
+                <span className={`text-[26px] tracking-[-0.02em] mt-1 whitespace-nowrap ${headingClass}`} style={{ fontWeight: 660 }}>{stat.value}</span>
               </motion.div>
             ))}
           </div>
 
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col overflow-hidden">
-            <h3 className="text-[13px] text-[#8898AA] uppercase tracking-[0.04em] mb-3 shrink-0" style={{ fontWeight: 480 }}>Top Performers</h3>
+            className={`${surfaceClass} rounded-xl p-5 flex flex-col overflow-hidden`}>
+            <h3 className={`text-[13px] uppercase tracking-[0.04em] mb-3 shrink-0 ${mutedClass}`} style={{ fontWeight: 480 }}>Top Performers</h3>
             <div className="space-y-1 flex-1 min-h-0">
               {location.topStaff.slice(0, 4).map((s, i) => (
-                <div key={i} className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+                <div key={i} className={`flex items-center gap-2.5 p-2 rounded-lg transition-colors ${rowHoverClass}`}>
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: location.color }}>
                     {s.name.split(' ').map(n => n[0]).join('')}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>{s.name}</p>
-                    <span className="text-[10px] text-[#8898AA]">{s.role} · {s.shifts} shifts</span>
+                    <p className={`text-[12px] truncate ${headingClass}`} style={{ fontWeight: 500 }}>{s.name}</p>
+                    <span className={`text-[10px] ${mutedClass}`}>{s.role} · {s.shifts} shifts</span>
                   </div>
                   <div className="text-[11px] text-[#D4A017]" style={{ fontWeight: 540 }}>★ {s.rating}</div>
                 </div>
@@ -335,14 +397,14 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="lg:col-span-2 space-y-4">
           {/* Shift Volume */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className="bg-white border border-[#E5E7EB] rounded-2xl p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            className={`${surfaceClass} rounded-2xl p-6`}>
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h3 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 560 }}>Shift Volume</h3>
-                <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>Last 7 days</span>
+                <h3 className={`text-[15px] ${headingClass}`} style={{ fontWeight: 560 }}>Shift Volume</h3>
+                <span className={`text-[12px] ${mutedClass}`} style={{ fontWeight: 420 }}>Last 7 days</span>
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-[20px] text-[#0A2540] tracking-[-0.02em]" style={{ fontWeight: 620 }}>{location.revenue}</span>
+                <span className={`text-[20px] tracking-[-0.02em] ${headingClass}`} style={{ fontWeight: 620 }}>{location.revenue}</span>
                 <span className="text-[11px] flex items-center gap-0.5" style={{ fontWeight: 520, color: location.trend >= 0 ? '#00B893' : '#E5484D' }}>
                   <TrendingUp size={10} />{location.trend > 0 ? '+' : ''}{location.trend}%
                 </span>
@@ -351,15 +413,15 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
             <MiniBarChart data={location.weeklyShifts} color={location.color} height={80} />
             <div className="flex justify-between mt-2">
               {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-                <span key={d} className="text-[10px] text-[#8898AA]/60 flex-1 text-center" style={{ fontWeight: 440 }}>{d}</span>
+                <span key={d} className={`text-[10px] flex-1 text-center ${mutedClass}`} style={{ fontWeight: 440, opacity: 0.7 }}>{d}</span>
               ))}
             </div>
           </motion.div>
 
           {/* Recent Activity */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }}
-            className="bg-white border border-[#E5E7EB] rounded-2xl p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <h3 className="text-[15px] text-[#0A2540] mb-4" style={{ fontWeight: 560 }}>Recent Activity</h3>
+            className={`${surfaceClass} rounded-2xl p-6`}>
+            <h3 className={`text-[15px] mb-4 ${headingClass}`} style={{ fontWeight: 560 }}>Recent Activity</h3>
             <div className="space-y-3">
               {location.recentActivity.map((a, i) => (
                 <div key={i} className="flex items-start gap-3 py-2">
@@ -371,8 +433,8 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                      <Activity size={12} className="text-[#635BFF]" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{a.text}</p>
-                    <span className="text-[11px] text-[#8898AA]/70">{a.time}</span>
+                    <p className={`text-[13px] ${strongBodyClass}`} style={{ fontWeight: 440 }}>{a.text}</p>
+                    <span className={`text-[11px] ${mutedClass}`} style={{ opacity: 0.7 }}>{a.time}</span>
                   </div>
                 </div>
               ))}
@@ -387,13 +449,17 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 { label: 'Invite Staff', desc: 'Add to your roster', icon: Users, color: '#00B893' },
                 { label: 'View Reports', desc: 'Location analytics', icon: ArrowUpRight, color: '#3B82F6' },
               ].map((action) => (
-                <button key={action.label} className="group flex items-center gap-4 p-4 rounded-xl bg-white border border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all duration-300 text-left">
+                <button key={action.label} className={`group flex items-center gap-4 p-4 rounded-xl border transition-all duration-300 text-left ${
+                  isDark
+                    ? 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/[0.12]'
+                    : 'bg-white border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)]'
+                }`}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110" style={{ background: `${action.color}10` }}>
                     <action.icon size={16} style={{ color: action.color }} />
                   </div>
                   <div>
-                    <span className="text-[13px] text-[#0A2540] block" style={{ fontWeight: 540 }}>{action.label}</span>
-                    <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>{action.desc}</span>
+                    <span className={`text-[13px] block ${headingClass}`} style={{ fontWeight: 540 }}>{action.label}</span>
+                    <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>{action.desc}</span>
                   </div>
                 </button>
               ))}
@@ -404,14 +470,14 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="space-y-4">
           {/* Coverage */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.35 }}
-            className="bg-white border border-[#E5E7EB] rounded-2xl p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <h3 className="text-[15px] text-[#0A2540] mb-4" style={{ fontWeight: 560 }}>Coverage</h3>
+            className={`${surfaceClass} rounded-2xl p-6`}>
+            <h3 className={`text-[15px] mb-4 ${headingClass}`} style={{ fontWeight: 560 }}>Coverage</h3>
             <div className="mb-4">
               <div className="flex justify-between mb-2">
-                <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 440 }}>Fill rate</span>
-                <span className="text-[12px] text-[#0A2540]" style={{ fontWeight: 560 }}>{location.fillRate}%</span>
+                <span className={`text-[12px] ${mutedClass}`} style={{ fontWeight: 440 }}>Fill rate</span>
+                <span className={`text-[12px] ${headingClass}`} style={{ fontWeight: 560 }}>{location.fillRate}%</span>
               </div>
-              <div className="h-2 bg-[#F0F0F5] rounded-full overflow-hidden">
+              <div className={`h-2 rounded-full overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
                 <motion.div initial={{ width: 0 }} animate={{ width: `${location.fillRate}%` }} transition={{ duration: 1, delay: 0.5, ease: 'easeOut' }}
                   className="h-full rounded-full" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
               </div>
@@ -425,9 +491,9 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 <div key={r.label} className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full" style={{ background: r.dotColor }} />
-                    <span className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 440 }}>{r.label}</span>
+                    <span className={`text-[12px] ${bodyClass}`} style={{ fontWeight: 440 }}>{r.label}</span>
                   </div>
-                  <span className="text-[13px] text-[#0A2540]" style={{ fontWeight: 540 }}>{r.value}</span>
+                  <span className={`text-[13px] ${headingClass}`} style={{ fontWeight: 540 }}>{r.value}</span>
                 </div>
               ))}
             </div>
@@ -435,13 +501,13 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 
           {/* Compliance */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
-            className="bg-white border border-[#E5E7EB] rounded-2xl p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <h3 className="text-[15px] text-[#0A2540] mb-3" style={{ fontWeight: 560 }}>Compliance</h3>
+            className={`${surfaceClass} rounded-2xl p-6`}>
+            <h3 className={`text-[15px] mb-3 ${headingClass}`} style={{ fontWeight: 560 }}>Compliance</h3>
             <div className="space-y-2.5">
               {['Credentials current', 'Overtime limits met', 'Break compliance'].map((c) => (
                 <div key={c} className="flex items-center gap-2.5">
                   <Shield size={13} className="text-[#00B893]" />
-                  <span className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 440 }}>{c}</span>
+                  <span className={`text-[12px] ${bodyClass}`} style={{ fontWeight: 440 }}>{c}</span>
                   <CheckCircle2 size={12} className="text-[#00B893] ml-auto" />
                 </div>
               ))}
@@ -455,8 +521,20 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 
 /* ─── Multi Location View ─── */
 function MultiLocationView({ locations }: { locations: typeof allLocations }) {
+  const {
+    isDark,
+    headingClass,
+    bodyClass,
+    mutedClass,
+    strongBodyClass,
+    surfaceClass,
+    borderClass,
+    rowHoverClass,
+    pillClass,
+    dashedCardClass,
+  } = useDashboardTheme();
   const navigate = useNavigate();
-  const { firstName } = useSessionUserDisplay();
+  const { greeting } = useSmartGreeting();
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
@@ -468,10 +546,10 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
         <div className="flex items-end justify-between mb-6">
           <div>
-            <h1 className="text-[28px] sm:text-[32px] text-[#0A2540] tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-              Good evening, {firstName}
+            <h1 className={`text-[28px] sm:text-[32px] tracking-[-0.025em] mb-1 ${headingClass}`} style={{ fontWeight: 620 }}>
+              {greeting}
             </h1>
-            <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            <p className={`text-[15px] ${mutedClass}`} style={{ fontWeight: 420 }}>
               Here's what's happening across your business today.
             </p>
           </div>
@@ -485,26 +563,26 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Today's Coverage */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.05 }}
-            className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col overflow-hidden">
+            className={`${surfaceClass} rounded-xl p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
-                <span className="text-[42px] text-[#0A2540] tracking-[-0.04em] leading-none" style={{ fontWeight: 720 }}>3</span>
+                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>3</span>
                 <div className="flex flex-col">
-                  <span className="text-[13px] text-[#0A2540] leading-tight" style={{ fontWeight: 580 }}>April</span>
-                  <span className="text-[13px] text-[#8898AA] leading-tight" style={{ fontWeight: 440 }}>Friday</span>
+                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>April</span>
+                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>Friday</span>
                 </div>
               </div>
               <div className="ml-auto">
-                <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.06em]" style={{ fontWeight: 500 }}>Today's Coverage</span>
+                <span className={`text-[11px] uppercase tracking-[0.06em] ${mutedClass}`} style={{ fontWeight: 500 }}>Today's Coverage</span>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto min-h-0 space-y-2 mb-3 pr-1">
               {locations.map((loc) => (
                 <div key={loc.id} className="flex items-center gap-2.5">
-                  <span className="text-[11px] text-[#C1CED8]" style={{ fontWeight: 420 }}>↳</span>
+                  <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>↳</span>
                   <span className="text-[13px]">{loc.logo}</span>
-                  <span className="text-[13px] text-[#3E4C59] flex-1 truncate" style={{ fontWeight: 480 }}>{loc.name.split(' ')[0]}</span>
-                  <span className="text-[13px] text-[#5E6D7A] tabular-nums" style={{ fontWeight: 520 }}>{loc.activeShifts}/{loc.activeShifts + loc.openShifts}</span>
+                  <span className={`text-[13px] flex-1 truncate ${strongBodyClass}`} style={{ fontWeight: 480 }}>{loc.name.split(' ')[0]}</span>
+                  <span className={`text-[13px] tabular-nums ${bodyClass}`} style={{ fontWeight: 520 }}>{loc.activeShifts}/{loc.activeShifts + loc.openShifts}</span>
                   {loc.openShifts === 0 ? (
                     <CircleCheck size={14} className="text-[#00B893]" />
                   ) : (
@@ -516,20 +594,20 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
                 </div>
               ))}
             </div>
-            <div className="pt-3 border-t border-[#F0F0F5] shrink-0">
+            <div className={`pt-3 border-t shrink-0 ${borderClass}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[22px] text-[#0A2540] tracking-[-0.03em]" style={{ fontWeight: 660 }}>78%</span>
-                  <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>covered</span>
+                  <span className={`text-[22px] tracking-[-0.03em] ${headingClass}`} style={{ fontWeight: 660 }}>78%</span>
+                  <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 440 }}>covered</span>
                 </div>
-                <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>72 of 92</span>
+                <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>72 of 92</span>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-[#F0F0F5] mb-2 overflow-hidden">
+              <div className={`w-full h-1.5 rounded-full mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
                 <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '78%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
-                <span className="text-[10px] text-[#5E6D7A]" style={{ fontWeight: 460 }}>{totalOpen} filling now · ~8 min</span>
+                <span className={`text-[10px] ${bodyClass}`} style={{ fontWeight: 460 }}>{totalOpen} filling now · ~8 min</span>
               </div>
             </div>
           </motion.div>
@@ -543,33 +621,33 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
               { label: 'Time Saved', value: '34 hrs', icon: Hourglass, color: '#8B5CF6' },
             ].map((stat, i) => (
               <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
-                className="bg-white border border-[#E5E7EB] rounded-xl px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col">
+                className={`${surfaceClass} rounded-xl px-4 py-4 flex flex-col`}>
                 <div className="flex items-center justify-between mb-auto">
-                  <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 480 }}>{stat.label}</span>
+                  <span className={`text-[11px] uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>{stat.label}</span>
                   <stat.icon size={14} style={{ color: stat.color }} />
                 </div>
-                <span className="text-[26px] text-[#0A2540] tracking-[-0.02em] mt-1 whitespace-nowrap" style={{ fontWeight: 660 }}>{stat.value}</span>
+                <span className={`text-[26px] tracking-[-0.02em] mt-1 whitespace-nowrap ${headingClass}`} style={{ fontWeight: 660 }}>{stat.value}</span>
               </motion.div>
             ))}
           </div>
 
           {/* Top Performers */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex flex-col overflow-hidden">
-            <h3 className="text-[13px] text-[#8898AA] uppercase tracking-[0.04em] mb-3 shrink-0" style={{ fontWeight: 480 }}>Top Performers</h3>
+            className={`${surfaceClass} rounded-xl p-5 flex flex-col overflow-hidden`}>
+            <h3 className={`text-[13px] uppercase tracking-[0.04em] mb-3 shrink-0 ${mutedClass}`} style={{ fontWeight: 480 }}>Top Performers</h3>
             <div className="space-y-1 flex-1 min-h-0">
               {locations.flatMap((loc) =>
                 loc.topStaff.map((s) => ({ ...s, locationName: loc.name, locationLogo: loc.logo, locationColor: loc.color }))
               ).sort((a, b) => b.rating - a.rating).slice(0, 4).map((s, i) => (
-                <div key={`${s.name}-${i}`} className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+                <div key={`${s.name}-${i}`} className={`flex items-center gap-2.5 p-2 rounded-lg transition-colors ${rowHoverClass}`}>
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: s.locationColor }}>
                     {s.name.split(' ').map(n => n[0]).join('')}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>{s.name}</p>
+                    <p className={`text-[12px] truncate ${headingClass}`} style={{ fontWeight: 500 }}>{s.name}</p>
                     <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-[#8898AA]">{s.role} · {s.shifts} shifts</span>
-                      <span className="text-[9px] text-[#8898AA]/50">|</span>
+                      <span className={`text-[10px] ${mutedClass}`}>{s.role} · {s.shifts} shifts</span>
+                      <span className={`text-[9px] ${mutedClass}`} style={{ opacity: 0.5 }}>|</span>
                       <span className="text-[10px]">{s.locationLogo}</span>
                     </div>
                   </div>
@@ -583,8 +661,8 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h2 className="text-[18px] text-[#0A2540] tracking-[-0.01em]" style={{ fontWeight: 580 }}>Your Locations</h2>
-          <span className="text-[12px] text-[#8898AA] bg-[#F0F0F5] px-2.5 py-0.5 rounded-full" style={{ fontWeight: 500 }}>{locations.length}</span>
+          <h2 className={`text-[18px] tracking-[-0.01em] ${headingClass}`} style={{ fontWeight: 580 }}>Your Locations</h2>
+          <span className={`text-[12px] px-2.5 py-0.5 rounded-full ${pillClass}`} style={{ fontWeight: 500 }}>{locations.length}</span>
         </div>
         <button className="flex items-center gap-1 text-[13px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 500 }}>
           View all <ChevronRight size={14} />
@@ -599,32 +677,36 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
         onClick={() => navigate('/onboarding')} className="mt-4 group cursor-pointer">
-        <div className="rounded-2xl border border-dashed border-[#D1D5DB] hover:border-[#635BFF]/40 bg-white hover:bg-[#635BFF]/[0.02] transition-all duration-500 p-8 flex items-center justify-center gap-3">
-          <div className="w-10 h-10 rounded-xl border border-[#E5E7EB] group-hover:border-[#635BFF]/30 flex items-center justify-center transition-all duration-300 group-hover:bg-[#635BFF]/[0.06]">
+        <div className={`rounded-2xl border border-dashed transition-all duration-500 p-8 flex items-center justify-center gap-3 ${dashedCardClass}`}>
+          <div className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all duration-300 group-hover:border-[#635BFF]/30 group-hover:bg-[#635BFF]/[0.06] ${isDark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
             <Plus size={18} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
           </div>
           <div>
-            <span className="text-[14px] text-[#5E6D7A] group-hover:text-[#0A2540] transition-colors" style={{ fontWeight: 520 }}>Add another location</span>
-            <p className="text-[12px] text-[#8898AA]/70" style={{ fontWeight: 420 }}>Set up a new location or organization</p>
+            <span className={`text-[14px] transition-colors ${isDark ? 'text-[#C1CED8] group-hover:text-white' : 'text-[#5E6D7A] group-hover:text-[#0A2540]'}`} style={{ fontWeight: 520 }}>Add another location</span>
+            <p className={`text-[12px] ${mutedClass}`} style={{ fontWeight: 420, opacity: 0.7 }}>Set up a new location or organization</p>
           </div>
         </div>
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.5 }} className="mt-10">
-        <h2 className="text-[16px] text-[#8898AA] mb-4 tracking-[-0.01em]" style={{ fontWeight: 500 }}>Quick Actions</h2>
+        <h2 className={`text-[16px] mb-4 tracking-[-0.01em] ${mutedClass}`} style={{ fontWeight: 500 }}>Quick Actions</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             { label: 'Post a Shift', desc: 'Create and broadcast an open shift', icon: Zap, color: '#635BFF' },
             { label: 'Invite Staff', desc: 'Add team members to your roster', icon: Users, color: '#00B893' },
             { label: 'View Reports', desc: 'Analytics across all locations', icon: ArrowUpRight, color: '#3B82F6' },
           ].map((action) => (
-            <button key={action.label} className="group flex items-center gap-4 p-4 rounded-xl bg-white border border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all duration-300 text-left">
+            <button key={action.label} className={`group flex items-center gap-4 p-4 rounded-xl border transition-all duration-300 text-left ${
+              isDark
+                ? 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/[0.12]'
+                : 'bg-white border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)]'
+            }`}>
               <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110" style={{ background: `${action.color}10` }}>
                 <action.icon size={16} style={{ color: action.color }} />
               </div>
               <div>
-                <span className="text-[13px] text-[#0A2540] block" style={{ fontWeight: 540 }}>{action.label}</span>
-                <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>{action.desc}</span>
+                <span className={`text-[13px] block ${headingClass}`} style={{ fontWeight: 540 }}>{action.label}</span>
+                <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>{action.desc}</span>
               </div>
             </button>
           ))}

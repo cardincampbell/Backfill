@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSessionUserDisplay } from '@/components/app-session-gate';
+import { useSmartGreeting } from './use-smart-greeting';
 import {
   Building2,
   Plus,
@@ -251,7 +252,8 @@ export default function Dashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const navigate = useNavigate();
-  const { firstName, initials } = useSessionUserDisplay();
+  const { initials } = useSessionUserDisplay();
+  const { greeting } = useSmartGreeting();
 
   const totalStaff = mockBusinesses.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = mockBusinesses.reduce((a, b) => a + b.activeShifts, 0);
@@ -385,7 +387,7 @@ export default function Dashboard() {
           <div className="flex items-end justify-between mb-6">
             <div>
               <h1 className="text-[28px] sm:text-[32px] text-white tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-                Good evening, {firstName}
+                {greeting}
               </h1>
               <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
                 Here's what's happening across your businesses today.

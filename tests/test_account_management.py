@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
-from app.models.business import Location
+from app.models.business import Business, Location
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
@@ -116,6 +116,24 @@ def _make_location(*, business_id, location_id, name="Downtown Los Angeles") -> 
         settings={},
         google_place_metadata={},
         is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _make_business(*, business_id, legal_name="Backfill Works, Inc.") -> Business:
+    now = datetime.now(timezone.utc)
+    return Business(
+        id=business_id,
+        legal_name=legal_name,
+        brand_name="Backfill",
+        slug="backfill",
+        vertical="staffing",
+        primary_email="ops@backfill.io",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
         created_at=now,
         updated_at=now,
     )
@@ -253,15 +271,18 @@ def test_account_profile_route_updates_current_user():
             json={
                 "full_name": "Cardin Campbell",
                 "email": "cardin@example.com",
+                "appearance_preference": "dark",
             },
         )
         assert response.status_code == 200
         payload = response.json()
         assert payload["user"]["full_name"] == "Cardin Campbell"
         assert payload["user"]["email"] == "cardin@example.com"
+        assert payload["user"]["profile_metadata"]["appearance_preference"] == "dark"
         assert payload["onboarding_required"] is False
         assert auth_ctx.user.full_name == "Cardin Campbell"
         assert auth_ctx.user.email == "cardin@example.com"
+        assert auth_ctx.user.profile_metadata["appearance_preference"] == "dark"
         assert auth_ctx.user.onboarding_completed_at == original_completed_at
         assert fake_session.commits == 1
         assert any(
@@ -312,5 +333,53 @@ def test_account_profile_route_rejects_duplicate_email():
         assert response.status_code == 400
         assert response.json() == {"detail": "email_already_in_use"}
         assert fake_session.commits == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_business_profile_route_updates_current_business():
+    fake_session = FakeAccountSession()
+    business_id = uuid4()
+    business = _make_business(business_id=business_id)
+    fake_session.get_map[(Business, business_id)] = business
+    auth_ctx = _make_auth_context(business_id=business_id)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}",
+            json={
+                "brand_name": "Backfill Works",
+                "vertical": "healthcare",
+                "primary_email": "hello@backfill.com",
+                "timezone": "America/New_York",
+                "company_address": "100 Market St, San Francisco, CA 94105",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["brand_name"] == "Backfill Works"
+        assert payload["vertical"] == "healthcare"
+        assert payload["primary_email"] == "hello@backfill.com"
+        assert payload["timezone"] == "America/New_York"
+        assert business.brand_name == "Backfill Works"
+        assert business.vertical == "healthcare"
+        assert business.primary_email == "hello@backfill.com"
+        assert business.timezone == "America/New_York"
+        assert business.settings["company_profile_address"] == "100 Market St, San Francisco, CA 94105"
+        assert fake_session.commits == 1
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "business.profile.updated"
+            for entry in fake_session.added
+        )
     finally:
         app.dependency_overrides.clear()

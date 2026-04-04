@@ -5,13 +5,16 @@ import {
   useContext,
   useEffect,
   useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
 } from "react";
 
 import type { AuthMeResponse } from "@/lib/api/auth";
 import { getAuthMe } from "@/lib/api/auth";
 
 type AppSessionGateProps = {
-  children: React.ReactNode;
+  children: ReactNode;
 };
 
 type SessionUserDisplay = {
@@ -23,7 +26,34 @@ type SessionUserDisplay = {
   initials: string;
 };
 
-const AppSessionContext = createContext<AuthMeResponse | null>(null);
+export type AppearancePreference = "light" | "dark" | "system";
+export type ResolvedAppAppearance = "light" | "dark";
+
+type AppSessionContextValue = {
+  session: AuthMeResponse | null;
+  setSession: Dispatch<SetStateAction<AuthMeResponse | null>>;
+  appearancePreference: AppearancePreference;
+  setAppearancePreference: Dispatch<SetStateAction<AppearancePreference>>;
+  resolvedAppearance: ResolvedAppAppearance;
+};
+
+const AppSessionContext = createContext<AppSessionContextValue | null>(null);
+const DEFAULT_APPEARANCE_PREFERENCE: AppearancePreference = "system";
+
+function normalizeAppearancePreference(value: unknown): AppearancePreference {
+  return value === "light" || value === "dark" || value === "system"
+    ? value
+    : DEFAULT_APPEARANCE_PREFERENCE;
+}
+
+function resolveSystemAppearance(): ResolvedAppAppearance {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
 
 function capitalizeSegment(value: string): string {
   if (!value) {
@@ -86,7 +116,26 @@ function buildSessionUserDisplay(
 }
 
 export function useAppSession(): AuthMeResponse | null {
-  return useContext(AppSessionContext);
+  return useContext(AppSessionContext)?.session ?? null;
+}
+
+export function useUpdateAppSession() {
+  return useContext(AppSessionContext)?.setSession;
+}
+
+export function useAppAppearancePreference(): AppearancePreference {
+  return (
+    useContext(AppSessionContext)?.appearancePreference ??
+    DEFAULT_APPEARANCE_PREFERENCE
+  );
+}
+
+export function useUpdateAppAppearancePreference() {
+  return useContext(AppSessionContext)?.setAppearancePreference;
+}
+
+export function useResolvedAppAppearance(): ResolvedAppAppearance {
+  return useContext(AppSessionContext)?.resolvedAppearance ?? "light";
 }
 
 export function useSessionUserDisplay(): SessionUserDisplay {
@@ -96,6 +145,10 @@ export function useSessionUserDisplay(): SessionUserDisplay {
 export function AppSessionGate({ children }: AppSessionGateProps) {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<AuthMeResponse | null>(null);
+  const [appearancePreference, setAppearancePreference] =
+    useState<AppearancePreference>(DEFAULT_APPEARANCE_PREFERENCE);
+  const [resolvedAppearance, setResolvedAppearance] =
+    useState<ResolvedAppAppearance>("light");
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +166,15 @@ export function AppSessionGate({ children }: AppSessionGateProps) {
         window.location.replace("/onboarding");
         return;
       }
+      const nextPreference = normalizeAppearancePreference(
+        session.user.profile_metadata?.appearance_preference,
+      );
+      setAppearancePreference(nextPreference);
+      setResolvedAppearance(
+        nextPreference === "system"
+          ? resolveSystemAppearance()
+          : nextPreference,
+      );
       setSession(session);
       setReady(true);
     }
@@ -124,6 +186,55 @@ export function AppSessionGate({ children }: AppSessionGateProps) {
     };
   }, []);
 
+  useEffect(() => {
+    const nextPreference = normalizeAppearancePreference(
+      session?.user.profile_metadata?.appearance_preference,
+    );
+    setAppearancePreference(nextPreference);
+  }, [session]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (appearancePreference !== "system") {
+      setResolvedAppearance(appearancePreference);
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => {
+      setResolvedAppearance(mediaQuery.matches ? "dark" : "light");
+    };
+
+    sync();
+    if ("addEventListener" in mediaQuery) {
+      mediaQuery.addEventListener("change", sync);
+    } else {
+      (mediaQuery as MediaQueryList & {
+        addListener?(listener: (event: MediaQueryListEvent) => void): void;
+      }).addListener?.(sync);
+    }
+    return () => {
+      if ("removeEventListener" in mediaQuery) {
+        mediaQuery.removeEventListener("change", sync);
+      } else {
+        (mediaQuery as MediaQueryList & {
+          removeListener?(listener: (event: MediaQueryListEvent) => void): void;
+        }).removeListener?.(sync);
+      }
+    };
+  }, [appearancePreference]);
+
+  useEffect(() => {
+    if (!ready || typeof document === "undefined") {
+      return;
+    }
+    document.documentElement.dataset.backfillAppearance = resolvedAppearance;
+    document.documentElement.style.colorScheme = resolvedAppearance;
+  }, [ready, resolvedAppearance]);
+
   if (!ready) {
     return (
       <main
@@ -134,7 +245,15 @@ export function AppSessionGate({ children }: AppSessionGateProps) {
   }
 
   return (
-    <AppSessionContext.Provider value={session}>
+    <AppSessionContext.Provider
+      value={{
+        session,
+        setSession,
+        appearancePreference,
+        setAppearancePreference,
+        resolvedAppearance,
+      }}
+    >
       {children}
     </AppSessionContext.Provider>
   );

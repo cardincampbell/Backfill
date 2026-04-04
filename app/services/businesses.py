@@ -10,6 +10,7 @@ from app.models.business import Business, Location, LocationRole, Role
 from app.models.scheduling import Shift
 from app.schemas.business import (
     BusinessCreate,
+    BusinessProfileUpdate,
     LocationCreate,
     LocationRoleAttach,
     RoleCreate,
@@ -91,6 +92,60 @@ async def create_business(session: AsyncSession, payload: BusinessCreate) -> Bus
     business = await create_business_record(session, payload)
     await session.refresh(business)
     return business
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+async def update_business_profile(
+    session: AsyncSession,
+    business: Business,
+    payload: BusinessProfileUpdate,
+) -> dict[str, object]:
+    brand_name = payload.brand_name.strip()
+    timezone = payload.timezone.strip()
+    if not brand_name:
+        raise ValueError("business_name_required")
+    if not timezone:
+        raise ValueError("timezone_required")
+
+    vertical = _normalize_optional(payload.vertical)
+    primary_email = _normalize_optional(payload.primary_email)
+    if primary_email is not None:
+        primary_email = primary_email.lower()
+    company_address = _normalize_optional(payload.company_address)
+
+    changes: dict[str, object] = {}
+    if business.brand_name != brand_name:
+        business.brand_name = brand_name
+        changes["brand_name"] = brand_name
+    if business.vertical != vertical:
+        business.vertical = vertical
+        changes["vertical"] = vertical
+    if business.primary_email != primary_email:
+        business.primary_email = primary_email
+        changes["primary_email"] = primary_email
+    if business.timezone != timezone:
+        business.timezone = timezone
+        changes["timezone"] = timezone
+
+    settings = dict(business.settings or {})
+    current_company_address = _normalize_optional(settings.get("company_profile_address"))
+    if current_company_address != company_address:
+        if company_address is None:
+            settings.pop("company_profile_address", None)
+        else:
+            settings["company_profile_address"] = company_address
+        business.settings = settings
+        changes["company_address"] = company_address
+
+    await session.flush()
+    await session.refresh(business)
+    return changes
 
 
 async def list_locations(session: AsyncSession, business_id: UUID) -> list[Location]:

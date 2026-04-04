@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import {
   Plus,
   Upload,
@@ -82,12 +83,26 @@ const statusConfig = {
 
 const locationOptions = ['All Locations', 'Downtown Medical Center', 'Sunrise Senior Living', 'Bay Area Staffing Co.', 'Coastal Hospitality Group'];
 const statusOptions = ['All Status', 'Active', 'On Leave', 'Inactive'];
+const rosterTemplateHref = '/backfill-employee-roster-template.xlsx';
 
 /* ─── Add Employee Modal ─── */
-function AddEmployeeModal({ onClose }: { onClose: () => void }) {
+function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolean }) {
   const [formData, setFormData] = useState({
     firstName: '', lastName: '', email: '', phone: '', role: '', department: '', location: '',
   });
+  const modalBg = dark ? 'bg-[#0F2E4C]' : 'bg-white';
+  const border = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const inputClass = dark
+    ? 'border-white/[0.08] bg-white/[0.04] text-white'
+    : 'border-[#E5E7EB] bg-white text-[#0A2540]';
+  const subtlePanel = dark ? 'bg-white/[0.04]' : 'bg-[#635BFF]/[0.04]';
+  const subtleBorder = dark ? 'border-white/[0.08]' : 'border-[#635BFF]/10';
+  const footerBg = dark ? 'bg-white/[0.03]' : 'bg-[#FAFBFC]';
+  const ghostButton = dark
+    ? 'text-[#C1CED8] border-white/[0.08] hover:bg-white/[0.06]'
+    : 'text-[#5E6D7A] border-[#E5E7EB] hover:bg-[#F7F8FA]';
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -95,58 +110,74 @@ function AddEmployeeModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}>
       <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden mx-4 sm:mx-0"
+        className={`w-full max-w-lg ${modalBg} rounded-2xl shadow-2xl overflow-hidden mx-4 sm:mx-0 border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
         onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 sm:px-6 py-5 border-b border-[#F0F0F5]">
+        <div className={`flex items-center justify-between px-4 sm:px-6 py-5 border-b ${border}`}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#635BFF]/10 flex items-center justify-center">
+            <div className={`w-9 h-9 rounded-xl ${dark ? 'bg-white/[0.06]' : 'bg-[#635BFF]/10'} flex items-center justify-center`}>
               <UserPlus size={18} className="text-[#635BFF]" />
             </div>
             <div>
-              <h2 className="text-[16px] text-[#0A2540]" style={{ fontWeight: 600 }}>Add Employee</h2>
-              <p className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>Add a new team member to your roster</p>
+              <h2 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h2>
+              <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>Add a new team member to your roster</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+          <button onClick={onClose} className={`p-2 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
             <X size={18} className="text-[#8898AA]" />
           </button>
         </div>
 
         <div className="px-4 sm:px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
+          <div className={`flex items-center gap-3 p-3.5 rounded-xl ${subtlePanel} border ${subtleBorder}`}>
+            <FileSpreadsheet size={18} className="text-[#635BFF] shrink-0" />
+            <div className="flex-1">
+              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>Uploading a full roster instead?</p>
+              <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>Download the workbook template with instructions, then use Bulk Upload.</p>
+            </div>
+            <a
+              href={rosterTemplateHref}
+              download
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] text-[#635BFF] transition-all ${dark ? 'bg-white/[0.06] border-white/[0.08] hover:bg-white/[0.1]' : 'bg-white border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}
+              style={{ fontWeight: 500 }}
+            >
+              <Download size={12} /> Template
+            </a>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>First Name</label>
+              <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>First Name</label>
               <input type="text" value={formData.firstName} onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="Sarah" />
             </div>
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Last Name</label>
+              <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Last Name</label>
               <input type="text" value={formData.lastName} onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="Martinez" />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Email</label>
+            <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Email</label>
             <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
               style={{ fontWeight: 440 }} placeholder="sarah.m@company.com" />
           </div>
 
           <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Phone</label>
+            <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Phone</label>
             <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
               style={{ fontWeight: 440 }} placeholder="(415) 555-0142" />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Role</label>
+              <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Role</label>
               <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none bg-white"
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${inputClass}`}
                 style={{ fontWeight: 440 }}>
                 <option value="">Select role</option>
                 <option>RN</option><option>LPN</option><option>CNA</option><option>Caregiver</option>
@@ -154,17 +185,17 @@ function AddEmployeeModal({ onClose }: { onClose: () => void }) {
               </select>
             </div>
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Department</label>
+              <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Department</label>
               <input type="text" value={formData.department} onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="ICU" />
             </div>
           </div>
 
           <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Location</label>
+            <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Location</label>
             <select value={formData.location} onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none bg-white"
+              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${inputClass}`}
               style={{ fontWeight: 440 }}>
               <option value="">Select location</option>
               {locationOptions.slice(1).map((l) => <option key={l}>{l}</option>)}
@@ -172,9 +203,9 @@ function AddEmployeeModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-4 sm:px-6 py-4 border-t border-[#F0F0F5] bg-[#FAFBFC]">
+        <div className={`flex items-center justify-end gap-3 px-4 sm:px-6 py-4 border-t ${border} ${footerBg}`}>
           <button onClick={onClose}
-            className="px-4 py-2.5 rounded-lg text-[13px] text-[#5E6D7A] border border-[#E5E7EB] hover:bg-[#F7F8FA] transition-all"
+            className={`px-4 py-2.5 rounded-lg text-[13px] border transition-all ${ghostButton}`}
             style={{ fontWeight: 480 }}>
             Cancel
           </button>
@@ -190,11 +221,20 @@ function AddEmployeeModal({ onClose }: { onClose: () => void }) {
 }
 
 /* ─── Bulk Upload Modal ─── */
-function BulkUploadModal({ onClose }: { onClose: () => void }) {
+function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const modalBg = dark ? 'bg-[#0F2E4C]' : 'bg-white';
+  const border = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const actionSurface = dark ? 'bg-white/[0.06] border-white/[0.08] hover:bg-white/[0.1]' : 'bg-white border-[#E5E7EB] hover:bg-[#F7F8FA]';
+  const footerBg = dark ? 'bg-white/[0.03]' : 'bg-[#FAFBFC]';
+  const ghostButton = dark
+    ? 'text-[#C1CED8] border-white/[0.08] hover:bg-white/[0.06]'
+    : 'text-[#5E6D7A] border-[#E5E7EB] hover:bg-[#F7F8FA]';
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -225,35 +265,39 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}>
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+        className={`w-full max-w-lg ${modalBg} rounded-2xl shadow-2xl overflow-hidden border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
         onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-5 border-b border-[#F0F0F5]">
+        <div className={`flex items-center justify-between px-6 py-5 border-b ${border}`}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#00B893]/10 flex items-center justify-center">
+            <div className={`w-9 h-9 rounded-xl ${dark ? 'bg-white/[0.06]' : 'bg-[#00B893]/10'} flex items-center justify-center`}>
               <Upload size={18} className="text-[#00B893]" />
             </div>
             <div>
-              <h2 className="text-[16px] text-[#0A2540]" style={{ fontWeight: 600 }}>Bulk Upload</h2>
-              <p className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>Import employees from a CSV or Excel file</p>
+              <h2 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 600 }}>Bulk Upload</h2>
+              <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>Import employees from a CSV or Excel file</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+          <button onClick={onClose} className={`p-2 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
             <X size={18} className="text-[#8898AA]" />
           </button>
         </div>
 
         <div className="px-6 py-6">
           {/* Download template */}
-          <div className="flex items-center gap-3 p-3.5 rounded-xl bg-[#635BFF]/[0.04] border border-[#635BFF]/10 mb-5">
+          <div className={`flex items-center gap-3 p-3.5 rounded-xl ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#635BFF]/[0.04] border-[#635BFF]/10'} border mb-5`}>
             <FileSpreadsheet size={18} className="text-[#635BFF] shrink-0" />
             <div className="flex-1">
-              <p className="text-[12px] text-[#0A2540]" style={{ fontWeight: 500 }}>Need a template?</p>
-              <p className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>Download our CSV template with the required columns.</p>
+              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>Need a template?</p>
+              <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>Download the roster workbook with an instructions tab and a clean upload tab.</p>
             </div>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-[#E5E7EB] text-[11px] text-[#635BFF] hover:bg-[#F7F8FA] transition-all"
-              style={{ fontWeight: 500 }}>
+            <a
+              href={rosterTemplateHref}
+              download
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] text-[#635BFF] transition-all ${actionSurface}`}
+              style={{ fontWeight: 500 }}
+            >
               <Download size={12} /> Template
-            </button>
+            </a>
           </div>
 
           {/* Drop zone */}
@@ -265,7 +309,7 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
             className={`relative cursor-pointer rounded-xl border-2 border-dashed transition-all duration-300 p-8 text-center ${
               isDragging ? 'border-[#635BFF] bg-[#635BFF]/[0.04]' :
               uploadedFile ? 'border-[#00B893]/40 bg-[#00B893]/[0.02]' :
-              'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA]'
+              dark ? 'border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA]'
             }`}>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFileSelect} className="hidden" />
             
@@ -295,11 +339,11 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
               </div>
             ) : (
               <div>
-                <div className="w-12 h-12 rounded-full bg-[#F0F0F5] flex items-center justify-center mx-auto mb-3">
+                <div className={`w-12 h-12 rounded-full ${dark ? 'bg-white/[0.06]' : 'bg-[#F0F0F5]'} flex items-center justify-center mx-auto mb-3`}>
                   <Upload size={20} className="text-[#8898AA]" />
                 </div>
-                <p className="text-[13px] text-[#0A2540] mb-1" style={{ fontWeight: 520 }}>Drop your file here, or click to browse</p>
-                <p className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>Supports CSV, XLS, XLSX \u2022 Max 5MB</p>
+                <p className={`text-[13px] ${textPrimary} mb-1`} style={{ fontWeight: 520 }}>Drop your file here, or click to browse</p>
+                <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>Supports CSV, XLS, XLSX \u2022 Max 5MB</p>
               </div>
             )}
           </div>
@@ -307,8 +351,8 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
           {/* Column mapping preview */}
           {uploadedFile && uploadProgress >= 100 && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.1 }}
-              className="mt-4 p-4 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
-              <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Column Mapping Preview</p>
+              className={`mt-4 p-4 rounded-xl border ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#F7F8FA] border-[#E5E7EB]'}`}>
+              <p className={`text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Column Mapping Preview</p>
               <div className="space-y-2">
                 {[
                   { csv: 'full_name', mapped: 'Employee Name', icon: '✓' },
@@ -319,9 +363,9 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
                 ].map((col) => (
                   <div key={col.csv} className="flex items-center gap-3 text-[12px]">
                     <span className="text-[#00B893]">{col.icon}</span>
-                    <span className="text-[#8898AA] w-28 truncate" style={{ fontWeight: 420 }}>{col.csv}</span>
-                    <span className="text-[#8898AA]">\u2192</span>
-                    <span className="text-[#0A2540]" style={{ fontWeight: 480 }}>{col.mapped}</span>
+                    <span className={`w-28 truncate ${textSecondary}`} style={{ fontWeight: 420 }}>{col.csv}</span>
+                    <span className={textSecondary}>\u2192</span>
+                    <span className={textPrimary} style={{ fontWeight: 480 }}>{col.mapped}</span>
                   </div>
                 ))}
               </div>
@@ -329,9 +373,9 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[#F0F0F5] bg-[#FAFBFC]">
+        <div className={`flex items-center justify-end gap-3 px-6 py-4 border-t ${border} ${footerBg}`}>
           <button onClick={onClose}
-            className="px-4 py-2.5 rounded-lg text-[13px] text-[#5E6D7A] border border-[#E5E7EB] hover:bg-[#F7F8FA] transition-all"
+            className={`px-4 py-2.5 rounded-lg text-[13px] border transition-all ${ghostButton}`}
             style={{ fontWeight: 480 }}>
             Cancel
           </button>
@@ -350,9 +394,17 @@ function BulkUploadModal({ onClose }: { onClose: () => void }) {
 }
 
 /* ─── Employee Detail Slide-over ─── */
-function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: () => void }) {
+function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClose: () => void; dark: boolean }) {
   const color = roleColors[employee.role] || '#635BFF';
   const status = statusConfig[employee.status];
+  const panelBg = dark ? 'bg-[#0F2E4C]' : 'bg-white';
+  const border = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#3E4C59]';
+  const mutedText = 'text-[#8898AA]';
+  const surface = dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]';
+  const surfaceBorder = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const rowBorder = dark ? 'border-white/[0.06]' : 'border-[#F7F8FA]';
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -360,16 +412,16 @@ function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: ()
       onClick={onClose}>
       <motion.div initial={{ x: 420 }} animate={{ x: 0 }} exit={{ x: 420 }}
         transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="w-full sm:w-[420px] h-full bg-white shadow-2xl flex flex-col overflow-hidden"
+        className={`w-full sm:w-[420px] h-full ${panelBg} shadow-2xl flex flex-col overflow-hidden border-l ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
         onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-5 border-b border-[#F0F0F5]">
+        <div className={`px-6 py-5 border-b ${border}`}>
           <div className="flex items-center justify-between mb-4">
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+            <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
               <X size={18} className="text-[#8898AA]" />
             </button>
             <div className="flex items-center gap-2">
-              <button className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
+              <button className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
                 <Edit3 size={15} className="text-[#8898AA]" />
               </button>
               <button className="p-1.5 rounded-lg hover:bg-[#FEE2E2] transition-colors">
@@ -383,7 +435,7 @@ function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: ()
               {employee.avatar}
             </div>
             <div>
-              <h2 className="text-[18px] text-[#0A2540] tracking-[-0.01em]" style={{ fontWeight: 600 }}>{employee.name}</h2>
+              <h2 className={`text-[18px] ${textPrimary} tracking-[-0.01em]`} style={{ fontWeight: 600 }}>{employee.name}</h2>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className="text-[12px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{employee.role}</span>
                 <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 480, color: status.color, background: `${status.bg}15` }}>{status.label}</span>
@@ -396,59 +448,59 @@ function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: ()
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           {/* Contact Info */}
           <div>
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Contact</h3>
+            <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Contact</h3>
             <div className="space-y-2.5">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[#F7F8FA] flex items-center justify-center"><Mail size={14} className="text-[#8898AA]" /></div>
-                <span className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{employee.email}</span>
+                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><Mail size={14} className="text-[#8898AA]" /></div>
+                <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.email}</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[#F7F8FA] flex items-center justify-center"><Phone size={14} className="text-[#8898AA]" /></div>
-                <span className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{employee.phone}</span>
+                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><Phone size={14} className="text-[#8898AA]" /></div>
+                <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.phone}</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-[#F7F8FA] flex items-center justify-center"><MapPin size={14} className="text-[#8898AA]" /></div>
-                <span className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{employee.locationEmoji} {employee.location}</span>
+                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><MapPin size={14} className="text-[#8898AA]" /></div>
+                <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.locationEmoji} {employee.location}</span>
               </div>
             </div>
           </div>
 
           {/* Stats */}
           <div>
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Performance</h3>
+            <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Performance</h3>
             <div className="grid grid-cols-3 gap-3">
-              <div className="p-3 rounded-xl bg-[#F7F8FA] text-center">
-                <span className="text-[20px] text-[#0A2540] tracking-[-0.02em] block" style={{ fontWeight: 640 }}>{employee.shifts}</span>
-                <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 460 }}>Shifts</span>
+              <div className={`p-3 rounded-xl ${surface} text-center`}>
+                <span className={`text-[20px] ${textPrimary} tracking-[-0.02em] block`} style={{ fontWeight: 640 }}>{employee.shifts}</span>
+                <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>Shifts</span>
               </div>
-              <div className="p-3 rounded-xl bg-[#F7F8FA] text-center">
+              <div className={`p-3 rounded-xl ${surface} text-center`}>
                 <div className="flex items-center justify-center gap-0.5">
                   <Star size={14} className="text-[#D4A017] fill-[#D4A017]" />
-                  <span className="text-[20px] text-[#0A2540] tracking-[-0.02em]" style={{ fontWeight: 640 }}>{employee.rating}</span>
+                  <span className={`text-[20px] ${textPrimary} tracking-[-0.02em]`} style={{ fontWeight: 640 }}>{employee.rating}</span>
                 </div>
-                <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 460 }}>Rating</span>
+                <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>Rating</span>
               </div>
-              <div className="p-3 rounded-xl bg-[#F7F8FA] text-center">
-                <span className="text-[20px] text-[#0A2540] tracking-[-0.02em] block" style={{ fontWeight: 640 }}>98%</span>
-                <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 460 }}>On-Time</span>
+              <div className={`p-3 rounded-xl ${surface} text-center`}>
+                <span className={`text-[20px] ${textPrimary} tracking-[-0.02em] block`} style={{ fontWeight: 640 }}>98%</span>
+                <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>On-Time</span>
               </div>
             </div>
           </div>
 
           {/* Details */}
           <div>
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Details</h3>
+            <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Details</h3>
             <div className="space-y-3">
               {[
                 { label: 'Department', value: employee.department, icon: MoreHorizontal },
                 { label: 'Hire Date', value: employee.hireDate, icon: Clock },
               ].map((item) => (
-                <div key={item.label} className="flex items-center justify-between py-2 border-b border-[#F7F8FA]">
+                <div key={item.label} className={`flex items-center justify-between py-2 border-b ${rowBorder}`}>
                   <div className="flex items-center gap-2">
                     <item.icon size={13} className="text-[#8898AA]" />
-                    <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 440 }}>{item.label}</span>
+                    <span className={`text-[12px] ${mutedText}`} style={{ fontWeight: 440 }}>{item.label}</span>
                   </div>
-                  <span className="text-[12px] text-[#0A2540]" style={{ fontWeight: 500 }}>{item.value}</span>
+                  <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{item.value}</span>
                 </div>
               ))}
             </div>
@@ -456,12 +508,12 @@ function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: ()
 
           {/* Certifications */}
           <div>
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Certifications</h3>
+            <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Certifications</h3>
             <div className="flex flex-wrap gap-2">
               {employee.certifications.map((cert) => (
-                <div key={cert} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB]">
+                <div key={cert} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${surface} border ${surfaceBorder}`}>
                   <Shield size={12} className="text-[#00B893]" />
-                  <span className="text-[11px] text-[#3E4C59]" style={{ fontWeight: 480 }}>{cert}</span>
+                  <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 480 }}>{cert}</span>
                 </div>
               ))}
             </div>
@@ -474,6 +526,7 @@ function EmployeeDetail({ employee, onClose }: { employee: Employee; onClose: ()
 
 /* ─── Main Team Page ─── */
 export default function Team() {
+  const isDark = useResolvedAppAppearance() === 'dark';
   const [searchQuery, setSearchQuery] = useState('');
   const [locationFilter, setLocationFilter] = useState('All Locations');
   const [statusFilter, setStatusFilter] = useState('All Status');
@@ -508,6 +561,15 @@ export default function Team() {
   const activeCount = employees.filter((e) => e.status === 'active').length;
   const leaveCount = employees.filter((e) => e.status === 'on-leave').length;
   const inactiveCount = employees.filter((e) => e.status === 'inactive').length;
+  const cardBg = isDark ? 'bg-[#0F2E4C] border-white/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.25)]' : 'bg-white border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.04)]';
+  const cardHeaderBg = isDark ? 'bg-white/[0.03] border-white/[0.06]' : 'bg-[#FAFBFC] border-[#F0F0F5]';
+  const textPrimary = isDark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const textMuted = 'text-[#8898AA]';
+  const inputBg = isDark ? 'bg-white/[0.04] border-white/[0.08] text-white' : 'bg-white border-[#E5E7EB] text-[#0A2540]';
+  const hoverRow = isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-[#FAFBFC]';
+  const divider = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
+  const softDivider = isDark ? 'divide-white/[0.06]' : 'divide-[#F7F8FA]';
 
   return (
     <DashboardShell activeNav="Team">
@@ -515,16 +577,16 @@ export default function Team() {
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
         <div className="flex items-end justify-between mb-6">
           <div>
-            <h1 className="text-[24px] sm:text-[28px] md:text-[32px] text-[#0A2540] tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
+            <h1 className={`text-[24px] sm:text-[28px] md:text-[32px] ${textPrimary} tracking-[-0.025em] mb-1`} style={{ fontWeight: 620 }}>
               Team
             </h1>
-            <p className="text-[13px] sm:text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            <p className={`text-[13px] sm:text-[15px] ${isDark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>
               Manage your employees across all locations.
             </p>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => setShowBulkModal(true)}
-              className="hidden sm:flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] text-[#5E6D7A] border border-[#E5E7EB] hover:bg-[#F7F8FA] hover:border-[#D1D5DB] transition-all"
+              className={`hidden sm:flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] border transition-all ${isDark ? 'text-[#C1CED8] border-white/[0.08] hover:bg-white/[0.06] hover:border-white/[0.14]' : 'text-[#5E6D7A] border-[#E5E7EB] hover:bg-[#F7F8FA] hover:border-[#D1D5DB]'}`}
               style={{ fontWeight: 480 }}>
               <Upload size={15} /> Bulk Upload
             </button>
@@ -545,12 +607,12 @@ export default function Team() {
             { label: 'Inactive', value: inactiveCount, color: '#8898AA' },
           ].map((stat, i) => (
             <motion.div key={stat.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: i * 0.05 }}
-              className="bg-white border border-[#E5E7EB] rounded-xl px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+              className={`${cardBg} rounded-xl px-4 py-4`}>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 480 }}>{stat.label}</span>
+                <span className={`text-[11px] ${textMuted} uppercase tracking-[0.04em]`} style={{ fontWeight: 480 }}>{stat.label}</span>
                 <div className="w-2 h-2 rounded-full" style={{ background: stat.color }} />
               </div>
-              <span className="text-[26px] text-[#0A2540] tracking-[-0.02em]" style={{ fontWeight: 660 }}>{stat.value}</span>
+              <span className={`text-[26px] ${textPrimary} tracking-[-0.02em]`} style={{ fontWeight: 660 }}>{stat.value}</span>
             </motion.div>
           ))}
         </div>
@@ -561,7 +623,7 @@ export default function Team() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
             <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by name, role, email..."
-              className="w-full pl-9 pr-4 py-2.5 rounded-lg bg-white border border-[#E5E7EB] text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+              className={`w-full pl-9 pr-4 py-2.5 rounded-lg border text-[12px] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputBg}`}
               style={{ fontWeight: 420 }} />
           </div>
 
@@ -569,7 +631,7 @@ export default function Team() {
             {/* Location filter */}
             <div className="relative">
               <button onClick={() => { setShowLocationDropdown(!showLocationDropdown); setShowStatusDropdown(false); }}
-                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-all"
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
                 style={{ fontWeight: 440 }}>
                 <MapPin size={13} />
                 <span className="max-w-[140px] truncate">{locationFilter}</span>
@@ -578,10 +640,10 @@ export default function Team() {
               <AnimatePresence>
                 {showLocationDropdown && (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className="absolute top-full mt-1 left-0 w-64 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-40">
+                    className={`absolute top-full mt-1 left-0 w-64 rounded-xl shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
                     {locationOptions.map((opt) => (
                       <button key={opt} onClick={() => { setLocationFilter(opt); setShowLocationDropdown(false); }}
-                        className={`w-full text-left px-4 py-2.5 text-[12px] hover:bg-[#F7F8FA] transition-colors ${locationFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.04]' : 'text-[#3E4C59]'}`}
+                        className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${locationFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.08]' : isDark ? 'text-[#C1CED8] hover:bg-white/[0.04]' : 'text-[#3E4C59] hover:bg-[#F7F8FA]'}`}
                         style={{ fontWeight: locationFilter === opt ? 520 : 420 }}>
                         {opt}
                       </button>
@@ -594,7 +656,7 @@ export default function Team() {
             {/* Status filter */}
             <div className="relative">
               <button onClick={() => { setShowStatusDropdown(!showStatusDropdown); setShowLocationDropdown(false); }}
-                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-all"
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
                 style={{ fontWeight: 440 }}>
                 <Filter size={13} />
                 <span>{statusFilter}</span>
@@ -603,10 +665,10 @@ export default function Team() {
               <AnimatePresence>
                 {showStatusDropdown && (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className="absolute top-full mt-1 left-0 w-40 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-40">
+                    className={`absolute top-full mt-1 left-0 w-40 rounded-xl shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
                     {statusOptions.map((opt) => (
                       <button key={opt} onClick={() => { setStatusFilter(opt); setShowStatusDropdown(false); }}
-                        className={`w-full text-left px-4 py-2.5 text-[12px] hover:bg-[#F7F8FA] transition-colors ${statusFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.04]' : 'text-[#3E4C59]'}`}
+                        className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${statusFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.08]' : isDark ? 'text-[#C1CED8] hover:bg-white/[0.04]' : 'text-[#3E4C59] hover:bg-[#F7F8FA]'}`}
                         style={{ fontWeight: statusFilter === opt ? 520 : 420 }}>
                         {opt}
                       </button>
@@ -617,36 +679,36 @@ export default function Team() {
             </div>
           </div>
 
-          <span className="text-[12px] text-[#8898AA] ml-auto" style={{ fontWeight: 420 }}>{filtered.length} employee{filtered.length !== 1 ? 's' : ''}</span>
+          <span className={`text-[12px] ${textMuted} ml-auto`} style={{ fontWeight: 420 }}>{filtered.length} employee{filtered.length !== 1 ? 's' : ''}</span>
         </div>
       </motion.div>
 
       {/* Employee Table */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}
-        className="bg-white border border-[#E5E7EB] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden">
+        className={`${cardBg} rounded-2xl overflow-hidden`}>
         {/* Table Header - Desktop only */}
-        <div className="hidden md:grid grid-cols-[2fr_1fr_1fr_1fr_0.7fr_0.7fr_44px] gap-4 px-5 py-3 border-b border-[#F0F0F5] bg-[#FAFBFC]">
-          <button onClick={() => toggleSort('name')} className="flex items-center gap-1.5 text-[11px] text-[#8898AA] uppercase tracking-[0.04em] hover:text-[#5E6D7A] transition-colors" style={{ fontWeight: 500 }}>
+        <div className={`hidden md:grid grid-cols-[2fr_1fr_1fr_1fr_0.7fr_0.7fr_44px] gap-4 px-5 py-3 border-b ${cardHeaderBg}`}>
+          <button onClick={() => toggleSort('name')} className={`flex items-center gap-1.5 text-[11px] ${textMuted} uppercase tracking-[0.04em] ${isDark ? 'hover:text-[#C1CED8]' : 'hover:text-[#5E6D7A]'} transition-colors`} style={{ fontWeight: 500 }}>
             Employee <ArrowUpDown size={11} />
           </button>
-          <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Role</span>
-          <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Location</span>
-          <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Status</span>
-          <button onClick={() => toggleSort('shifts')} className="flex items-center gap-1.5 text-[11px] text-[#8898AA] uppercase tracking-[0.04em] hover:text-[#5E6D7A] transition-colors" style={{ fontWeight: 500 }}>
+          <span className={`text-[11px] ${textMuted} uppercase tracking-[0.04em]`} style={{ fontWeight: 500 }}>Role</span>
+          <span className={`text-[11px] ${textMuted} uppercase tracking-[0.04em]`} style={{ fontWeight: 500 }}>Location</span>
+          <span className={`text-[11px] ${textMuted} uppercase tracking-[0.04em]`} style={{ fontWeight: 500 }}>Status</span>
+          <button onClick={() => toggleSort('shifts')} className={`flex items-center gap-1.5 text-[11px] ${textMuted} uppercase tracking-[0.04em] ${isDark ? 'hover:text-[#C1CED8]' : 'hover:text-[#5E6D7A]'} transition-colors`} style={{ fontWeight: 500 }}>
             Shifts <ArrowUpDown size={11} />
           </button>
-          <button onClick={() => toggleSort('rating')} className="flex items-center gap-1.5 text-[11px] text-[#8898AA] uppercase tracking-[0.04em] hover:text-[#5E6D7A] transition-colors" style={{ fontWeight: 500 }}>
+          <button onClick={() => toggleSort('rating')} className={`flex items-center gap-1.5 text-[11px] ${textMuted} uppercase tracking-[0.04em] ${isDark ? 'hover:text-[#C1CED8]' : 'hover:text-[#5E6D7A]'} transition-colors`} style={{ fontWeight: 500 }}>
             Rating <ArrowUpDown size={11} />
           </button>
           <span />
         </div>
 
         {/* Mobile sort bar */}
-        <div className="md:hidden flex items-center gap-2 px-4 py-3 border-b border-[#F0F0F5] bg-[#FAFBFC] overflow-x-auto">
-          <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.04em] shrink-0" style={{ fontWeight: 500 }}>Sort:</span>
+        <div className={`md:hidden flex items-center gap-2 px-4 py-3 border-b ${cardHeaderBg} overflow-x-auto`}>
+          <span className={`text-[10px] ${textMuted} uppercase tracking-[0.04em] shrink-0`} style={{ fontWeight: 500 }}>Sort:</span>
           {(['name', 'shifts', 'rating'] as const).map((field) => (
             <button key={field} onClick={() => toggleSort(field)}
-              className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] transition-colors ${sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : 'text-[#8898AA] bg-[#F7F8FA]'}`}
+              className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] transition-colors ${sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : isDark ? 'text-[#C1CED8] bg-white/[0.04]' : 'text-[#8898AA] bg-[#F7F8FA]'}`}
               style={{ fontWeight: sortField === field ? 520 : 420 }}>
               {field.charAt(0).toUpperCase() + field.slice(1)} {sortField === field && (sortDir === 'asc' ? '↑' : '↓')}
             </button>
@@ -661,15 +723,15 @@ export default function Team() {
             return (
               <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
                 onClick={() => setSelectedEmployee(emp)}
-                className="grid grid-cols-[2fr_1fr_1fr_1fr_0.7fr_0.7fr_44px] gap-4 px-5 py-3.5 border-b border-[#F7F8FA] last:border-0 hover:bg-[#FAFBFC] cursor-pointer transition-colors group">
+                className={`grid grid-cols-[2fr_1fr_1fr_1fr_0.7fr_0.7fr_44px] gap-4 px-5 py-3.5 border-b ${isDark ? 'border-white/[0.06]' : 'border-[#F7F8FA]'} last:border-0 ${hoverRow} cursor-pointer transition-colors group`}>
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] text-white shrink-0"
                     style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
                     {emp.avatar}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-[13px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>{emp.name}</p>
-                    <p className="text-[11px] text-[#8898AA] truncate" style={{ fontWeight: 400 }}>{emp.email}</p>
+                    <p className={`text-[13px] ${textPrimary} truncate`} style={{ fontWeight: 520 }}>{emp.name}</p>
+                    <p className={`text-[11px] ${textMuted} truncate`} style={{ fontWeight: 400 }}>{emp.email}</p>
                   </div>
                 </div>
                 <div className="flex items-center">
@@ -677,7 +739,7 @@ export default function Team() {
                 </div>
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="text-[13px]">{emp.locationEmoji}</span>
-                  <span className="text-[12px] text-[#5E6D7A] truncate" style={{ fontWeight: 440 }}>{emp.location.split(' ')[0]}</span>
+                  <span className={`text-[12px] ${textSecondary} truncate`} style={{ fontWeight: 440 }}>{emp.location.split(' ')[0]}</span>
                 </div>
                 <div className="flex items-center">
                   <div className="flex items-center gap-1.5">
@@ -686,15 +748,15 @@ export default function Team() {
                   </div>
                 </div>
                 <div className="flex items-center">
-                  <span className="text-[13px] text-[#0A2540] tabular-nums" style={{ fontWeight: 520 }}>{emp.shifts}</span>
+                  <span className={`text-[13px] ${textPrimary} tabular-nums`} style={{ fontWeight: 520 }}>{emp.shifts}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Star size={12} className="text-[#D4A017] fill-[#D4A017]" />
-                  <span className="text-[12px] text-[#0A2540] tabular-nums" style={{ fontWeight: 500 }}>{emp.rating}</span>
+                  <span className={`text-[12px] ${textPrimary} tabular-nums`} style={{ fontWeight: 500 }}>{emp.rating}</span>
                 </div>
                 <div className="flex items-center justify-center">
                   <button onClick={(e) => { e.stopPropagation(); setSelectedEmployee(emp); }}
-                    className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-[#F0F0F5] transition-all">
+                    className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F0F0F5]'} transition-all`}>
                     <Eye size={14} className="text-[#8898AA]" />
                   </button>
                 </div>
@@ -704,14 +766,14 @@ export default function Team() {
         </div>
 
         {/* Rows - Mobile Cards */}
-        <div className="md:hidden divide-y divide-[#F7F8FA]">
+        <div className={`md:hidden divide-y ${softDivider}`}>
           {filtered.map((emp, i) => {
             const color = roleColors[emp.role] || '#635BFF';
             const status = statusConfig[emp.status];
             return (
               <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
                 onClick={() => setSelectedEmployee(emp)}
-                className="px-4 py-3.5 active:bg-[#FAFBFC] cursor-pointer transition-colors">
+                className={`px-4 py-3.5 ${isDark ? 'active:bg-white/[0.03]' : 'active:bg-[#FAFBFC]'} cursor-pointer transition-colors`}>
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-[12px] text-white shrink-0"
                     style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
@@ -719,7 +781,7 @@ export default function Team() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[14px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>{emp.name}</p>
+                      <p className={`text-[14px] ${textPrimary} truncate`} style={{ fontWeight: 520 }}>{emp.name}</p>
                       <div className="flex items-center gap-1.5 shrink-0">
                         <div className="w-1.5 h-1.5 rounded-full" style={{ background: status.color }} />
                         <span className="text-[11px]" style={{ fontWeight: 460, color: status.color }}>{status.label}</span>
@@ -727,11 +789,11 @@ export default function Team() {
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{emp.role}</span>
-                      <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>{emp.locationEmoji} {emp.location.split(' ')[0]}</span>
-                      <span className="text-[11px] text-[#8898AA] ml-auto tabular-nums" style={{ fontWeight: 460 }}>{emp.shifts} shifts</span>
+                      <span className={`text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>{emp.locationEmoji} {emp.location.split(' ')[0]}</span>
+                      <span className={`text-[11px] ${textMuted} ml-auto tabular-nums`} style={{ fontWeight: 460 }}>{emp.shifts} shifts</span>
                       <div className="flex items-center gap-0.5">
                         <Star size={10} className="text-[#D4A017] fill-[#D4A017]" />
-                        <span className="text-[11px] text-[#0A2540] tabular-nums" style={{ fontWeight: 480 }}>{emp.rating}</span>
+                        <span className={`text-[11px] ${textPrimary} tabular-nums`} style={{ fontWeight: 480 }}>{emp.rating}</span>
                       </div>
                     </div>
                   </div>
@@ -744,17 +806,17 @@ export default function Team() {
         {filtered.length === 0 && (
           <div className="px-8 py-16 text-center">
             <AlertCircle size={32} className="text-[#E5E7EB] mx-auto mb-3" />
-            <p className="text-[14px] text-[#8898AA]" style={{ fontWeight: 480 }}>No employees match your filters</p>
-            <p className="text-[12px] text-[#C1CED8] mt-1" style={{ fontWeight: 420 }}>Try adjusting your search or filter criteria</p>
+            <p className={`text-[14px] ${textMuted}`} style={{ fontWeight: 480 }}>No employees match your filters</p>
+            <p className={`text-[12px] ${isDark ? 'text-[#5E6D7A]' : 'text-[#C1CED8]'} mt-1`} style={{ fontWeight: 420 }}>Try adjusting your search or filter criteria</p>
           </div>
         )}
       </motion.div>
 
       {/* Modals */}
       <AnimatePresence>
-        {showAddModal && <AddEmployeeModal onClose={() => setShowAddModal(false)} />}
-        {showBulkModal && <BulkUploadModal onClose={() => setShowBulkModal(false)} />}
-        {selectedEmployee && <EmployeeDetail employee={selectedEmployee} onClose={() => setSelectedEmployee(null)} />}
+        {showAddModal && <AddEmployeeModal dark={isDark} onClose={() => setShowAddModal(false)} />}
+        {showBulkModal && <BulkUploadModal dark={isDark} onClose={() => setShowBulkModal(false)} />}
+        {selectedEmployee && <EmployeeDetail dark={isDark} employee={selectedEmployee} onClose={() => setSelectedEmployee(null)} />}
       </AnimatePresence>
     </DashboardShell>
   );
