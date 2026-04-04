@@ -111,11 +111,11 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
       onClick={onClose}>
       <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className={`w-full max-w-lg ${modalBg} rounded-2xl shadow-2xl overflow-hidden mx-4 sm:mx-0 border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
+        className={`w-full max-w-lg ${modalBg} backfill-ui-radius shadow-2xl overflow-hidden mx-4 sm:mx-0 border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
         onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center justify-between px-4 sm:px-6 py-5 border-b ${border}`}>
           <div className="flex items-center gap-3">
-            <div className={`w-9 h-9 rounded-xl ${dark ? 'bg-white/[0.06]' : 'bg-[#635BFF]/10'} flex items-center justify-center`}>
+            <div className={`w-9 h-9 backfill-ui-radius ${dark ? 'bg-white/[0.06]' : 'bg-[#635BFF]/10'} flex items-center justify-center`}>
               <UserPlus size={18} className="text-[#635BFF]" />
             </div>
             <div>
@@ -123,13 +123,13 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
               <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>Add a new team member to your roster</p>
             </div>
           </div>
-          <button onClick={onClose} className={`p-2 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
+          <button onClick={onClose} className={`p-2 backfill-ui-radius ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
             <X size={18} className="text-[#8898AA]" />
           </button>
         </div>
 
         <div className="px-4 sm:px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
-          <div className={`flex items-center gap-3 p-3.5 rounded-xl ${subtlePanel} border ${subtleBorder}`}>
+          <div className={`flex items-center gap-3 p-3.5 backfill-ui-radius ${subtlePanel} border ${subtleBorder}`}>
             <FileSpreadsheet size={18} className="text-[#635BFF] shrink-0" />
             <div className="flex-1">
               <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>Uploading a full roster instead?</p>
@@ -138,7 +138,7 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
             <a
               href={rosterTemplateHref}
               download
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] text-[#635BFF] transition-all ${dark ? 'bg-white/[0.06] border-white/[0.08] hover:bg-white/[0.1]' : 'bg-white border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 backfill-ui-radius border text-[11px] text-[#635BFF] transition-all ${dark ? 'bg-white/[0.06] border-white/[0.08] hover:bg-white/[0.1]' : 'bg-white border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}
               style={{ fontWeight: 500 }}
             >
               <Download size={12} /> Template
@@ -149,13 +149,13 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>First Name</label>
               <input type="text" value={formData.firstName} onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
+                className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="Sarah" />
             </div>
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Last Name</label>
               <input type="text" value={formData.lastName} onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
+                className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="Martinez" />
             </div>
           </div>
@@ -163,14 +163,14 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
           <div>
             <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Email</label>
             <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
+              className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
               style={{ fontWeight: 440 }} placeholder="sarah.m@company.com" />
           </div>
 
           <div>
             <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Phone</label>
             <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
+              className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
               style={{ fontWeight: 440 }} placeholder="(415) 555-0142" />
           </div>
 
@@ -190,7 +190,7 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Department</label>
               <input type="text" value={formData.department} onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
+                className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputClass}`}
                 style={{ fontWeight: 440 }} placeholder="ICU" />
             </div>
           </div>
@@ -210,12 +210,12 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
 
         <div className={`flex items-center justify-end gap-3 px-4 sm:px-6 py-4 border-t ${border} ${footerBg}`}>
           <button onClick={onClose}
-            className={`px-4 py-2.5 rounded-lg text-[13px] border transition-all ${ghostButton}`}
+            className={`px-4 py-2.5 backfill-ui-radius text-[13px] border transition-all ${ghostButton}`}
             style={{ fontWeight: 480 }}>
             Cancel
           </button>
           <button
-            className="px-5 py-2.5 rounded-lg text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_20px_rgba(99,91,255,0.25)]"
+            className="px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_20px_rgba(99,91,255,0.25)]"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             Add Employee
           </button>
@@ -270,11 +270,11 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
       onClick={onClose}>
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className={`w-full max-w-lg ${modalBg} rounded-2xl shadow-2xl overflow-hidden border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
+        className={`w-full max-w-lg ${modalBg} backfill-ui-radius shadow-2xl overflow-hidden border ${dark ? 'border-white/[0.08]' : 'border-transparent'}`}
         onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center justify-between px-6 py-5 border-b ${border}`}>
           <div className="flex items-center gap-3">
-            <div className={`w-9 h-9 rounded-xl ${dark ? 'bg-white/[0.06]' : 'bg-[#00B893]/10'} flex items-center justify-center`}>
+            <div className={`w-9 h-9 backfill-ui-radius ${dark ? 'bg-white/[0.06]' : 'bg-[#00B893]/10'} flex items-center justify-center`}>
               <Upload size={18} className="text-[#00B893]" />
             </div>
             <div>
@@ -282,14 +282,14 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
               <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>Import employees from a CSV or Excel file</p>
             </div>
           </div>
-          <button onClick={onClose} className={`p-2 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
+          <button onClick={onClose} className={`p-2 backfill-ui-radius ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
             <X size={18} className="text-[#8898AA]" />
           </button>
         </div>
 
         <div className="px-6 py-6">
           {/* Download template */}
-          <div className={`flex items-center gap-3 p-3.5 rounded-xl ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#635BFF]/[0.04] border-[#635BFF]/10'} border mb-5`}>
+          <div className={`flex items-center gap-3 p-3.5 backfill-ui-radius ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#635BFF]/[0.04] border-[#635BFF]/10'} border mb-5`}>
             <FileSpreadsheet size={18} className="text-[#635BFF] shrink-0" />
             <div className="flex-1">
               <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>Need a template?</p>
@@ -298,7 +298,7 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
             <a
               href={rosterTemplateHref}
               download
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] text-[#635BFF] transition-all ${actionSurface}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 backfill-ui-radius border text-[11px] text-[#635BFF] transition-all ${actionSurface}`}
               style={{ fontWeight: 500 }}
             >
               <Download size={12} /> Template
@@ -311,7 +311,7 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
             onClick={() => fileRef.current?.click()}
-            className={`relative cursor-pointer rounded-xl border-2 border-dashed transition-all duration-300 p-8 text-center ${
+            className={`relative cursor-pointer backfill-ui-radius border-2 border-dashed transition-all duration-300 p-8 text-center ${
               isDragging ? 'border-[#635BFF] bg-[#635BFF]/[0.04]' :
               uploadedFile ? 'border-[#00B893]/40 bg-[#00B893]/[0.02]' :
               dark ? 'border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA]'
@@ -356,7 +356,7 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
           {/* Column mapping preview */}
           {uploadedFile && uploadProgress >= 100 && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.1 }}
-              className={`mt-4 p-4 rounded-xl border ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#F7F8FA] border-[#E5E7EB]'}`}>
+              className={`mt-4 p-4 backfill-ui-radius border ${dark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#F7F8FA] border-[#E5E7EB]'}`}>
               <p className={`text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Column Mapping Preview</p>
               <div className="space-y-2">
                 {[
@@ -380,12 +380,12 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
 
         <div className={`flex items-center justify-end gap-3 px-6 py-4 border-t ${border} ${footerBg}`}>
           <button onClick={onClose}
-            className={`px-4 py-2.5 rounded-lg text-[13px] border transition-all ${ghostButton}`}
+            className={`px-4 py-2.5 backfill-ui-radius text-[13px] border transition-all ${ghostButton}`}
             style={{ fontWeight: 480 }}>
             Cancel
           </button>
           <button
-            className={`px-5 py-2.5 rounded-lg text-[13px] text-white transition-all duration-300 ${
+            className={`px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 ${
               uploadedFile && uploadProgress >= 100 ? 'hover:shadow-[0_0_20px_rgba(0,184,147,0.25)]' : 'opacity-40 cursor-not-allowed'
             }`}
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #00B893, #00D4AA)' }}
@@ -422,28 +422,28 @@ function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClo
         {/* Header */}
         <div className={`px-6 py-5 border-b ${border}`}>
           <div className="flex items-center justify-between mb-4">
-            <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
+            <button onClick={onClose} className={`p-1.5 backfill-ui-radius ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
               <X size={18} className="text-[#8898AA]" />
             </button>
             <div className="flex items-center gap-2">
-              <button className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
+              <button className={`p-1.5 backfill-ui-radius ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`}>
                 <Edit3 size={15} className="text-[#8898AA]" />
               </button>
-              <button className="p-1.5 rounded-lg hover:bg-[#FEE2E2] transition-colors">
+              <button className="p-1.5 backfill-ui-radius hover:bg-[#FEE2E2] transition-colors">
                 <Trash2 size={15} className="text-[#E5484D]" />
               </button>
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-[16px] text-white shrink-0"
+            <div className="w-14 h-14 backfill-ui-radius flex items-center justify-center text-[16px] text-white shrink-0"
               style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
               {employee.avatar}
             </div>
             <div>
               <h2 className={`text-[18px] ${textPrimary} tracking-[-0.01em]`} style={{ fontWeight: 600 }}>{employee.name}</h2>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[12px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{employee.role}</span>
-                <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 480, color: status.color, background: `${status.bg}15` }}>{status.label}</span>
+                <span className="text-[12px] px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500, color, background: `${color}10` }}>{employee.role}</span>
+                <span className="text-[11px] px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 480, color: status.color, background: `${status.bg}15` }}>{status.label}</span>
               </div>
             </div>
           </div>
@@ -456,15 +456,15 @@ function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClo
             <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Contact</h3>
             <div className="space-y-2.5">
               <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><Mail size={14} className="text-[#8898AA]" /></div>
+                <div className={`w-8 h-8 backfill-ui-radius ${surface} flex items-center justify-center`}><Mail size={14} className="text-[#8898AA]" /></div>
                 <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.email}</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><Phone size={14} className="text-[#8898AA]" /></div>
+                <div className={`w-8 h-8 backfill-ui-radius ${surface} flex items-center justify-center`}><Phone size={14} className="text-[#8898AA]" /></div>
                 <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.phone}</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-lg ${surface} flex items-center justify-center`}><MapPin size={14} className="text-[#8898AA]" /></div>
+                <div className={`w-8 h-8 backfill-ui-radius ${surface} flex items-center justify-center`}><MapPin size={14} className="text-[#8898AA]" /></div>
                 <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>{employee.locationEmoji} {employee.location}</span>
               </div>
             </div>
@@ -474,18 +474,18 @@ function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClo
           <div>
             <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Performance</h3>
             <div className="grid grid-cols-3 gap-3">
-              <div className={`p-3 rounded-xl ${surface} text-center`}>
+              <div className={`p-3 backfill-ui-radius ${surface} text-center`}>
                 <span className={`text-[20px] ${textPrimary} tracking-[-0.02em] block`} style={{ fontWeight: 640 }}>{employee.shifts}</span>
                 <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>Shifts</span>
               </div>
-              <div className={`p-3 rounded-xl ${surface} text-center`}>
+              <div className={`p-3 backfill-ui-radius ${surface} text-center`}>
                 <div className="flex items-center justify-center gap-0.5">
                   <Star size={14} className="text-[#D4A017] fill-[#D4A017]" />
                   <span className={`text-[20px] ${textPrimary} tracking-[-0.02em]`} style={{ fontWeight: 640 }}>{employee.rating}</span>
                 </div>
                 <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>Rating</span>
               </div>
-              <div className={`p-3 rounded-xl ${surface} text-center`}>
+              <div className={`p-3 backfill-ui-radius ${surface} text-center`}>
                 <span className={`text-[20px] ${textPrimary} tracking-[-0.02em] block`} style={{ fontWeight: 640 }}>98%</span>
                 <span className={`text-[10px] ${mutedText} uppercase tracking-[0.04em]`} style={{ fontWeight: 460 }}>On-Time</span>
               </div>
@@ -516,7 +516,7 @@ function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClo
             <h3 className={`text-[11px] ${mutedText} uppercase tracking-[0.04em] mb-3`} style={{ fontWeight: 500 }}>Certifications</h3>
             <div className="flex flex-wrap gap-2">
               {employee.certifications.map((cert) => (
-                <div key={cert} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${surface} border ${surfaceBorder}`}>
+                <div key={cert} className={`flex items-center gap-1.5 px-3 py-1.5 backfill-ui-radius ${surface} border ${surfaceBorder}`}>
                   <Shield size={12} className="text-[#00B893]" />
                   <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 480 }}>{cert}</span>
                 </div>
@@ -595,12 +595,12 @@ export default function Team({
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => setShowBulkModal(true)}
-              className={`hidden sm:flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] border transition-all ${isDark ? 'text-[#C1CED8] border-white/[0.08] hover:bg-white/[0.06] hover:border-white/[0.14]' : 'text-[#5E6D7A] border-[#E5E7EB] hover:bg-[#F7F8FA] hover:border-[#D1D5DB]'}`}
+              className={`hidden sm:flex items-center gap-2 px-4 py-2.5 backfill-ui-radius text-[13px] border transition-all ${isDark ? 'text-[#C1CED8] border-white/[0.08] hover:bg-white/[0.06] hover:border-white/[0.14]' : 'text-[#5E6D7A] border-[#E5E7EB] hover:bg-[#F7F8FA] hover:border-[#D1D5DB]'}`}
               style={{ fontWeight: 480 }}>
               <Upload size={15} /> Bulk Upload
             </button>
             <button onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-full text-[12px] sm:text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
+              className="flex items-center gap-2 px-3 sm:px-5 py-2.5 backfill-ui-radius text-[12px] sm:text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
               style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
               <Plus size={15} /> <span className="hidden sm:inline">Add Employee</span><span className="sm:hidden">Add</span>
             </button>
@@ -616,7 +616,7 @@ export default function Team({
             { label: 'Inactive', value: inactiveCount, color: '#8898AA' },
           ].map((stat, i) => (
             <motion.div key={stat.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: i * 0.05 }}
-              className={`${cardBg} rounded-xl px-4 py-4`}>
+              className={`${cardBg} backfill-ui-radius px-4 py-4`}>
               <div className="flex items-center justify-between mb-1">
                 <span className={`text-[11px] ${textMuted} uppercase tracking-[0.04em]`} style={{ fontWeight: 480 }}>{stat.label}</span>
                 <div className="w-2 h-2 rounded-full" style={{ background: stat.color }} />
@@ -632,7 +632,7 @@ export default function Team({
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
             <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by name, role, email..."
-              className={`w-full pl-9 pr-4 py-2.5 rounded-lg border text-[12px] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputBg}`}
+              className={`w-full pl-9 pr-4 py-2.5 backfill-ui-radius border text-[12px] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${inputBg}`}
               style={{ fontWeight: 420 }} />
           </div>
 
@@ -640,7 +640,7 @@ export default function Team({
             {/* Location filter */}
             <div className="relative">
               <button onClick={() => { setShowLocationDropdown(!showLocationDropdown); setShowStatusDropdown(false); }}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+                className={`flex items-center gap-2 px-3 py-2.5 backfill-ui-radius border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
                 style={{ fontWeight: 440 }}>
                 <MapPin size={13} />
                 <span className="max-w-[140px] truncate">{locationFilter}</span>
@@ -649,7 +649,7 @@ export default function Team({
               <AnimatePresence>
                 {showLocationDropdown && (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className={`absolute top-full mt-1 left-0 w-64 rounded-xl shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
+                    className={`absolute top-full mt-1 left-0 w-64 backfill-ui-radius shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
                     {locationOptions.map((opt) => (
                       <button key={opt} onClick={() => { setLocationFilter(opt); setShowLocationDropdown(false); }}
                         className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${locationFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.08]' : isDark ? 'text-[#C1CED8] hover:bg-white/[0.04]' : 'text-[#3E4C59] hover:bg-[#F7F8FA]'}`}
@@ -665,7 +665,7 @@ export default function Team({
             {/* Status filter */}
             <div className="relative">
               <button onClick={() => { setShowStatusDropdown(!showStatusDropdown); setShowLocationDropdown(false); }}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+                className={`flex items-center gap-2 px-3 py-2.5 backfill-ui-radius border text-[12px] transition-all ${isDark ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]' : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
                 style={{ fontWeight: 440 }}>
                 <Filter size={13} />
                 <span>{statusFilter}</span>
@@ -674,7 +674,7 @@ export default function Team({
               <AnimatePresence>
                 {showStatusDropdown && (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className={`absolute top-full mt-1 left-0 w-40 rounded-xl shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
+                    className={`absolute top-full mt-1 left-0 w-40 backfill-ui-radius shadow-xl overflow-hidden z-40 border ${isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]'}`}>
                     {statusOptions.map((opt) => (
                       <button key={opt} onClick={() => { setStatusFilter(opt); setShowStatusDropdown(false); }}
                         className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${statusFilter === opt ? 'text-[#635BFF] bg-[#635BFF]/[0.08]' : isDark ? 'text-[#C1CED8] hover:bg-white/[0.04]' : 'text-[#3E4C59] hover:bg-[#F7F8FA]'}`}
@@ -694,7 +694,7 @@ export default function Team({
 
       {/* Employee Table */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}
-        className={`${cardBg} rounded-2xl overflow-hidden`}>
+        className={`${cardBg} backfill-ui-radius overflow-hidden`}>
         {/* Table Header - Desktop only */}
         <div className={`hidden md:grid grid-cols-[2fr_1fr_1fr_1fr_0.7fr_0.7fr_44px] gap-4 px-5 py-3 border-b ${cardHeaderBg}`}>
           <button onClick={() => toggleSort('name')} className={`flex items-center gap-1.5 text-[11px] ${textMuted} uppercase tracking-[0.04em] ${isDark ? 'hover:text-[#C1CED8]' : 'hover:text-[#5E6D7A]'} transition-colors`} style={{ fontWeight: 500 }}>
@@ -717,7 +717,7 @@ export default function Team({
           <span className={`text-[10px] ${textMuted} uppercase tracking-[0.04em] shrink-0`} style={{ fontWeight: 500 }}>Sort:</span>
           {(['name', 'shifts', 'rating'] as const).map((field) => (
             <button key={field} onClick={() => toggleSort(field)}
-              className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] transition-colors ${sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : isDark ? 'text-[#C1CED8] bg-white/[0.04]' : 'text-[#8898AA] bg-[#F7F8FA]'}`}
+              className={`shrink-0 px-2.5 py-1 backfill-ui-radius text-[11px] transition-colors ${sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : isDark ? 'text-[#C1CED8] bg-white/[0.04]' : 'text-[#8898AA] bg-[#F7F8FA]'}`}
               style={{ fontWeight: sortField === field ? 520 : 420 }}>
               {field.charAt(0).toUpperCase() + field.slice(1)} {sortField === field && (sortDir === 'asc' ? '↑' : '↓')}
             </button>
@@ -744,7 +744,7 @@ export default function Team({
                   </div>
                 </div>
                 <div className="flex items-center">
-                  <span className="text-[11px] px-2.5 py-1 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{emp.role}</span>
+                  <span className="text-[11px] px-2.5 py-1 backfill-ui-radius" style={{ fontWeight: 500, color, background: `${color}10` }}>{emp.role}</span>
                 </div>
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="text-[13px]">{emp.locationEmoji}</span>
@@ -765,7 +765,7 @@ export default function Team({
                 </div>
                 <div className="flex items-center justify-center">
                   <button onClick={(e) => { e.stopPropagation(); setSelectedEmployee(emp); }}
-                    className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F0F0F5]'} transition-all`}>
+                    className={`p-1.5 backfill-ui-radius opacity-0 group-hover:opacity-100 ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F0F0F5]'} transition-all`}>
                     <Eye size={14} className="text-[#8898AA]" />
                   </button>
                 </div>
@@ -797,7 +797,7 @@ export default function Team({
                       </div>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{emp.role}</span>
+                      <span className="text-[11px] px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500, color, background: `${color}10` }}>{emp.role}</span>
                       <span className={`text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>{emp.locationEmoji} {emp.location.split(' ')[0]}</span>
                       <span className={`text-[11px] ${textMuted} ml-auto tabular-nums`} style={{ fontWeight: 460 }}>{emp.shifts} shifts</span>
                       <div className="flex items-center gap-0.5">

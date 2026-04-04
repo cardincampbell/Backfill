@@ -209,12 +209,12 @@ export function LandingBackfillShiftsInterface() {
   };
 
   return (
-    <div ref={containerRef} className="w-full flex rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.12)] overflow-hidden border border-[#d8dee6]">
+    <div ref={containerRef} className="w-full flex backfill-ui-radius shadow-[0_8px_40px_rgba(0,0,0,0.12)] overflow-hidden border border-[#d8dee6]">
       {/* AI Chat Panel */}
       <div className="hidden md:flex flex-col w-[260px] bg-[#0D1B2A] border-r border-white/[0.06] shrink-0">
         {/* Chat Header */}
         <div className="px-4 py-3 border-b border-white/[0.06] flex items-center gap-2.5">
-          <div className="w-6 h-6 rounded-lg bg-[#635BFF]/20 flex items-center justify-center">
+          <div className="w-6 h-6 backfill-ui-radius bg-[#635BFF]/20 flex items-center justify-center">
             <Sparkles className="h-3 w-3 text-[#635BFF]" />
           </div>
           <span className="text-[13px] text-white/80" style={{ fontWeight: 600 }}>Backfill Copilot</span>
@@ -225,10 +225,10 @@ export function LandingBackfillShiftsInterface() {
         <div className="flex-1 px-3 py-4 flex flex-col justify-end gap-3 overflow-hidden">
           {/* Previous context messages */}
           <div className="flex flex-col gap-1">
-            <div className="self-end bg-white/[0.08] rounded-xl rounded-br-sm px-3 py-2 max-w-[200px]">
+            <div className="self-end bg-white/[0.08] backfill-ui-radius rounded-br-sm px-3 py-2 max-w-[200px]">
               <p className="text-[11px] text-white/50 leading-[1.5]">Add Sarah to dinner on Monday.</p>
             </div>
-            <div className="self-start bg-[#635BFF]/15 rounded-xl rounded-bl-sm px-3 py-2 max-w-[200px]">
+            <div className="self-start bg-[#635BFF]/15 backfill-ui-radius rounded-bl-sm px-3 py-2 max-w-[200px]">
               <p className="text-[11px] text-[#a5a0ff]/70 leading-[1.5]">Done. Sarah is on Dinner Mon 11a–7p.</p>
             </div>
           </div>
@@ -236,7 +236,7 @@ export function LandingBackfillShiftsInterface() {
           {/* User's animated message */}
           {animPhase >= 1 && (
             <div className="flex flex-col gap-1">
-              <div className="self-end bg-white/[0.08] rounded-xl rounded-br-sm px-3 py-2 max-w-[210px]" style={{ animation: animPhase === 2 ? 'none' : undefined }}>
+              <div className="self-end bg-white/[0.08] backfill-ui-radius rounded-br-sm px-3 py-2 max-w-[210px]" style={{ animation: animPhase === 2 ? 'none' : undefined }}>
                 <p className="text-[11px] text-white/70 leading-[1.5]">
                   {animPhase >= 2 ? fullMessage : typedText}
                   {animPhase === 1 && <span className="inline-block w-[1px] h-[12px] bg-white/50 ml-[1px] align-middle animate-pulse" />}
@@ -247,7 +247,7 @@ export function LandingBackfillShiftsInterface() {
 
           {/* AI thinking indicator */}
           {animPhase === 3 && (
-            <div className="self-start bg-[#635BFF]/15 rounded-xl rounded-bl-sm px-3 py-2.5">
+            <div className="self-start bg-[#635BFF]/15 backfill-ui-radius rounded-bl-sm px-3 py-2.5">
               <div className="flex items-center gap-1">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#635BFF]/60 animate-bounce" style={{ animationDelay: '0ms' }} />
                 <div className="w-1.5 h-1.5 rounded-full bg-[#635BFF]/60 animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -258,7 +258,7 @@ export function LandingBackfillShiftsInterface() {
 
           {/* AI response */}
           {animPhase >= 4 && (
-            <div className="self-start bg-[#635BFF]/15 rounded-xl rounded-bl-sm px-3 py-2 max-w-[220px]" style={{ animation: 'fadeSlideUp 0.3s ease-out' }}>
+            <div className="self-start bg-[#635BFF]/15 backfill-ui-radius rounded-bl-sm px-3 py-2 max-w-[220px]" style={{ animation: 'fadeSlideUp 0.3s ease-out' }}>
               <p className="text-[11px] text-[#a5a0ff]/80 leading-[1.5]">
                 Done. Swapped Maya & James on Sat.
               </p>
@@ -274,7 +274,7 @@ export function LandingBackfillShiftsInterface() {
 
         {/* Chat Input */}
         <div className="px-3 pb-3">
-          <div className="flex items-center gap-2 bg-white/[0.06] rounded-xl px-3 py-2.5 border border-white/[0.06]">
+          <div className="flex items-center gap-2 bg-white/[0.06] backfill-ui-radius px-3 py-2.5 border border-white/[0.06]">
             <input
               type="text"
               placeholder="Ask Backfill AI..."
@@ -292,26 +292,26 @@ export function LandingBackfillShiftsInterface() {
         <div className="bg-[#0A2540] px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-[#635BFF] flex items-center justify-center">
+              <div className="w-7 h-7 backfill-ui-radius bg-[#635BFF] flex items-center justify-center">
                 <Calendar className="h-3.5 w-3.5 text-white" />
               </div>
               <span className="text-white text-[15px] tracking-[-0.01em]" style={{ fontWeight: 600 }}>Backfill Shifts</span>
             </div>
-            <div className="hidden sm:flex items-center ml-4 bg-white/[0.08] rounded-lg p-0.5">
-              <button className="px-3 py-1.5 text-[12px] text-white bg-white/[0.15] rounded-md" style={{ fontWeight: 500 }}>Schedule</button>
-              <button className="px-3 py-1.5 text-[12px] text-white/50 hover:text-white/70 rounded-md transition-colors" style={{ fontWeight: 500 }}>Availability</button>
-              <button className="px-3 py-1.5 text-[12px] text-white/50 hover:text-white/70 rounded-md transition-colors" style={{ fontWeight: 500 }}>Time Off</button>
+            <div className="hidden sm:flex items-center ml-4 bg-white/[0.08] backfill-ui-radius p-0.5">
+              <button className="px-3 py-1.5 text-[12px] text-white bg-white/[0.15] backfill-ui-radius" style={{ fontWeight: 500 }}>Schedule</button>
+              <button className="px-3 py-1.5 text-[12px] text-white/50 hover:text-white/70 backfill-ui-radius transition-colors" style={{ fontWeight: 500 }}>Availability</button>
+              <button className="px-3 py-1.5 text-[12px] text-white/50 hover:text-white/70 backfill-ui-radius transition-colors" style={{ fontWeight: 500 }}>Time Off</button>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#635BFF] text-white rounded-lg text-[12px] hover:bg-[#5850d6] transition-colors" style={{ fontWeight: 500 }}>
+            <button className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#635BFF] text-white backfill-ui-radius text-[12px] hover:bg-[#5850d6] transition-colors" style={{ fontWeight: 500 }}>
               <Plus className="h-3.5 w-3.5" />
               Add shift
             </button>
-            <button className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
+            <button className="p-1.5 hover:bg-white/10 backfill-ui-radius transition-colors">
               <Filter className="h-4 w-4 text-white/50" />
             </button>
-            <button className="p-1.5 hover:bg-white/10 rounded-lg transition-colors">
+            <button className="p-1.5 hover:bg-white/10 backfill-ui-radius transition-colors">
               <MoreHorizontal className="h-4 w-4 text-white/50" />
             </button>
           </div>
@@ -325,16 +325,16 @@ export function LandingBackfillShiftsInterface() {
             </select>
           </div>
           <div className="flex items-center gap-1">
-            <button className="p-1.5 hover:bg-[#f5f7fa] rounded-lg transition-colors">
+            <button className="p-1.5 hover:bg-[#f5f7fa] backfill-ui-radius transition-colors">
               <ChevronLeft className="h-4 w-4 text-[#425466]" />
             </button>
-            <button className="px-3 py-1.5 text-[13px] text-[#0A2540] hover:bg-[#f5f7fa] rounded-lg transition-colors" style={{ fontWeight: 600 }}>
+            <button className="px-3 py-1.5 text-[13px] text-[#0A2540] hover:bg-[#f5f7fa] backfill-ui-radius transition-colors" style={{ fontWeight: 600 }}>
               Mar 12 – 18, 2026
             </button>
-            <button className="p-1.5 hover:bg-[#f5f7fa] rounded-lg transition-colors">
+            <button className="p-1.5 hover:bg-[#f5f7fa] backfill-ui-radius transition-colors">
               <ChevronRight className="h-4 w-4 text-[#425466]" />
             </button>
-            <button className="hidden sm:flex ml-2 px-2.5 py-1.5 text-[12px] text-[#635BFF] bg-[#635BFF]/[0.06] hover:bg-[#635BFF]/[0.1] rounded-lg transition-colors" style={{ fontWeight: 500 }}>
+            <button className="hidden sm:flex ml-2 px-2.5 py-1.5 text-[12px] text-[#635BFF] bg-[#635BFF]/[0.06] hover:bg-[#635BFF]/[0.1] backfill-ui-radius transition-colors" style={{ fontWeight: 500 }}>
               Today
             </button>
           </div>
@@ -405,7 +405,7 @@ export function LandingBackfillShiftsInterface() {
                         >
                           {shift ? (
                             <div
-                              className={`rounded-md px-1.5 py-1.5 cursor-pointer transition-all relative overflow-hidden ${showHighlight ? 'ring-2 ring-[#635BFF]/40 scale-[1.03]' : ''} ${showDone ? 'ring-1 ring-[#4ADE80]/30' : ''}`}
+                              className={`backfill-ui-radius px-1.5 py-1.5 cursor-pointer transition-all relative overflow-hidden ${showHighlight ? 'ring-2 ring-[#635BFF]/40 scale-[1.03]' : ''} ${showDone ? 'ring-1 ring-[#4ADE80]/30' : ''}`}
                               style={{
                                 backgroundColor: getShiftStyles(shift.color, shift.status).backgroundColor,
                                 borderLeft: `2.5px solid ${getShiftStyles(shift.color, shift.status).borderColor}`,
@@ -442,7 +442,7 @@ export function LandingBackfillShiftsInterface() {
                               )}
                             </div>
                           ) : (
-                            <div className="h-full min-h-[38px] rounded-md border border-transparent hover:border-dashed hover:border-[#d0d7de] transition-colors group-hover:opacity-100 opacity-0 flex items-center justify-center">
+                            <div className="h-full min-h-[38px] backfill-ui-radius border border-transparent hover:border-dashed hover:border-[#d0d7de] transition-colors group-hover:opacity-100 opacity-0 flex items-center justify-center">
                               <Plus className="h-3 w-3 text-[#c0c8d0]" />
                             </div>
                           )}

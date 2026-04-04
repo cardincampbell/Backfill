@@ -128,7 +128,7 @@ export function BrandedSelect({
         aria-expanded={open}
         aria-haspopup="listbox"
         onClick={() => setOpen((current) => !current)}
-        className={`flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left text-[13px] transition-all focus:outline-none focus:border-[#635BFF]/60 focus:shadow-[0_0_0_4px_rgba(99,91,255,0.12)] ${controlClass}`}
+        className={`flex min-h-[44px] w-full items-center justify-between gap-3 backfill-ui-radius border px-3.5 py-2.5 text-left text-[13px] transition-all focus:outline-none focus:border-[#635BFF]/60 focus:shadow-[0_0_0_4px_rgba(99,91,255,0.12)] ${controlClass}`}
         style={{ fontWeight: 440 }}
       >
         <span className="min-w-0 truncate">
@@ -147,7 +147,7 @@ export function BrandedSelect({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className={`absolute left-0 right-0 top-[calc(100%+8px)] z-50 overflow-hidden rounded-2xl border p-1.5 ${menuClass}`}
+            className={`absolute left-0 right-0 top-[calc(100%+8px)] z-50 overflow-hidden backfill-ui-radius border p-1.5 ${menuClass}`}
           >
             <div className="max-h-64 overflow-y-auto">
               {resolvedOptions.map((option) => {
@@ -158,7 +158,7 @@ export function BrandedSelect({
                     type="button"
                     disabled={option.disabled}
                     onClick={() => handleSelect(option.value)}
-                    className={`flex w-full items-center rounded-xl px-3 py-2.5 text-left text-[12px] transition-colors ${selected ? selectedClass : optionBaseClass} ${option.disabled ? "cursor-not-allowed opacity-45" : ""}`}
+                    className={`flex w-full items-center backfill-ui-radius px-3 py-2.5 text-left text-[12px] transition-colors ${selected ? selectedClass : optionBaseClass} ${option.disabled ? "cursor-not-allowed opacity-45" : ""}`}
                     style={{ fontWeight: selected ? 540 : 430 }}
                   >
                     <span className="min-w-0 truncate">{option.label}</span>

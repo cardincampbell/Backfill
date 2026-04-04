@@ -105,7 +105,7 @@ export default function LandingPage() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.6 }}
-                  className="inline-flex items-center gap-2.5 px-4 py-1.5 bg-white/80 backdrop-blur-sm border border-[#e2e8f0] rounded-full mb-6 sm:mb-8 shadow-[0_1px_3px_rgba(0,0,0,0.04)] self-start"
+                  className="inline-flex items-center gap-2.5 px-4 py-1.5 bg-white/80 backdrop-blur-sm border border-[#e2e8f0] backfill-ui-radius mb-6 sm:mb-8 shadow-[0_1px_3px_rgba(0,0,0,0.04)] self-start"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-[#635BFF] animate-pulse" />
                   <span className="text-[13px] text-[#425466]" style={{ fontWeight: 500 }}>Always on autonomous shift coverage</span>
@@ -140,7 +140,7 @@ export default function LandingPage() {
                 >
                   <Link
                     href="/try"
-                    className="group w-full sm:w-auto px-8 py-4 sm:px-7 sm:py-3.5 bg-[#0A2540] text-white rounded-full transition-all duration-300 text-[17px] sm:text-[16px] inline-flex items-center justify-center sm:inline-flex gap-2.5 shadow-[0_4px_14px_rgba(10,37,64,0.35)] hover:shadow-[0_6px_24px_rgba(10,37,64,0.45)] hover:translate-y-[-1px]"
+                    className="group w-full sm:w-auto px-8 py-4 sm:px-7 sm:py-3.5 bg-[#0A2540] text-white backfill-ui-radius transition-all duration-300 text-[17px] sm:text-[16px] inline-flex items-center justify-center sm:inline-flex gap-2.5 shadow-[0_4px_14px_rgba(10,37,64,0.35)] hover:shadow-[0_6px_24px_rgba(10,37,64,0.45)] hover:translate-y-[-1px]"
                     style={{ fontWeight: 500 }}
                   >
                     Try Backfill Free
@@ -268,7 +268,7 @@ export default function LandingPage() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ delay: 0.3 }}
-            className="mt-12 sm:mt-16 p-6 sm:p-8 rounded-2xl border border-white/[0.06] bg-white/[0.02]"
+            className="mt-12 sm:mt-16 p-6 sm:p-8 backfill-ui-radius border border-white/[0.06] bg-white/[0.02]"
           >
             <p className="text-[15px] sm:text-[17px] text-[#8898AA] italic leading-[1.8]">
               "For a 30-location group, this is happening multiple times a week — across every location, every manager, every shift window. That's not a staffing problem. That's a systems problem."
@@ -337,7 +337,7 @@ export default function LandingPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.1, duration: 0.6 }}
                 viewport={{ once: true }}
-                className={`group relative bg-gradient-to-b ${item.gradient} p-8 rounded-2xl border border-[#e2e8f0] hover:border-[#c4d1e0] transition-all hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)] hover:translate-y-[-2px] duration-300`}
+                className={`group relative bg-gradient-to-b ${item.gradient} p-8 backfill-ui-radius border border-[#e2e8f0] hover:border-[#c4d1e0] transition-all hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)] hover:translate-y-[-2px] duration-300`}
               >
                 {/* Step number watermark */}
                 <div className="absolute top-6 right-6 text-[72px] leading-none tracking-[-0.04em] text-[#0A2540]/[0.04]" style={{ fontWeight: 700 }}>
@@ -346,7 +346,7 @@ export default function LandingPage() {
 
                 <div className="flex items-center gap-3 mb-8">
                   <div
-                    className="h-10 w-10 rounded-xl flex items-center justify-center text-white"
+                    className="h-10 w-10 backfill-ui-radius flex items-center justify-center text-white"
                     style={{ backgroundColor: item.color }}
                   >
                     {item.icon}
@@ -355,7 +355,7 @@ export default function LandingPage() {
                 <h3 className="text-[22px] tracking-[-0.02em] mb-1.5 text-[#0A2540]" style={{ fontWeight: 600 }}>{item.title}</h3>
                 <div className="text-[14px] text-[#8898AA] mb-4" style={{ fontWeight: 450 }}>{item.subtitle}</div>
                 <p className="text-[15px] text-[#425466] leading-[1.7] mb-6">{item.description}</p>
-                <div className="inline-block px-3 py-1.5 bg-white/80 border border-[#e2e8f0] rounded-full text-[12px] text-[#425466]" style={{ fontWeight: 500 }}>
+                <div className="inline-block px-3 py-1.5 bg-white/80 border border-[#e2e8f0] backfill-ui-radius text-[12px] text-[#425466]" style={{ fontWeight: 500 }}>
                   {item.badge}
                 </div>
               </motion.div>
@@ -384,7 +384,7 @@ export default function LandingPage() {
             transition={{ duration: 0.6 }}
             className="mb-16"
           >
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-[#635BFF]/15 border border-[#635BFF]/25 text-[#a5a0ff] rounded-full text-[12px] tracking-[0.08em] uppercase mb-8" style={{ fontWeight: 600 }}>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-[#635BFF]/15 border border-[#635BFF]/25 text-[#a5a0ff] backfill-ui-radius text-[12px] tracking-[0.08em] uppercase mb-8" style={{ fontWeight: 600 }}>
               <span className="w-1.5 h-1.5 rounded-full bg-[#635BFF]" />
               Backfill Shifts
             </div>
@@ -441,7 +441,7 @@ export default function LandingPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.06, duration: 0.5 }}
                 viewport={{ once: true }}
-                className="group p-6 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] hover:border-[#635BFF]/30 transition-all duration-300"
+                className="group p-6 backfill-ui-radius border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] hover:border-[#635BFF]/30 transition-all duration-300"
               >
                 <h3 className="text-[17px] tracking-[-0.01em] mb-2 text-white/90 group-hover:text-white transition-colors" style={{ fontWeight: 550 }}>{feature.title}</h3>
                 <p className="text-[14px] text-[#8898AA]/80 leading-[1.65] group-hover:text-[#8898AA] transition-colors">{feature.description}</p>
@@ -489,7 +489,7 @@ export default function LandingPage() {
                 <motion.div
                   key={integration}
                   whileHover={{ scale: 1.02, y: -1 }}
-                  className="px-6 py-4 bg-white border border-[#e2e8f0] rounded-2xl text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)] transition-all duration-300"
+                  className="px-6 py-4 bg-white border border-[#e2e8f0] backfill-ui-radius text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)] transition-all duration-300"
                   style={{ fontWeight: 500 }}
                 >
                   {integration}
@@ -568,7 +568,7 @@ export default function LandingPage() {
             <div className="mt-10 text-center">
               <Link
                 href="/try"
-                className="group px-7 py-3.5 bg-[#635BFF] text-white rounded-full transition-all duration-300 text-[15px] inline-flex items-center gap-2 shadow-[0_4px_20px_rgba(99,91,255,0.4)] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)] hover:translate-y-[-1px]"
+                className="group px-7 py-3.5 bg-[#635BFF] text-white backfill-ui-radius transition-all duration-300 text-[15px] inline-flex items-center gap-2 shadow-[0_4px_20px_rgba(99,91,255,0.4)] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)] hover:translate-y-[-1px]"
                 style={{ fontWeight: 500 }}
               >
                 Try Backfill Free
@@ -633,7 +633,7 @@ export default function LandingPage() {
             </p>
             <Link
               href="/try"
-              className="group px-8 py-4 bg-white text-[#0A2540] rounded-full hover:bg-white/95 transition-all text-[16px] inline-flex items-center gap-2.5 shadow-[0_4px_20px_rgba(255,255,255,0.15)] hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)] hover:translate-y-[-1px]"
+              className="group px-8 py-4 bg-white text-[#0A2540] backfill-ui-radius hover:bg-white/95 transition-all text-[16px] inline-flex items-center gap-2.5 shadow-[0_4px_20px_rgba(255,255,255,0.15)] hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)] hover:translate-y-[-1px]"
               style={{ fontWeight: 550 }}
             >
               Start filling callouts autonomously

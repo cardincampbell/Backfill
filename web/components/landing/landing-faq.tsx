@@ -47,7 +47,7 @@ export function LandingFaq() {
         <Accordion.Item
           key={faq.question}
           value={`item-${index}`}
-          className="bg-white rounded-2xl border border-[#e2e8f0] overflow-hidden hover:border-[#c4d1e0] transition-all duration-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
+          className="bg-white backfill-ui-radius border border-[#e2e8f0] overflow-hidden hover:border-[#c4d1e0] transition-all duration-300 hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
         >
           <Accordion.Header>
             <Accordion.Trigger className="landing-faq-trigger group flex w-full items-center justify-between px-6 py-5 text-left">

@@ -166,7 +166,7 @@ function ScopeButton({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-[13px] transition-all duration-300 ${
+      className={`flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] transition-all duration-300 ${
         active
           ? dark
             ? "bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
@@ -215,7 +215,7 @@ function SettingsInput({
   return (
     <input
       {...rest}
-      className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
+      className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
         dark
           ? "border-white/[0.08] bg-white/[0.04] text-white"
           : "border-[#E5E7EB] text-[#0A2540]"
@@ -248,7 +248,7 @@ function Toggle({
 }) {
   return (
     <button
-      className={`relative h-[22px] w-10 rounded-full transition-all duration-300 ${
+      className={`relative h-[22px] w-10 backfill-ui-radius transition-all duration-300 ${
         enabled ? "bg-[#635BFF]" : "bg-[#E5E7EB]"
       }`}
       onClick={() => onChange(!enabled)}
@@ -628,7 +628,7 @@ export default function Settings({
         <div className="space-y-5">
           <div className="flex items-center gap-4">
             <div className="relative">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center text-white text-[18px]" style={{ fontWeight: 600 }}>
+              <div className="w-16 h-16 backfill-ui-radius bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center text-white text-[18px]" style={{ fontWeight: 600 }}>
                 {businessLabel.charAt(0).toUpperCase()}
               </div>
               <button className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full ${isDark ? "bg-[#0F2E4C] border-white/[0.08]" : "bg-white border-[#E5E7EB]"} border flex items-center justify-center shadow-sm opacity-60`} disabled type="button">
@@ -742,8 +742,8 @@ export default function Settings({
       return (
         <div className="space-y-3">
           {locations.map((location) => (
-            <div key={location.name} className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${isDark ? "border-white/[0.08] hover:border-white/[0.14] hover:bg-white/[0.03]" : "border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"}`}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px]" style={{ background: `${location.color}10` }}>
+            <div key={location.name} className={`flex items-center gap-4 p-4 backfill-ui-radius border transition-all ${isDark ? "border-white/[0.08] hover:border-white/[0.14] hover:bg-white/[0.03]" : "border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"}`}>
+              <div className="w-10 h-10 backfill-ui-radius flex items-center justify-center text-[18px]" style={{ background: `${location.color}10` }}>
                 {location.emoji}
               </div>
               <div className="flex-1">
@@ -762,13 +762,13 @@ export default function Settings({
     if (scope === "business" && activeSection === "billing") {
       return (
         <div className="space-y-5">
-          <div className={`p-5 rounded-xl border ${isDark ? "border-[#635BFF]/25 bg-[#635BFF]/[0.08]" : "border-[#635BFF]/20 bg-gradient-to-br from-[#635BFF]/[0.04] to-[#8B5CF6]/[0.02]"}`}>
+          <div className={`p-5 backfill-ui-radius border ${isDark ? "border-[#635BFF]/25 bg-[#635BFF]/[0.08]" : "border-[#635BFF]/20 bg-gradient-to-br from-[#635BFF]/[0.04] to-[#8B5CF6]/[0.02]"}`}>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Zap size={16} className="text-[#635BFF]" />
                 <span className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 580 }}>Business Pro</span>
               </div>
-              <span className="text-[11px] text-[#635BFF] px-2.5 py-1 rounded-full bg-[#635BFF]/10" style={{ fontWeight: 520 }}>
+              <span className="text-[11px] text-[#635BFF] px-2.5 py-1 backfill-ui-radius bg-[#635BFF]/10" style={{ fontWeight: 520 }}>
                 Current Plan
               </span>
             </div>
@@ -786,10 +786,10 @@ export default function Settings({
             </div>
           </div>
 
-          <div className={`p-4 rounded-xl border ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
+          <div className={`p-4 backfill-ui-radius border ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-7 rounded-md bg-[#1A1F36] flex items-center justify-center">
+                <div className="w-10 h-7 backfill-ui-radius bg-[#1A1F36] flex items-center justify-center">
                   <span className="text-[10px] text-white" style={{ fontWeight: 600 }}>VISA</span>
                 </div>
                 <div>
@@ -820,7 +820,7 @@ export default function Settings({
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 520 }}>{invoice.amount}</span>
-                    <span className="text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 rounded-full" style={{ fontWeight: 500 }}>{invoice.status}</span>
+                    <span className="text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>{invoice.status}</span>
                   </div>
                 </div>
               ))}
@@ -841,7 +841,7 @@ export default function Settings({
       return (
         <div className="space-y-1">
           {items.map((item) => (
-            <div key={item.label} className={`flex items-center justify-between p-4 rounded-xl transition-colors ${rowHover}`}>
+            <div key={item.label} className={`flex items-center justify-between p-4 backfill-ui-radius transition-colors ${rowHover}`}>
               <div>
                 <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>{item.label}</p>
                 <p className={`text-[11px] mt-0.5 max-w-md ${textMuted}`} style={{ fontWeight: 420 }}>{item.desc}</p>
@@ -864,8 +864,8 @@ export default function Settings({
       return (
         <div className="space-y-3">
           {integrations.map((integration) => (
-            <div key={integration.name} className={`flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl border transition-all ${isDark ? "border-white/[0.08] hover:border-white/[0.14]" : "border-[#E5E7EB] hover:border-[#D1D5DB]"}`}>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px] shrink-0" style={{ background: `${integration.color}10` }}>
+            <div key={integration.name} className={`flex items-center gap-3 sm:gap-4 p-3 sm:p-4 backfill-ui-radius border transition-all ${isDark ? "border-white/[0.08] hover:border-white/[0.14]" : "border-[#E5E7EB] hover:border-[#D1D5DB]"}`}>
+              <div className="w-10 h-10 backfill-ui-radius flex items-center justify-center text-[18px] shrink-0" style={{ background: `${integration.color}10` }}>
                 {integration.icon}
               </div>
               <div className="flex-1 min-w-0">
@@ -874,7 +874,7 @@ export default function Settings({
               </div>
               {integration.connected ? (
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="hidden sm:inline text-[11px] text-[#00B893] bg-[#00B893]/10 px-2.5 py-1 rounded-full" style={{ fontWeight: 500 }}>
+                  <span className="hidden sm:inline text-[11px] text-[#00B893] bg-[#00B893]/10 px-2.5 py-1 backfill-ui-radius" style={{ fontWeight: 500 }}>
                     Connected
                   </span>
                   <button className="text-[12px] text-[#8898AA] hover:text-[#E5484D] transition-colors" style={{ fontWeight: 440 }}>
@@ -882,7 +882,7 @@ export default function Settings({
                   </button>
                 </div>
               ) : (
-                <button className="px-3 sm:px-3.5 py-2 rounded-lg text-[12px] text-[#635BFF] border border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04] transition-all shrink-0" style={{ fontWeight: 500 }}>
+                <button className="px-3 sm:px-3.5 py-2 backfill-ui-radius text-[12px] text-[#635BFF] border border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04] transition-all shrink-0" style={{ fontWeight: 500 }}>
                   Connect
                 </button>
               )}
@@ -897,7 +897,7 @@ export default function Settings({
         <div className="space-y-5">
           <div className="flex items-center gap-4">
             <div className="relative">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center text-white text-[18px]" style={{ fontWeight: 600 }}>
+              <div className="w-16 h-16 backfill-ui-radius bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center text-white text-[18px]" style={{ fontWeight: 600 }}>
                 {initials}
               </div>
               <button className={`absolute -bottom-1 -right-1 w-6 h-6 rounded-full ${isDark ? "bg-[#0F2E4C] border-white/[0.08]" : "bg-white border-[#E5E7EB]"} border flex items-center justify-center shadow-sm opacity-60`} disabled type="button">
@@ -976,10 +976,10 @@ export default function Settings({
             </div>
           </div>
 
-          <div className={`p-4 rounded-xl border ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
+          <div className={`p-4 backfill-ui-radius border ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-[#00B893]/10 flex items-center justify-center">
+                <div className="w-9 h-9 backfill-ui-radius bg-[#00B893]/10 flex items-center justify-center">
                   <Smartphone size={16} className="text-[#00B893]" />
                 </div>
                 <div>
@@ -1000,7 +1000,7 @@ export default function Settings({
                 { device: "MacBook Pro • Chrome", location: "San Francisco, CA", current: true },
                 { device: "iPhone 15 Pro • Safari", location: "San Francisco, CA", current: false },
               ].map((sessionItem) => (
-                <div key={sessionItem.device} className={`flex items-center justify-between p-3 rounded-lg ${cardBg}`}>
+                <div key={sessionItem.device} className={`flex items-center justify-between p-3 backfill-ui-radius ${cardBg}`}>
                   <div className="flex items-center gap-3">
                     <Monitor size={15} className={textMuted} />
                     <div>
@@ -1009,7 +1009,7 @@ export default function Settings({
                     </div>
                   </div>
                   {sessionItem.current ? (
-                    <span className="text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 rounded-full" style={{ fontWeight: 500 }}>
+                    <span className="text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>
                       This Device
                     </span>
                   ) : (
@@ -1036,7 +1036,7 @@ export default function Settings({
       return (
         <div className="space-y-1">
           {items.map((item) => (
-            <div key={item.label} className={`flex items-center justify-between p-4 rounded-xl transition-colors ${rowHover}`}>
+            <div key={item.label} className={`flex items-center justify-between p-4 backfill-ui-radius transition-colors ${rowHover}`}>
               <div>
                 <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>{item.label}</p>
                 <p className={`text-[11px] mt-0.5 ${textMuted}`} style={{ fontWeight: 420 }}>{item.desc}</p>
@@ -1065,7 +1065,7 @@ export default function Settings({
                 return (
                   <button
                     key={theme.key}
-                    className={`relative p-4 rounded-xl border-2 transition-all duration-300 text-center ${
+                    className={`relative p-4 backfill-ui-radius border-2 transition-all duration-300 text-center ${
                       selected
                         ? "border-[#635BFF] bg-[#635BFF]/[0.03] shadow-[0_0_0_3px_rgba(99,91,255,0.1)]"
                         : isDark
@@ -1086,7 +1086,7 @@ export default function Settings({
                       </div>
                     ) : null}
                     <div className="flex items-center justify-center gap-1 mb-2">
-                      <div className={`w-8 h-6 rounded-md border overflow-hidden flex ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
+                      <div className={`w-8 h-6 backfill-ui-radius border overflow-hidden flex ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
                         <div className="flex-1" style={{ background: theme.colors[0] }} />
                         <div className="flex-1" style={{ background: theme.colors[1] }} />
                       </div>
@@ -1152,7 +1152,7 @@ export default function Settings({
           {activeDirty ? (
             <motion.button
               animate={{ opacity: 1, scale: 1 }}
-              className="hidden sm:block px-5 py-2.5 rounded-full text-[13px] text-white whitespace-nowrap transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-60 disabled:hover:shadow-none"
+              className="hidden sm:block px-5 py-2.5 backfill-ui-radius text-[13px] text-white whitespace-nowrap transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-60 disabled:hover:shadow-none"
               disabled={!activeCanSave}
               initial={{ opacity: 0, scale: 0.95 }}
               onClick={() => {
@@ -1176,7 +1176,7 @@ export default function Settings({
         </div>
 
         <div className="mb-6">
-          <div className={`inline-flex items-center rounded-xl p-1 gap-0.5 ${subtleSurface}`}>
+          <div className={`inline-flex items-center backfill-ui-radius p-1 gap-0.5 ${subtleSurface}`}>
             <ScopeButton active={scope === "business"} dark={isDark} icon={Building2} label="Business" onClick={() => switchScope("business")} />
             <ScopeButton active={scope === "personal"} dark={isDark} icon={User} label="Personal" onClick={() => switchScope("personal")} />
           </div>
@@ -1188,7 +1188,7 @@ export default function Settings({
               {sections.map((section) => (
                 <button
                   key={section.key}
-                  className={`flex items-center gap-2 md:gap-3 px-3 md:px-3.5 py-2.5 rounded-lg text-left transition-all duration-200 md:w-full ${
+                  className={`flex items-center gap-2 md:gap-3 px-3 md:px-3.5 py-2.5 backfill-ui-radius text-left transition-all duration-200 md:w-full ${
                     activeSection === section.key
                       ? "bg-[#635BFF]/[0.08] text-[#635BFF]"
                       : `${textSecondary} ${rowHover}`
@@ -1206,11 +1206,11 @@ export default function Settings({
           </motion.div>
 
           <div className="flex-1 min-w-0">
-            <div className={`${panelClass} border rounded-2xl p-4 sm:p-6`}>
+            <div className={`${panelClass} border backfill-ui-radius p-4 sm:p-6`}>
               <div className={`flex items-center gap-3 mb-6 pb-5 border-b ${borderClass}`}>
                 {currentSection ? (
                   <>
-                    <div className={`w-9 h-9 rounded-xl ${isDark ? "bg-white/[0.06]" : "bg-[#635BFF]/10"} flex items-center justify-center`}>
+                    <div className={`w-9 h-9 backfill-ui-radius ${isDark ? "bg-white/[0.06]" : "bg-[#635BFF]/10"} flex items-center justify-center`}>
                       <currentSection.icon size={16} className="text-[#635BFF]" />
                     </div>
                     <div>
@@ -1227,7 +1227,7 @@ export default function Settings({
 
               {activeFeedback ? (
                 <div
-                  className="mb-5 rounded-xl px-4 py-3 text-[13px]"
+                  className="mb-5 backfill-ui-radius px-4 py-3 text-[13px]"
                   data-tone={activeFeedback.tone}
                   role="status"
                   style={{
@@ -1264,7 +1264,7 @@ export default function Settings({
             transition={{ duration: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
           >
             <button
-              className="w-full py-3 rounded-full text-[14px] text-white transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+              className="w-full py-3 backfill-ui-radius text-[14px] text-white transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
               disabled={!activeCanSave}
               onClick={() => {
                 void handleSaveActive();

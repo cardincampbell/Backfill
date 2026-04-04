@@ -73,20 +73,20 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
     ? 'bg-white/[0.06] text-[#C1CED8] rounded-bl-md'
     : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md';
   const typingBubbleClass = isDark
-    ? 'bg-white/[0.06] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5'
-    : 'bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5';
+    ? 'bg-white/[0.06] backfill-ui-radius rounded-bl-md px-4 py-3 flex items-center gap-1.5'
+    : 'bg-[#F0F0F5] backfill-ui-radius rounded-bl-md px-4 py-3 flex items-center gap-1.5';
   const suggestionButtonClass = isDark
-    ? 'w-full text-left px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors text-[11px] text-[#C1CED8]'
-    : 'w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]';
+    ? 'w-full text-left px-3 py-2 backfill-ui-radius bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors text-[11px] text-[#C1CED8]'
+    : 'w-full text-left px-3 py-2 backfill-ui-radius bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]';
   const inputWrapClass = isDark
-    ? 'flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 transition-colors'
-    : 'flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all';
+    ? 'flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] backfill-ui-radius px-3 py-2 focus-within:border-[#635BFF]/40 transition-colors'
+    : 'flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] backfill-ui-radius px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all';
   const inputClass = isDark
     ? 'flex-1 bg-transparent text-[12px] text-white placeholder-[#8898AA]/50 focus:outline-none'
     : 'flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none';
   const sendButtonClass = isDark
-    ? 'p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors disabled:opacity-30'
-    : 'p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30';
+    ? 'p-1.5 backfill-ui-radius hover:bg-white/[0.06] transition-colors disabled:opacity-30'
+    : 'p-1.5 backfill-ui-radius hover:bg-[#E5E7EB] transition-colors disabled:opacity-30';
   const footerBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
 
   useEffect(() => {
@@ -121,7 +121,7 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
                 <Sparkles size={11} className="text-white" />
               </div>
             )}
-            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
+            <div className={`max-w-[85%] backfill-ui-radius px-3.5 py-2.5 text-[12px] leading-relaxed ${
               msg.role === 'user' ? 'bg-[#635BFF] text-white rounded-br-md' : assistantBubbleClass
             }`} style={{ fontWeight: 420, whiteSpace: 'pre-line' }}>
               {msg.text}
@@ -229,16 +229,16 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
           <Link to="/" className="flex items-center gap-2.5">
             <span className={`text-[18px] tracking-[-0.02em] ${textPrimaryClass}`} style={{ fontWeight: 620 }}>Backfill</span>
           </Link>
-          <button onClick={() => setSidebarOpen(false)} className={`p-1.5 rounded-lg ${hoverSurfaceClass} transition-colors lg:hidden`}>
+          <button onClick={() => setSidebarOpen(false)} className={`p-1.5 backfill-ui-radius ${hoverSurfaceClass} transition-colors lg:hidden`}>
             <X size={18} className={mutedTextClass} />
           </button>
         </div>
 
         {/* Tab Switcher */}
         <div className="px-3 pt-3 pb-1">
-          <div className={`flex items-center ${subtleSurfaceClass} rounded-lg p-0.5`}>
+          <div className={`flex items-center ${subtleSurfaceClass} backfill-ui-radius p-0.5`}>
             <button onClick={() => setSidebarTab('nav')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 backfill-ui-radius text-[12px] transition-all duration-200 ${
                 sidebarTab === 'nav'
                   ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
                   : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
@@ -246,7 +246,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
               <LayoutGrid size={13} />Navigate
             </button>
             <button onClick={() => setSidebarTab('copilot')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 backfill-ui-radius text-[12px] transition-all duration-200 ${
                 sidebarTab === 'copilot' ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm' : 'text-[#8898AA] hover:text-[#0A2540]'
               }`} style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}>
               <Sparkles size={13} />Copilot
@@ -263,7 +263,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                 <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
                   {navItems.map((item) => (
                     <button key={item.label} onClick={() => handleNav(item.path)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 backfill-ui-radius transition-all duration-200 ${
                         activeNav === item.label
                           ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                           : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -277,11 +277,11 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                   <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
                     <span className={`text-[10px] ${mutedTextClass} uppercase tracking-[0.06em] px-3 mb-2 block`} style={{ fontWeight: 500 }}>Locations</span>
                     {allLocations.map((loc) => (
-                      <button key={loc.id} className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'} transition-all duration-200`}>
+                      <button key={loc.id} className={`w-full flex items-center gap-2.5 px-3 py-2 backfill-ui-radius ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'} transition-all duration-200`}>
                         <span className="text-[14px]">{loc.logo}</span>
                         <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
                         {loc.openShifts > 0 && (
-                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
+                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
                         )}
                       </button>
                     ))}
@@ -289,7 +289,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                 </nav>
                 <div className={`border-t ${sectionBorderClass} py-3 px-3 space-y-1`}>
                   <button onClick={() => handleNav('/settings')}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 backfill-ui-radius transition-all duration-200 ${
                       activeNav === 'Settings'
                         ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                         : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -310,7 +310,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
 
         {/* User */}
         <div className={`border-t ${sectionBorderClass} p-3`}>
-        <div className={`flex items-center gap-3 rounded-lg p-2 ${surfaceClass}`}>
+        <div className={`flex items-center gap-3 backfill-ui-radius p-2 ${surfaceClass}`}>
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
             <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
           </div>
@@ -328,7 +328,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
         <header className={`sticky top-0 z-20 border-b ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'} backdrop-blur-xl`}>
           <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
             <div className="flex items-center gap-3">
-              <button onClick={() => setSidebarOpen(true)} className={`p-2 rounded-lg ${hoverSurfaceClass} transition-colors lg:hidden`}>
+              <button onClick={() => setSidebarOpen(true)} className={`p-2 backfill-ui-radius ${hoverSurfaceClass} transition-colors lg:hidden`}>
                 <Menu size={20} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
               </button>
               <div className="relative hidden sm:block">
@@ -336,7 +336,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                 <input
                   type="text"
                   placeholder="Search..."
-                  className={`w-48 md:w-64 pl-9 pr-4 py-2 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${searchFieldClass}`}
+                  className={`w-48 md:w-64 pl-9 pr-4 py-2 backfill-ui-radius border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${searchFieldClass}`}
                   style={{ fontWeight: 420 }}
                 />
               </div>
@@ -344,18 +344,18 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
               <span className={`text-[16px] tracking-[-0.02em] ${textPrimaryClass} lg:hidden sm:hidden`} style={{ fontWeight: 620 }}>Backfill</span>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              <button className={`p-2 rounded-lg ${hoverSurfaceClass} transition-colors hidden sm:block`}>
+              <button className={`p-2 backfill-ui-radius ${hoverSurfaceClass} transition-colors hidden sm:block`}>
                 <HelpCircle size={18} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
               </button>
               <div className="relative">
-                <button onClick={() => setShowNotifications(!showNotifications)} className={`relative p-2 rounded-lg ${hoverSurfaceClass} transition-colors`}>
+                <button onClick={() => setShowNotifications(!showNotifications)} className={`relative p-2 backfill-ui-radius ${hoverSurfaceClass} transition-colors`}>
                   <Bell size={18} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
                   <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E5484D] rounded-full" />
                 </button>
                 <AnimatePresence>
                   {showNotifications && (
                     <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.96 }} transition={{ duration: 0.2 }}
-                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 ${panelBgClass} border ${panelBorderClass} rounded-xl shadow-xl overflow-hidden z-50`}>
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 ${panelBgClass} border ${panelBorderClass} backfill-ui-radius shadow-xl overflow-hidden z-50`}>
                       <div className={`px-4 py-3 border-b ${sectionBorderClass}`}>
                         <span className={`text-[13px] ${textPrimaryClass}`} style={{ fontWeight: 560 }}>Notifications</span>
                       </div>

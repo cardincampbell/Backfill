@@ -45,10 +45,12 @@
   --shadow-lg: 0 24px 56px rgba(10, 37, 64, 0.12), 0 6px 16px rgba(10, 37, 64, 0.06);
 
   /* ── Radius & Motion ─────────────────────────────────── */
-  --radius-sm: 8px;
-  --radius:    12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-ui: 14px;
+  --radius-circle: 999px;
+  --radius-sm: var(--radius-ui);
+  --radius:    var(--radius-ui);
+  --radius-lg: var(--radius-ui);
+  --radius-xl: var(--radius-ui);
   --transition: 0.2s ease;
 }
 
@@ -79,6 +81,18 @@ body {
     color: inherit;
     text-decoration: none;
   }
+}
+
+.backfill-ui-radius {
+  border-radius: var(--radius-ui);
+}
+
+.backfill-ui-radius.rounded-bl-md {
+  border-bottom-left-radius: 8px;
+}
+
+.backfill-ui-radius.rounded-br-md {
+  border-bottom-right-radius: 8px;
 }
 
 p {
@@ -149,7 +163,7 @@ p {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-ui);
   background: var(--brand);
   color: white;
 }
@@ -162,7 +176,7 @@ p {
 
 .nav a {
   padding: 8px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-ui);
   color: var(--muted);
   font-size: 0.88rem;
   font-weight: 500;
@@ -200,7 +214,7 @@ p {
 .eyebrow {
   display: inline-flex;
   padding: 5px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-ui);
   background: var(--brand-soft);
   color: var(--brand);
   font-size: 11px;
@@ -248,7 +262,7 @@ p {
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 980px;
+  border-radius: var(--radius-ui);
   padding: 10px 20px;
   font-size: 0.88rem;
   font-weight: 600;
@@ -3696,7 +3710,7 @@ body:has(.lp-onboarding) .site-main {
 .lp-signup-check {
   width: 56px;
   height: 56px;
-  border-radius: 18px;
+  border-radius: var(--radius-ui);
   background: rgba(99, 91, 255, 0.1);
   border: 1px solid rgba(99, 91, 255, 0.2);
   color: #635BFF;
@@ -3751,7 +3765,7 @@ body:has(.lp-onboarding) .site-main {
   font-size: clamp(20px, 3vw, 22px);
   font-weight: 450;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
+  border-radius: var(--radius-ui);
   background: rgba(255, 255, 255, 0.04);
   color: #fff;
   font-family: inherit;
@@ -3807,7 +3821,7 @@ body:has(.lp-onboarding) .site-main {
   padding: 0 32px;
   font-size: 15px;
   font-weight: 520;
-  border-radius: 999px;
+  border-radius: var(--radius-ui);
   background: linear-gradient(to bottom, #635BFF, #5851DF);
   color: #fff;
   border: none;
@@ -5011,7 +5025,7 @@ body:has(.lp-onboarding) .site-main {
 .dashboard-rail-brand-mark {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: var(--radius-ui);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5039,7 +5053,7 @@ body:has(.lp-onboarding) .site-main {
   align-items: center;
   gap: 5px;
   padding: 10px 8px;
-  border-radius: 14px;
+  border-radius: var(--radius-ui);
   border: 1px solid transparent;
   color: var(--text-2);
   text-decoration: none;
@@ -5083,7 +5097,7 @@ body:has(.lp-onboarding) .site-main {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 18px;
+  border-radius: var(--radius-ui);
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
   color: inherit;
@@ -5141,7 +5155,7 @@ body:has(.lp-onboarding) .site-main {
   display: grid;
   gap: 6px;
   padding: 8px;
-  border-radius: 16px;
+  border-radius: var(--radius-ui);
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-lg);
