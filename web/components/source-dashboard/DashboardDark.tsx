@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {
   Plus,
   MoreHorizontal,
@@ -118,9 +119,15 @@ interface ChatMessage {
   text: string;
 }
 
-const initialMessages: ChatMessage[] = [
-  { id: 1, role: 'assistant', text: "Hi Jordan! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?" },
-];
+function buildInitialMessages(firstName: string): ChatMessage[] {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
+    },
+  ];
+}
 
 /* ─── Components ─── */
 
@@ -512,6 +519,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 /* ─── Multi Location View ─── */
 function MultiLocationView({ locations }: { locations: typeof allLocations }) {
   const navigate = useNavigate();
+  const { firstName } = useSessionUserDisplay();
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
@@ -528,7 +536,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
         <div className="flex items-end justify-between mb-6">
           <div>
             <h1 className="text-[28px] sm:text-[32px] text-white tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-              Good evening, Jordan
+              Good evening, {firstName}
             </h1>
             <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
               Here's what's happening across your business today.
@@ -696,7 +704,10 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
 /* ─── Copilot Chat Panel ─── */
 function CopilotPanel() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const { firstName } = useSessionUserDisplay();
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    buildInitialMessages(firstName),
+  );
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -814,11 +825,11 @@ export default function DashboardDark() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'nav' | 'copilot'>('nav');
-  const [demoSingle, setDemoSingle] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const { fullName, email, phone, initials } = useSessionUserDisplay();
 
-  const locations = demoSingle ? [allLocations[0]] : allLocations;
+  const locations = allLocations;
 
   return (
     <div className="min-h-screen bg-[#0A2540] flex" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
@@ -937,11 +948,11 @@ export default function DashboardDark() {
         <div className="border-t border-white/[0.06] p-3">
           <div className="flex items-center gap-3 rounded-lg p-2 bg-white/[0.03]">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
-              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>JD</span>
+              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-white truncate" style={{ fontWeight: 520 }}>Jordan Davis</p>
-              <p className="text-[11px] text-[#8898AA] truncate">jordan@backfill.io</p>
+              <p className="text-[12px] text-white truncate" style={{ fontWeight: 520 }}>{fullName}</p>
+              <p className="text-[11px] text-[#8898AA] truncate">{email ?? phone ?? 'Phone sign-in'}</p>
             </div>
           </div>
         </div>
@@ -973,13 +984,6 @@ export default function DashboardDark() {
               </div>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              <button
-                onClick={() => setDemoSingle(!demoSingle)}
-                className="hidden sm:block text-[11px] text-[#8898AA] hover:text-white border border-white/[0.08] rounded-lg px-3 py-1.5 hover:bg-white/[0.04] transition-all"
-                style={{ fontWeight: 460 }}
-              >
-                {demoSingle ? 'Multi-Location' : 'Single Location'}
-              </button>
               <button className="p-2 rounded-lg hover:bg-white/[0.06] transition-colors hidden sm:block">
                 <HelpCircle size={18} className="text-[#8898AA]" />
               </button>

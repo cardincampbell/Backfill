@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {
   Plus,
   MoreHorizontal,
@@ -116,9 +117,16 @@ const copilotSuggestions = [
 ];
 
 interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
-const initialMessages: ChatMessage[] = [
-  { id: 1, role: 'assistant', text: "Hi Jordan! I'm your Backfill Copilot. You have 2 locations with a combined 8 open shifts. Sunrise Senior Living has the most gaps (5 open). Want me to help prioritize coverage, or is there something else I can assist with?" },
-];
+
+function buildInitialMessages(firstName: string): ChatMessage[] {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      text: `Hi ${firstName}! I'm your Backfill Copilot. You have 2 locations with a combined 8 open shifts. Sunrise Senior Living has the most gaps (5 open). Want me to help prioritize coverage, or is there something else I can assist with?`,
+    },
+  ];
+}
 
 /* ─── Components ─── */
 
@@ -269,7 +277,10 @@ function LocationExpandedCard({ loc, index }: { loc: typeof locations[0]; index:
 
 /* ─── Copilot Chat Panel ─── */
 function CopilotPanel() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const { firstName } = useSessionUserDisplay();
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    buildInitialMessages(firstName),
+  );
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -364,6 +375,7 @@ export default function DashboardTwo() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'nav' | 'copilot'>('nav');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { fullName, email, phone, initials, firstName } = useSessionUserDisplay();
   const navigate = useNavigate();
 
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
@@ -457,11 +469,11 @@ export default function DashboardTwo() {
         <div className="border-t border-[#F0F0F5] p-3">
           <div className="flex items-center gap-3 rounded-lg p-2 bg-[#F7F8FA]">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
-              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>JD</span>
+              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>Jordan Davis</p>
-              <p className="text-[11px] text-[#8898AA] truncate">jordan@backfill.io</p>
+              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>{fullName}</p>
+              <p className="text-[11px] text-[#8898AA] truncate">{email ?? phone ?? 'Phone sign-in'}</p>
             </div>
           </div>
         </div>
@@ -527,7 +539,7 @@ export default function DashboardTwo() {
             <div className="flex items-end justify-between mb-6">
               <div>
                 <h1 className="text-[28px] sm:text-[32px] text-[#0A2540] tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-                  Good evening, Jordan
+                  Good evening, {firstName}
                 </h1>
                 <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
                   Here's what's happening across your business today.

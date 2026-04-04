@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {
   Building2,
   User,
@@ -279,19 +280,21 @@ function IntegrationsSettings() {
 
 /* ─── Personal Settings Sections ─── */
 function PersonalProfile() {
+  const { fullName, firstName, lastName, email, phone, initials } = useSessionUserDisplay();
+
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
       <div className="flex items-center gap-4 mb-6">
         <div className="relative">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center text-white text-[18px]" style={{ fontWeight: 600 }}>
-            JD
+            {initials}
           </div>
           <button className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-white border border-[#E5E7EB] flex items-center justify-center shadow-sm hover:bg-[#F7F8FA] transition-colors">
             <Camera size={11} className="text-[#8898AA]" />
           </button>
         </div>
         <div>
-          <h3 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 560 }}>Jordan Davis</h3>
+          <h3 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 560 }}>{fullName}</h3>
           <p className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>Account Owner \u2022 Admin</p>
         </div>
       </div>
@@ -300,26 +303,26 @@ function PersonalProfile() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>First Name</label>
-            <input type="text" defaultValue="Jordan"
+            <input type="text" defaultValue={firstName}
               className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
               style={{ fontWeight: 440 }} />
           </div>
           <div>
             <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Last Name</label>
-            <input type="text" defaultValue="Davis"
+            <input type="text" defaultValue={lastName}
               className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
               style={{ fontWeight: 440 }} />
           </div>
         </div>
         <div>
           <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Email</label>
-          <input type="email" defaultValue="jordan@backfill.io"
+          <input type="email" defaultValue={email ?? ""}
             className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
             style={{ fontWeight: 440 }} />
         </div>
         <div>
           <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Phone</label>
-          <input type="tel" defaultValue="(415) 555-0100"
+          <input type="tel" defaultValue={phone ?? ""}
             className="w-full px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
             style={{ fontWeight: 440 }} />
         </div>

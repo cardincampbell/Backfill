@@ -20,7 +20,7 @@ function inThirtySeconds(): string {
 }
 
 export default function TryPage() {
-  const [checkingSession, setCheckingSession] = useState(true);
+  const [redirectingSession, setRedirectingSession] = useState(false);
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [consented, setConsented] = useState(false);
@@ -38,10 +38,9 @@ export default function TryPage() {
       const session = await getAuthMe();
       if (cancelled) return;
       if (session) {
+        setRedirectingSession(true);
         replaceWithAuthDestination(session.onboarding_required);
-        return;
       }
-      setCheckingSession(false);
     }
 
     void resolveSession();
@@ -106,18 +105,6 @@ export default function TryPage() {
     }
   }
 
-  if (checkingSession) {
-    return (
-      <main className="lp-signup">
-        <div style={{ minHeight: "100svh", display: "grid", placeItems: "center" }}>
-          <div style={{ fontSize: "1.5rem", fontWeight: 700, letterSpacing: "-0.04em" }}>
-            Backfill
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="lp-signup">
       <div className="lp-signup-card">
@@ -161,7 +148,7 @@ export default function TryPage() {
               <button
                 type="submit"
                 className="lp-signup-submit"
-                disabled={!phone.trim() || !consented || loading}
+                disabled={!phone.trim() || !consented || loading || redirectingSession}
               >
                 {loading ? "Sending..." : "Send code"}
               </button>
@@ -195,7 +182,7 @@ export default function TryPage() {
               <button
                 type="submit"
                 className="lp-signup-submit"
-                disabled={!code.trim() || loading}
+                disabled={!code.trim() || loading || redirectingSession}
               >
                 {loading ? "Verifying..." : "Verify code"}
               </button>

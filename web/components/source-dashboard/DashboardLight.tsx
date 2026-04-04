@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
+import DashboardShell from './DashboardShell';
 import {
   Plus,
   MoreHorizontal,
@@ -108,9 +110,16 @@ const copilotSuggestions = [
 ];
 
 interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
-const initialMessages: ChatMessage[] = [
-  { id: 1, role: 'assistant', text: "Hi Jordan! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?" },
-];
+
+function buildInitialMessages(firstName: string): ChatMessage[] {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
+    },
+  ];
+}
 
 /* ─── Components ─── */
 
@@ -447,6 +456,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 /* ─── Multi Location View ─── */
 function MultiLocationView({ locations }: { locations: typeof allLocations }) {
   const navigate = useNavigate();
+  const { firstName } = useSessionUserDisplay();
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
@@ -459,7 +469,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
         <div className="flex items-end justify-between mb-6">
           <div>
             <h1 className="text-[28px] sm:text-[32px] text-[#0A2540] tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-              Good evening, Jordan
+              Good evening, {firstName}
             </h1>
             <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
               Here's what's happening across your business today.
@@ -626,7 +636,10 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
 /* ─── Copilot Chat Panel (Light) ─── */
 function CopilotPanel() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const { firstName } = useSessionUserDisplay();
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    buildInitialMessages(firstName),
+  );
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -716,204 +729,9 @@ function CopilotPanel() {
 
 /* ─── Main Dashboard Light ─── */
 export default function DashboardLight() {
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [searchFocused, setSearchFocused] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'nav' | 'copilot'>('nav');
-  const [demoSingle, setDemoSingle] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const navigate = useNavigate();
-
-  const locations = demoSingle ? [allLocations[0]] : allLocations;
-
-  const handleNav = (path: string) => {
-    navigate(path);
-    setSidebarOpen(false);
-  };
-
   return (
-    <div className="min-h-screen bg-[#F7F8FA] flex" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Mobile Sidebar Overlay */}
-      <AnimatePresence>
-        {sidebarOpen && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Left Sidebar */}
-      <aside className={`fixed top-0 left-0 h-full z-50 w-[280px] flex flex-col border-r border-[#E5E7EB] bg-white transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        {/* Logo */}
-        <div className="flex items-center justify-between h-16 px-5 border-b border-[#F0F0F5]">
-          <Link to="/" className="flex items-center gap-2.5">
-            <span className="text-[18px] tracking-[-0.02em] text-[#0A2540]" style={{ fontWeight: 620 }}>Backfill</span>
-          </Link>
-          <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors lg:hidden">
-            <X size={18} className="text-[#8898AA]" />
-          </button>
-        </div>
-
-        {/* Tab Switcher */}
-        <div className="px-3 pt-3 pb-1">
-          <div className="flex items-center bg-[#F0F0F5] rounded-lg p-0.5">
-            <button onClick={() => setSidebarTab('nav')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
-                sidebarTab === 'nav' ? 'bg-white text-[#0A2540] shadow-sm' : 'text-[#8898AA] hover:text-[#0A2540]'
-              }`} style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}>
-              <LayoutGrid size={13} />Navigate
-            </button>
-            <button onClick={() => setSidebarTab('copilot')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
-                sidebarTab === 'copilot' ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm' : 'text-[#8898AA] hover:text-[#0A2540]'
-              }`} style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}>
-              <Sparkles size={13} />Copilot
-            </button>
-          </div>
-        </div>
-
-        {/* Tab Content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <AnimatePresence mode="wait">
-            {sidebarTab === 'nav' ? (
-              <motion.div key="nav" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.2 }}
-                className="flex-1 flex flex-col">
-                <nav className="flex-1 py-3 px-3 space-y-1">
-                  {navItems.map((item) => (
-                    <button key={item.label} onClick={() => { if (item.label === 'Team') handleNav('/team'); }}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                      item.active ? 'bg-[#635BFF]/[0.08] text-[#635BFF]' : 'text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA]'
-                    }`}>
-                      <item.icon size={18} className="shrink-0" />
-                      <span className="text-[13px]" style={{ fontWeight: item.active ? 540 : 440 }}>{item.label}</span>
-                    </button>
-                  ))}
-
-                  {/* Location shortcuts */}
-                  <div className="pt-4 mt-3 border-t border-[#F0F0F5]">
-                    <span className="text-[10px] text-[#8898AA] uppercase tracking-[0.06em] px-3 mb-2 block" style={{ fontWeight: 500 }}>Locations</span>
-                    {locations.map((loc) => (
-                      <button key={loc.id} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA] transition-all duration-200">
-                        <span className="text-[14px]">{loc.logo}</span>
-                        <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
-                        {loc.openShifts > 0 && (
-                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </nav>
-                <div className="border-t border-[#F0F0F5] py-3 px-3 space-y-1">
-                  <button onClick={() => handleNav('/settings')} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[#5E6D7A] hover:text-[#0A2540] hover:bg-[#F7F8FA] transition-all duration-200">
-                    <Settings size={18} className="shrink-0" /><span className="text-[13px]" style={{ fontWeight: 440 }}>Settings</span>
-                  </button>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div key="copilot" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} transition={{ duration: 0.2 }}
-                className="flex-1 flex flex-col overflow-hidden">
-                <CopilotPanel />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* User */}
-        <div className="border-t border-[#F0F0F5] p-3">
-          <div className="flex items-center gap-3 rounded-lg p-2 bg-[#F7F8FA]">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
-              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>JD</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>Jordan Davis</p>
-              <p className="text-[11px] text-[#8898AA] truncate">jordan@backfill.io</p>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main Area */}
-      <div className="flex-1 min-h-screen lg:ml-[280px]">
-        {/* Top Bar */}
-        <header className="sticky top-0 z-20 border-b border-[#E5E7EB] bg-white/80 backdrop-blur-xl">
-          <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
-            <div className="flex items-center gap-3">
-              <button onClick={() => setSidebarOpen(true)} className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors lg:hidden">
-                <Menu size={20} className="text-[#5E6D7A]" />
-              </button>
-              <div className="relative hidden sm:block">
-                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
-                <input
-                  type="text"
-                  placeholder="Search..."
-                  className="w-48 md:w-64 pl-9 pr-4 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
-                  style={{ fontWeight: 420 }}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              <button onClick={() => setDemoSingle(!demoSingle)}
-                className="hidden sm:block text-[11px] text-[#5E6D7A] hover:text-[#0A2540] border border-[#E5E7EB] rounded-lg px-3 py-1.5 hover:bg-[#F7F8FA] transition-all"
-                style={{ fontWeight: 460 }}>
-                {demoSingle ? 'Multi-Location' : 'Single Location'}
-              </button>
-              <button className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors hidden sm:block">
-                <HelpCircle size={18} className="text-[#5E6D7A]" />
-              </button>
-              <button
-                onClick={() => navigate('/dashboard-dark')}
-                className="p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors"
-                title="Switch to dark mode"
-              >
-                <Moon size={18} className="text-[#5E6D7A]" />
-              </button>
-              <div className="relative">
-                <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-                  <Bell size={18} className="text-[#5E6D7A]" />
-                  <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E5484D] rounded-full" />
-                </button>
-                <AnimatePresence>
-                  {showNotifications && (
-                    <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.96 }} transition={{ duration: 0.2 }}
-                      className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-50">
-                      <div className="px-4 py-3 border-b border-[#F0F0F5]">
-                        <span className="text-[13px] text-[#0A2540]" style={{ fontWeight: 560 }}>Notifications</span>
-                      </div>
-                      {notifications.map((n) => (
-                        <div key={n.id} className="px-4 py-3 hover:bg-[#F7F8FA] transition-colors border-b border-[#F0F0F5] last:border-0">
-                          <div className="flex items-start gap-2.5">
-                            {n.urgent ? <AlertCircle size={14} className="text-[#E5484D] mt-0.5 shrink-0" /> : <CheckCircle2 size={14} className="text-[#00B893] mt-0.5 shrink-0" />}
-                            <div>
-                              <p className="text-[12px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{n.text}</p>
-                              <span className="text-[11px] text-[#8898AA]">{n.time} ago</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        {/* Content */}
-        <div className="px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
-          <AnimatePresence mode="wait">
-            {locations.length === 1 ? (
-              <motion.div key="single" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-                <SingleLocationView location={locations[0]} />
-              </motion.div>
-            ) : (
-              <motion.div key="multi" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
-                <MultiLocationView locations={locations} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-    </div>
+    <DashboardShell activeNav="Overview">
+      <MultiLocationView locations={allLocations} />
+    </DashboardShell>
   );
 }

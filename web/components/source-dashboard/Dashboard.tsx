@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {
   Building2,
   Plus,
@@ -250,6 +251,7 @@ export default function Dashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const navigate = useNavigate();
+  const { firstName, initials } = useSessionUserDisplay();
 
   const totalStaff = mockBusinesses.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = mockBusinesses.reduce((a, b) => a + b.activeShifts, 0);
@@ -364,7 +366,7 @@ export default function Dashboard() {
 
               {/* Avatar */}
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center ml-1">
-                <span className="text-[12px] text-white" style={{ fontWeight: 600 }}>JD</span>
+                <span className="text-[12px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
               </div>
             </div>
           </div>
@@ -383,7 +385,7 @@ export default function Dashboard() {
           <div className="flex items-end justify-between mb-6">
             <div>
               <h1 className="text-[28px] sm:text-[32px] text-white tracking-[-0.025em] mb-1" style={{ fontWeight: 620 }}>
-                Good evening, Jordan
+                Good evening, {firstName}
               </h1>
               <p className="text-[15px] text-[#8898AA]" style={{ fontWeight: 420 }}>
                 Here's what's happening across your businesses today.

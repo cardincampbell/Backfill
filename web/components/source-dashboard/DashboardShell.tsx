@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePathname } from 'next/navigation';
+import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {
   Users,
   Bell,
@@ -47,13 +48,23 @@ const copilotSuggestions = [
 ];
 
 interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
-const initialMessages: ChatMessage[] = [
-  { id: 1, role: 'assistant', text: "Hi Jordan! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?" },
-];
+
+function buildInitialMessages(firstName: string): ChatMessage[] {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
+    },
+  ];
+}
 
 /* ─── Copilot Panel ─── */
 function CopilotPanel() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const { firstName } = useSessionUserDisplay();
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    buildInitialMessages(firstName),
+  );
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -154,6 +165,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
   const navigate = useNavigate();
   const pathname = usePathname();
   const darkMode = pathname === '/dashboard-dark';
+  const { fullName, email, phone, initials } = useSessionUserDisplay();
 
   // Close sidebar on navigation
   const handleNav = (path: string) => {
@@ -258,16 +270,16 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
 
         {/* User */}
         <div className="border-t border-[#F0F0F5] p-3">
-          <div className="flex items-center gap-3 rounded-lg p-2 bg-[#F7F8FA]">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
-              <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>JD</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>Jordan Davis</p>
-              <p className="text-[11px] text-[#8898AA] truncate">jordan@backfill.io</p>
-            </div>
+        <div className="flex items-center gap-3 rounded-lg p-2 bg-[#F7F8FA]">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
+            <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
+          </div>
+          <div className="flex-1 min-w-0">
+              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 520 }}>{fullName}</p>
+              <p className="text-[11px] text-[#8898AA] truncate">{email ?? phone ?? 'Phone sign-in'}</p>
           </div>
         </div>
+      </div>
       </aside>
 
       {/* Main Area */}
