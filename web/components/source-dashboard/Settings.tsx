@@ -42,6 +42,7 @@ import {
   type BusinessProfile,
   getWorkspace,
 } from "@/lib/api/workspace";
+import { BrandedSelect } from "./BrandedSelect";
 import DashboardShell from "./DashboardShell";
 
 type SettingsScope = "business" | "personal";
@@ -227,12 +228,13 @@ function SettingsInput({
 function SettingsSelect(
   props: React.SelectHTMLAttributes<HTMLSelectElement> & { dark?: boolean },
 ) {
-  const { className, dark: _dark, ...rest } = props;
+  const { className, dark: _dark, value, ...rest } = props;
   return (
-    <select
+    <BrandedSelect
       {...rest}
-      className={`brand-select w-full text-[13px] ${className ?? ""}`}
-      style={{ fontWeight: 440 }}
+      className={className}
+      dark={_dark}
+      value={typeof value === "string" ? value : String(value ?? "")}
     />
   );
 }

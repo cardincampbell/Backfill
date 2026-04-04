@@ -15,6 +15,7 @@ import { getAuthMe } from "@/lib/api/auth";
 
 type AppSessionGateProps = {
   children: ReactNode;
+  enforceRedirects?: boolean;
 };
 
 type SessionUserDisplay = {
@@ -142,7 +143,10 @@ export function useSessionUserDisplay(): SessionUserDisplay {
   return buildSessionUserDisplay(useAppSession());
 }
 
-export function AppSessionGate({ children }: AppSessionGateProps) {
+export function AppSessionGate({
+  children,
+  enforceRedirects = true,
+}: AppSessionGateProps) {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<AuthMeResponse | null>(null);
   const [appearancePreference, setAppearancePreference] =
@@ -159,12 +163,18 @@ export function AppSessionGate({ children }: AppSessionGateProps) {
         return;
       }
       if (!session) {
-        window.location.replace("/login");
+        if (enforceRedirects) {
+          window.location.replace("/login");
+          return;
+        }
+        setReady(true);
         return;
       }
       if (session.onboarding_required) {
-        window.location.replace("/onboarding");
-        return;
+        if (enforceRedirects) {
+          window.location.replace("/onboarding");
+          return;
+        }
       }
       const nextPreference = normalizeAppearancePreference(
         session.user.profile_metadata?.appearance_preference,
@@ -184,7 +194,7 @@ export function AppSessionGate({ children }: AppSessionGateProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enforceRedirects]);
 
   useEffect(() => {
     const nextPreference = normalizeAppearancePreference(

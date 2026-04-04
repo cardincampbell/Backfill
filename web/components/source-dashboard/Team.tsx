@@ -28,6 +28,7 @@ import {
   Shield,
   Activity,
 } from 'lucide-react';
+import { BrandedSelect } from './BrandedSelect';
 import DashboardShell from './DashboardShell';
 
 /* ─── Types ─── */
@@ -176,13 +177,15 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Role</label>
-              <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                className="brand-select w-full text-[13px]"
-                style={{ fontWeight: 440 }}>
+              <BrandedSelect
+                dark={dark}
+                onChange={(e: { target: { value: string } }) => setFormData({ ...formData, role: e.target.value })}
+                value={formData.role}
+              >
                 <option value="">Select role</option>
                 <option>RN</option><option>LPN</option><option>CNA</option><option>Caregiver</option>
                 <option>Temp RN</option><option>Temp LPN</option><option>Server Lead</option><option>Bartender</option>
-              </select>
+              </BrandedSelect>
             </div>
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Department</label>
@@ -194,12 +197,14 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
 
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Location</label>
-              <select value={formData.location} onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              className="brand-select w-full text-[13px]"
-              style={{ fontWeight: 440 }}>
+              <BrandedSelect
+                dark={dark}
+                onChange={(e: { target: { value: string } }) => setFormData({ ...formData, location: e.target.value })}
+                value={formData.location}
+              >
               <option value="">Select location</option>
               {locationOptions.slice(1).map((l) => <option key={l}>{l}</option>)}
-            </select>
+            </BrandedSelect>
           </div>
         </div>
 

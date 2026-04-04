@@ -1,7 +1,4 @@
 "use client";
-
-import { AppSessionGate } from "@/components/app-session-gate";
-import DashboardShell from "@/components/source-dashboard/DashboardShell";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -25,22 +22,7 @@ export function SiteChrome({ children }: SiteChromeProps) {
     return <>{children}</>;
   }
 
-  if (isLiveAppSurface) {
-    const activeNav =
-      pathname === "/team"
-        ? "Team"
-        : pathname === "/settings"
-          ? "Settings"
-          : "Overview";
-
-    return (
-      <AppSessionGate>
-        <DashboardShell activeNav={activeNav}>{children}</DashboardShell>
-      </AppSessionGate>
-    );
-  }
-
-  if (isReferenceAppSurface) {
+  if (isLiveAppSurface || isReferenceAppSurface) {
     return <>{children}</>;
   }
 
