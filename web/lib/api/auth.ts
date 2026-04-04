@@ -150,6 +150,51 @@ export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return fetchAppJson<AuthMeResponse>(`${API_PREFIX}/auth/me`);
 }
 
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+export async function waitForAuthMe(
+  options?: {
+    attempts?: number;
+    delayMs?: number;
+    maxDelayMs?: number;
+  },
+): Promise<AuthMeResponse | null> {
+  const attempts = options?.attempts ?? 8;
+  const delayMs = options?.delayMs ?? 120;
+  const maxDelayMs = options?.maxDelayMs ?? 400;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const authMe = await getAuthMe();
+    if (authMe) {
+      return authMe;
+    }
+    if (attempt < attempts - 1) {
+      await wait(Math.min(delayMs * (attempt + 1), maxDelayMs));
+    }
+  }
+
+  return null;
+}
+
+export function replaceWithAuthDestination(onboardingRequired: boolean): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.location.replace(onboardingRequired ? "/onboarding" : "/dashboard-light");
+}
+
+export async function finalizeVerifiedSessionNavigation(
+  onboardingRequired: boolean,
+): Promise<AuthMeResponse | null> {
+  const authMe = await waitForAuthMe();
+  replaceWithAuthDestination(authMe?.onboarding_required ?? onboardingRequired);
+  return authMe;
+}
+
 export async function requestChallenge(input: {
   phone_e164: string;
   purpose: "sign_in" | "sign_up";

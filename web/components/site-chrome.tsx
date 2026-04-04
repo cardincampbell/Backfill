@@ -10,8 +10,17 @@ type SiteChromeProps = {
 export function SiteChrome({ children }: SiteChromeProps) {
   const pathname = usePathname();
   const currentYear = new Date().getFullYear();
+  const isAppSurface =
+    pathname === "/dashboard" ||
+    pathname.startsWith("/dashboard/") ||
+    pathname === "/dashboard-light" ||
+    pathname === "/dashboard-dark" ||
+    pathname === "/dashboard-single" ||
+    pathname === "/dashboard-two" ||
+    pathname === "/team" ||
+    pathname === "/settings";
 
-  if (pathname === "/") {
+  if (pathname === "/" || isAppSurface) {
     return <>{children}</>;
   }
 

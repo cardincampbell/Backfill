@@ -1,9 +1,9 @@
+import Team from "@/components/source-dashboard/Team";
 import { requireAppSession } from "@/lib/require-app-session";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function TeamPage() {
   await requireAppSession();
-  redirect("/dashboard-light");
+  return <Team />;
 }

@@ -1,9 +1,9 @@
+import Settings from "@/components/source-dashboard/Settings";
 import { requireAppSession } from "@/lib/require-app-session";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function SettingsPage() {
   await requireAppSession();
-  redirect("/dashboard-light");
+  return <Settings />;
 }

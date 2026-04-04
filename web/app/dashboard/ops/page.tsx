@@ -2,6 +2,6 @@ import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardOpsPage() {
-  redirect("/dashboard/locations");
+export default async function LegacyDashboardOpsPage() {
+  redirect("/dashboard");
 }

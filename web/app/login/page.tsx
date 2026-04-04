@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 import {
+  finalizeVerifiedSessionNavigation,
   getAuthMe,
+  replaceWithAuthDestination,
   requestChallenge,
   verifyChallenge,
 } from "@/lib/api/auth";
@@ -18,7 +19,6 @@ function inThirtySeconds(): string {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
   const [checkingSession, setCheckingSession] = useState(true);
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
@@ -35,7 +35,7 @@ export default function LoginPage() {
       const session = await getAuthMe();
       if (cancelled) return;
       if (session) {
-        router.replace(session.onboarding_required ? "/onboarding" : "/dashboard");
+        replaceWithAuthDestination(session.onboarding_required);
         return;
       }
       setCheckingSession(false);
@@ -45,7 +45,7 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, []);
 
   async function handlePhoneSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -79,7 +79,7 @@ export default function LoginPage() {
         phone_e164: phone.trim(),
         code: code.trim(),
       });
-      router.replace(response.onboarding_required ? "/onboarding" : "/dashboard");
+      await finalizeVerifiedSessionNavigation(response.onboarding_required);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not verify your code.");
     } finally {

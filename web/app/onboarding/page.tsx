@@ -66,7 +66,7 @@ function OnboardingBody() {
       if (cancelled) return;
       setSession(authMe);
       if (!inviteToken && authMe && !authMe.onboarding_required) {
-        router.replace("/dashboard");
+        router.replace("/dashboard-light");
         return;
       }
       if (!inviteToken && authMe?.user.full_name) {
@@ -165,7 +165,7 @@ function OnboardingBody() {
         },
         location: buildLocationPayloadFromPlace(selectedPlace),
       });
-      router.replace("/dashboard");
+      router.replace("/dashboard-light");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish onboarding.");
     } finally {
@@ -245,7 +245,7 @@ function OnboardingBody() {
       setName((current) => current || authMe?.user.full_name || "");
       setEmail((current) => current || authMe?.user.email || invitePreview?.invite_email || "");
       if (!response.onboarding_required) {
-        router.replace("/dashboard");
+        router.replace("/dashboard-light");
         return;
       }
       setInviteStep("profile");
@@ -268,7 +268,7 @@ function OnboardingBody() {
         full_name: name.trim(),
         email: email.trim(),
       });
-      router.replace("/dashboard");
+      router.replace("/dashboard-light");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish your profile.");
     } finally {
