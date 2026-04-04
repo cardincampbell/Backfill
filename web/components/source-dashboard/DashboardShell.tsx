@@ -37,8 +37,9 @@ const notifications = [
 ];
 
 const navItems = [
-  { label: 'Overview', icon: LayoutGrid, path: '/dashboard-light' },
+  { label: 'Overview', icon: LayoutGrid, path: '/dashboard' },
   { label: 'Team', icon: Users, path: '/team' },
+  { label: 'Settings', icon: Settings, path: '/settings' },
 ];
 
 const copilotSuggestions = [

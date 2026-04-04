@@ -410,7 +410,6 @@ p {
 }
 
 .field input,
-.field select,
 .field textarea {
   width: 100%;
   border: 1px solid var(--line-strong);
@@ -433,6 +432,81 @@ p {
 
 .field textarea {
   resize: vertical;
+}
+
+.field select,
+.settings-select,
+.mapping-select,
+.inline-select,
+.brand-select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, var(--brand-dim));
+  border-radius: var(--radius);
+  padding: 10px 44px 10px 14px;
+  background-color: var(--panel-raised);
+  background-image:
+    url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23635BFF' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='M6 8.5l4 4 4-4'/%3e%3c/svg%3e"),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0));
+  background-position: right 14px center, center;
+  background-repeat: no-repeat;
+  background-size: 16px 16px, 100% 100%;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 10px 24px rgba(10, 37, 64, 0.05);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.field select:hover,
+.settings-select:hover,
+.mapping-select:hover,
+.inline-select:hover,
+.brand-select:hover {
+  border-color: color-mix(in srgb, var(--brand) 26%, var(--line-strong));
+  background-color: color-mix(in srgb, var(--panel-raised) 92%, var(--brand-soft));
+}
+
+.field select:focus-visible,
+.settings-select:focus-visible,
+.mapping-select:focus-visible,
+.inline-select:focus-visible,
+.brand-select:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--brand) 50%, var(--line-strong));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 0 0 4px rgba(99, 91, 255, 0.12),
+    0 14px 30px rgba(10, 37, 64, 0.08);
+}
+
+.field select:disabled,
+.settings-select:disabled,
+.mapping-select:disabled,
+.inline-select:disabled,
+.brand-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.field select option,
+.settings-select option,
+.mapping-select option,
+.inline-select option,
+.brand-select option {
+  background: var(--panel);
+  color: var(--text);
 }
 
 .field-span-2 {
@@ -1968,26 +2042,8 @@ tbody tr:hover {
 
 .settings-select {
   margin-top: 6px;
-  padding: 8px 12px;
   font-size: 0.85rem;
-  font-family: inherit;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2386868b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
-  background-position: right 8px center;
-  background-repeat: no-repeat;
-  background-size: 16px;
-  padding-right: 32px;
   max-width: 320px;
-  transition: border-color var(--transition);
-}
-
-.settings-select:focus {
-  outline: none;
-  border-color: var(--brand);
 }
 
 /* ── Exceptions feed ──────────────────────────────────────────────────── */
@@ -6579,13 +6635,56 @@ body:has(.lp-onboarding) .site-main {
 
 .dashboard-app-shell .field input,
 .dashboard-app-shell .field textarea,
-.dashboard-app-shell .field select,
 .dashboard-app-shell input,
-.dashboard-app-shell textarea,
-.dashboard-app-shell select {
+.dashboard-app-shell textarea {
   background: var(--panel-raised);
   border-color: var(--line);
   color: var(--text);
+}
+
+.dashboard-app-shell .field select,
+.dashboard-app-shell .settings-select,
+.dashboard-app-shell .mapping-select,
+.dashboard-app-shell .inline-select,
+.dashboard-app-shell .brand-select {
+  background-color: var(--panel-raised);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 16px 32px rgba(10, 37, 64, 0.08);
+}
+
+.dashboard-app-shell[data-dashboard-theme="dark"] .field select,
+.dashboard-app-shell[data-dashboard-theme="dark"] .settings-select,
+.dashboard-app-shell[data-dashboard-theme="dark"] .mapping-select,
+.dashboard-app-shell[data-dashboard-theme="dark"] .inline-select,
+.dashboard-app-shell[data-dashboard-theme="dark"] .brand-select {
+  background-image:
+    url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23A7B7FF' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='M6 8.5l4 4 4-4'/%3e%3c/svg%3e"),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0));
+  border-color: color-mix(in srgb, var(--line-strong) 78%, var(--brand-dim));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 34px rgba(0, 0, 0, 0.22);
+}
+
+.dashboard-app-shell[data-dashboard-theme="dark"] .field select:hover,
+.dashboard-app-shell[data-dashboard-theme="dark"] .settings-select:hover,
+.dashboard-app-shell[data-dashboard-theme="dark"] .mapping-select:hover,
+.dashboard-app-shell[data-dashboard-theme="dark"] .inline-select:hover,
+.dashboard-app-shell[data-dashboard-theme="dark"] .brand-select:hover {
+  background-color: color-mix(in srgb, var(--panel-raised) 88%, var(--brand-soft));
+  border-color: color-mix(in srgb, var(--brand) 34%, var(--line-strong));
+}
+
+.dashboard-app-shell[data-dashboard-theme="dark"] .field select:focus-visible,
+.dashboard-app-shell[data-dashboard-theme="dark"] .settings-select:focus-visible,
+.dashboard-app-shell[data-dashboard-theme="dark"] .mapping-select:focus-visible,
+.dashboard-app-shell[data-dashboard-theme="dark"] .inline-select:focus-visible,
+.dashboard-app-shell[data-dashboard-theme="dark"] .brand-select:focus-visible {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 4px rgba(99, 91, 255, 0.18),
+    0 22px 40px rgba(0, 0, 0, 0.24);
 }
 
 .dashboard-app-shell .field input::placeholder,

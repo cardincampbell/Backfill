@@ -320,7 +320,7 @@ export function LandingBackfillShiftsInterface() {
         {/* Date Navigation */}
         <div className="bg-white px-5 py-2.5 flex items-center justify-between border-b border-[#e8ecf0]">
           <div className="flex items-center gap-2">
-            <select className="text-[13px] text-[#0A2540] bg-[#f5f7fa] border border-[#e2e8f0] rounded-lg px-3 py-1.5 appearance-none pr-7 cursor-pointer" style={{ fontWeight: 500 }}>
+            <select className="brand-select min-w-[180px] py-1.5 text-[13px]" style={{ fontWeight: 500 }}>
               <option>Downtown Location</option>
             </select>
           </div>

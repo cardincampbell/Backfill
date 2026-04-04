@@ -186,7 +186,7 @@ export function replaceWithAuthDestination(onboardingRequired: boolean): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.location.replace(onboardingRequired ? "/onboarding" : "/dashboard-light");
+  window.location.replace(onboardingRequired ? "/onboarding" : "/dashboard");
 }
 
 export async function finalizeVerifiedSessionNavigation(

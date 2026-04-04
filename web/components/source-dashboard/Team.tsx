@@ -177,7 +177,7 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
             <div>
               <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Role</label>
               <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${inputClass}`}
+                className="brand-select w-full text-[13px]"
                 style={{ fontWeight: 440 }}>
                 <option value="">Select role</option>
                 <option>RN</option><option>LPN</option><option>CNA</option><option>Caregiver</option>
@@ -192,10 +192,10 @@ function AddEmployeeModal({ onClose, dark }: { onClose: () => void; dark: boolea
             </div>
           </div>
 
-          <div>
-            <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Location</label>
-            <select value={formData.location} onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${inputClass}`}
+            <div>
+              <label className={`block text-[11px] ${textSecondary} uppercase tracking-[0.04em] mb-1.5`} style={{ fontWeight: 500 }}>Location</label>
+              <select value={formData.location} onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+              className="brand-select w-full text-[13px]"
               style={{ fontWeight: 440 }}>
               <option value="">Select location</option>
               {locationOptions.slice(1).map((l) => <option key={l}>{l}</option>)}
@@ -525,7 +525,11 @@ function EmployeeDetail({ employee, onClose, dark }: { employee: Employee; onClo
 }
 
 /* ─── Main Team Page ─── */
-export default function Team() {
+export default function Team({
+  embeddedInShell = false,
+}: {
+  embeddedInShell?: boolean;
+}) {
   const isDark = useResolvedAppAppearance() === 'dark';
   const [searchQuery, setSearchQuery] = useState('');
   const [locationFilter, setLocationFilter] = useState('All Locations');
@@ -571,8 +575,8 @@ export default function Team() {
   const divider = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
   const softDivider = isDark ? 'divide-white/[0.06]' : 'divide-[#F7F8FA]';
 
-  return (
-    <DashboardShell activeNav="Team">
+  const content = (
+    <>
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
         <div className="flex items-end justify-between mb-6">
@@ -818,6 +822,12 @@ export default function Team() {
         {showBulkModal && <BulkUploadModal dark={isDark} onClose={() => setShowBulkModal(false)} />}
         {selectedEmployee && <EmployeeDetail dark={isDark} employee={selectedEmployee} onClose={() => setSelectedEmployee(null)} />}
       </AnimatePresence>
-    </DashboardShell>
+    </>
   );
+
+  if (embeddedInShell) {
+    return content;
+  }
+
+  return <DashboardShell activeNav="Team">{content}</DashboardShell>;
 }

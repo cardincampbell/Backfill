@@ -1,12 +1,9 @@
-import { AppSessionGate } from "@/components/app-session-gate";
 import Settings from "@/components/source-dashboard/Settings";
+import { requireAppSession } from "@/lib/require-app-session";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
-  return (
-    <AppSessionGate>
-      <Settings />
-    </AppSessionGate>
-  );
+export default async function SettingsPage() {
+  await requireAppSession();
+  return <Settings embeddedInShell />;
 }

@@ -1,9 +1,9 @@
+import DashboardLight from "@/components/source-dashboard/DashboardLight";
 import { requireAppSession } from "@/lib/require-app-session";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await requireAppSession();
-  redirect("/dashboard-light");
+  return <DashboardLight embeddedInShell />;
 }

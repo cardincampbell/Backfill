@@ -810,10 +810,16 @@ function CopilotPanel() {
 }
 
 /* ─── Main Dashboard Light ─── */
-export default function DashboardLight() {
-  return (
-    <DashboardShell activeNav="Overview">
-      <MultiLocationView locations={allLocations} />
-    </DashboardShell>
-  );
+export default function DashboardLight({
+  embeddedInShell = false,
+}: {
+  embeddedInShell?: boolean;
+}) {
+  const content = <MultiLocationView locations={allLocations} />;
+
+  if (embeddedInShell) {
+    return content;
+  }
+
+  return <DashboardShell activeNav="Overview">{content}</DashboardShell>;
 }

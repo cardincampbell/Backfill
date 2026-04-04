@@ -1,12 +1,7 @@
-import { AppSessionGate } from "@/components/app-session-gate";
-import DashboardLight from "@/components/source-dashboard/DashboardLight";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default function DashboardLightPage() {
-  return (
-    <AppSessionGate>
-      <DashboardLight />
-    </AppSessionGate>
-  );
+  redirect("/dashboard");
 }

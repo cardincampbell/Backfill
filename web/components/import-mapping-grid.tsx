@@ -179,17 +179,10 @@ function MappingRow({
       <div className="mapping-source">{column}</div>
       <div className="mapping-arrow">\u2192</div>
       <select
+        className="mapping-select"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={{
-          padding: "8px 12px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--line-strong)",
-          fontSize: "0.85rem",
-          background: "var(--panel)",
-          color: value ? "var(--text)" : "var(--muted)",
-          font: "inherit",
-        }}
+        style={{ fontSize: "0.85rem", color: value ? "var(--text)" : "var(--muted)" }}
       >
         {TARGET_FIELDS.map((f) => (
           <option key={f.value} value={f.value}>

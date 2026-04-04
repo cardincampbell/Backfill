@@ -73,15 +73,12 @@ export function RosterWorkerActions({ workerId, isActive, locationId, locations 
       {showTransfer && (
         <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
           <select
+            className="inline-select"
             value={targetLocationId}
             onChange={(e) => setTargetLocationId(e.target.value ? Number(e.target.value) : "")}
             style={{
-              padding: "6px 10px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--line-strong)",
+              width: "min(260px, 100%)",
               fontSize: "0.78rem",
-              background: "var(--panel)",
-              color: "var(--text)",
               font: "inherit",
             }}
           >
