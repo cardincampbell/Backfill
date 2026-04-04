@@ -12,7 +12,7 @@ import {
   completeOnboardingProfile,
   getAuthMe,
   getManagerInvitePreview,
-  mirrorSessionCookieForApp,
+  installVerifiedSessionForApp,
   requestManagerInviteChallenge,
   type AuthMeResponse,
   type ManagerInvitePreview,
@@ -247,7 +247,7 @@ function OnboardingBody() {
         phone_e164: phone.trim(),
         code: code.trim(),
       });
-      mirrorSessionCookieForApp(response);
+      await installVerifiedSessionForApp(response);
       const authMe = await getAuthMe();
       setSession(authMe);
       setName((current) => current || authMe?.user.full_name || "");

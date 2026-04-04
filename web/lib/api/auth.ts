@@ -1,5 +1,4 @@
 import { apiFetchApp, fetchAppJson, API_PREFIX } from "./backend-client";
-import { SESSION_COOKIE } from "@/lib/auth/constants";
 
 export type AppearancePreference = "light" | "dark" | "system";
 
@@ -136,6 +135,8 @@ export type OTPChallengeVerifyResponse = {
   step_up_granted: boolean;
 };
 
+const DEFAULT_SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60;
+
 function deriveSharedCookieDomain(hostname: string): string | null {
   const normalized = hostname.trim().toLowerCase();
   if (!normalized || normalized === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) {
@@ -148,35 +149,6 @@ function deriveSharedCookieDomain(hostname: string): string | null {
     return ".usebackfill.com";
   }
   return null;
-}
-
-export function mirrorSessionCookieForApp(response: OTPChallengeVerifyResponse): void {
-  if (typeof document === "undefined" || !response.token) {
-    return;
-  }
-
-  const parts = [
-    `${SESSION_COOKIE}=${encodeURIComponent(response.token)}`,
-    "Path=/",
-    "SameSite=Lax",
-  ];
-
-  if (window.location.protocol === "https:") {
-    parts.push("Secure");
-  }
-
-  const domain = deriveSharedCookieDomain(window.location.hostname);
-  if (domain) {
-    parts.push(`Domain=${domain}`);
-  }
-
-  const expiresAt = response.session?.expires_at ? Date.parse(response.session.expires_at) : NaN;
-  if (Number.isFinite(expiresAt)) {
-    const maxAgeSeconds = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
-    parts.push(`Max-Age=${maxAgeSeconds}`);
-  }
-
-  document.cookie = parts.join("; ");
 }
 
 export type ManagerInvitePreview = {
@@ -196,34 +168,40 @@ export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return fetchAppJson<AuthMeResponse>(`${API_PREFIX}/auth/me`);
 }
 
-function wait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, delayMs);
-  });
+function maxAgeSecondsFromVerifyResponse(
+  response: OTPChallengeVerifyResponse,
+): number {
+  const expiresAt = response.session?.expires_at ? Date.parse(response.session.expires_at) : NaN;
+  if (Number.isFinite(expiresAt)) {
+    return Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+  }
+  return DEFAULT_SESSION_MAX_AGE_SECONDS;
 }
 
-export async function waitForAuthMe(
-  options?: {
-    attempts?: number;
-    delayMs?: number;
-    maxDelayMs?: number;
-  },
-): Promise<AuthMeResponse | null> {
-  const attempts = options?.attempts ?? 8;
-  const delayMs = options?.delayMs ?? 120;
-  const maxDelayMs = options?.maxDelayMs ?? 400;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const authMe = await getAuthMe();
-    if (authMe) {
-      return authMe;
-    }
-    if (attempt < attempts - 1) {
-      await wait(Math.min(delayMs * (attempt + 1), maxDelayMs));
-    }
+export async function installVerifiedSessionForApp(
+  response: OTPChallengeVerifyResponse,
+): Promise<void> {
+  if (!response.token) {
+    return;
   }
 
-  return null;
+  const completionResponse = await fetch("/auth/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      token: response.token,
+      maxAge: maxAgeSecondsFromVerifyResponse(response),
+      domain:
+        typeof window === "undefined"
+          ? null
+          : deriveSharedCookieDomain(window.location.hostname),
+    }),
+  });
+
+  if (!completionResponse.ok) {
+    throw new Error(await parseError(completionResponse));
+  }
 }
 
 export function replaceWithAuthDestination(onboardingRequired: boolean): void {
@@ -234,11 +212,10 @@ export function replaceWithAuthDestination(onboardingRequired: boolean): void {
 }
 
 export async function finalizeVerifiedSessionNavigation(
-  onboardingRequired: boolean,
-): Promise<AuthMeResponse | null> {
-  const authMe = await waitForAuthMe();
-  replaceWithAuthDestination(authMe?.onboarding_required ?? onboardingRequired);
-  return authMe;
+  response: OTPChallengeVerifyResponse,
+): Promise<void> {
+  await installVerifiedSessionForApp(response);
+  replaceWithAuthDestination(response.onboarding_required);
 }
 
 export async function requestChallenge(input: {
