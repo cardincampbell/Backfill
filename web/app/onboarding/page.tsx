@@ -12,6 +12,7 @@ import {
   completeOnboardingProfile,
   getAuthMe,
   getManagerInvitePreview,
+  mirrorSessionCookieForApp,
   requestManagerInviteChallenge,
   type AuthMeResponse,
   type ManagerInvitePreview,
@@ -246,6 +247,7 @@ function OnboardingBody() {
         phone_e164: phone.trim(),
         code: code.trim(),
       });
+      mirrorSessionCookieForApp(response);
       const authMe = await getAuthMe();
       setSession(authMe);
       setName((current) => current || authMe?.user.full_name || "");

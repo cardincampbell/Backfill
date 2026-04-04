@@ -1,4 +1,5 @@
 import { apiFetchApp, fetchAppJson, API_PREFIX } from "./backend-client";
+import { SESSION_COOKIE } from "@/lib/auth/constants";
 
 export type AppearancePreference = "light" | "dark" | "system";
 
@@ -134,6 +135,49 @@ export type OTPChallengeVerifyResponse = {
   onboarding_required: boolean;
   step_up_granted: boolean;
 };
+
+function deriveSharedCookieDomain(hostname: string): string | null {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized || normalized === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) {
+    return null;
+  }
+  if (normalized === "usebackfill.com") {
+    return ".usebackfill.com";
+  }
+  if (normalized === "www.usebackfill.com") {
+    return ".usebackfill.com";
+  }
+  return null;
+}
+
+export function mirrorSessionCookieForApp(response: OTPChallengeVerifyResponse): void {
+  if (typeof document === "undefined" || !response.token) {
+    return;
+  }
+
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(response.token)}`,
+    "Path=/",
+    "SameSite=Lax",
+  ];
+
+  if (window.location.protocol === "https:") {
+    parts.push("Secure");
+  }
+
+  const domain = deriveSharedCookieDomain(window.location.hostname);
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
+
+  const expiresAt = response.session?.expires_at ? Date.parse(response.session.expires_at) : NaN;
+  if (Number.isFinite(expiresAt)) {
+    const maxAgeSeconds = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+    parts.push(`Max-Age=${maxAgeSeconds}`);
+  }
+
+  document.cookie = parts.join("; ");
+}
 
 export type ManagerInvitePreview = {
   invite_email: string;

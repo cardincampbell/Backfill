@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import {
   finalizeVerifiedSessionNavigation,
+  mirrorSessionCookieForApp,
   requestChallenge,
   verifyChallenge,
 } from "@/lib/api/auth";
@@ -57,6 +58,7 @@ export function LoginPageClient() {
         phone_e164: phone.trim(),
         code: code.trim(),
       });
+      mirrorSessionCookieForApp(response);
       await finalizeVerifiedSessionNavigation(response.onboarding_required);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not verify your code.");
