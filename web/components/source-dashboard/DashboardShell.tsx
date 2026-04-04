@@ -61,7 +61,7 @@ function buildInitialMessages(firstName: string): ChatMessage[] {
 }
 
 /* ─── Copilot Panel ─── */
-function CopilotPanel() {
+function CopilotPanel({ isDark }: { isDark: boolean }) {
   const { firstName } = useSessionUserDisplay();
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
     buildInitialMessages(firstName),
@@ -69,6 +69,26 @@ function CopilotPanel() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const assistantBubbleClass = isDark
+    ? 'bg-white/[0.06] text-[#C1CED8] rounded-bl-md'
+    : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md';
+  const typingBubbleClass = isDark
+    ? 'bg-white/[0.06] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5'
+    : 'bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5';
+  const suggestionButtonClass = isDark
+    ? 'w-full text-left px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors text-[11px] text-[#C1CED8]'
+    : 'w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]';
+  const inputWrapClass = isDark
+    ? 'flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 transition-colors'
+    : 'flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all';
+  const inputClass = isDark
+    ? 'flex-1 bg-transparent text-[12px] text-white placeholder-[#8898AA]/50 focus:outline-none'
+    : 'flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none';
+  const sendButtonClass = isDark
+    ? 'p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors disabled:opacity-30'
+    : 'p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30';
+  const footerBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -103,7 +123,7 @@ function CopilotPanel() {
               </div>
             )}
             <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
-              msg.role === 'user' ? 'bg-[#635BFF] text-white rounded-br-md' : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md'
+              msg.role === 'user' ? 'bg-[#635BFF] text-white rounded-br-md' : assistantBubbleClass
             }`} style={{ fontWeight: 420, whiteSpace: 'pre-line' }}>
               {msg.text}
             </div>
@@ -114,7 +134,7 @@ function CopilotPanel() {
             <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
               <Sparkles size={11} className="text-white" />
             </div>
-            <div className="bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5">
+            <div className={typingBubbleClass}>
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '0ms' }} />
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '150ms' }} />
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -128,7 +148,7 @@ function CopilotPanel() {
         <div className="px-3 pb-2 space-y-1.5">
           {copilotSuggestions.map((s) => (
             <button key={s} onClick={() => sendMessage(s)}
-              className="w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]"
+              className={suggestionButtonClass}
               style={{ fontWeight: 440 }}>
               {s}
             </button>
@@ -136,15 +156,15 @@ function CopilotPanel() {
         </div>
       )}
 
-      <div className="p-3 border-t border-[#F0F0F5]">
-        <div className="flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all">
+      <div className={`p-3 border-t ${footerBorderClass}`}>
+        <div className={inputWrapClass}>
           <input type="text" value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage(input)}
             placeholder="Ask Copilot..."
-            className="flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none"
+            className={inputClass}
             style={{ fontWeight: 420 }} />
           <button onClick={() => sendMessage(input)} disabled={!input.trim()}
-            className="p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30">
+            className={sendButtonClass}>
             <Send size={14} className="text-[#635BFF]" />
           </button>
         </div>
@@ -283,7 +303,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
             ) : (
               <motion.div key="copilot" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} transition={{ duration: 0.2 }}
                 className="flex-1 flex flex-col overflow-hidden">
-                <CopilotPanel />
+                <CopilotPanel isDark={isDark} />
               </motion.div>
             )}
           </AnimatePresence>
