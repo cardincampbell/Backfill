@@ -5,12 +5,12 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app_v2.config import v2_settings
-from app_v2.db.base import Base
-import app_v2.models  # noqa: F401
+from app.config import settings
+from app.db.base import Base
+import app.models  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", v2_settings.sync_database_url)
+config.set_main_option("sqlalchemy.url", settings.sync_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -20,7 +20,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=v2_settings.sync_database_url,
+        url=settings.sync_database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

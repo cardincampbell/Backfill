@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from alembic import op
 
-from app_v2.models.webhooks import WebhookDelivery, WebhookSubscription
+from app.models.webhooks import WebhookDelivery, WebhookSubscription
 
 
 revision = "20260402_0002"

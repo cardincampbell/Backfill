@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from alembic import op
 
-from app_v2.db.base import Base
-import app_v2.models  # noqa: F401
+from app.db.base import Base
+import app.models  # noqa: F401
 
 
 # revision identifiers, used by Alembic.

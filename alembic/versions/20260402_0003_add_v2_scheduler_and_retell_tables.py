@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from alembic import op
 
-from app_v2.models.integrations import (
+from app.models.integrations import (
     RetellConversation,
     SchedulerConnection,
     SchedulerEvent,
