@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
 import { PlaceAutocomplete } from "@/components/place-autocomplete";
@@ -35,7 +35,6 @@ function isValidEmail(value: string): boolean {
 }
 
 function OnboardingBody() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const inviteToken = searchParams.get("invite")?.trim() || null;
   const isInviteFlow = Boolean(inviteToken);
@@ -66,7 +65,7 @@ function OnboardingBody() {
       if (cancelled) return;
       setSession(authMe);
       if (!inviteToken && authMe && !authMe.onboarding_required) {
-        router.replace("/dashboard");
+        replaceDashboard();
         return;
       }
       if (!inviteToken && authMe?.user.full_name) {
@@ -85,7 +84,7 @@ function OnboardingBody() {
     return () => {
       cancelled = true;
     };
-  }, [inviteToken, router]);
+  }, [inviteToken]);
 
   useEffect(() => {
     if (!inviteToken) {
@@ -137,13 +136,20 @@ function OnboardingBody() {
     return `${invitePreview.business_name} · ${invitePreview.location_name}`;
   }, [invitePreview]);
 
+  function replaceDashboard(): void {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.location.replace("/dashboard");
+  }
+
   async function submitOwnerWorkspace() {
     if (!session || !selectedPlace || loading) return;
     setLoading(true);
     setError("");
     try {
       const organizationName = inferOrganizationName(selectedPlace);
-      const response = await bootstrapOwnerWorkspace({
+      await bootstrapOwnerWorkspace({
         profile: {
           full_name: name.trim(),
           email: email.trim(),
@@ -165,7 +171,7 @@ function OnboardingBody() {
         },
         location: buildLocationPayloadFromPlace(selectedPlace),
       });
-      router.replace("/dashboard");
+      replaceDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish onboarding.");
     } finally {
@@ -245,7 +251,7 @@ function OnboardingBody() {
       setName((current) => current || authMe?.user.full_name || "");
       setEmail((current) => current || authMe?.user.email || invitePreview?.invite_email || "");
       if (!response.onboarding_required) {
-        router.replace("/dashboard");
+        replaceDashboard();
         return;
       }
       setInviteStep("profile");
@@ -268,7 +274,7 @@ function OnboardingBody() {
         full_name: name.trim(),
         email: email.trim(),
       });
-      router.replace("/dashboard");
+      replaceDashboard();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish your profile.");
     } finally {

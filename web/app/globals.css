@@ -441,19 +441,23 @@ p {
 .brand-select {
   width: 100%;
   min-height: 44px;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, var(--brand-dim));
+  border: 1px solid color-mix(in srgb, var(--line-strong) 74%, var(--brand-dim));
   border-radius: var(--radius);
   padding: 10px 44px 10px 14px;
-  background-color: var(--panel-raised);
+  background-color: color-mix(in srgb, var(--panel-raised) 86%, var(--brand-soft));
   background-image:
     url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23635BFF' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='M6 8.5l4 4 4-4'/%3e%3c/svg%3e"),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0));
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, rgba(255, 255, 255, 0.55) 36%, var(--brand-soft)),
+      rgba(255, 255, 255, 0)
+    );
   background-position: right 14px center, center;
   background-repeat: no-repeat;
   background-size: 16px 16px, 100% 100%;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.65),
-    0 10px 24px rgba(10, 37, 64, 0.05);
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 12px 28px rgba(10, 37, 64, 0.06);
   color: var(--text);
   font: inherit;
   line-height: 1.25;
@@ -473,8 +477,8 @@ p {
 .mapping-select:hover,
 .inline-select:hover,
 .brand-select:hover {
-  border-color: color-mix(in srgb, var(--brand) 26%, var(--line-strong));
-  background-color: color-mix(in srgb, var(--panel-raised) 92%, var(--brand-soft));
+  border-color: color-mix(in srgb, var(--brand) 34%, var(--line-strong));
+  background-color: color-mix(in srgb, var(--panel-raised) 80%, var(--brand-soft));
 }
 
 .field select:focus-visible,
@@ -483,11 +487,11 @@ p {
 .inline-select:focus-visible,
 .brand-select:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--brand) 50%, var(--line-strong));
+  border-color: color-mix(in srgb, var(--brand) 54%, var(--line-strong));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 0 0 4px rgba(99, 91, 255, 0.12),
-    0 14px 30px rgba(10, 37, 64, 0.08);
+    0 16px 32px rgba(10, 37, 64, 0.1);
 }
 
 .field select:disabled,
@@ -6658,13 +6662,14 @@ body:has(.lp-onboarding) .site-main {
 .dashboard-app-shell[data-dashboard-theme="dark"] .mapping-select,
 .dashboard-app-shell[data-dashboard-theme="dark"] .inline-select,
 .dashboard-app-shell[data-dashboard-theme="dark"] .brand-select {
+  background-color: color-mix(in srgb, var(--panel-raised) 78%, var(--brand-soft));
   background-image:
     url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23A7B7FF' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6' d='M6 8.5l4 4 4-4'/%3e%3c/svg%3e"),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0));
+    linear-gradient(180deg, rgba(99, 91, 255, 0.14), rgba(7, 27, 47, 0));
   border-color: color-mix(in srgb, var(--line-strong) 78%, var(--brand-dim));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 18px 34px rgba(0, 0, 0, 0.22);
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 18px 34px rgba(0, 0, 0, 0.24);
 }
 
 .dashboard-app-shell[data-dashboard-theme="dark"] .field select:hover,
