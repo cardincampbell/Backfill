@@ -1,4 +1,9 @@
 import { apiFetchApp, fetchAppJson, API_PREFIX } from "./backend-client";
+import {
+  SESSION_COOKIE,
+  SESSION_HANDOFF_COOKIE,
+  SESSION_HANDOFF_STORAGE_KEY,
+} from "@/lib/auth/constants";
 
 export type AppearancePreference = "light" | "dark" | "system";
 
@@ -178,6 +183,79 @@ function maxAgeSecondsFromVerifyResponse(
   return DEFAULT_SESSION_MAX_AGE_SECONDS;
 }
 
+function persistCookie(
+  name: string,
+  value: string,
+  options: {
+    maxAgeSeconds: number;
+    domain: string | null;
+  },
+): void {
+  const { maxAgeSeconds, domain } = options;
+  const normalizedMaxAge =
+    maxAgeSeconds <= 0 ? 0 : Math.max(60, Math.floor(maxAgeSeconds));
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "SameSite=Lax",
+    `Max-Age=${normalizedMaxAge}`,
+  ];
+
+  if (window.location.protocol === "https:") {
+    parts.push("Secure");
+  }
+
+  if (domain) {
+    parts.push(`Domain=${domain}`);
+  }
+
+  document.cookie = parts.join("; ");
+}
+
+export function persistVerifiedSessionHandoff(
+  response: OTPChallengeVerifyResponse,
+): void {
+  if (typeof window === "undefined" || !response.token) {
+    return;
+  }
+
+  const domain = deriveSharedCookieDomain(window.location.hostname);
+  const maxAgeSeconds = maxAgeSecondsFromVerifyResponse(response);
+
+  try {
+    window.sessionStorage.setItem(SESSION_HANDOFF_STORAGE_KEY, response.token);
+  } catch {
+    // Ignore storage failures and rely on cookies only.
+  }
+
+  persistCookie(SESSION_HANDOFF_COOKIE, "1", {
+    maxAgeSeconds: Math.min(maxAgeSeconds, 5 * 60),
+    domain,
+  });
+  persistCookie(SESSION_COOKIE, response.token, {
+    maxAgeSeconds,
+    domain,
+  });
+}
+
+export function clearVerifiedSessionHandoff(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const domain = deriveSharedCookieDomain(window.location.hostname);
+  try {
+    window.sessionStorage.removeItem(SESSION_HANDOFF_STORAGE_KEY);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+
+  persistCookie(SESSION_HANDOFF_COOKIE, "", {
+    maxAgeSeconds: 0,
+    domain,
+  });
+}
+
 export async function installVerifiedSessionForApp(
   response: OTPChallengeVerifyResponse,
 ): Promise<void> {
@@ -214,7 +292,42 @@ export function replaceWithAuthDestination(onboardingRequired: boolean): void {
 export async function finalizeVerifiedSessionNavigation(
   response: OTPChallengeVerifyResponse,
 ): Promise<void> {
-  await installVerifiedSessionForApp(response);
+  persistVerifiedSessionHandoff(response);
+  if (
+    typeof document !== "undefined" &&
+    typeof window !== "undefined" &&
+    response.token
+  ) {
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/auth/complete";
+    form.style.display = "none";
+
+    const fields = {
+      token: response.token,
+      maxAge: String(maxAgeSecondsFromVerifyResponse(response)),
+      domain: deriveSharedCookieDomain(window.location.hostname) ?? "",
+      destination: response.onboarding_required ? "/onboarding" : "/dashboard",
+    };
+
+    for (const [name, value] of Object.entries(fields)) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+    return;
+  }
+
+  try {
+    await installVerifiedSessionForApp(response);
+  } catch {
+    // Fall back to a direct navigation if the app-host completion route is unavailable.
+  }
   replaceWithAuthDestination(response.onboarding_required);
 }
 
@@ -280,6 +393,7 @@ export async function logout(): Promise<void> {
   if (!response.ok && response.status !== 204) {
     throw new Error(await parseError(response));
   }
+  clearVerifiedSessionHandoff();
 }
 
 export async function getManagerInvitePreview(

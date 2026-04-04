@@ -6,6 +6,7 @@ type CompletionPayload = {
   token?: unknown;
   maxAge?: unknown;
   domain?: unknown;
+  destination?: unknown;
 };
 
 function normalizeCookieDomain(value: unknown): string | undefined {
@@ -29,11 +30,49 @@ function normalizeMaxAge(value: unknown): number {
   return 14 * 24 * 60 * 60;
 }
 
-export async function POST(request: NextRequest) {
-  let payload: CompletionPayload;
+function normalizeDestination(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "/dashboard" || trimmed === "/onboarding") {
+    return trimmed;
+  }
+  return null;
+}
+
+async function parseCompletionPayload(
+  request: NextRequest,
+): Promise<CompletionPayload | null> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+
+  if (
+    contentType.includes("application/x-www-form-urlencoded") ||
+    contentType.includes("multipart/form-data")
+  ) {
+    try {
+      const form = await request.formData();
+      return {
+        token: form.get("token"),
+        maxAge: Number(form.get("maxAge")),
+        domain: form.get("domain"),
+        destination: form.get("destination"),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   try {
-    payload = (await request.json()) as CompletionPayload;
+    return (await request.json()) as CompletionPayload;
   } catch {
+    return null;
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const payload = await parseCompletionPayload(request);
+  if (!payload) {
     return NextResponse.json(
       { detail: "invalid_session_completion_payload" },
       { status: 400 },
@@ -48,7 +87,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const response = NextResponse.json({ ok: true });
+  const destination = normalizeDestination(payload.destination);
+  const response = destination
+    ? NextResponse.redirect(new URL(destination, request.url), { status: 303 })
+    : NextResponse.json({ ok: true });
   response.cookies.set({
     name: SESSION_COOKIE,
     value: token,

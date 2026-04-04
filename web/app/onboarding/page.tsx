@@ -12,6 +12,7 @@ import {
   completeOnboardingProfile,
   getAuthMe,
   getManagerInvitePreview,
+  persistVerifiedSessionHandoff,
   installVerifiedSessionForApp,
   requestManagerInviteChallenge,
   type AuthMeResponse,
@@ -247,7 +248,12 @@ function OnboardingBody() {
         phone_e164: phone.trim(),
         code: code.trim(),
       });
-      await installVerifiedSessionForApp(response);
+      persistVerifiedSessionHandoff(response);
+      try {
+        await installVerifiedSessionForApp(response);
+      } catch {
+        // The handoff token keeps the onboarding session alive on the next screen.
+      }
       const authMe = await getAuthMe();
       setSession(authMe);
       setName((current) => current || authMe?.user.full_name || "");

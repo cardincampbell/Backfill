@@ -1,16 +1,33 @@
-import { getWorkspace } from "@/lib/api/workspace";
+import { getAuthMe } from "@/lib/api/auth";
+import {
+  SESSION_COOKIE,
+  SESSION_HANDOFF_COOKIE,
+} from "@/lib/auth/constants";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 
 export async function requireAppSession() {
-  const workspace = await getWorkspace();
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(SESSION_COOKIE)?.value;
+  const handoffCookie = cookieStore.get(SESSION_HANDOFF_COOKIE)?.value;
 
-  if (!workspace) {
+  if (!sessionCookie && !handoffCookie) {
     redirect("/login");
   }
 
-  if (workspace.onboarding_required) {
+  const session = await getAuthMe();
+
+  if (!session && handoffCookie) {
+    return null;
+  }
+
+  if (!session) {
+    redirect("/login");
+  }
+
+  if (session.onboarding_required) {
     redirect("/onboarding");
   }
 
-  return workspace;
+  return session;
 }

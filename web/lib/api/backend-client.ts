@@ -1,4 +1,7 @@
-import { SESSION_COOKIE } from "@/lib/auth/constants";
+import {
+  SESSION_COOKIE,
+  SESSION_HANDOFF_STORAGE_KEY,
+} from "@/lib/auth/constants";
 import { API_BASE_URL } from "./client";
 
 export const API_PREFIX =
@@ -9,6 +12,18 @@ async function getSessionToken(): Promise<string | undefined> {
   const { cookies } = await import("next/headers");
   const cookieStore = await cookies();
   return cookieStore.get(SESSION_COOKIE)?.value;
+}
+
+function getClientSessionHandoffToken(): string | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  try {
+    const token = window.sessionStorage.getItem(SESSION_HANDOFF_STORAGE_KEY)?.trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveUrl(pathOrUrl: string): string {
@@ -28,8 +43,10 @@ export async function apiFetchApp(
   const url = resolveUrl(pathOrUrl);
   const method = (init?.method ?? "GET").toUpperCase();
   const token = await getSessionToken();
-  const authHeaders: Record<string, string> = token
-    ? { Authorization: `Bearer ${token}` }
+  const clientHandoffToken = getClientSessionHandoffToken();
+  const authToken = token ?? clientHandoffToken;
+  const authHeaders: Record<string, string> = authToken
+    ? { Authorization: `Bearer ${authToken}` }
     : {};
   try {
     return await fetch(url, {
