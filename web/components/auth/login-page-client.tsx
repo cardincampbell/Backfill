@@ -1,11 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   finalizeVerifiedSessionNavigation,
+  getAuthMe,
+  hasStoredSessionHandoff,
+  installStoredSessionForApp,
+  replaceWithAuthDestination,
   requestChallenge,
+  refreshAppSessionCookie,
   verifyChallenge,
 } from "@/lib/api/auth";
 import { useOtpCooldown } from "@/lib/auth/use-otp-cooldown";
@@ -24,6 +29,33 @@ export function LoginPageClient() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const { canResend, secondsLeft, startCooldown } = useOtpCooldown();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function resumeLiveSession() {
+      if (!hasStoredSessionHandoff()) {
+        return;
+      }
+      const session = await getAuthMe();
+      if (!session || cancelled) {
+        return;
+      }
+      try {
+        await installStoredSessionForApp(session);
+      } catch {
+        await refreshAppSessionCookie().catch(() => undefined);
+      }
+      if (!cancelled) {
+        replaceWithAuthDestination(session.onboarding_required);
+      }
+    }
+
+    void resumeLiveSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handlePhoneSubmit(event: React.FormEvent) {
     event.preventDefault();

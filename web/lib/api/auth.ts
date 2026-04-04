@@ -173,14 +173,18 @@ export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return fetchAppJson<AuthMeResponse>(`${API_PREFIX}/auth/me`);
 }
 
-function maxAgeSecondsFromVerifyResponse(
-  response: OTPChallengeVerifyResponse,
-): number {
-  const expiresAt = response.session?.expires_at ? Date.parse(response.session.expires_at) : NaN;
+function maxAgeSecondsFromExpiry(expiresAtRaw: string | null | undefined): number {
+  const expiresAt = expiresAtRaw ? Date.parse(expiresAtRaw) : NaN;
   if (Number.isFinite(expiresAt)) {
     return Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
   }
   return DEFAULT_SESSION_MAX_AGE_SECONDS;
+}
+
+function maxAgeSecondsFromVerifyResponse(
+  response: OTPChallengeVerifyResponse,
+): number {
+  return maxAgeSecondsFromExpiry(response.session?.expires_at);
 }
 
 function persistCookie(
@@ -256,6 +260,22 @@ export function clearVerifiedSessionHandoff(): void {
   });
 }
 
+function readStoredVerifiedSessionToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const token = window.sessionStorage.getItem(SESSION_HANDOFF_STORAGE_KEY)?.trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+export function hasStoredSessionHandoff(): boolean {
+  return Boolean(readStoredVerifiedSessionToken());
+}
+
 export async function installVerifiedSessionForApp(
   response: OTPChallengeVerifyResponse,
 ): Promise<void> {
@@ -279,6 +299,43 @@ export async function installVerifiedSessionForApp(
 
   if (!completionResponse.ok) {
     throw new Error(await parseError(completionResponse));
+  }
+}
+
+export async function installStoredSessionForApp(
+  session: Pick<AuthMeResponse, "session">,
+): Promise<void> {
+  const token = readStoredVerifiedSessionToken();
+  if (!token) {
+    return;
+  }
+
+  const completionResponse = await fetch("/auth/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      token,
+      maxAge: maxAgeSecondsFromExpiry(session.session?.expires_at),
+      domain:
+        typeof window === "undefined"
+          ? null
+          : deriveSharedCookieDomain(window.location.hostname),
+    }),
+  });
+
+  if (!completionResponse.ok) {
+    throw new Error(await parseError(completionResponse));
+  }
+}
+
+export async function refreshAppSessionCookie(): Promise<void> {
+  const response = await fetch("/auth/refresh", {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(await parseError(response));
   }
 }
 

@@ -11,7 +11,12 @@ import {
 } from "react";
 
 import type { AuthMeResponse } from "@/lib/api/auth";
-import { getAuthMe } from "@/lib/api/auth";
+import {
+  getAuthMe,
+  hasStoredSessionHandoff,
+  installStoredSessionForApp,
+  refreshAppSessionCookie,
+} from "@/lib/api/auth";
 
 type AppSessionGateProps = {
   children: ReactNode;
@@ -186,6 +191,11 @@ export function AppSessionGate({
           : nextPreference,
       );
       setSession(session);
+      if (hasStoredSessionHandoff()) {
+        void installStoredSessionForApp(session).catch(() => undefined);
+      } else {
+        void refreshAppSessionCookie().catch(() => undefined);
+      }
       setReady(true);
     }
 
