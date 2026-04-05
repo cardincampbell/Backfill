@@ -374,7 +374,19 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
 
     result = await auth.request_otp_challenge(
         session,
-        OTPChallengeRequest(phone_e164="+1 (555) 555-0123", purpose="sign_in"),
+        OTPChallengeRequest(
+            phone_e164="+1 (555) 555-0123",
+            purpose="sign_in",
+            challenge_metadata={
+                "device_context": {
+                    "display_label": "iPhone • iOS 17.4 • Safari",
+                    "device_family": "iPhone",
+                    "os_name": "iOS",
+                    "os_version": "17.4",
+                    "browser_name": "Safari",
+                }
+            },
+        ),
         ip_address="127.0.0.1",
         user_agent="pytest",
         trusted_device_id="device-1",
@@ -391,6 +403,16 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
     assert result.session is not None
     assert result.trusted_device_id == "device-1"
     assert result.session.device_fingerprint == "device-1"
+    assert result.session.session_metadata == {
+        "auth_flow": "trusted_reentry",
+        "device_context": {
+            "display_label": "iPhone • iOS 17.4 • Safari",
+            "device_family": "iPhone",
+            "os_name": "iOS",
+            "os_version": "17.4",
+            "browser_name": "Safari",
+        },
+    }
     assert len(sessions) == 1
     assert {entry.event_name for entry in audits} == {
         "auth.challenge.skipped",
@@ -470,6 +492,15 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
             phone_e164="+15555550160",
             code="123456",
             device_fingerprint="device-1",
+            session_metadata={
+                "device_context": {
+                    "display_label": "Mac • macOS 15.4 • Chrome",
+                    "device_family": "Mac",
+                    "os_name": "macOS",
+                    "os_version": "15.4",
+                    "browser_name": "Chrome",
+                }
+            },
         ),
         ip_address="127.0.0.1",
         user_agent="pytest",
@@ -482,6 +513,15 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
     assert result.session is not None
     assert result.trusted_device_id is not None
     assert result.session.device_fingerprint == result.trusted_device_id
+    assert result.session.session_metadata == {
+        "device_context": {
+            "display_label": "Mac • macOS 15.4 • Chrome",
+            "device_family": "Mac",
+            "os_name": "macOS",
+            "os_version": "15.4",
+            "browser_name": "Chrome",
+        }
+    }
     assert challenge.status == ChallengeStatus.approved
     assert len(users) == 1
     assert users[0].primary_phone_e164 == "+15555550160"

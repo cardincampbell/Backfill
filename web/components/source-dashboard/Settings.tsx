@@ -142,7 +142,55 @@ function formatSessionTimestamp(value: string | null | undefined): string | null
   }).format(date);
 }
 
-function formatSessionDeviceLabel(userAgent: string | null | undefined): string {
+function trimMetadataText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function readSessionDeviceContext(
+  session: AuthSessionRecord,
+): {
+  displayLabel?: string;
+  deviceFamily?: string;
+  deviceModel?: string;
+  osName?: string;
+  osVersion?: string;
+  browserName?: string;
+} {
+  const metadata = session.session_metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return {};
+  }
+  const raw = metadata["device_context"];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const source = raw as Record<string, unknown>;
+  return {
+    displayLabel: trimMetadataText(source.display_label) ?? undefined,
+    deviceFamily: trimMetadataText(source.device_family) ?? undefined,
+    deviceModel: trimMetadataText(source.device_model) ?? undefined,
+    osName: trimMetadataText(source.os_name) ?? undefined,
+    osVersion: trimMetadataText(source.os_version) ?? undefined,
+    browserName: trimMetadataText(source.browser_name) ?? undefined,
+  };
+}
+
+function extractUserAgentVersion(
+  source: string,
+  pattern: RegExp,
+): string | undefined {
+  const match = source.match(pattern);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return match[1].replace(/_/g, ".");
+}
+
+function formatUserAgentDeviceLabel(userAgent: string | null | undefined): string {
   const source = userAgent?.trim() ?? "";
   if (!source) {
     return "Unknown Device";
@@ -150,6 +198,10 @@ function formatSessionDeviceLabel(userAgent: string | null | undefined): string 
 
   const browser = /Edg\//i.test(source)
     ? "Edge"
+    : /CriOS\//i.test(source)
+      ? "Chrome"
+      : /FxiOS\//i.test(source)
+        ? "Firefox"
     : /OPR\//i.test(source)
       ? "Opera"
       : /Chrome\//i.test(source)
@@ -176,7 +228,56 @@ function formatSessionDeviceLabel(userAgent: string | null | undefined): string 
                 ? "Linux"
                 : "Unknown Device";
 
-  return `${device} • ${browser}`;
+  const osLabel = /iPhone|iPad|iPod/i.test(source)
+    ? (() => {
+        const version = extractUserAgentVersion(source, /OS ([0-9_]+)/i);
+        return version ? `iOS ${version}` : "iOS";
+      })()
+    : /Android/i.test(source)
+      ? (() => {
+          const version = extractUserAgentVersion(source, /Android ([0-9.]+)/i);
+          return version ? `Android ${version}` : "Android";
+        })()
+      : /Macintosh|Mac OS X/i.test(source)
+        ? (() => {
+            const version = extractUserAgentVersion(source, /Mac OS X ([0-9_]+)/i);
+            return version ? `macOS ${version}` : "macOS";
+          })()
+        : /Windows/i.test(source)
+          ? (() => {
+              const version = extractUserAgentVersion(source, /Windows NT ([0-9.]+)/i);
+              return version ? `Windows ${version}` : "Windows";
+            })()
+          : /CrOS/i.test(source)
+            ? "ChromeOS"
+            : /Linux/i.test(source)
+              ? "Linux"
+              : null;
+
+  return [device, osLabel, browser].filter(Boolean).join(" • ");
+}
+
+function formatSessionDeviceLabel(session: AuthSessionRecord): string {
+  const deviceContext = readSessionDeviceContext(session);
+  if (deviceContext.displayLabel) {
+    return deviceContext.displayLabel;
+  }
+
+  const deviceName = deviceContext.deviceModel ?? deviceContext.deviceFamily;
+  const osLabel = deviceContext.osName
+    ? deviceContext.osVersion
+      ? `${deviceContext.osName} ${deviceContext.osVersion}`
+      : deviceContext.osName
+    : null;
+
+  const contextLabel = [deviceName, osLabel, deviceContext.browserName]
+    .filter(Boolean)
+    .join(" • ");
+  if (contextLabel) {
+    return contextLabel;
+  }
+
+  return formatUserAgentDeviceLabel(session.user_agent);
 }
 
 function formatSessionMeta(session: AuthSessionRecord): string {
@@ -1175,7 +1276,7 @@ export default function Settings({
                           <Monitor size={15} className={`${textMuted} shrink-0`} />
                           <div className="min-w-0">
                             <p className={`truncate text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                              {formatSessionDeviceLabel(sessionItem.user_agent)}
+                              {formatSessionDeviceLabel(sessionItem)}
                             </p>
                             <p className={`truncate text-[10px] ${textMuted}`} style={{ fontWeight: 420 }}>
                               {formatSessionMeta(sessionItem)}
