@@ -597,7 +597,7 @@ export default function LandingPage() {
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="mt-10 border-l-4 border-[#635BFF]/60 pl-7 py-1 max-w-2xl mx-auto"
+            className="mt-10 border-l-4 border-[#635BFF]/60 pl-7 py-1 max-w-3xl mx-auto"
           >
             <p className="text-[17px] sm:text-[19px] text-white/80 leading-[1.65] italic mb-4" style={{ fontWeight: 400 }}>
               &ldquo;The first month I used Backfill I filled 11 shifts I would have had to handle manually. At 45 minutes each, that&apos;s over 8 hours back. The math wasn&apos;t hard.&rdquo;
