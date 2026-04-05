@@ -52,6 +52,12 @@ class AuthMeResponse(BaseSchema):
     onboarding_required: bool
 
 
+class SessionRestoreResponse(BaseSchema):
+    restored: bool = True
+    session: SessionRead
+    onboarding_required: bool
+
+
 class OTPChallengeRequest(BaseSchema):
     phone_e164: str
     purpose: str = "sign_in"

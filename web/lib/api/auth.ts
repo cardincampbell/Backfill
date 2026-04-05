@@ -110,6 +110,11 @@ export type AuthMeResponse = {
   onboarding_required: boolean;
 };
 
+export type SessionRestoreResponse = {
+  restored: boolean;
+  onboarding_required: boolean;
+};
+
 export type OTPChallenge = {
   id: string;
   user_id?: string | null;
@@ -183,6 +188,32 @@ export type ManagerInvitePreview = {
 
 export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return fetchAppJson<AuthMeResponse>(`${API_PREFIX}/auth/me`);
+}
+
+export async function restoreTrustedDeviceSession(): Promise<SessionRestoreResponse | null> {
+  const response = await fetch("/auth/restore", {
+    method: "POST",
+    credentials: "include",
+  });
+  if (response.status === 204) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as SessionRestoreResponse;
+}
+
+export async function recoverAuthMe(): Promise<AuthMeResponse | null> {
+  const session = await getAuthMe();
+  if (session) {
+    return session;
+  }
+  const restored = await restoreTrustedDeviceSession();
+  if (!restored?.restored) {
+    return null;
+  }
+  return getAuthMe();
 }
 
 export async function getAuthSessions(): Promise<Session[]> {

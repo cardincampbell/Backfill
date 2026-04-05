@@ -23,7 +23,7 @@ export function AppShellLayout({ children }: AppShellLayoutProps) {
   const activeNav = resolveActiveNav(pathname);
 
   return (
-    <AppSessionGate enforceRedirects={false}>
+    <AppSessionGate>
       <DashboardShell activeNav={activeNav}>{children}</DashboardShell>
     </AppSessionGate>
   );

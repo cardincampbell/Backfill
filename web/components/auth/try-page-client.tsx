@@ -5,10 +5,10 @@ import { useEffect, useState } from "react";
 
 import {
   finalizeVerifiedSessionNavigation,
-  getAuthMe,
   hasStoredSessionHandoff,
   installStoredSessionForApp,
   replaceWithAuthDestination,
+  recoverAuthMe,
   requestChallenge,
   requestChallengeAuto,
   refreshAppSessionCookie,
@@ -37,15 +37,16 @@ export function TryPageClient() {
     let cancelled = false;
 
     async function resumeLiveSession() {
-      if (!hasStoredSessionHandoff()) {
-        return;
-      }
-      const session = await getAuthMe();
+      const session = await recoverAuthMe();
       if (!session || cancelled) {
         return;
       }
       try {
-        await installStoredSessionForApp(session);
+        if (hasStoredSessionHandoff()) {
+          await installStoredSessionForApp(session);
+        } else {
+          await refreshAppSessionCookie().catch(() => undefined);
+        }
       } catch {
         await refreshAppSessionCookie().catch(() => undefined);
       }

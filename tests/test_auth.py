@@ -24,7 +24,12 @@ from app.models.coverage import AuditLog
 from app.models.identity import Membership, OTPChallenge, Session, User
 from app.schemas.auth import OTPChallengeRequest, OTPChallengeVerifyRequest
 from app.services import auth
-from app.services.auth import AuthContext, OTPChallengeRequestResult, OTPChallengeVerificationResult
+from app.services.auth import (
+    AuthContext,
+    OTPChallengeRequestResult,
+    OTPChallengeVerificationResult,
+    TrustedDeviceSessionRestoreResult,
+)
 
 
 class _ScalarResult:
@@ -659,6 +664,122 @@ async def test_resolve_auth_context_refreshes_all_active_sessions_for_user():
     assert sibling_session.expires_at > datetime.now(timezone.utc) + timedelta(days=13)
 
 
+@pytest.mark.asyncio
+async def test_restore_trusted_device_session_issues_new_session():
+    user = User(
+        id=uuid4(),
+        full_name="Session User",
+        email="session@example.com",
+        primary_phone_e164="+15555550188",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    source_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash="existing",
+        device_fingerprint="device-1",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={"auth_flow": "trusted_reentry"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    source_session.user = user
+
+    session = FakeAuthSession()
+    session.execute_queue = [[source_session]]
+
+    result = await auth.restore_trusted_device_session(
+        session,
+        trusted_device_id="device-1",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
+
+    assert result is not None
+    assert result.token is not None
+    assert result.session.device_fingerprint == "device-1"
+    assert result.session.session_metadata == {"auth_flow": "trusted_device_restore"}
+    assert {entry.event_name for entry in audits} == {
+        "auth.session.created",
+        "auth.session.restored",
+    }
+
+
+@pytest.mark.asyncio
+async def test_restore_trusted_device_session_rejects_ambiguous_device():
+    user_one = User(
+        id=uuid4(),
+        full_name="User One",
+        email="one@example.com",
+        primary_phone_e164="+15555550110",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    user_two = User(
+        id=uuid4(),
+        full_name="User Two",
+        email="two@example.com",
+        primary_phone_e164="+15555550111",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session_one = Session(
+        id=uuid4(),
+        user_id=user_one.id,
+        token_hash="one",
+        device_fingerprint="shared-device",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session_one.user = user_one
+    session_two = Session(
+        id=uuid4(),
+        user_id=user_two.id,
+        token_hash="two",
+        device_fingerprint="shared-device",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session_two.user = user_two
+
+    session = FakeAuthSession()
+    session.execute_queue = [[session_one, session_two]]
+
+    result = await auth.restore_trusted_device_session(
+        session,
+        trusted_device_id="shared-device",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+
+    assert result is None
+
+
 def test_list_sessions_route_returns_active_sessions():
     auth_ctx = _make_auth_context(with_membership=True)
     current_session = auth_ctx.session
@@ -958,5 +1079,82 @@ def test_request_route_sets_http_only_cookie_when_trusted_session_issued(monkeyp
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
         assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
         assert "HttpOnly" in set_cookie
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_restore_route_sets_http_only_cookie_when_trusted_device_session_restored(monkeypatch):
+    user = User(
+        id=uuid4(),
+        full_name="Restore User",
+        email="restore@example.com",
+        primary_phone_e164="+15555550199",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    issued_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash="hashed",
+        device_fingerprint="device-1",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=336),
+        session_metadata={"auth_flow": "trusted_device_restore"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def override_db():
+        yield DummySession()
+
+    async def fake_restore(*args, **kwargs):
+        return TrustedDeviceSessionRestoreResult(
+            user=user,
+            session=issued_session,
+            token="raw-token",
+            onboarding_required=False,
+        )
+
+    monkeypatch.setattr("app.api.routes.auth.auth.restore_trusted_device_session", fake_restore)
+
+    app.dependency_overrides[get_db_session] = override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/auth/restore",
+            cookies={settings.trusted_device_cookie_name: "device-1"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["restored"] is True
+        set_cookie = response.headers.get("set-cookie", "")
+        assert response.headers.get("X-Backfill-Trusted-Device") == "device-1"
+        assert response.headers.get("X-Backfill-Session-Token") == "raw-token"
+        assert f"{settings.session_cookie_name}=raw-token" in set_cookie
+        assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
+        assert "HttpOnly" in set_cookie
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_restore_route_returns_no_content_when_trusted_device_session_unavailable(monkeypatch):
+    async def override_db():
+        yield DummySession()
+
+    async def fake_restore(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.routes.auth.auth.restore_trusted_device_session", fake_restore)
+
+    app.dependency_overrides[get_db_session] = override_db
+    try:
+        client = TestClient(app)
+        response = client.post("/api/auth/restore")
+        assert response.status_code == 204
     finally:
         app.dependency_overrides.clear()

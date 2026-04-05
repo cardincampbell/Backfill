@@ -69,6 +69,14 @@ class OTPChallengeVerificationResult:
     step_up_granted: bool
 
 
+@dataclass
+class TrustedDeviceSessionRestoreResult:
+    user: User
+    session: Session
+    token: str
+    onboarding_required: bool
+
+
 def _trim_text(value: object | None) -> Optional[str]:
     if value is None:
         return None
@@ -372,6 +380,77 @@ async def resolve_auth_context(session_db: AsyncSession, raw_token: str) -> Opti
     await session_db.commit()
     await session_db.refresh(record)
     return AuthContext(user=record.user, session=record, memberships=memberships)
+
+
+async def restore_trusted_device_session(
+    session_db: AsyncSession,
+    *,
+    trusted_device_id: str | None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    now: datetime | None = None,
+) -> TrustedDeviceSessionRestoreResult | None:
+    trusted_device_id = _trim_text(trusted_device_id)
+    if not trusted_device_id:
+        return None
+
+    current_time = now or datetime.now(timezone.utc)
+    result = await session_db.execute(
+        select(Session)
+        .options(selectinload(Session.user))
+        .where(
+            Session.device_fingerprint == trusted_device_id,
+            Session.revoked_at.is_(None),
+            or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
+        )
+    )
+    records = list(result.scalars().all())
+    if not records:
+        return None
+
+    user_ids = {record.user_id for record in records}
+    if len(user_ids) != 1:
+        return None
+
+    source_session = max(
+        records,
+        key=lambda record: (
+            record.last_seen_at or record.updated_at or record.created_at,
+            record.created_at,
+        ),
+    )
+    raw_token, session_record = await _issue_authenticated_session(
+        session_db,
+        user=source_session.user,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        business_id=None,
+        location_id=None,
+        device_fingerprint=trusted_device_id,
+        session_metadata={"auth_flow": "trusted_device_restore"},
+        source="trusted_device_restore",
+        purpose="restore",
+    )
+    await audit_service.append(
+        session_db,
+        event_name="auth.session.restored",
+        target_type="session",
+        target_id=session_record.id,
+        actor_type=AuditActorType.user,
+        actor_user_id=source_session.user.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        payload={"restored_from_session_id": str(source_session.id)},
+    )
+    await session_db.commit()
+    await session_db.refresh(source_session.user)
+    await session_db.refresh(session_record)
+    return TrustedDeviceSessionRestoreResult(
+        user=source_session.user,
+        session=session_record,
+        token=raw_token,
+        onboarding_required=onboarding_required_for_user(source_session.user),
+    )
 
 
 async def revoke_session_by_id(

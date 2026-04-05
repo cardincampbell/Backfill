@@ -13,12 +13,14 @@ from app.schemas.auth import (
     OTPChallengeVerifyResponse,
     SessionRead,
     SessionRevokeResponse,
+    SessionRestoreResponse,
 )
 from app.services import audit as audit_service
 from app.services import auth, rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 TRUSTED_DEVICE_HEADER = "X-Backfill-Trusted-Device"
+SESSION_TOKEN_HEADER = "X-Backfill-Session-Token"
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -49,6 +51,10 @@ def _set_trusted_device_cookie(response: Response, trusted_device_id: str) -> No
 
 def _set_trusted_device_header(response: Response, trusted_device_id: str) -> None:
     response.headers[TRUSTED_DEVICE_HEADER] = trusted_device_id
+
+
+def _set_session_token_header(response: Response, token: str) -> None:
+    response.headers[SESSION_TOKEN_HEADER] = token
 
 
 @router.post("/challenges/request", response_model=OTPChallengeRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -149,6 +155,33 @@ async def me(auth_ctx: AuthDep):
         session=auth_ctx.session,
         memberships=auth_ctx.memberships,
         onboarding_required=auth.onboarding_required_for_user(auth_ctx.user),
+    )
+
+
+@router.post("/restore", response_model=SessionRestoreResponse)
+async def restore_session(
+    session: SessionDep,
+    request: Request,
+    response: Response,
+):
+    result = await auth.restore_trusted_device_session(
+        session,
+        trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+    )
+    if result is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    _set_session_cookie(response, result.token)
+    _set_session_token_header(response, result.token)
+    if result.session.device_fingerprint:
+        _set_trusted_device_cookie(response, result.session.device_fingerprint)
+        _set_trusted_device_header(response, result.session.device_fingerprint)
+    return SessionRestoreResponse(
+        restored=True,
+        session=result.session,
+        onboarding_required=result.onboarding_required,
     )
 
 

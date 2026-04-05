@@ -12,8 +12,8 @@ import {
 
 import type { AuthMeResponse } from "@/lib/api/auth";
 import {
-  getAuthMe,
   hasStoredSessionHandoff,
+  recoverAuthMe,
   installStoredSessionForApp,
   refreshAppSessionCookie,
 } from "@/lib/api/auth";
@@ -163,7 +163,7 @@ export function AppSessionGate({
     let cancelled = false;
 
     async function resolveSession() {
-      const session = await getAuthMe();
+      const session = await recoverAuthMe();
       if (cancelled) {
         return;
       }
