@@ -281,7 +281,7 @@ export default function DashboardSingle() {
                       <span className="text-[14px]">{location.logo}</span>
                       <span className="text-[12px] truncate" style={{ fontWeight: 480 }}>{location.name}</span>
                       {location.openShifts > 0 && (
-                        <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>{location.openShifts}</span>
+                        <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 540 }}>{location.openShifts}</span>
                       )}
                     </button>
                   </div>
@@ -388,7 +388,7 @@ export default function DashboardSingle() {
                 </div>
               </div>
               <button onClick={() => navigate('/onboarding')}
-                className="hidden sm:flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
+                className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Plus size={15} />Add Location
               </button>
@@ -441,8 +441,8 @@ export default function DashboardSingle() {
                     </div>
                     <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>21 of 24</span>
                   </div>
-                  <div className="w-full h-1.5 rounded-full bg-[#F0F0F5] mb-2 overflow-hidden">
-                    <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
+                  <div className="w-full h-1.5 backfill-ui-radius bg-[#F0F0F5] mb-2 overflow-hidden">
+                    <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
@@ -540,7 +540,7 @@ export default function DashboardSingle() {
                       {shift.filled ? (
                         <span className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 460 }}>{shift.assignee}</span>
                       ) : (
-                        <button className="text-[11px] text-[#635BFF] border border-[#635BFF]/20 rounded-full px-3 py-1 hover:bg-[#635BFF]/5 transition-colors" style={{ fontWeight: 500 }}>
+                        <button className="text-[11px] text-[#635BFF] border border-[#635BFF]/20 backfill-ui-radius px-3 py-1 hover:bg-[#635BFF]/5 transition-colors" style={{ fontWeight: 500 }}>
                           Fill shift
                         </button>
                       )}
@@ -605,9 +605,9 @@ export default function DashboardSingle() {
                     <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 440 }}>Fill rate</span>
                     <span className="text-[12px] text-[#0A2540]" style={{ fontWeight: 560 }}>{location.fillRate}%</span>
                   </div>
-                  <div className="h-2 bg-[#F0F0F5] rounded-full overflow-hidden">
+                  <div className="h-2 bg-[#F0F0F5] backfill-ui-radius overflow-hidden">
                     <motion.div initial={{ width: 0 }} animate={{ width: `${location.fillRate}%` }} transition={{ duration: 1, delay: 0.5, ease: 'easeOut' }}
-                      className="h-full rounded-full" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
+                      className="h-full backfill-ui-radius" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
                   </div>
                 </div>
                 <div className="space-y-3 pt-2">

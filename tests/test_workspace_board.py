@@ -324,7 +324,7 @@ async def _build_board() -> WorkspaceLocationBoardRead:
 
     session.get_map[(Business, business_id)] = business
     session.get_map[(Location, location_id)] = location
-    session.execute_queue = [[location_role], [employee], [shift]]
+    session.execute_queue = [[location_role], [role], [employee], [shift]]
 
     return await workspace_board.get_location_board(
         session,
@@ -442,10 +442,11 @@ async def test_location_board_summarizes_roles_workers_and_actions():
 
 
 @pytest.mark.asyncio
-async def test_location_board_falls_back_to_business_roles_when_location_roles_missing():
+async def test_location_board_reports_setup_required_when_location_roles_missing():
     board = await _build_board_without_location_roles()
 
-    assert len(board.roles) == 1
-    assert board.roles[0].role_code == "cashier"
-    assert len(board.workers) == 1
-    assert board.workers[0].role_names == ["Cashier"]
+    assert board.location_role_setup_required is True
+    assert board.roles == []
+    assert len(board.available_roles) == 1
+    assert board.available_roles[0].role_code == "cashier"
+    assert board.workers == []

@@ -395,7 +395,7 @@ export default function Dashboard() {
             </div>
             <button
               onClick={() => navigate('/onboarding')}
-              className="hidden sm:flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
+              className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
               style={{
                 fontWeight: 540,
                 background: 'linear-gradient(135deg, #635BFF, #8B5CF6)',
@@ -441,7 +441,7 @@ export default function Dashboard() {
             <h2 className="text-[18px] text-white tracking-[-0.01em]" style={{ fontWeight: 580 }}>
               Your Businesses
             </h2>
-            <span className="text-[12px] text-[#8898AA] bg-white/[0.06] px-2.5 py-0.5 rounded-full" style={{ fontWeight: 500 }}>
+            <span className="text-[12px] text-[#8898AA] bg-white/[0.06] px-2.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>
               {mockBusinesses.length}
             </span>
           </div>

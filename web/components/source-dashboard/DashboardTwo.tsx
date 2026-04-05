@@ -446,7 +446,7 @@ export default function DashboardTwo() {
                         <span className="text-[14px]">{loc.logo}</span>
                         <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
                         {loc.openShifts > 0 && (
-                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
+                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
                         )}
                       </button>
                     ))}
@@ -548,7 +548,7 @@ export default function DashboardTwo() {
                 </p>
               </div>
               <button onClick={() => navigate('/onboarding')}
-                className="hidden sm:flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
+                className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Plus size={15} />Add Location
               </button>
@@ -606,8 +606,8 @@ export default function DashboardTwo() {
                     </div>
                     <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>8 of 9</span>
                   </div>
-                  <div className="w-full h-1.5 rounded-full bg-[#F0F0F5] mb-2 overflow-hidden">
-                    <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '89%' }} />
+                  <div className="w-full h-1.5 backfill-ui-radius bg-[#F0F0F5] mb-2 overflow-hidden">
+                    <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '89%' }} />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
@@ -667,7 +667,7 @@ export default function DashboardTwo() {
           <div className="mb-5 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-[18px] text-[#0A2540] tracking-[-0.01em]" style={{ fontWeight: 580 }}>Your Locations</h2>
-              <span className="text-[12px] text-[#8898AA] bg-[#F0F0F5] px-2.5 py-0.5 rounded-full" style={{ fontWeight: 500 }}>{locations.length}</span>
+              <span className="text-[12px] text-[#8898AA] bg-[#F0F0F5] px-2.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>{locations.length}</span>
             </div>
           </div>
 

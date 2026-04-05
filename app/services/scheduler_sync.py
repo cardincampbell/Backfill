@@ -414,13 +414,6 @@ async def _get_or_create_role(
         source="scheduler_sync",
         source_metadata={"role_name": role_name},
     )
-    await businesses.ensure_location_role(
-        session,
-        business_id=business_id,
-        location_id=location_id,
-        role_id=role.id,
-        source="scheduler_sync",
-    )
     cache[code] = role
     return role
 

@@ -21,9 +21,6 @@ from app.schemas.workforce import (
     EmployeeLocationClearanceCreate,
     EmployeeRoleCreate,
 )
-from app.services import businesses
-
-
 async def _require_business(session: AsyncSession, business_id: UUID) -> Business:
     business = await session.get(Business, business_id)
     if business is None:
@@ -117,13 +114,6 @@ async def enroll_employee_at_location(
         )
         session.add(employee_role)
         employee_roles.append(employee_role)
-        await businesses.ensure_location_role(
-            session,
-            business_id=business_id,
-            location_id=payload.location_id,
-            role_id=role.id,
-            source="employee_enrollment",
-        )
 
     await session.flush()
     await session.refresh(employee)

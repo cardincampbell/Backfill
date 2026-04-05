@@ -343,8 +343,8 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 </div>
                 <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>21 of 24</span>
               </div>
-              <div className={`w-full h-1.5 rounded-full mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
-                <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
+              <div className={`w-full h-1.5 backfill-ui-radius mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
@@ -477,9 +477,9 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 <span className={`text-[12px] ${mutedClass}`} style={{ fontWeight: 440 }}>Fill rate</span>
                 <span className={`text-[12px] ${headingClass}`} style={{ fontWeight: 560 }}>{location.fillRate}%</span>
               </div>
-              <div className={`h-2 rounded-full overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+              <div className={`h-2 backfill-ui-radius overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
                 <motion.div initial={{ width: 0 }} animate={{ width: `${location.fillRate}%` }} transition={{ duration: 1, delay: 0.5, ease: 'easeOut' }}
-                  className="h-full rounded-full" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
+                  className="h-full backfill-ui-radius" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
               </div>
             </div>
             <div className="space-y-3 pt-2">
@@ -602,8 +602,8 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
                 </div>
                 <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>72 of 92</span>
               </div>
-              <div className={`w-full h-1.5 rounded-full mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
-                <div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '78%' }} />
+              <div className={`w-full h-1.5 backfill-ui-radius mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '78%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />

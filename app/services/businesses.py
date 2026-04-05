@@ -93,7 +93,12 @@ async def get_business(session: AsyncSession, business_id: UUID) -> Optional[Bus
     return await session.get(Business, business_id)
 
 
-async def create_business_record(session: AsyncSession, payload: BusinessCreate) -> Business:
+async def create_business_record(
+    session: AsyncSession,
+    payload: BusinessCreate,
+    *,
+    derive_roles: bool = True,
+) -> Business:
     slug = await _next_unique_business_slug(session, payload.slug or payload.brand_name or payload.legal_name)
     business = Business(
         legal_name=payload.legal_name,
@@ -108,7 +113,8 @@ async def create_business_record(session: AsyncSession, payload: BusinessCreate)
     )
     session.add(business)
     await session.flush()
-    await role_derivation.sync_business_role_catalog(session, business, locations=[])
+    if derive_roles:
+        await role_derivation.sync_business_role_catalog(session, business, locations=[])
     return business
 
 
@@ -195,7 +201,13 @@ async def get_location(
     return location
 
 
-async def create_location_record(session: AsyncSession, business_id: UUID, payload: LocationCreate) -> Location:
+async def create_location_record(
+    session: AsyncSession,
+    business_id: UUID,
+    payload: LocationCreate,
+    *,
+    derive_roles: bool = True,
+) -> Location:
     business = await get_business(session, business_id)
     if business is None:
         raise LookupError("business_not_found")
@@ -220,8 +232,9 @@ async def create_location_record(session: AsyncSession, business_id: UUID, paylo
     )
     session.add(location)
     await session.flush()
-    existing_locations = await list_locations(session, business_id)
-    await role_derivation.sync_business_role_catalog(session, business, locations=existing_locations)
+    if derive_roles:
+        existing_locations = await list_locations(session, business_id)
+        await role_derivation.sync_business_role_catalog(session, business, locations=existing_locations)
     return location
 
 

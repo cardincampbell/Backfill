@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.business import Location, Role
+from app.models.business import Location
 from app.models.common import OfferStatus, RetellConversationType, ShiftStatus
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.identity import User

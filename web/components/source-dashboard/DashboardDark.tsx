@@ -268,7 +268,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
           </div>
           <button
             onClick={() => navigate('/onboarding')}
-            className="hidden sm:flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
+            className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}
           >
             <Plus size={15} />
@@ -322,8 +322,8 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 </div>
                 <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>21 of 24</span>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-white/[0.06] mb-2 overflow-hidden">
-                <div className="h-full rounded-full bg-gradient-to-r from-[#00D4AA] to-[#00F0C0]" style={{ width: '88%' }} />
+              <div className="w-full h-1.5 backfill-ui-radius bg-white/[0.06] mb-2 overflow-hidden">
+                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00D4AA] to-[#00F0C0]" style={{ width: '88%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#FFB224] animate-pulse" />
@@ -457,12 +457,12 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 440 }}>Fill rate</span>
                 <span className="text-[12px] text-white" style={{ fontWeight: 560 }}>{location.fillRate}%</span>
               </div>
-              <div className="h-2 bg-white/[0.06] rounded-full overflow-hidden">
+              <div className="h-2 bg-white/[0.06] backfill-ui-radius overflow-hidden">
                 <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${location.fillRate}%` }}
                   transition={{ duration: 1, delay: 0.5, ease: 'easeOut' }}
-                  className="h-full rounded-full"
+                  className="h-full backfill-ui-radius"
                   style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }}
                 />
               </div>
@@ -544,7 +544,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
           </div>
           <button
             onClick={() => navigate('/onboarding')}
-            className="hidden sm:flex items-center gap-2 px-5 py-2.5 rounded-full text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
+            className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.3)]"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}
           >
             <Plus size={15} />
@@ -594,8 +594,8 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
                 </div>
                 <span className="text-[11px] text-[#8898AA] tabular-nums" style={{ fontWeight: 460 }}>72 of 92</span>
               </div>
-              <div className="w-full h-1.5 rounded-full bg-white/[0.06] mb-2 overflow-hidden">
-                <div className="h-full rounded-full bg-gradient-to-r from-[#00D4AA] to-[#00F0C0]" style={{ width: '78%' }} />
+              <div className="w-full h-1.5 backfill-ui-radius bg-white/[0.06] mb-2 overflow-hidden">
+                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00D4AA] to-[#00F0C0]" style={{ width: '78%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#FFB224] animate-pulse" />
@@ -652,7 +652,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-[18px] text-white tracking-[-0.01em]" style={{ fontWeight: 580 }}>Your Locations</h2>
-          <span className="text-[12px] text-[#8898AA] bg-white/[0.06] px-2.5 py-0.5 rounded-full" style={{ fontWeight: 500 }}>{locations.length}</span>
+          <span className="text-[12px] text-[#8898AA] bg-white/[0.06] px-2.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>{locations.length}</span>
         </div>
         <button className="flex items-center gap-1 text-[13px] text-[#635BFF] hover:text-[#8B5CF6] transition-colors" style={{ fontWeight: 500 }}>
           View all <ChevronRight size={14} />
@@ -915,7 +915,7 @@ export default function DashboardDark() {
                         <span className="text-[14px]">{loc.logo}</span>
                         <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
                         {loc.openShifts > 0 && (
-                          <span className="ml-auto text-[10px] text-[#FF6B6B] bg-[#FF6B6B]/15 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
+                          <span className="ml-auto text-[10px] text-[#FF6B6B] bg-[#FF6B6B]/15 px-1.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
                         )}
                       </button>
                     ))}

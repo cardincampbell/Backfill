@@ -83,7 +83,9 @@ class WorkspaceLocationBoardRead(BaseSchema):
     timezone: str
     week_start_date: date
     week_end_date: date
+    location_role_setup_required: bool = False
     roles: list[WorkspaceBoardRoleRead]
+    available_roles: list[WorkspaceBoardRoleRead] = []
     workers: list[WorkspaceBoardWorkerRead]
     shifts: list[WorkspaceBoardShiftRead]
     action_summary: WorkspaceBoardActionSummaryRead

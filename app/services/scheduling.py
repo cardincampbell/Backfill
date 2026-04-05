@@ -12,9 +12,6 @@ from app.models.coverage import CoverageCase
 from app.models.scheduling import Shift
 from app.models.scheduling import ShiftAssignment
 from app.schemas.scheduling import ShiftCreate, ShiftUpdate
-from app.services import businesses
-
-
 async def list_shifts(
     session: AsyncSession,
     business_id: UUID,
@@ -48,13 +45,7 @@ async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftC
         )
     )
     if enabled_role is None:
-        enabled_role = await businesses.ensure_location_role(
-            session,
-            business_id=business_id,
-            location_id=payload.location_id,
-            role_id=payload.role_id,
-            source="shift_usage",
-        )
+        raise ValueError("location_role_not_enabled")
 
     shift = Shift(
         business_id=business_id,
@@ -99,13 +90,7 @@ async def update_shift(
             )
         )
         if enabled_role is None:
-            enabled_role = await businesses.ensure_location_role(
-                session,
-                business_id=business_id,
-                location_id=shift.location_id,
-                role_id=payload.role_id,
-                source="shift_usage",
-            )
+            raise ValueError("location_role_not_enabled")
         shift.role_id = payload.role_id
 
     if payload.timezone is not None:

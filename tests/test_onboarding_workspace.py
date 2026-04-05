@@ -13,7 +13,7 @@ from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
 from app.schemas.onboarding import OwnerWorkspaceBootstrapRequest
-from app.services import onboarding, workspace
+from app.services import onboarding, role_derivation, workspace
 from app.services.auth import AuthContext
 
 
@@ -146,6 +146,51 @@ async def test_bootstrap_owner_workspace_creates_business_location_membership():
         "location.created",
         "onboarding.workspace.bootstrapped",
     }
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_owner_workspace_derives_roles_once_after_location_exists(monkeypatch):
+    session = FakeSession()
+    auth_ctx = _make_auth_context()
+    derive_calls: list[tuple[str, list[str]]] = []
+    original_sync = role_derivation.sync_business_role_catalog
+
+    async def instrumented_sync(db_session, business, *, locations=None):
+        derive_calls.append(
+            (
+                str(business.id),
+                [str(location.id) for location in (locations or [])],
+            )
+        )
+        return await original_sync(db_session, business, locations=locations)
+
+    monkeypatch.setattr(role_derivation, "sync_business_role_catalog", instrumented_sync)
+
+    await onboarding.bootstrap_owner_workspace(
+        session,
+        auth_ctx,
+        OwnerWorkspaceBootstrapRequest(
+            profile={"full_name": "Cardin Campbell", "email": "cardin@example.com"},
+            business={
+                "legal_name": "Whole Foods Market LLC",
+                "brand_name": "Whole Foods Market",
+                "vertical": "retail",
+                "timezone": "America/Los_Angeles",
+            },
+            location={
+                "name": "Downtown Los Angeles",
+                "address_line_1": "788 S Grand Ave",
+                "locality": "Los Angeles",
+                "region": "CA",
+                "postal_code": "90017",
+                "timezone": "America/Los_Angeles",
+                "google_place_id": "place_123",
+            },
+        ),
+    )
+
+    assert len(derive_calls) == 1
+    assert len(derive_calls[0][1]) == 1
 
 
 @pytest.mark.asyncio

@@ -45,12 +45,13 @@
   --shadow-lg: 0 24px 56px rgba(10, 37, 64, 0.12), 0 6px 16px rgba(10, 37, 64, 0.06);
 
   /* ── Radius & Motion ─────────────────────────────────── */
-  --radius-ui: 10px;
+  --radius-base: 10px;
+  --radius-ui: var(--radius-base);
   --radius-circle: 999px;
-  --radius-sm: var(--radius-ui);
-  --radius:    var(--radius-ui);
-  --radius-lg: var(--radius-ui);
-  --radius-xl: var(--radius-ui);
+  --radius-sm: var(--radius-base);
+  --radius:    var(--radius-base);
+  --radius-lg: var(--radius-base);
+  --radius-xl: var(--radius-base);
   --transition: 0.2s ease;
 }
 
@@ -84,7 +85,11 @@ body {
 }
 
 .backfill-ui-radius {
-  border-radius: var(--radius-ui);
+  border-radius: var(--radius-base);
+}
+
+.dashboard-rail-radius {
+  border-radius: var(--radius-base) !important;
 }
 
 .backfill-ui-radius.rounded-bl-md {
@@ -93,6 +98,10 @@ body {
 
 .backfill-ui-radius.rounded-br-md {
   border-bottom-right-radius: 8px;
+}
+
+:where(.rounded-lg, .rounded-xl, .rounded-2xl, .rounded-3xl) {
+  border-radius: var(--radius-base);
 }
 
 p {

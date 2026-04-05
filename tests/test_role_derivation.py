@@ -196,14 +196,11 @@ async def test_enroll_employee_at_location_creates_location_role_from_employee_a
 
     location_roles = [obj for obj in session.added if isinstance(obj, LocationRole)]
     assert result.employee.home_location_id == location.id
-    assert len(location_roles) == 1
-    assert location_roles[0].location_id == location.id
-    assert location_roles[0].role_id == role.id
-    assert location_roles[0].coverage_settings["source"] == "employee_enrollment"
+    assert location_roles == []
 
 
 @pytest.mark.asyncio
-async def test_create_shift_creates_location_role_from_shift_usage():
+async def test_create_shift_requires_explicit_location_role():
     session = FakeSession()
     business = _make_business(vertical="retail")
     location = _make_location(business_id=business.id, primary_type="store", types=["store"])
@@ -221,33 +218,32 @@ async def test_create_shift_creates_location_role_from_shift_usage():
     )
     session.get_map[(Location, location.id)] = location
     session.get_map[(Role, role.id)] = role
-    session.scalar_queue = [None, None]
+    session.scalar_queue = [None]
     starts_at = datetime.now(timezone.utc)
 
-    shift = await scheduling.create_shift(
-        session,
-        business.id,
-        ShiftCreate(
-            location_id=location.id,
-            role_id=role.id,
-            source_system="backfill_native",
-            timezone="America/Los_Angeles",
-            starts_at=starts_at,
-            ends_at=starts_at + timedelta(hours=1),
-            seats_requested=1,
-            requires_manager_approval=False,
-            premium_cents=0,
-            notes=None,
-            shift_metadata={},
-        ),
-    )
+    with pytest.raises(ValueError, match="location_role_not_enabled"):
+        await scheduling.create_shift(
+            session,
+            business.id,
+            ShiftCreate(
+                location_id=location.id,
+                role_id=role.id,
+                source_system="backfill_native",
+                timezone="America/Los_Angeles",
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(hours=1),
+                seats_requested=1,
+                requires_manager_approval=False,
+                premium_cents=0,
+                notes=None,
+                shift_metadata={},
+            ),
+        )
 
     location_roles = [obj for obj in session.added if isinstance(obj, LocationRole)]
     shifts = [obj for obj in session.added if isinstance(obj, Shift)]
-    assert shift.location_id == location.id
-    assert len(location_roles) == 1
-    assert location_roles[0].coverage_settings["source"] == "shift_usage"
-    assert len(shifts) == 1
+    assert location_roles == []
+    assert shifts == []
 
 
 @pytest.mark.asyncio
@@ -283,7 +279,7 @@ async def test_ensure_business_role_merges_source_metadata_without_clobbering_de
 
 
 @pytest.mark.asyncio
-async def test_scheduler_sync_reuses_shared_role_upsert_and_location_role():
+async def test_scheduler_sync_reuses_shared_role_upsert_without_location_role_side_effect():
     session = FakeSession()
     business = _make_business(vertical="retail")
     location = _make_location(business_id=business.id, primary_type="store", types=["store"])
@@ -304,8 +300,7 @@ async def test_scheduler_sync_reuses_shared_role_upsert_and_location_role():
     assert len(created_roles) == 1
     assert created_roles[0].metadata_json["sources"] == ["scheduler_sync"]
     assert created_roles[0].metadata_json["source_details"]["scheduler_sync"]["role_name"] == "Cashier"
-    assert len(created_location_roles) == 1
-    assert created_location_roles[0].coverage_settings["source"] == "scheduler_sync"
+    assert created_location_roles == []
 
 
 @pytest.mark.asyncio

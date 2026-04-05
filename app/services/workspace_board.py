@@ -142,37 +142,32 @@ async def get_location_board(
         .order_by(LocationRole.created_at.asc())
     )
     location_roles = list(role_rows.scalars().all())
-    enabled_role_ids: set[UUID]
-    roles: list[WorkspaceBoardRoleRead]
-    if location_roles:
-        enabled_role_ids = {item.role_id for item in location_roles}
-        roles = [
-            WorkspaceBoardRoleRead(
-                role_id=item.role.id,
-                role_code=item.role.code,
-                role_name=item.role.name,
-                min_headcount=item.min_headcount,
-                max_headcount=item.max_headcount,
-            )
-            for item in location_roles
-            if item.role is not None
-        ]
-    else:
-        business_role_rows = await session.execute(
-            select(Role)
-            .where(Role.business_id == business_id)
-            .order_by(Role.name.asc(), Role.created_at.asc())
+    enabled_role_ids = {item.role_id for item in location_roles}
+    roles = [
+        WorkspaceBoardRoleRead(
+            role_id=item.role.id,
+            role_code=item.role.code,
+            role_name=item.role.name,
+            min_headcount=item.min_headcount,
+            max_headcount=item.max_headcount,
         )
-        business_roles = list(business_role_rows.scalars().all())
-        enabled_role_ids = {role.id for role in business_roles}
-        roles = [
-            WorkspaceBoardRoleRead(
-                role_id=role.id,
-                role_code=role.code,
-                role_name=role.name,
-            )
-            for role in business_roles
-        ]
+        for item in location_roles
+        if item.role is not None
+    ]
+    business_role_rows = await session.execute(
+        select(Role)
+        .where(Role.business_id == business_id)
+        .order_by(Role.name.asc(), Role.created_at.asc())
+    )
+    business_roles = list(business_role_rows.scalars().all())
+    available_roles = [
+        WorkspaceBoardRoleRead(
+            role_id=role.id,
+            role_code=role.code,
+            role_name=role.name,
+        )
+        for role in business_roles
+    ]
 
     employee_rows = await session.execute(
         select(Employee)
@@ -317,7 +312,9 @@ async def get_location_board(
         timezone=location.timezone,
         week_start_date=window.week_start,
         week_end_date=window.week_end,
+        location_role_setup_required=not bool(location_roles),
         roles=roles,
+        available_roles=available_roles,
         workers=workers,
         shifts=shift_reads,
         action_summary=WorkspaceBoardActionSummaryRead(

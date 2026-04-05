@@ -332,8 +332,8 @@ function BulkUploadModal({ onClose, dark }: { onClose: () => void; dark: boolean
                 <p className="text-[13px] text-[#0A2540] mb-1" style={{ fontWeight: 520 }}>{uploadedFile}</p>
                 {uploadProgress < 100 ? (
                   <div className="w-48 mx-auto">
-                    <div className="h-1.5 rounded-full bg-[#F0F0F5] overflow-hidden mt-2">
-                      <motion.div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]"
+                    <div className="h-1.5 backfill-ui-radius bg-[#F0F0F5] overflow-hidden mt-2">
+                      <motion.div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]"
                         initial={{ width: 0 }} animate={{ width: `${Math.min(uploadProgress, 100)}%` }} />
                     </div>
                     <p className="text-[11px] text-[#8898AA] mt-1.5" style={{ fontWeight: 420 }}>Processing...</p>

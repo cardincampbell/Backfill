@@ -229,16 +229,16 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
           <Link to="/" className="flex items-center gap-2.5">
             <span className={`text-[18px] tracking-[-0.02em] ${textPrimaryClass}`} style={{ fontWeight: 620 }}>Backfill</span>
           </Link>
-          <button onClick={() => setSidebarOpen(false)} className={`p-1.5 backfill-ui-radius ${hoverSurfaceClass} transition-colors lg:hidden`}>
+          <button onClick={() => setSidebarOpen(false)} className={`p-1.5 dashboard-rail-radius ${hoverSurfaceClass} transition-colors lg:hidden`}>
             <X size={18} className={mutedTextClass} />
           </button>
         </div>
 
         {/* Tab Switcher */}
         <div className="px-3 pt-3 pb-1">
-          <div className={`flex items-center ${subtleSurfaceClass} backfill-ui-radius p-0.5`}>
+          <div className={`flex items-center ${subtleSurfaceClass} dashboard-rail-radius p-0.5`}>
             <button onClick={() => setSidebarTab('nav')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 backfill-ui-radius text-[12px] transition-all duration-200 ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 dashboard-rail-radius text-[12px] transition-all duration-200 ${
                 sidebarTab === 'nav'
                   ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
                   : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
@@ -246,7 +246,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
               <LayoutGrid size={13} />Navigate
             </button>
             <button onClick={() => setSidebarTab('copilot')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 backfill-ui-radius text-[12px] transition-all duration-200 ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 dashboard-rail-radius text-[12px] transition-all duration-200 ${
                 sidebarTab === 'copilot' ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm' : 'text-[#8898AA] hover:text-[#0A2540]'
               }`} style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}>
               <Sparkles size={13} />Copilot
@@ -263,7 +263,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                 <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
                   {navItems.map((item) => (
                     <button key={item.label} onClick={() => handleNav(item.path)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 backfill-ui-radius transition-all duration-200 ${
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 dashboard-rail-radius transition-all duration-200 ${
                         activeNav === item.label
                           ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                           : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -277,11 +277,11 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                   <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
                     <span className={`text-[10px] ${mutedTextClass} uppercase tracking-[0.06em] px-3 mb-2 block`} style={{ fontWeight: 500 }}>Locations</span>
                     {allLocations.map((loc) => (
-                      <button key={loc.id} className={`w-full flex items-center gap-2.5 px-3 py-2 backfill-ui-radius ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'} transition-all duration-200`}>
+                      <button key={loc.id} className={`w-full flex items-center gap-2.5 px-3 py-2 dashboard-rail-radius ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'} transition-all duration-200`}>
                         <span className="text-[14px]">{loc.logo}</span>
                         <span className="text-[12px] truncate" style={{ fontWeight: 440 }}>{loc.name}</span>
                         {loc.openShifts > 0 && (
-                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 backfill-ui-radius" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
+                          <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 dashboard-rail-radius" style={{ fontWeight: 540 }}>{loc.openShifts}</span>
                         )}
                       </button>
                     ))}
@@ -289,7 +289,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                 </nav>
                 <div className={`border-t ${sectionBorderClass} py-3 px-3 space-y-1`}>
                   <button onClick={() => handleNav('/settings')}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 backfill-ui-radius transition-all duration-200 ${
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 dashboard-rail-radius transition-all duration-200 ${
                       activeNav === 'Settings'
                         ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                         : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -310,7 +310,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
 
         {/* User */}
         <div className={`border-t ${sectionBorderClass} p-3`}>
-        <div className={`flex items-center gap-3 backfill-ui-radius p-2 ${surfaceClass}`}>
+        <div className={`flex items-center gap-3 dashboard-rail-radius p-2 ${surfaceClass}`}>
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
             <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>{initials}</span>
           </div>
