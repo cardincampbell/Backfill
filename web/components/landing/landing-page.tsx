@@ -411,9 +411,10 @@ export default function LandingPage() {
               <p>
                 Backfill Shifts isn&apos;t asking you to change how you run your restaurant. It&apos;s asking you to stop doing one thing: the schedule in your head. Tell the AI what your week looks like. It drafts it, you approve it, and the coverage engine takes over from there.
               </p>
-              <p className="text-[#b0b8c8]">
-                &ldquo;Add a closing shift Friday, same crew as last week.&rdquo; Done. &ldquo;Daniela can&apos;t do Tuesday — move her to Thursday.&rdquo; Done.
-              </p>
+              <ul className="text-[#b0b8c8] space-y-2 list-none pl-0">
+                <li>&ldquo;Add a closing shift Friday, same crew as last week.&rdquo; Done.</li>
+                <li>&ldquo;Daniela can&apos;t do Tuesday — move her to Thursday.&rdquo; Done.</li>
+              </ul>
               <p>
                 You&apos;re not learning software. You&apos;re having a conversation.
               </p>
@@ -577,25 +578,13 @@ export default function LandingPage() {
               <div className="text-[16px] text-[#8898AA]" style={{ fontWeight: 450 }}>per successfully filled shift</div>
             </div>
 
-            <div className="space-y-0 max-w-lg mx-auto">
-              {[
-                { label: 'One-time location setup', value: 'Flat fee per site' },
-                { label: 'Backfill Shifts included', value: 'No extra cost' },
-              ].map((item, index) => (
-                <div key={index} className="flex justify-between items-center py-4 border-b border-white/[0.08] last:border-0">
-                  <span className="text-[15px] text-[#8898AA]">{item.label}</span>
-                  <span className="text-[15px] text-white" style={{ fontWeight: 550 }}>{item.value}</span>
-                </div>
-              ))}
-            </div>
-
             <div className="mt-10 text-center">
               <Link
                 href="/try"
                 className="group px-7 py-3.5 bg-[#635BFF] text-white backfill-ui-radius transition-all duration-300 text-[15px] inline-flex items-center gap-2 shadow-[0_4px_20px_rgba(99,91,255,0.4)] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)] hover:translate-y-[-1px]"
                 style={{ fontWeight: 500 }}
               >
-                Try Backfill Free
+                Get Started Free
                 <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
               </Link>
             </div>
