@@ -115,6 +115,12 @@ const copilotSuggestions = [
 
 interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
 
+type CoverageDateParts = {
+  dayOfMonth: string;
+  monthLabel: string;
+  weekdayLabel: string;
+};
+
 function buildInitialMessages(firstName: string): ChatMessage[] {
   return [
     {
@@ -123,6 +129,54 @@ function buildInitialMessages(firstName: string): ChatMessage[] {
       text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
     },
   ];
+}
+
+function resolveCoverageDateParts(timeZone: string): CoverageDateParts {
+  const now = new Date();
+
+  try {
+    const dayOfMonth = new Intl.DateTimeFormat('en-US', {
+      day: 'numeric',
+      timeZone,
+    }).format(now);
+    const monthLabel = new Intl.DateTimeFormat('en-US', {
+      month: 'long',
+      timeZone,
+    }).format(now);
+    const weekdayLabel = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      timeZone,
+    }).format(now);
+
+    return { dayOfMonth, monthLabel, weekdayLabel };
+  } catch {
+    return {
+      dayOfMonth: String(now.getDate()),
+      monthLabel: now.toLocaleString('en-US', { month: 'long' }),
+      weekdayLabel: now.toLocaleString('en-US', { weekday: 'long' }),
+    };
+  }
+}
+
+function useCoverageDateParts(timeZone: string): CoverageDateParts {
+  const [dateParts, setDateParts] = useState<CoverageDateParts>(() =>
+    resolveCoverageDateParts(timeZone),
+  );
+
+  useEffect(() => {
+    const updateDateParts = () => {
+      setDateParts(resolveCoverageDateParts(timeZone));
+    };
+
+    updateDateParts();
+    const intervalId = window.setInterval(updateDateParts, 60_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [timeZone]);
+
+  return dateParts;
 }
 
 /* ─── Components ─── */
@@ -273,6 +327,8 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
     rowHoverClass,
   } = useDashboardTheme();
   const navigate = useNavigate();
+  const { timeZone } = useSmartGreeting();
+  const coverageDate = useCoverageDateParts(timeZone);
   return (
     <div>
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
@@ -303,10 +359,16 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
             className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
-                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>3</span>
+                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>
+                  {coverageDate.dayOfMonth}
+                </span>
                 <div className="flex flex-col">
-                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>April</span>
-                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>Friday</span>
+                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>
+                    {coverageDate.monthLabel}
+                  </span>
+                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>
+                    {coverageDate.weekdayLabel}
+                  </span>
                 </div>
               </div>
               <div className="ml-auto">
@@ -534,7 +596,8 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
     dashedCardClass,
   } = useDashboardTheme();
   const navigate = useNavigate();
-  const { greeting } = useSmartGreeting();
+  const { greeting, timeZone } = useSmartGreeting();
+  const coverageDate = useCoverageDateParts(timeZone);
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
@@ -566,10 +629,16 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
             className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
-                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>3</span>
+                <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>
+                  {coverageDate.dayOfMonth}
+                </span>
                 <div className="flex flex-col">
-                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>April</span>
-                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>Friday</span>
+                  <span className={`text-[13px] leading-tight ${headingClass}`} style={{ fontWeight: 580 }}>
+                    {coverageDate.monthLabel}
+                  </span>
+                  <span className={`text-[13px] leading-tight ${mutedClass}`} style={{ fontWeight: 440 }}>
+                    {coverageDate.weekdayLabel}
+                  </span>
                 </div>
               </div>
               <div className="ml-auto">
