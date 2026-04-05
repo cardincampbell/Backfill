@@ -7,235 +7,6 @@ import {
 
 export type AppearancePreference = "light" | "dark" | "system";
 
-type ClientDeviceContext = {
-  display_label?: string;
-  device_family?: string;
-  device_model?: string;
-  os_name?: string;
-  os_version?: string;
-  browser_name?: string;
-  browser_version?: string;
-};
-
-type UADataBrand = {
-  brand?: string;
-  version?: string;
-};
-
-type NavigatorUAData = {
-  brands?: UADataBrand[];
-  mobile?: boolean;
-  model?: string;
-  platform?: string;
-  getHighEntropyValues?: (
-    hints: string[],
-  ) => Promise<Record<string, unknown>>;
-};
-
-type NavigatorWithUAData = Navigator & {
-  userAgentData?: NavigatorUAData;
-};
-
-function trimText(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : null;
-}
-
-function normalizeVersion(value: string | null | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value.replace(/_/g, ".").trim();
-  return normalized || undefined;
-}
-
-function extractMatch(source: string, pattern: RegExp): string | undefined {
-  const match = source.match(pattern);
-  return normalizeVersion(match?.[1]);
-}
-
-function inferBrowserInfo(
-  userAgent: string,
-  brands: UADataBrand[] | undefined,
-): { name?: string; version?: string } {
-  const brandEntries = Array.isArray(brands) ? brands : [];
-  const chromiumBrand = brandEntries.find((entry) =>
-    /Google Chrome|Chromium/i.test(entry.brand ?? ""),
-  );
-  const edgeBrand = brandEntries.find((entry) =>
-    /Microsoft Edge/i.test(entry.brand ?? ""),
-  );
-  const operaBrand = brandEntries.find((entry) =>
-    /Opera/i.test(entry.brand ?? ""),
-  );
-
-  if (/EdgiOS\/([0-9.]+)/i.test(userAgent)) {
-    return { name: "Edge", version: extractMatch(userAgent, /EdgiOS\/([0-9.]+)/i) };
-  }
-  if (/Edg\/([0-9.]+)/i.test(userAgent) || edgeBrand) {
-    return {
-      name: "Edge",
-      version: extractMatch(userAgent, /Edg\/([0-9.]+)/i) ?? normalizeVersion(edgeBrand?.version),
-    };
-  }
-  if (/OPR\/([0-9.]+)/i.test(userAgent) || operaBrand) {
-    return {
-      name: "Opera",
-      version: extractMatch(userAgent, /OPR\/([0-9.]+)/i) ?? normalizeVersion(operaBrand?.version),
-    };
-  }
-  if (/FxiOS\/([0-9.]+)/i.test(userAgent)) {
-    return { name: "Firefox", version: extractMatch(userAgent, /FxiOS\/([0-9.]+)/i) };
-  }
-  if (/Firefox\/([0-9.]+)/i.test(userAgent)) {
-    return { name: "Firefox", version: extractMatch(userAgent, /Firefox\/([0-9.]+)/i) };
-  }
-  if (/CriOS\/([0-9.]+)/i.test(userAgent)) {
-    return { name: "Chrome", version: extractMatch(userAgent, /CriOS\/([0-9.]+)/i) };
-  }
-  if (/Chrome\/([0-9.]+)/i.test(userAgent) || chromiumBrand) {
-    return {
-      name: "Chrome",
-      version:
-        extractMatch(userAgent, /Chrome\/([0-9.]+)/i) ??
-        normalizeVersion(chromiumBrand?.version),
-    };
-  }
-  if (/Version\/([0-9.]+).+Safari\//i.test(userAgent)) {
-    return {
-      name: "Safari",
-      version: extractMatch(userAgent, /Version\/([0-9.]+).+Safari\//i),
-    };
-  }
-  if (/Safari\//i.test(userAgent)) {
-    return { name: "Safari" };
-  }
-  return { name: "Browser" };
-}
-
-function inferOsInfo(
-  userAgent: string,
-  platform: string | undefined,
-): { name?: string; version?: string } {
-  if (/iPhone|iPad|iPod/i.test(userAgent)) {
-    return {
-      name: "iOS",
-      version: extractMatch(userAgent, /OS ([0-9_]+)/i),
-    };
-  }
-  if (/Android/i.test(userAgent)) {
-    return {
-      name: "Android",
-      version: extractMatch(userAgent, /Android ([0-9.]+)/i),
-    };
-  }
-  if (/Macintosh|Mac OS X/i.test(userAgent) || /macOS/i.test(platform ?? "")) {
-    return {
-      name: "macOS",
-      version: extractMatch(userAgent, /Mac OS X ([0-9_]+)/i),
-    };
-  }
-  if (/Windows/i.test(userAgent) || /Windows/i.test(platform ?? "")) {
-    return {
-      name: "Windows",
-      version: extractMatch(userAgent, /Windows NT ([0-9.]+)/i),
-    };
-  }
-  if (/CrOS/i.test(userAgent) || /Chrome OS/i.test(platform ?? "")) {
-    return { name: "ChromeOS" };
-  }
-  if (/Linux/i.test(userAgent) || /Linux/i.test(platform ?? "")) {
-    return { name: "Linux" };
-  }
-  return {};
-}
-
-function inferDeviceInfo(
-  userAgent: string,
-  options: {
-    mobile?: boolean;
-    model?: string;
-    platform?: string;
-  },
-): { family?: string; model?: string } {
-  const model = trimText(options.model) ?? undefined;
-  if (/iPhone/i.test(userAgent)) {
-    return { family: "iPhone", model };
-  }
-  if (/iPad/i.test(userAgent)) {
-    return { family: "iPad", model };
-  }
-  if (/Android/i.test(userAgent) || /Android/i.test(options.platform ?? "")) {
-    return { family: "Android", model };
-  }
-  if (/Macintosh|Mac OS X/i.test(userAgent) || /macOS/i.test(options.platform ?? "")) {
-    return { family: "Mac", model };
-  }
-  if (/Windows/i.test(userAgent) || /Windows/i.test(options.platform ?? "")) {
-    return { family: "Windows PC", model };
-  }
-  if (/CrOS/i.test(userAgent) || /Chrome OS/i.test(options.platform ?? "")) {
-    return { family: "Chromebook", model };
-  }
-  if (/Linux/i.test(userAgent) || /Linux/i.test(options.platform ?? "")) {
-    return { family: options.mobile ? "Mobile Device" : "Linux", model };
-  }
-  return { family: options.mobile ? "Mobile Device" : "Unknown Device", model };
-}
-
-async function collectClientDeviceContext(): Promise<ClientDeviceContext> {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return {};
-  }
-
-  const userAgent = trimText(navigator.userAgent) ?? "";
-  const navigatorWithUAData = navigator as NavigatorWithUAData;
-  const uaData = navigatorWithUAData.userAgentData;
-
-  let model = trimText(uaData?.model) ?? undefined;
-  let platform = trimText(uaData?.platform) ?? undefined;
-
-  if (typeof uaData?.getHighEntropyValues === "function") {
-    try {
-      const values = await uaData.getHighEntropyValues(["model"]);
-      model = trimText(values.model) ?? model;
-    } catch {
-      // Ignore unsupported high-entropy lookups and fall back to the user agent.
-    }
-  }
-
-  const browser = inferBrowserInfo(userAgent, uaData?.brands);
-  const os = inferOsInfo(userAgent, platform);
-  const device = inferDeviceInfo(userAgent, {
-    mobile: uaData?.mobile,
-    model,
-    platform,
-  });
-
-  const deviceName = device.model ?? device.family;
-  const osLabel = os.name
-    ? os.version
-      ? `${os.name} ${os.version}`
-      : os.name
-    : undefined;
-  const displayLabel = [deviceName, osLabel, browser.name]
-    .filter(Boolean)
-    .join(" • ");
-
-  return {
-    display_label: displayLabel || undefined,
-    device_family: device.family,
-    device_model: device.model,
-    os_name: os.name,
-    os_version: os.version,
-    browser_name: browser.name,
-    browser_version: browser.version,
-  };
-}
-
 async function parseError(response: Response): Promise<string> {
   const requestId = response.headers.get("X-Backfill-Request-ID");
   try {
@@ -292,7 +63,6 @@ async function parseError(response: Response): Promise<string> {
 export type Session = {
   id: string;
   user_id: string;
-  device_fingerprint?: string | null;
   ip_address?: string | null;
   user_agent?: string | null;
   risk_level: string;
@@ -673,7 +443,6 @@ export async function requestChallenge(input: {
   purpose: "sign_in" | "sign_up";
   locale?: string;
 }) {
-  const deviceContext = await collectClientDeviceContext();
   const response = await apiFetchApp(`${API_PREFIX}/auth/challenges/request`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -681,9 +450,6 @@ export async function requestChallenge(input: {
       phone_e164: input.phone_e164,
       purpose: input.purpose,
       locale: input.locale ?? "en",
-      challenge_metadata: {
-        device_context: deviceContext,
-      },
     }),
   });
   if (!response.ok) {
@@ -712,7 +478,6 @@ export async function verifyChallenge(input: {
   phone_e164: string;
   code: string;
 }) {
-  const deviceContext = await collectClientDeviceContext();
   const response = await apiFetchApp(`${API_PREFIX}/auth/challenges/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -720,9 +485,6 @@ export async function verifyChallenge(input: {
       challenge_id: input.challenge_id,
       phone_e164: input.phone_e164,
       code: input.code,
-      session_metadata: {
-        device_context: deviceContext,
-      },
     }),
   });
   if (!response.ok) {
@@ -759,7 +521,6 @@ export async function requestManagerInviteChallenge(input: {
   manager_name?: string;
   locale?: string;
 }) {
-  const deviceContext = await collectClientDeviceContext();
   const response = await apiFetchApp(
     `${API_PREFIX}/manager-invites/${input.inviteToken}/request-challenge`,
     {
@@ -769,9 +530,6 @@ export async function requestManagerInviteChallenge(input: {
         phone_e164: input.phone_e164,
         manager_name: input.manager_name,
         locale: input.locale ?? "en",
-        challenge_metadata: {
-          device_context: deviceContext,
-        },
       }),
     },
   );

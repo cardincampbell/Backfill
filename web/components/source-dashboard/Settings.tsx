@@ -142,43 +142,6 @@ function formatSessionTimestamp(value: string | null | undefined): string | null
   }).format(date);
 }
 
-function trimMetadataText(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized || null;
-}
-
-function readSessionDeviceContext(
-  session: AuthSessionRecord,
-): {
-  displayLabel?: string;
-  deviceFamily?: string;
-  deviceModel?: string;
-  osName?: string;
-  osVersion?: string;
-  browserName?: string;
-} {
-  const metadata = session.session_metadata;
-  if (!metadata || typeof metadata !== "object") {
-    return {};
-  }
-  const raw = metadata["device_context"];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
-  const source = raw as Record<string, unknown>;
-  return {
-    displayLabel: trimMetadataText(source.display_label) ?? undefined,
-    deviceFamily: trimMetadataText(source.device_family) ?? undefined,
-    deviceModel: trimMetadataText(source.device_model) ?? undefined,
-    osName: trimMetadataText(source.os_name) ?? undefined,
-    osVersion: trimMetadataText(source.os_version) ?? undefined,
-    browserName: trimMetadataText(source.browser_name) ?? undefined,
-  };
-}
-
 function extractUserAgentVersion(
   source: string,
   pattern: RegExp,
@@ -258,25 +221,6 @@ function formatUserAgentDeviceLabel(userAgent: string | null | undefined): strin
 }
 
 function formatSessionDeviceLabel(session: AuthSessionRecord): string {
-  const deviceContext = readSessionDeviceContext(session);
-  if (deviceContext.displayLabel) {
-    return deviceContext.displayLabel;
-  }
-
-  const deviceName = deviceContext.deviceModel ?? deviceContext.deviceFamily;
-  const osLabel = deviceContext.osName
-    ? deviceContext.osVersion
-      ? `${deviceContext.osName} ${deviceContext.osVersion}`
-      : deviceContext.osName
-    : null;
-
-  const contextLabel = [deviceName, osLabel, deviceContext.browserName]
-    .filter(Boolean)
-    .join(" • ");
-  if (contextLabel) {
-    return contextLabel;
-  }
-
   return formatUserAgentDeviceLabel(session.user_agent);
 }
 

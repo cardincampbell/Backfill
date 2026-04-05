@@ -171,6 +171,26 @@ def test_auth_me_requires_session():
         app.dependency_overrides.clear()
 
 
+def test_auth_me_omits_trusted_device_identifier():
+    auth_ctx = _make_auth_context(with_membership=True)
+    auth_ctx.session.device_fingerprint = "device-1"
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.get("/api/auth/me")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["session"]["id"] == str(auth_ctx.session.id)
+        assert "device_fingerprint" not in payload["session"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_business_read_denies_without_membership():
     target_business_id = uuid4()
 
@@ -263,7 +283,15 @@ async def test_request_otp_challenge_records_audit(monkeypatch):
 
     result = await auth.request_otp_challenge(
         session,
-        OTPChallengeRequest(phone_e164="+1 (555) 555-0123", purpose="sign_in"),
+        OTPChallengeRequest(
+            phone_e164="+1 (555) 555-0123",
+            purpose="sign_in",
+            challenge_metadata={
+                "device_context": {
+                    "display_label": "Spoofed Device",
+                }
+            },
+        ),
         ip_address="127.0.0.1",
         user_agent="pytest",
     )
@@ -274,6 +302,8 @@ async def test_request_otp_challenge_records_audit(monkeypatch):
     challenge = result.challenge
     assert challenge.external_sid == "VE123"
     assert challenge.status == ChallengeStatus.pending
+    assert challenge.challenge_metadata["locale"] == "en"
+    assert "device_context" not in challenge.challenge_metadata
     assert audits[-1].event_name == "auth.challenge.requested"
     assert audits[-1].actor_type == AuditActorType.user
 
@@ -403,16 +433,7 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
     assert result.session is not None
     assert result.trusted_device_id == "device-1"
     assert result.session.device_fingerprint == "device-1"
-    assert result.session.session_metadata == {
-        "auth_flow": "trusted_reentry",
-        "device_context": {
-            "display_label": "iPhone • iOS 17.4 • Safari",
-            "device_family": "iPhone",
-            "os_name": "iOS",
-            "os_version": "17.4",
-            "browser_name": "Safari",
-        },
-    }
+    assert result.session.session_metadata == {"auth_flow": "trusted_reentry"}
     assert len(sessions) == 1
     assert {entry.event_name for entry in audits} == {
         "auth.challenge.skipped",
@@ -513,15 +534,7 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
     assert result.session is not None
     assert result.trusted_device_id is not None
     assert result.session.device_fingerprint == result.trusted_device_id
-    assert result.session.session_metadata == {
-        "device_context": {
-            "display_label": "Mac • macOS 15.4 • Chrome",
-            "device_family": "Mac",
-            "os_name": "macOS",
-            "os_version": "15.4",
-            "browser_name": "Chrome",
-        }
-    }
+    assert result.session.session_metadata == {}
     assert challenge.status == ChallengeStatus.approved
     assert len(users) == 1
     assert users[0].primary_phone_e164 == "+15555550160"
@@ -696,6 +709,8 @@ def test_list_sessions_route_returns_active_sessions():
         ]
         assert payload[0]["user_agent"] == current_session.user_agent
         assert payload[1]["ip_address"] == sibling_session.ip_address
+        assert "device_fingerprint" not in payload[0]
+        assert "device_fingerprint" not in payload[1]
     finally:
         app.dependency_overrides.clear()
 
@@ -870,6 +885,8 @@ def test_verify_route_sets_http_only_cookie(monkeypatch):
             },
         )
         assert response.status_code == 200
+        payload = response.json()
+        assert "device_fingerprint" not in payload["session"]
         set_cookie = response.headers.get("set-cookie", "")
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
         assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
@@ -934,6 +951,7 @@ def test_request_route_sets_http_only_cookie_when_trusted_session_issued(monkeyp
         assert payload["otp_required"] is False
         assert payload["token"] == "raw-token"
         assert payload["challenge"] is None
+        assert "device_fingerprint" not in payload["session"]
         set_cookie = response.headers.get("set-cookie", "")
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
         assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie

@@ -76,45 +76,9 @@ def _trim_text(value: object | None) -> Optional[str]:
     return text or None
 
 
-def _normalized_device_context(value: object | None) -> dict[str, str]:
-    if not isinstance(value, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key in (
-        "display_label",
-        "device_family",
-        "device_model",
-        "os_name",
-        "os_version",
-        "browser_name",
-        "browser_version",
-    ):
-        text = _trim_text(value.get(key))
-        if text:
-            normalized[key] = text
-    return normalized
-
-
-def _normalized_client_session_metadata(value: object | None) -> dict:
-    if not isinstance(value, dict):
-        return {}
-    normalized: dict[str, object] = {}
-    auth_flow = _trim_text(value.get("auth_flow"))
-    if auth_flow:
-        normalized["auth_flow"] = auth_flow
-    device_context = _normalized_device_context(value.get("device_context"))
-    if device_context:
-        normalized["device_context"] = device_context
-    return normalized
-
-
 def _merged_client_challenge_metadata(value: object | None, *, locale: str | None = None) -> dict:
     metadata = dict(value) if isinstance(value, dict) else {}
-    device_context = _normalized_device_context(metadata.get("device_context"))
-    if device_context:
-        metadata["device_context"] = device_context
-    else:
-        metadata.pop("device_context", None)
+    metadata.pop("device_context", None)
     if locale:
         metadata["locale"] = locale
     return metadata
@@ -567,12 +531,7 @@ async def request_otp_challenge(
             business_id=payload.business_id,
             location_id=payload.location_id,
             device_fingerprint=trusted_device_id,
-            session_metadata=_normalized_client_session_metadata(
-                {
-                    "auth_flow": "trusted_reentry",
-                    "device_context": (payload.challenge_metadata or {}).get("device_context"),
-                }
-            ),
+            session_metadata={"auth_flow": "trusted_reentry"},
             source="trusted_reentry",
             purpose=purpose.value,
         )
@@ -902,7 +861,7 @@ async def verify_otp_challenge(
         actor_membership_id=invite_membership.id if invite_membership is not None else None,
         device_fingerprint=trusted_device_id,
         risk_level=payload.risk_level,
-        session_metadata=_normalized_client_session_metadata(payload.session_metadata),
+        session_metadata={},
         source="otp_challenge",
         purpose=challenge.purpose.value,
     )

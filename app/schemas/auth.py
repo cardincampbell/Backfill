@@ -24,7 +24,6 @@ class SessionCreateRequest(BaseSchema):
 class SessionRead(BaseSchema):
     id: UUID
     user_id: UUID
-    device_fingerprint: Optional[str]
     ip_address: Optional[str]
     user_agent: Optional[str]
     risk_level: str
