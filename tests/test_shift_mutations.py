@@ -189,6 +189,89 @@ def test_update_shift_route_updates_shift():
       app.dependency_overrides.clear()
 
 
+def test_create_shift_route_rejects_end_before_start():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.get_map[(Role, role_id)] = role
+    fake_session.scalar_queue = [location_role]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts",
+            json={
+                "location_id": str(location_id),
+                "role_id": str(role_id),
+                "source_system": "backfill_native",
+                "timezone": "America/Los_Angeles",
+                "starts_at": (now + timedelta(hours=8)).isoformat(),
+                "ends_at": (now + timedelta(hours=2)).isoformat(),
+                "seats_requested": 1,
+                "requires_manager_approval": False,
+                "premium_cents": 0,
+                "notes": None,
+                "shift_metadata": {},
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {"detail": "shift_end_must_be_after_start"}
+        assert all(not isinstance(entry, Shift) for entry in fake_session.added)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_delete_shift_route_deletes_empty_shift():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)

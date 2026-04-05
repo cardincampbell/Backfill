@@ -28,6 +28,7 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
         assert args["offer_id"] == "offer_123"
         return {"status": "accepted", "offer_id": "offer_123"}
 
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.dispatch_function_call", fake_dispatch)
 
     app.dependency_overrides[get_db_session] = _override_db
@@ -35,6 +36,7 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/providers/retell/webhook",
+            headers={"X-Retell-Signature": "sig_valid"},
             json={
                 "event": "function_call",
                 "name": "claim_shift",
@@ -55,6 +57,7 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
         assert body["event"] == "call_started"
         return Conversation()
 
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.persist_payload", fake_persist)
 
     app.dependency_overrides[get_db_session] = _override_db
@@ -62,6 +65,7 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
         client = TestClient(app)
         response = client.post(
             "/api/providers/retell/webhook",
+            headers={"X-Retell-Signature": "sig_valid"},
             json={
                 "event": "call_started",
                 "call": {"call_id": "call_123"},
@@ -69,5 +73,21 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
         )
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "conversation_id": "conv_123"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_retell_webhook_rejects_invalid_signature(monkeypatch):
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: False)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/providers/retell/webhook",
+            json={"event": "call_started", "call": {"call_id": "call_123"}},
+        )
+        assert response.status_code == 403
+        assert response.json() == {"detail": "invalid_webhook_signature"}
     finally:
         app.dependency_overrides.clear()

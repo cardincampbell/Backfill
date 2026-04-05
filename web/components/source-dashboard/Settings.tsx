@@ -24,7 +24,6 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 
 import {
   type AppearancePreference,
@@ -283,7 +282,6 @@ export default function Settings({
 }: {
   embeddedInShell?: boolean;
 }) {
-  const router = useRouter();
   const session = useAppSession();
   const updateSession = useUpdateAppSession();
   const appearancePreference = useAppAppearancePreference();
@@ -521,7 +519,6 @@ export default function Settings({
         ...current,
         personal: { tone: "success", message: "Personal information updated." },
       }));
-      router.refresh();
     } catch (error) {
       setFeedback((current) => ({
         ...current,
@@ -560,7 +557,6 @@ export default function Settings({
         ...current,
         business: { tone: "success", message: "Company profile updated." },
       }));
-      router.refresh();
     } catch (error) {
       setFeedback((current) => ({
         ...current,

@@ -450,3 +450,12 @@ async def test_location_board_reports_setup_required_when_location_roles_missing
     assert len(board.available_roles) == 1
     assert board.available_roles[0].role_code == "cashier"
     assert board.workers == []
+
+
+def test_board_window_uses_location_timezone_boundaries():
+    window = workspace_board.board_window("America/Los_Angeles", date(2026, 4, 6))
+
+    assert window.week_start == date(2026, 4, 6)
+    assert window.week_end == date(2026, 4, 12)
+    assert window.starts_at == datetime(2026, 4, 6, 7, 0, tzinfo=timezone.utc)
+    assert window.ends_at == datetime(2026, 4, 13, 6, 59, 59, 999999, tzinfo=timezone.utc)

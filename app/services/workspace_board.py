@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,16 +41,17 @@ class LocationBoardWindow:
     ends_at: datetime
 
 
-def monday_for(value: date | None = None) -> date:
-    current = value or datetime.now(timezone.utc).date()
+def monday_for(timezone_name: str, value: date | None = None) -> date:
+    current = value or datetime.now(ZoneInfo(timezone_name)).date()
     return current - timedelta(days=current.weekday())
 
 
-def board_window(week_start: date | None = None) -> LocationBoardWindow:
-    monday = monday_for(week_start)
+def board_window(timezone_name: str, week_start: date | None = None) -> LocationBoardWindow:
+    local_zone = ZoneInfo(timezone_name)
+    monday = monday_for(timezone_name, week_start)
     week_end = monday + timedelta(days=6)
-    starts_at = datetime.combine(monday, datetime.min.time(), tzinfo=timezone.utc)
-    ends_at = datetime.combine(week_end, datetime.max.time(), tzinfo=timezone.utc)
+    starts_at = datetime.combine(monday, datetime.min.time(), tzinfo=local_zone).astimezone(timezone.utc)
+    ends_at = datetime.combine(week_end, datetime.max.time(), tzinfo=local_zone).astimezone(timezone.utc)
     return LocationBoardWindow(
         week_start=monday,
         week_end=week_end,
@@ -125,12 +127,11 @@ async def get_location_board(
     location_id: UUID,
     week_start: date | None = None,
 ) -> WorkspaceLocationBoardRead:
-    window = board_window(week_start)
-
     business = await session.get(Business, business_id)
     location = await session.get(Location, location_id)
     if business is None or location is None or location.business_id != business_id:
         raise LookupError("business_or_location_not_found")
+    window = board_window(location.timezone, week_start)
 
     role_rows = await session.execute(
         select(LocationRole)

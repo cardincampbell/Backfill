@@ -1,5 +1,6 @@
 import {
   SESSION_COOKIE,
+  SESSION_HANDOFF_COOKIE,
   SESSION_HANDOFF_STORAGE_KEY,
 } from "@/lib/auth/constants";
 import { API_BASE_URL } from "./client";
@@ -16,6 +17,14 @@ async function getSessionToken(): Promise<string | undefined> {
 
 function getClientSessionHandoffToken(): string | undefined {
   if (typeof window === "undefined") {
+    return undefined;
+  }
+  const hasHandoffMarker = document.cookie
+    .split(";")
+    .some((cookie) =>
+      cookie.trim().startsWith(`${SESSION_HANDOFF_COOKIE}=`),
+    );
+  if (!hasHandoffMarker) {
     return undefined;
   }
   try {

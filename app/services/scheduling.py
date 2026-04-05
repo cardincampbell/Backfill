@@ -12,6 +12,8 @@ from app.models.coverage import CoverageCase
 from app.models.scheduling import Shift
 from app.models.scheduling import ShiftAssignment
 from app.schemas.scheduling import ShiftCreate, ShiftUpdate
+
+
 async def list_shifts(
     session: AsyncSession,
     business_id: UUID,
@@ -36,6 +38,8 @@ async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftC
     role = await session.get(Role, payload.role_id)
     if location is None or role is None or location.business_id != business_id or role.business_id != business_id:
         raise LookupError("location_or_role_not_found")
+    if payload.ends_at <= payload.starts_at:
+        raise ValueError("shift_end_must_be_after_start")
 
     enabled_role = await session.scalar(
         select(LocationRole).where(
@@ -101,7 +105,7 @@ async def update_shift(
         shift.ends_at = payload.ends_at
     if payload.starts_at is not None or payload.ends_at is not None:
         if shift.ends_at <= shift.starts_at:
-          raise ValueError("shift_end_must_be_after_start")
+            raise ValueError("shift_end_must_be_after_start")
     if payload.seats_requested is not None:
         if payload.seats_requested < max(1, shift.seats_filled):
             raise ValueError("seats_requested_below_current_fill")

@@ -243,6 +243,8 @@ async def test_sync_business_identity_promotes_clean_business_name_and_persists_
     assert business.settings["brand_name_source"] == "derived"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
     assert pasadena.settings["derived_identity"]["suggested_location_name"] == "Urth Caffe · Pasadena"
+    assert pasadena.settings["derived_identity"]["location_name_promoted"] is True
+    assert pasadena.name == "Urth Caffe · Pasadena"
     assert result.support_location_count == 2
 
 
@@ -274,6 +276,30 @@ async def test_sync_business_identity_respects_manual_brand_override():
     assert business.brand_name == "Urth Caffe"
     assert business.settings["brand_name_source"] == "manual"
     assert business.settings["derived_identity"]["manual_override_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_business_identity_does_not_promote_single_location_name():
+    session = FakeSession()
+    business = _make_business(
+        brand_name="Urth Caffe Pasadena",
+        place_metadata={"name": "Urth Caffe Pasadena"},
+    )
+    pasadena = _make_location(
+        business_id=business.id,
+        raw_place_name="Urth Caffe Pasadena",
+        locality="Pasadena",
+    )
+
+    await business_identity_derivation.sync_business_identity(
+        session,
+        business,
+        locations=[pasadena],
+    )
+
+    assert business.brand_name == "Urth Caffe"
+    assert pasadena.settings["derived_identity"]["location_name_promoted"] is False
+    assert pasadena.name == "Urth Caffe Pasadena"
 
 
 @pytest.mark.asyncio
@@ -367,6 +393,7 @@ async def test_bootstrap_owner_workspace_promotes_clean_business_name():
     assert business.brand_name == "Urth Caffe"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
     assert location.settings["derived_identity"]["suggested_location_name"] == "Urth Caffe · Pasadena"
+    assert location.settings["derived_identity"]["location_name_promoted"] is False
 
 
 @pytest.mark.asyncio

@@ -272,8 +272,21 @@ function readStoredVerifiedSessionToken(): string | null {
   }
 }
 
+function hasSessionHandoffCookie(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return document.cookie
+    .split(";")
+    .some((cookie) =>
+      cookie.trim().startsWith(`${SESSION_HANDOFF_COOKIE}=`),
+    );
+}
+
 export function hasStoredSessionHandoff(): boolean {
-  return Boolean(readStoredVerifiedSessionToken());
+  return Boolean(
+    readStoredVerifiedSessionToken() && hasSessionHandoffCookie(),
+  );
 }
 
 export async function installVerifiedSessionForApp(
@@ -300,6 +313,8 @@ export async function installVerifiedSessionForApp(
   if (!completionResponse.ok) {
     throw new Error(await parseError(completionResponse));
   }
+
+  clearVerifiedSessionHandoff();
 }
 
 export async function installStoredSessionForApp(
@@ -327,6 +342,8 @@ export async function installStoredSessionForApp(
   if (!completionResponse.ok) {
     throw new Error(await parseError(completionResponse));
   }
+
+  clearVerifiedSessionHandoff();
 }
 
 export async function refreshAppSessionCookie(): Promise<void> {
@@ -337,6 +354,7 @@ export async function refreshAppSessionCookie(): Promise<void> {
   if (!response.ok && response.status !== 204) {
     throw new Error(await parseError(response));
   }
+  clearVerifiedSessionHandoff();
 }
 
 export function replaceWithAuthDestination(onboardingRequired: boolean): void {

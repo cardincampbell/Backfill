@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.business import Business, Location
 
 DERIVATION_VERSION = "business_identity_places_v1"
+_PROMOTE_LOCATION_NAME_CONFIDENCE = 0.9
 _GENERIC_BASE_NAMES = {"location", "store", "shop", "office", "branch"}
 _PROTECTED_BASE_NAMES = {
     "boston market",
@@ -413,8 +414,13 @@ async def sync_business_identity(
             "derivation_version": DERIVATION_VERSION,
             "reason_codes": identity.reason_codes,
             "suggested_location_name": identity.suggested_location_name,
+            "location_name_promoted": bool(
+                identity.location_label is not None and identity.confidence >= _PROMOTE_LOCATION_NAME_CONFIDENCE
+            ),
             "evidence": identity.evidence,
         }
+        if identity.location_label is not None and identity.confidence >= _PROMOTE_LOCATION_NAME_CONFIDENCE:
+            location.name = identity.suggested_location_name
         location.settings = location_settings
 
     await session.flush()

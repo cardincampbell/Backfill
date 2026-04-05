@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
 import {
@@ -51,7 +50,6 @@ function profileTitle(user: AuthUser): string {
 export function AccountSettingsPanel({
   session,
 }: AccountSettingsPanelProps) {
-  const router = useRouter();
   const [user, setUser] = useState(session.user);
   const [fullName, setFullName] = useState(session.user.full_name ?? "");
   const [email, setEmail] = useState(session.user.email ?? "");
@@ -83,7 +81,6 @@ export function AccountSettingsPanel({
       setFullName(response.user.full_name ?? "");
       setEmail(response.user.email ?? "");
       setFeedback({ type: "success", message: "Account details updated." });
-      router.refresh();
     } catch (error) {
       setFeedback({
         type: "error",
