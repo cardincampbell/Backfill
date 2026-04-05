@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.business import Location, LocationRole, Role
+from app.models.business import Location, Role
 from app.models.common import (
     AssignmentStatus,
     CoverageCaseStatus,
@@ -38,6 +38,7 @@ from app.schemas.integrations import (
     SchedulerSyncJobRead,
 )
 from app.services import coverage as coverage_service
+from app.services import businesses
 from app.services import scheduling as scheduling_service
 from app.services.scheduler_adapters import (
     ExternalEmployeeRecord,
@@ -46,8 +47,6 @@ from app.services.scheduler_adapters import (
     build_connection_secret_hint,
 )
 from app.services.utils import role_code_from_name
-
-
 ROLLING_RECONCILE_INTERVAL = timedelta(minutes=30)
 
 
@@ -405,42 +404,23 @@ async def _get_or_create_role(
     cache: dict[str, Role],
 ) -> Role:
     code = role_code_from_name(role_name)
-    if code in cache:
-        return cache[code]
-    role = await session.scalar(
-        select(Role).where(Role.business_id == business_id, Role.code == code)
+    cached = cache.get(code)
+    if cached is not None:
+        return cached
+    role = await businesses.ensure_business_role(
+        session,
+        business_id=business_id,
+        role_name=role_name,
+        source="scheduler_sync",
+        source_metadata={"role_name": role_name},
     )
-    if role is None:
-        role = Role(
-            business_id=business_id,
-            code=code,
-            name=role_name,
-            min_notice_minutes=0,
-            coverage_priority=100,
-            metadata_json={"source": "scheduler_sync"},
-        )
-        session.add(role)
-        await session.flush()
-    location_role = await session.scalar(
-        select(LocationRole).where(
-            LocationRole.location_id == location_id,
-            LocationRole.role_id == role.id,
-        )
+    await businesses.ensure_location_role(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role.id,
+        source="scheduler_sync",
     )
-    if location_role is None:
-        session.add(
-            LocationRole(
-                location_id=location_id,
-                role_id=role.id,
-                is_active=True,
-                premium_rules={},
-                coverage_settings={},
-            )
-        )
-        await session.flush()
-    elif not location_role.is_active:
-        location_role.is_active = True
-        await session.flush()
     cache[code] = role
     return role
 

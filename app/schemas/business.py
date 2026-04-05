@@ -116,6 +116,13 @@ class RoleRead(BaseSchema):
     updated_at: datetime
 
 
+class BusinessRoleDerivationRead(BaseSchema):
+    business_id: UUID
+    vertical: Optional[str]
+    settings: dict
+    roles: list[RoleRead]
+
+
 class LocationRoleAttach(BaseSchema):
     min_headcount: Optional[int] = None
     max_headcount: Optional[int] = None

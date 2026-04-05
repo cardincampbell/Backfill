@@ -15,6 +15,7 @@ from app.schemas.business import (
     LocationRoleAttach,
     RoleCreate,
 )
+from app.services import role_derivation
 from app.services.utils import role_code_from_name, slugify
 
 
@@ -56,6 +57,28 @@ async def _next_unique_role_code(session: AsyncSession, business_id: UUID, reque
     return code
 
 
+def _merge_role_metadata(
+    existing: dict | None,
+    *,
+    source: str,
+    source_metadata: dict | None = None,
+) -> dict:
+    metadata = dict(existing or {})
+    sources = [item for item in metadata.get("sources", []) if isinstance(item, str) and item.strip()]
+    if source not in sources:
+        sources.append(source)
+    metadata["sources"] = sorted(set(sources))
+    metadata["last_source"] = source
+
+    source_details = dict(metadata.get("source_details") or {})
+    current_source_payload = dict(source_details.get(source) or {})
+    if source_metadata:
+        current_source_payload.update(source_metadata)
+    source_details[source] = current_source_payload
+    metadata["source_details"] = source_details
+    return metadata
+
+
 async def list_businesses(session: AsyncSession, business_ids: Optional[Sequence[UUID]] = None) -> list[Business]:
     stmt = select(Business).order_by(Business.created_at.desc())
     if business_ids is not None:
@@ -85,6 +108,7 @@ async def create_business_record(session: AsyncSession, payload: BusinessCreate)
     )
     session.add(business)
     await session.flush()
+    await role_derivation.sync_business_role_catalog(session, business, locations=[])
     return business
 
 
@@ -123,9 +147,15 @@ async def update_business_profile(
     if business.brand_name != brand_name:
         business.brand_name = brand_name
         changes["brand_name"] = brand_name
+    settings = dict(business.settings or {})
+
     if business.vertical != vertical:
         business.vertical = vertical
         changes["vertical"] = vertical
+        if vertical is None:
+            settings.pop("vertical_source", None)
+        else:
+            settings["vertical_source"] = "manual"
     if business.primary_email != primary_email:
         business.primary_email = primary_email
         changes["primary_email"] = primary_email
@@ -133,7 +163,6 @@ async def update_business_profile(
         business.timezone = timezone
         changes["timezone"] = timezone
 
-    settings = dict(business.settings or {})
     current_company_address = _normalize_optional(settings.get("company_profile_address"))
     if current_company_address != company_address:
         if company_address is None:
@@ -191,6 +220,8 @@ async def create_location_record(session: AsyncSession, business_id: UUID, paylo
     )
     session.add(location)
     await session.flush()
+    existing_locations = await list_locations(session, business_id)
+    await role_derivation.sync_business_role_catalog(session, business, locations=existing_locations)
     return location
 
 
@@ -222,9 +253,73 @@ async def delete_location(
 
 async def list_roles(session: AsyncSession, business_id: UUID) -> list[Role]:
     result = await session.execute(
-        select(Role).where(Role.business_id == business_id).order_by(Role.created_at.desc())
+        select(Role).where(Role.business_id == business_id).order_by(Role.name.asc(), Role.created_at.asc())
     )
     return list(result.scalars().all())
+
+
+async def ensure_business_role(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    role_name: str,
+    source: str,
+    role_code: str | None = None,
+    category: str | None = None,
+    description: str | None = None,
+    min_notice_minutes: int | None = None,
+    default_shift_length_minutes: int | None = None,
+    coverage_priority: int | None = None,
+    source_metadata: dict | None = None,
+) -> Role:
+    normalized_name = role_name.strip()
+    if not normalized_name:
+        raise ValueError("role_name_required")
+
+    code = role_code_from_name(role_code or normalized_name)
+    existing = await session.scalar(
+        select(Role).where(Role.business_id == business_id, Role.code == code)
+    )
+    if existing is None:
+        role = Role(
+            business_id=business_id,
+            code=code,
+            name=normalized_name,
+            category=category,
+            description=description,
+            min_notice_minutes=max(0, int(min_notice_minutes or 0)),
+            default_shift_length_minutes=default_shift_length_minutes,
+            coverage_priority=max(0, int(coverage_priority if coverage_priority is not None else 100)),
+            metadata_json=_merge_role_metadata(
+                {},
+                source=source,
+                source_metadata=source_metadata,
+            ),
+        )
+        session.add(role)
+        await session.flush()
+        return role
+
+    if not existing.name:
+        existing.name = normalized_name
+    if category and not existing.category:
+        existing.category = category
+    if description and not existing.description:
+        existing.description = description
+    if default_shift_length_minutes is not None and existing.default_shift_length_minutes is None:
+        existing.default_shift_length_minutes = default_shift_length_minutes
+    if min_notice_minutes is not None and existing.min_notice_minutes == 0 and min_notice_minutes > 0:
+        existing.min_notice_minutes = min_notice_minutes
+    if coverage_priority is not None and existing.coverage_priority == 100 and coverage_priority != 100:
+        existing.coverage_priority = max(0, int(coverage_priority))
+
+    existing.metadata_json = _merge_role_metadata(
+        existing.metadata_json,
+        source=source,
+        source_metadata=source_metadata,
+    )
+    await session.flush()
+    return existing
 
 
 async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCreate) -> Role:
@@ -248,6 +343,19 @@ async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCre
     await session.flush()
     await session.refresh(role)
     return role
+
+
+async def rerun_role_derivation(session: AsyncSession, business_id: UUID) -> tuple[Business, list[Role]]:
+    business = await get_business(session, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
+
+    locations = await list_locations(session, business_id)
+    await role_derivation.sync_business_role_catalog(session, business, locations=locations)
+    await session.flush()
+    await session.refresh(business)
+    roles = await list_roles(session, business_id)
+    return business, roles
 
 
 async def attach_role_to_location(
@@ -284,4 +392,38 @@ async def attach_role_to_location(
 
     await session.flush()
     await session.refresh(existing)
+    return existing
+
+
+async def ensure_location_role(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID,
+    role_id: UUID,
+    source: str,
+) -> LocationRole:
+    location = await session.get(Location, location_id)
+    role = await session.get(Role, role_id)
+    if location is None or role is None or location.business_id != business_id or role.business_id != business_id:
+        raise LookupError("location_or_role_not_found")
+
+    existing = await session.scalar(
+        select(LocationRole).where(LocationRole.location_id == location_id, LocationRole.role_id == role_id)
+    )
+    if existing is None:
+        existing = LocationRole(
+            location_id=location_id,
+            role_id=role_id,
+            coverage_settings={"source": source},
+        )
+        session.add(existing)
+    else:
+        existing.is_active = True
+        coverage_settings = dict(existing.coverage_settings or {})
+        coverage_settings.setdefault("source", source)
+        coverage_settings["last_source"] = source
+        existing.coverage_settings = coverage_settings
+
+    await session.flush()
     return existing

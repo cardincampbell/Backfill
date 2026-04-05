@@ -17,9 +17,8 @@ from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.schemas.scheduling import ShiftCreate
-from app.services import coverage as coverage_service
+from app.services import businesses, coverage as coverage_service
 from app.services import delivery, messaging, scheduler_sync, scheduling
-from app.services.utils import role_code_from_name
 from app.config import settings
 
 
@@ -367,21 +366,13 @@ async def create_open_shift(session: AsyncSession, args: dict) -> dict:
     role_name = str(args.get("role") or "").strip()
     if not role_name:
         raise ValueError("role_required")
-    role_code = role_code_from_name(role_name)
-    role = await session.scalar(
-        select(Role).where(Role.business_id == location.business_id, Role.code == role_code)
+    role = await businesses.ensure_business_role(
+        session,
+        business_id=location.business_id,
+        role_name=role_name,
+        source="retell_voice",
+        source_metadata={"role_name": role_name},
     )
-    if role is None:
-        role = Role(
-            business_id=location.business_id,
-            code=role_code,
-            name=role_name,
-            min_notice_minutes=0,
-            coverage_priority=100,
-            metadata_json={"source": "retell_voice"},
-        )
-        session.add(role)
-        await session.flush()
     starts_at, ends_at = _parse_shift_datetimes(args, location.timezone)
     shift = await scheduling.create_shift(
         session,

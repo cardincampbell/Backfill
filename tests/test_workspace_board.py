@@ -333,6 +333,92 @@ async def _build_board() -> WorkspaceLocationBoardRead:
         week_start=date(2026, 4, 6),
     )
 
+
+async def _build_board_without_location_roles() -> WorkspaceLocationBoardRead:
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        legal_name="Whole Foods Market LLC",
+        brand_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        home_location_id=location_id,
+        full_name="Jamie Rivera",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        reliability_score=0.925,
+        avg_response_time_seconds=120,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            proficiency_level=3,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.clearances = []
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[], [role], [employee], []]
+
+    return await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
 @pytest.mark.asyncio
 async def test_location_board_summarizes_roles_workers_and_actions():
     board = await _build_board()
@@ -353,3 +439,13 @@ async def test_location_board_summarizes_roles_workers_and_actions():
     assert board.action_summary.approval_required == 1
     assert board.action_summary.active_coverage == 1
     assert board.action_summary.open_shifts == 1
+
+
+@pytest.mark.asyncio
+async def test_location_board_falls_back_to_business_roles_when_location_roles_missing():
+    board = await _build_board_without_location_roles()
+
+    assert len(board.roles) == 1
+    assert board.roles[0].role_code == "cashier"
+    assert len(board.workers) == 1
+    assert board.workers[0].role_names == ["Cashier"]
