@@ -294,7 +294,7 @@ export default function LandingPage() {
               Three steps. Zero manual work.
             </h2>
             <p className="text-[16px] sm:text-[18px] text-[#425466] leading-[1.65]">
-              Backfill plugs into your existing workflow. When a shift opens, the engine takes over.
+              No scrambling. No group chat. Our coverage engine takes over and notifies you when it&apos;s done.
             </p>
           </motion.div>
 
@@ -361,6 +361,22 @@ export default function LandingPage() {
               </motion.div>
             ))}
           </div>
+
+          {/* Section quote */}
+          <motion.blockquote
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="mt-16 border-l-4 border-[#635BFF] pl-7 py-1 max-w-2xl"
+          >
+            <p className="text-[18px] sm:text-[20px] text-[#0A2540] leading-[1.65] italic mb-4" style={{ fontWeight: 450 }}>
+              &ldquo;I used to spend the first hour of every morning chasing coverage. Now I check the app and it&apos;s already done.&rdquo;
+            </p>
+            <cite className="not-italic text-[13px] text-[#8898AA] tracking-[0.01em]" style={{ fontWeight: 500 }}>
+              — Operations Manager, 3-location casual dining group, Los Angeles
+            </cite>
+          </motion.blockquote>
         </div>
       </section>
 
@@ -391,9 +407,17 @@ export default function LandingPage() {
             <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.08] tracking-[-0.03em] mb-6 max-w-3xl" style={{ fontWeight: 600 }}>
               Don't have scheduling software? Ours thinks for you.
             </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#8898AA] leading-[1.7] max-w-2xl">
-              Backfill Shifts isn't just a scheduler. It's an AI-native scheduling layer built directly into your Backfill account — one that builds your schedule, learns your operation, and updates itself in plain language.
-            </p>
+            <div className="text-[16px] sm:text-[18px] text-[#8898AA] leading-[1.8] max-w-2xl space-y-5">
+              <p>
+                Backfill Shifts isn&apos;t asking you to change how you run your restaurant. It&apos;s asking you to stop doing one thing: the schedule in your head. Tell the AI what your week looks like. It drafts it, you approve it, and the coverage engine takes over from there.
+              </p>
+              <p className="text-[#b0b8c8]">
+                &ldquo;Add a closing shift Friday, same crew as last week.&rdquo; Done. &ldquo;Daniela can&apos;t do Tuesday — move her to Thursday.&rdquo; Done.
+              </p>
+              <p>
+                You&apos;re not learning software. You&apos;re having a conversation.
+              </p>
+            </div>
           </motion.div>
 
           {/* Product Screenshot */}
@@ -577,6 +601,22 @@ export default function LandingPage() {
             </div>
             </div>
           </motion.div>
+
+          {/* Pricing quote */}
+          <motion.blockquote
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="mt-10 border-l-4 border-[#635BFF]/60 pl-7 py-1 max-w-2xl mx-auto"
+          >
+            <p className="text-[17px] sm:text-[19px] text-white/80 leading-[1.65] italic mb-4" style={{ fontWeight: 400 }}>
+              &ldquo;The first month I used Backfill I filled 11 shifts I would have had to handle manually. At 45 minutes each, that&apos;s over 8 hours back. The math wasn&apos;t hard.&rdquo;
+            </p>
+            <cite className="not-italic text-[13px] text-[#8898AA] tracking-[0.01em]" style={{ fontWeight: 500 }}>
+              — GM, fast casual restaurants, 4 locations
+            </cite>
+          </motion.blockquote>
         </div>
       </section>
 
