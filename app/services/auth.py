@@ -394,6 +394,54 @@ async def revoke_session_by_id(
     await session_db.commit()
 
 
+async def list_active_sessions_for_user(
+    session_db: AsyncSession,
+    *,
+    user_id: UUID,
+    now: datetime | None = None,
+) -> list[Session]:
+    current_time = now or datetime.now(timezone.utc)
+    result = await session_db.execute(
+        select(Session).where(
+            Session.user_id == user_id,
+            Session.revoked_at.is_(None),
+            or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
+        )
+    )
+    records = list(result.scalars().all())
+    records.sort(
+        key=lambda record: (
+            record.last_seen_at or record.updated_at or record.created_at,
+            record.created_at,
+        ),
+        reverse=True,
+    )
+    return records
+
+
+async def revoke_user_session(
+    session_db: AsyncSession,
+    *,
+    session_id: UUID,
+    user_id: UUID,
+    actor_user_id: UUID | None = None,
+    actor_membership_id: UUID | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    record = await session_db.get(Session, session_id)
+    if record is None or record.user_id != user_id:
+        raise LookupError("session_not_found")
+    await revoke_session_by_id(
+        session_db,
+        session_id,
+        actor_user_id=actor_user_id,
+        actor_membership_id=actor_membership_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+
 def has_business_access(
     auth: AuthContext,
     business_id: UUID,

@@ -7,10 +7,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ChangeEventHandler,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronDown } from "lucide-react";
 
@@ -72,6 +74,10 @@ export function BrandedSelect({
 }: BrandedSelectProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const controlRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
+  const [mounted, setMounted] = useState(false);
   const resolvedOptions = useMemo(
     () => options ?? extractOptions(children),
     [children, options],
@@ -83,8 +89,16 @@ export function BrandedSelect({
     null;
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        !rootRef.current?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     }
@@ -102,6 +116,58 @@ export function BrandedSelect({
       window.removeEventListener("keydown", handleEscape);
     };
   }, []);
+
+  useEffect(() => {
+    if (!open || !controlRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    function updatePosition() {
+      if (!controlRef.current) {
+        return;
+      }
+
+      const rect = controlRef.current.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const spacing = 8;
+      const viewportPadding = 12;
+      const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
+      const spaceAbove = rect.top - viewportPadding;
+      const openUpward = spaceBelow < 200 && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(
+        120,
+        Math.min(
+          320,
+          (openUpward ? spaceAbove : spaceBelow) - spacing,
+        ),
+      );
+      const width = Math.min(rect.width, viewportWidth - viewportPadding * 2);
+      const left = Math.min(
+        Math.max(viewportPadding, rect.left),
+        viewportWidth - width - viewportPadding,
+      );
+
+      setMenuStyle({
+        position: "fixed",
+        left,
+        width,
+        maxHeight,
+        zIndex: 9999,
+        ...(openUpward
+          ? { bottom: viewportHeight - rect.top + spacing }
+          : { top: rect.bottom + spacing }),
+      });
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
 
   const controlClass = dark
     ? "border-white/[0.08] bg-[linear-gradient(180deg,rgba(99,91,255,0.18),rgba(15,46,76,0.98))] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_18px_36px_rgba(0,0,0,0.24)]"
@@ -121,35 +187,19 @@ export function BrandedSelect({
     onChange?.({ target: { value: nextValue } } as never);
   }
 
-  return (
-    <div ref={rootRef} className={`relative ${className ?? ""}`}>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => setOpen((current) => !current)}
-        className={`flex min-h-[44px] w-full items-center justify-between gap-3 backfill-ui-radius border px-3.5 py-2.5 text-left text-[13px] transition-all focus:outline-none focus:border-[#635BFF]/60 focus:shadow-[0_0_0_4px_rgba(99,91,255,0.12)] ${controlClass}`}
-        style={{ fontWeight: 440 }}
-      >
-        <span className="min-w-0 truncate">
-          {selectedOption?.label ?? <span className="text-[#8898AA]">Select</span>}
-        </span>
-        <ChevronDown
-          size={16}
-          className={`shrink-0 transition-transform ${dark ? "text-[#A7B7FF]" : "text-[#635BFF]"} ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-
-      <AnimatePresence>
-        {open ? (
+  const menu = open && mounted && menuStyle
+    ? createPortal(
+        <AnimatePresence>
           <motion.div
+            ref={menuRef}
             initial={{ opacity: 0, y: 6, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.98 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className={`absolute left-0 right-0 top-[calc(100%+8px)] z-50 overflow-hidden backfill-ui-radius border p-1.5 ${menuClass}`}
+            className={`overflow-hidden backfill-ui-radius border p-1.5 ${menuClass}`}
+            style={menuStyle}
           >
-            <div className="max-h-64 overflow-y-auto">
+            <div className="overflow-y-auto" style={{ maxHeight: menuStyle.maxHeight }}>
               {resolvedOptions.map((option) => {
                 const selected = option.value === value;
                 return (
@@ -167,8 +217,31 @@ export function BrandedSelect({
               })}
             </div>
           </motion.div>
-        ) : null}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div ref={rootRef} className={`relative ${className ?? ""}`}>
+      <button
+        ref={controlRef}
+        type="button"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => setOpen((current) => !current)}
+        className={`flex min-h-[44px] w-full items-center justify-between gap-3 backfill-ui-radius border px-3.5 py-2.5 text-left text-[13px] transition-all focus:outline-none focus:border-[#635BFF]/60 focus:shadow-[0_0_0_4px_rgba(99,91,255,0.12)] ${controlClass}`}
+        style={{ fontWeight: 440 }}
+      >
+        <span className="min-w-0 truncate">
+          {selectedOption?.label ?? <span className="text-[#8898AA]">Select</span>}
+        </span>
+        <ChevronDown
+          size={16}
+          className={`shrink-0 transition-transform ${dark ? "text-[#A7B7FF]" : "text-[#635BFF]"} ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {menu}
     </div>
   );
 }

@@ -9,8 +9,6 @@ import {
   Check,
   ChevronRight,
   CreditCard,
-  Eye,
-  EyeOff,
   FileText,
   Globe,
   Link2,
@@ -34,7 +32,12 @@ import {
   useUpdateAppAppearancePreference,
   useUpdateAppSession,
 } from "@/components/app-session-gate";
-import { updateAccountProfile } from "@/lib/api/auth";
+import {
+  getAuthSessions,
+  revokeAuthSession,
+  type Session as AuthSessionRecord,
+  updateAccountProfile,
+} from "@/lib/api/auth";
 import {
   getBusinessProfile,
   updateBusinessProfile,
@@ -69,9 +72,9 @@ type PersonalFormState = {
 
 type CompanyFormState = {
   companyName: string;
-  industry: string;
+  businessType: string;
   businessEmail: string;
-  companyAddress: string;
+  businessAddress: string;
   timezone: string;
 };
 
@@ -87,7 +90,7 @@ function normalizeText(value: string): string {
   return value.trim();
 }
 
-function getCompanyAddress(business: BusinessProfile | null): string {
+function getBusinessAddress(business: BusinessProfile | null): string {
   if (!business) {
     return "";
   }
@@ -118,11 +121,77 @@ function buildPersonalForm(
 function buildCompanyForm(business: BusinessProfile): CompanyFormState {
   return {
     companyName: business.brand_name ?? business.legal_name,
-    industry: business.vertical ?? "",
+    businessType: business.vertical ?? "",
     businessEmail: business.primary_email ?? "",
-    companyAddress: getCompanyAddress(business),
+    businessAddress: getBusinessAddress(business),
     timezone: business.timezone,
   };
+}
+
+function formatSessionTimestamp(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function formatSessionDeviceLabel(userAgent: string | null | undefined): string {
+  const source = userAgent?.trim() ?? "";
+  if (!source) {
+    return "Unknown Device";
+  }
+
+  const browser = /Edg\//i.test(source)
+    ? "Edge"
+    : /OPR\//i.test(source)
+      ? "Opera"
+      : /Chrome\//i.test(source)
+        ? "Chrome"
+        : /Firefox\//i.test(source)
+          ? "Firefox"
+          : /Safari\//i.test(source)
+            ? "Safari"
+            : "Browser";
+
+  const device = /iPhone/i.test(source)
+    ? "iPhone"
+    : /iPad/i.test(source)
+      ? "iPad"
+      : /Android/i.test(source)
+        ? "Android Device"
+        : /Macintosh|Mac OS X/i.test(source)
+          ? "Mac"
+          : /Windows/i.test(source)
+            ? "Windows PC"
+            : /CrOS/i.test(source)
+              ? "Chromebook"
+              : /Linux/i.test(source)
+                ? "Linux"
+                : "Unknown Device";
+
+  return `${device} • ${browser}`;
+}
+
+function formatSessionMeta(session: AuthSessionRecord): string {
+  const parts: string[] = [];
+  const lastSeen =
+    formatSessionTimestamp(
+      session.last_seen_at ?? session.updated_at ?? session.created_at,
+    );
+  if (lastSeen) {
+    parts.push(lastSeen);
+  }
+  if (session.ip_address?.trim()) {
+    parts.push(session.ip_address.trim());
+  }
+  return parts.join(" • ") || "Active session";
 }
 
 function formsMatchPersonal(
@@ -142,9 +211,9 @@ function formsMatchCompany(
 ): boolean {
   return (
     normalizeText(left.companyName) === normalizeText(right.companyName) &&
-    normalizeText(left.industry) === normalizeText(right.industry) &&
+    normalizeText(left.businessType) === normalizeText(right.businessType) &&
     normalizeEmail(left.businessEmail) === normalizeEmail(right.businessEmail) &&
-    normalizeText(left.companyAddress) === normalizeText(right.companyAddress) &&
+    normalizeText(left.businessAddress) === normalizeText(right.businessAddress) &&
     normalizeText(left.timezone) === normalizeText(right.timezone)
   );
 }
@@ -263,11 +332,29 @@ function Toggle({
 }
 
 const businessSections = [
-  { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
+  { key: "company", label: "Business Profile", icon: Building2, saveTarget: "business" as const },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
   { key: "integrations", label: "Integrations", icon: Link2, saveTarget: null },
+];
+
+const BUSINESS_TYPE_OPTIONS = [
+  { value: "", label: "Select business type" },
+  { value: "restaurant", label: "Restaurant" },
+  { value: "cafe", label: "Cafe" },
+  { value: "bakery", label: "Bakery" },
+  { value: "bar", label: "Bar" },
+  { value: "retail", label: "Retail" },
+  { value: "beauty", label: "Beauty" },
+  { value: "fitness", label: "Fitness" },
+  { value: "medical_clinic", label: "Medical Clinic" },
+  { value: "dental_clinic", label: "Dental Clinic" },
+  { value: "home_services", label: "Home Services" },
+  { value: "warehouse", label: "Warehouse" },
+  { value: "hotel", label: "Hotel" },
+  { value: "professional_office", label: "Professional Office" },
+  { value: "mixed_unknown", label: "General Business" },
 ];
 
 const personalSections = [
@@ -301,12 +388,9 @@ export default function Settings({
   const [weeklyReports, setWeeklyReports] = useState(false);
   const [escalations, setEscalations] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
-  const [pushNotifications, setPushNotifications] = useState(true);
   const [smsNotifications, setSmsNotifications] = useState(false);
   const [dailyDigest, setDailyDigest] = useState(true);
   const [twoFactor, setTwoFactor] = useState(true);
-  const [showOldPassword, setShowOldPassword] = useState(false);
-  const [showNewPassword, setShowNewPassword] = useState(false);
   const [language, setLanguage] = useState("en");
   const [dateFormat, setDateFormat] = useState("mdy");
 
@@ -333,21 +417,25 @@ export default function Settings({
     );
   const [companyForm, setCompanyForm] = useState<CompanyFormState>({
     companyName: "",
-    industry: "",
+    businessType: "",
     businessEmail: "",
-    companyAddress: "",
+    businessAddress: "",
     timezone: "America/Los_Angeles",
   });
   const [companyBaseline, setCompanyBaseline] = useState<CompanyFormState>({
     companyName: "",
-    industry: "",
+    businessType: "",
     businessEmail: "",
-    companyAddress: "",
+    businessAddress: "",
     timezone: "America/Los_Angeles",
   });
 
   const [personalSaving, setPersonalSaving] = useState(false);
   const [businessSaving, setBusinessSaving] = useState(false);
+  const [activeSessions, setActiveSessions] = useState<AuthSessionRecord[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [sessionActionId, setSessionActionId] = useState<string | null>(null);
+  const [sessionFeedback, setSessionFeedback] = useState<Feedback>(null);
   const [feedback, setFeedback] = useState<Record<SettingsScope, Feedback>>({
     business: null,
     personal: null,
@@ -355,6 +443,8 @@ export default function Settings({
 
   useEffect(() => {
     if (!session) {
+      setActiveSessions([]);
+      setSessionsLoading(false);
       return;
     }
     const nextForm = buildPersonalForm(
@@ -367,6 +457,46 @@ export default function Settings({
     setPersonalForm(nextForm);
     setPersonalBaseline(nextForm);
   }, [session]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadActiveSessions() {
+      try {
+        setSessionsLoading(true);
+        const nextSessions = await getAuthSessions();
+        if (cancelled) {
+          return;
+        }
+        setActiveSessions(nextSessions);
+        setSessionFeedback(null);
+      } catch (error) {
+        if (!cancelled) {
+          setSessionFeedback({
+            tone: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not load active sessions.",
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setSessionsLoading(false);
+        }
+      }
+    }
+
+    void loadActiveSessions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -400,7 +530,7 @@ export default function Settings({
             ...current,
             business: {
               tone: "error",
-              message: "Could not load the company profile right now.",
+              message: "Could not load the business profile right now.",
             },
           }));
         }
@@ -465,6 +595,23 @@ export default function Settings({
       : activeSaveTarget === "personal"
         ? feedback.personal
         : null;
+  const currentSessionId = session?.session.id ?? null;
+  const visibleSessions = useMemo(() => {
+    return [...activeSessions].sort((left, right) => {
+      const leftCurrent = left.id === currentSessionId ? 1 : 0;
+      const rightCurrent = right.id === currentSessionId ? 1 : 0;
+      if (leftCurrent !== rightCurrent) {
+        return rightCurrent - leftCurrent;
+      }
+      const leftLastSeen = Date.parse(
+        left.last_seen_at ?? left.updated_at ?? left.created_at,
+      );
+      const rightLastSeen = Date.parse(
+        right.last_seen_at ?? right.updated_at ?? right.created_at,
+      );
+      return rightLastSeen - leftLastSeen;
+    });
+  }, [activeSessions, currentSessionId]);
 
   const businessLabel = useMemo(() => {
     if (!business) {
@@ -544,10 +691,10 @@ export default function Settings({
     try {
       const response = await updateBusinessProfile(business.id, {
         brand_name: normalizeText(companyForm.companyName),
-        vertical: normalizeText(companyForm.industry) || null,
+        vertical: normalizeText(companyForm.businessType) || null,
         primary_email: normalizeEmail(companyForm.businessEmail) || null,
         timezone: normalizeText(companyForm.timezone),
-        company_address: normalizeText(companyForm.companyAddress) || null,
+        company_address: normalizeText(companyForm.businessAddress) || null,
       });
       const nextBaseline = buildCompanyForm(response);
       setBusiness(response);
@@ -555,7 +702,7 @@ export default function Settings({
       setCompanyBaseline(nextBaseline);
       setFeedback((current) => ({
         ...current,
-        business: { tone: "success", message: "Company profile updated." },
+        business: { tone: "success", message: "Business profile updated." },
       }));
     } catch (error) {
       setFeedback((current) => ({
@@ -565,7 +712,7 @@ export default function Settings({
           message:
             error instanceof Error
               ? error.message
-              : "Could not update the company profile.",
+              : "Could not update the business profile.",
         },
       }));
     } finally {
@@ -580,6 +727,34 @@ export default function Settings({
     }
     if (activeSaveTarget === "personal") {
       await savePersonal();
+    }
+  }
+
+  async function handleRevokeSession(sessionId: string) {
+    if (sessionId === currentSessionId) {
+      return;
+    }
+    setSessionActionId(sessionId);
+    setSessionFeedback(null);
+    try {
+      await revokeAuthSession(sessionId);
+      setActiveSessions((current) =>
+        current.filter((record) => record.id !== sessionId),
+      );
+      setSessionFeedback({
+        tone: "success",
+        message: "Session revoked.",
+      });
+    } catch (error) {
+      setSessionFeedback({
+        tone: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Could not revoke that session.",
+      });
+    } finally {
+      setSessionActionId(null);
     }
   }
 
@@ -607,7 +782,7 @@ export default function Settings({
       if (businessLoading) {
         return (
           <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
-            Loading company profile…
+            Loading business profile…
           </div>
         );
       }
@@ -642,7 +817,7 @@ export default function Settings({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <SettingsField icon={Building2} label="Company Name">
+            <SettingsField icon={Building2} label="Business Name">
               <SettingsInput
                 dark={isDark}
                 onChange={(event) =>
@@ -656,22 +831,22 @@ export default function Settings({
               />
             </SettingsField>
 
-            <SettingsField icon={Building2} label="Industry">
+            <SettingsField icon={Building2} label="Business Type">
               <SettingsSelect
                 dark={isDark}
                 onChange={(event) =>
                   setCompanyForm((current) => ({
                     ...current,
-                    industry: event.target.value,
+                    businessType: event.target.value,
                   }))
                 }
-                value={companyForm.industry}
+                value={companyForm.businessType}
               >
-                <option value="">Select industry</option>
-                <option value="healthcare">Healthcare</option>
-                <option value="hospitality">Hospitality</option>
-                <option value="staffing">Staffing Agency</option>
-                <option value="retail">Retail</option>
+                {BUSINESS_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value || "blank"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </SettingsSelect>
             </SettingsField>
           </div>
@@ -685,24 +860,24 @@ export default function Settings({
                   businessEmail: event.target.value,
                 }))
               }
-              placeholder="ops@company.com"
+              placeholder="ops@business.com"
               type="email"
               value={companyForm.businessEmail}
             />
           </SettingsField>
 
-          <SettingsField icon={MapPin} label="Company Address">
+          <SettingsField icon={MapPin} label="Business Address">
             <SettingsInput
               dark={isDark}
               onChange={(event) =>
                 setCompanyForm((current) => ({
                   ...current,
-                  companyAddress: event.target.value,
+                  businessAddress: event.target.value,
                 }))
               }
               placeholder="Headquarters or mailing address"
               type="text"
-              value={companyForm.companyAddress}
+              value={companyForm.businessAddress}
             />
           </SettingsField>
 
@@ -948,30 +1123,6 @@ export default function Settings({
     if (scope === "personal" && activeSection === "security") {
       return (
         <div className="space-y-5">
-          <div>
-            <h4 className={`text-[13px] mb-3 ${textPrimary}`} style={{ fontWeight: 540 }}>Change Password</h4>
-            <div className="space-y-3">
-              <div className="relative">
-                <label className={`block text-[11px] uppercase tracking-[0.04em] mb-1.5 ${textMuted}`} style={{ fontWeight: 500 }}>
-                  Current Password
-                </label>
-                <SettingsInput dark={isDark} defaultValue="password123" type={showOldPassword ? "text" : "password"} />
-                <button className="absolute right-3 top-[34px] text-[#8898AA] hover:text-[#5E6D7A] transition-colors" onClick={() => setShowOldPassword((current) => !current)} type="button">
-                  {showOldPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              </div>
-              <div className="relative">
-                <label className={`block text-[11px] uppercase tracking-[0.04em] mb-1.5 ${textMuted}`} style={{ fontWeight: 500 }}>
-                  New Password
-                </label>
-                <SettingsInput dark={isDark} placeholder="Enter new password" type={showNewPassword ? "text" : "password"} />
-                <button className="absolute right-3 top-[34px] text-[#8898AA] hover:text-[#5E6D7A] transition-colors" onClick={() => setShowNewPassword((current) => !current)} type="button">
-                  {showNewPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              </div>
-            </div>
-          </div>
-
           <div className={`p-4 backfill-ui-radius border ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -991,31 +1142,73 @@ export default function Settings({
 
           <div>
             <h4 className={`text-[13px] mb-3 ${textPrimary}`} style={{ fontWeight: 540 }}>Active Sessions</h4>
-            <div className="space-y-2">
-              {[
-                { device: "MacBook Pro • Chrome", location: "San Francisco, CA", current: true },
-                { device: "iPhone 15 Pro • Safari", location: "San Francisco, CA", current: false },
-              ].map((sessionItem) => (
-                <div key={sessionItem.device} className={`flex items-center justify-between p-3 backfill-ui-radius ${cardBg}`}>
-                  <div className="flex items-center gap-3">
-                    <Monitor size={15} className={textMuted} />
-                    <div>
-                      <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>{sessionItem.device}</p>
-                      <p className={`text-[10px] ${textMuted}`} style={{ fontWeight: 420 }}>{sessionItem.location}</p>
-                    </div>
+            {sessionFeedback ? (
+              <div
+                className="mb-3 backfill-ui-radius px-4 py-3 text-[12px]"
+                role="status"
+                style={{
+                  background:
+                    sessionFeedback.tone === "success"
+                      ? "rgba(0, 184, 147, 0.08)"
+                      : "rgba(229, 72, 77, 0.08)",
+                  color:
+                    sessionFeedback.tone === "success" ? "#067A64" : "#C13535",
+                  fontWeight: 500,
+                }}
+              >
+                {sessionFeedback.message}
+              </div>
+            ) : null}
+
+            {sessionsLoading ? (
+              <div className={`py-3 text-[12px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                Loading active sessions…
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {visibleSessions.length > 0 ? (
+                  visibleSessions.map((sessionItem) => {
+                    const isCurrentSession = sessionItem.id === currentSessionId;
+                    return (
+                      <div key={sessionItem.id} className={`flex items-center justify-between gap-3 p-3 backfill-ui-radius ${cardBg}`}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <Monitor size={15} className={`${textMuted} shrink-0`} />
+                          <div className="min-w-0">
+                            <p className={`truncate text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                              {formatSessionDeviceLabel(sessionItem.user_agent)}
+                            </p>
+                            <p className={`truncate text-[10px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                              {formatSessionMeta(sessionItem)}
+                            </p>
+                          </div>
+                        </div>
+                        {isCurrentSession ? (
+                          <span className="shrink-0 text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>
+                            This Device
+                          </span>
+                        ) : (
+                          <button
+                            className="shrink-0 text-[11px] text-[#E5484D] hover:text-[#C13535] transition-colors disabled:opacity-50"
+                            disabled={sessionActionId === sessionItem.id}
+                            onClick={() => {
+                              void handleRevokeSession(sessionItem.id);
+                            }}
+                            style={{ fontWeight: 460 }}
+                            type="button"
+                          >
+                            {sessionActionId === sessionItem.id ? "Revoking…" : "Revoke"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className={`py-3 text-[12px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                    No active sessions found.
                   </div>
-                  {sessionItem.current ? (
-                    <span className="text-[10px] text-[#00B893] bg-[#00B893]/10 px-2 py-0.5 backfill-ui-radius" style={{ fontWeight: 500 }}>
-                      This Device
-                    </span>
-                  ) : (
-                    <button className="text-[11px] text-[#E5484D] hover:text-[#C13535] transition-colors" style={{ fontWeight: 460 }}>
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -1024,7 +1217,6 @@ export default function Settings({
     if (scope === "personal" && activeSection === "personal-notifications") {
       const items = [
         { label: "Email Notifications", desc: "Receive updates and alerts via email", enabled: emailNotifications, onChange: setEmailNotifications },
-        { label: "Push Notifications", desc: "Get real-time push notifications on your devices", enabled: pushNotifications, onChange: setPushNotifications },
         { label: "SMS Notifications", desc: "Receive urgent alerts via text message", enabled: smsNotifications, onChange: setSmsNotifications },
         { label: "Daily Digest", desc: "Get a summary of the day's activity each evening", enabled: dailyDigest, onChange: setDailyDigest },
       ];
@@ -1163,7 +1355,7 @@ export default function Settings({
               {activeSaving
                 ? "Saving…"
                 : activeSaveTarget === "business"
-                  ? "Save company profile"
+                  ? "Save business profile"
                   : activeSection === "appearance"
                     ? "Save appearance"
                     : "Save personal info"}
@@ -1274,7 +1466,7 @@ export default function Settings({
               {activeSaving
                 ? "Saving…"
                 : activeSaveTarget === "business"
-                  ? "Save company profile"
+                  ? "Save business profile"
                   : activeSection === "appearance"
                     ? "Save appearance"
                     : "Save personal info"}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from uuid import UUID
 
 from app.api.deps import AuthDep, OptionalAuthDep, SessionDep
 from app.config import settings
@@ -10,6 +11,8 @@ from app.schemas.auth import (
     OTPChallengeRequestResponse,
     OTPChallengeVerifyRequest,
     OTPChallengeVerifyResponse,
+    SessionRead,
+    SessionRevokeResponse,
 )
 from app.services import audit as audit_service
 from app.services import auth, rate_limit
@@ -140,6 +143,39 @@ async def me(auth_ctx: AuthDep):
         memberships=auth_ctx.memberships,
         onboarding_required=auth.onboarding_required_for_user(auth_ctx.user),
     )
+
+
+@router.get("/sessions", response_model=list[SessionRead])
+async def list_sessions(session: SessionDep, auth_ctx: AuthDep):
+    return await auth.list_active_sessions_for_user(
+        session,
+        user_id=auth_ctx.user.id,
+    )
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionRevokeResponse)
+async def revoke_session(
+    session_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    membership = None
+    if auth_ctx.memberships:
+        membership = auth.membership_for_scope(auth_ctx, auth_ctx.memberships[0].business_id)
+    try:
+        await auth.revoke_user_session(
+            session,
+            session_id=session_id,
+            user_id=auth_ctx.user.id,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=audit_service.request_client_ip(request),
+            user_agent=audit_service.request_user_agent(request),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return SessionRevokeResponse(revoked=True)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

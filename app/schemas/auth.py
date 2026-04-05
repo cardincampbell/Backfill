@@ -42,6 +42,10 @@ class SessionCreateResponse(BaseSchema):
     session: SessionRead
 
 
+class SessionRevokeResponse(BaseSchema):
+    revoked: bool
+
+
 class AuthMeResponse(BaseSchema):
     user: UserRead
     session: SessionRead

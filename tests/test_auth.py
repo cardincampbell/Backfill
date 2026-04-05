@@ -606,6 +606,100 @@ async def test_resolve_auth_context_refreshes_all_active_sessions_for_user():
     assert sibling_session.expires_at > datetime.now(timezone.utc) + timedelta(days=13)
 
 
+def test_list_sessions_route_returns_active_sessions():
+    auth_ctx = _make_auth_context(with_membership=True)
+    current_session = auth_ctx.session
+    current_session.user_agent = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    )
+    current_session.ip_address = "203.0.113.10"
+    current_session.last_seen_at = datetime.now(timezone.utc)
+
+    sibling_session = Session(
+        id=uuid4(),
+        user_id=auth_ctx.user.id,
+        token_hash="sibling",
+        ip_address="198.51.100.8",
+        user_agent=(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        ),
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    session = FakeAuthSession()
+    session.execute_queue = [[sibling_session, current_session]]
+
+    async def override_db():
+        yield session
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.get("/api/auth/sessions")
+        assert response.status_code == 200
+        payload = response.json()
+        assert [item["id"] for item in payload] == [
+            str(current_session.id),
+            str(sibling_session.id),
+        ]
+        assert payload[0]["user_agent"] == current_session.user_agent
+        assert payload[1]["ip_address"] == sibling_session.ip_address
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_revoke_session_route_revokes_owned_session():
+    auth_ctx = _make_auth_context(with_membership=True)
+    target_session = Session(
+        id=uuid4(),
+        user_id=auth_ctx.user.id,
+        token_hash="revoke-me",
+        ip_address="198.51.100.44",
+        user_agent="pytest",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    session = FakeAuthSession()
+    session.get_map[(Session, target_session.id)] = target_session
+
+    async def override_db():
+        yield session
+
+    async def override_auth():
+        return auth_ctx
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.delete(f"/api/auth/sessions/{target_session.id}")
+        assert response.status_code == 200
+        assert response.json() == {"revoked": True}
+        assert target_session.revoked_at is not None
+        audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
+        assert audits[-1].event_name == "auth.session.revoked"
+    finally:
+        app.dependency_overrides.clear()
+
+
 @pytest.mark.asyncio
 async def test_verify_otp_step_up_marks_session(monkeypatch):
     auth_ctx = _make_auth_context(with_membership=True)

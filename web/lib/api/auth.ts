@@ -63,6 +63,9 @@ async function parseError(response: Response): Promise<string> {
 export type Session = {
   id: string;
   user_id: string;
+  device_fingerprint?: string | null;
+  ip_address?: string | null;
+  user_agent?: string | null;
   risk_level: string;
   elevated_actions: string[];
   last_seen_at?: string | null;
@@ -181,6 +184,26 @@ export type ManagerInvitePreview = {
 
 export async function getAuthMe(): Promise<AuthMeResponse | null> {
   return fetchAppJson<AuthMeResponse>(`${API_PREFIX}/auth/me`);
+}
+
+export async function getAuthSessions(): Promise<Session[]> {
+  const response = await apiFetchApp(`${API_PREFIX}/auth/sessions`);
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as Session[];
+}
+
+export async function revokeAuthSession(
+  sessionId: string,
+): Promise<{ revoked: boolean }> {
+  const response = await apiFetchApp(`${API_PREFIX}/auth/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as { revoked: boolean };
 }
 
 function maxAgeSecondsFromExpiry(expiresAtRaw: string | null | undefined): number {
