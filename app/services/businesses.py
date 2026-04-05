@@ -15,7 +15,7 @@ from app.schemas.business import (
     LocationRoleAttach,
     RoleCreate,
 )
-from app.services import role_derivation
+from app.services import business_identity_derivation, role_derivation
 from app.services.utils import role_code_from_name, slugify
 
 
@@ -97,9 +97,17 @@ async def create_business_record(
     session: AsyncSession,
     payload: BusinessCreate,
     *,
+    derive_identity: bool = True,
     derive_roles: bool = True,
 ) -> Business:
     slug = await _next_unique_business_slug(session, payload.slug or payload.brand_name or payload.legal_name)
+    settings = dict(payload.settings or {})
+    if (
+        not settings.get("brand_name_source")
+        and not payload.place_metadata
+        and _normalize_optional(payload.brand_name) is not None
+    ):
+        settings["brand_name_source"] = "manual"
     business = Business(
         legal_name=payload.legal_name,
         brand_name=payload.brand_name,
@@ -108,11 +116,13 @@ async def create_business_record(
         primary_phone_e164=payload.primary_phone_e164,
         primary_email=payload.primary_email,
         timezone=payload.timezone,
-        settings=payload.settings,
+        settings=settings,
         place_metadata=payload.place_metadata,
     )
     session.add(business)
     await session.flush()
+    if derive_identity:
+        await business_identity_derivation.sync_business_identity(session, business, locations=[])
     if derive_roles:
         await role_derivation.sync_business_role_catalog(session, business, locations=[])
     return business
@@ -153,7 +163,9 @@ async def update_business_profile(
     if business.brand_name != brand_name:
         business.brand_name = brand_name
         changes["brand_name"] = brand_name
-    settings = dict(business.settings or {})
+    current_settings = dict(business.settings or {})
+    settings = dict(current_settings)
+    settings["brand_name_source"] = "manual"
 
     if business.vertical != vertical:
         business.vertical = vertical
@@ -175,8 +187,10 @@ async def update_business_profile(
             settings.pop("company_profile_address", None)
         else:
             settings["company_profile_address"] = company_address
-        business.settings = settings
         changes["company_address"] = company_address
+
+    if settings != current_settings:
+        business.settings = settings
 
     await session.flush()
     await session.refresh(business)
@@ -206,6 +220,7 @@ async def create_location_record(
     business_id: UUID,
     payload: LocationCreate,
     *,
+    derive_identity: bool = True,
     derive_roles: bool = True,
 ) -> Location:
     business = await get_business(session, business_id)
@@ -232,8 +247,15 @@ async def create_location_record(
     )
     session.add(location)
     await session.flush()
-    if derive_roles:
+    if derive_identity or derive_roles:
         existing_locations = await list_locations(session, business_id)
+        if derive_identity:
+            await business_identity_derivation.sync_business_identity(
+                session,
+                business,
+                locations=existing_locations,
+            )
+    if derive_roles:
         await role_derivation.sync_business_role_catalog(session, business, locations=existing_locations)
     return location
 
@@ -369,6 +391,18 @@ async def rerun_role_derivation(session: AsyncSession, business_id: UUID) -> tup
     await session.refresh(business)
     roles = await list_roles(session, business_id)
     return business, roles
+
+
+async def rerun_business_identity_derivation(session: AsyncSession, business_id: UUID) -> Business:
+    business = await get_business(session, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
+
+    locations = await list_locations(session, business_id)
+    await business_identity_derivation.sync_business_identity(session, business, locations=locations)
+    await session.flush()
+    await session.refresh(business)
+    return business
 
 
 async def attach_role_to_location(

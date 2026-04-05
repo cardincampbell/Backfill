@@ -123,6 +123,12 @@ class BusinessRoleDerivationRead(BaseSchema):
     roles: list[RoleRead]
 
 
+class BusinessIdentityDerivationRead(BaseSchema):
+    business_id: UUID
+    brand_name: Optional[str]
+    settings: dict
+
+
 class LocationRoleAttach(BaseSchema):
     min_headcount: Optional[int] = None
     max_headcount: Optional[int] = None

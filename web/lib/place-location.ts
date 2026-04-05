@@ -9,6 +9,13 @@ export function inferLocationName(place: PlaceSuggestion): string {
   const locationLabel = place.location_label?.trim();
   const rawName = place.name.trim();
   if (locationLabel) {
+    const normalizedLabel = locationLabel.toLowerCase();
+    if (rawName.toLowerCase().endsWith(normalizedLabel)) {
+      return rawName;
+    }
+    if (businessName.toLowerCase().endsWith(normalizedLabel)) {
+      return businessName;
+    }
     return `${businessName} · ${locationLabel}`;
   }
   if (rawName && rawName.toLowerCase() !== businessName.toLowerCase()) {

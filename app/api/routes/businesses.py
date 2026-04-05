@@ -10,6 +10,7 @@ from app.models.common import AuditActorType, MembershipRole, MembershipStatus
 from app.models.identity import Membership
 from app.schemas.business import (
     BusinessCreate,
+    BusinessIdentityDerivationRead,
     BusinessProfileUpdate,
     BusinessRoleDerivationRead,
     BusinessRead,
@@ -382,6 +383,50 @@ async def derive_roles_for_business(
         vertical=business.vertical,
         settings=business.settings,
         roles=roles,
+    )
+
+
+@router.post(
+    "/{business_id}/identity/derive",
+    response_model=BusinessIdentityDerivationRead,
+)
+async def derive_business_identity(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        business = await businesses.rerun_business_identity_derivation(session, business_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    derived_identity = business.settings.get("derived_identity", {})
+    await audit_service.append(
+        session,
+        event_name="business.identity.derived",
+        target_type="business",
+        target_id=business.id,
+        business_id=business.id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "brand_name": business.brand_name,
+            "confidence": derived_identity.get("name_derivation_confidence"),
+            "derivation_version": derived_identity.get("derivation_version"),
+        },
+    )
+    await session.commit()
+    return BusinessIdentityDerivationRead(
+        business_id=business.id,
+        brand_name=business.brand_name,
+        settings=business.settings,
     )
 
 
