@@ -18,6 +18,7 @@ from app.services import audit as audit_service
 from app.services import auth, rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+TRUSTED_DEVICE_HEADER = "X-Backfill-Trusted-Device"
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -44,6 +45,10 @@ def _set_trusted_device_cookie(response: Response, trusted_device_id: str) -> No
         domain=settings.session_cookie_domain,
         path="/",
     )
+
+
+def _set_trusted_device_header(response: Response, trusted_device_id: str) -> None:
+    response.headers[TRUSTED_DEVICE_HEADER] = trusted_device_id
 
 
 @router.post("/challenges/request", response_model=OTPChallengeRequestResponse, status_code=status.HTTP_201_CREATED)
@@ -80,6 +85,7 @@ async def request_challenge(
         _set_session_cookie(response, result.token)
     if result.trusted_device_id:
         _set_trusted_device_cookie(response, result.trusted_device_id)
+        _set_trusted_device_header(response, result.trusted_device_id)
 
     return OTPChallengeRequestResponse(
         challenge=result.challenge,
@@ -124,6 +130,7 @@ async def verify_challenge(
         _set_session_cookie(response, result.token)
     if result.trusted_device_id:
         _set_trusted_device_cookie(response, result.trusted_device_id)
+        _set_trusted_device_header(response, result.trusted_device_id)
 
     return OTPChallengeVerifyResponse(
         challenge=result.challenge,

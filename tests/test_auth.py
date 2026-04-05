@@ -888,6 +888,7 @@ def test_verify_route_sets_http_only_cookie(monkeypatch):
         payload = response.json()
         assert "device_fingerprint" not in payload["session"]
         set_cookie = response.headers.get("set-cookie", "")
+        assert response.headers.get("X-Backfill-Trusted-Device") == "device-1"
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
         assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
         assert "HttpOnly" in set_cookie
@@ -953,6 +954,7 @@ def test_request_route_sets_http_only_cookie_when_trusted_session_issued(monkeyp
         assert payload["challenge"] is None
         assert "device_fingerprint" not in payload["session"]
         set_cookie = response.headers.get("set-cookie", "")
+        assert response.headers.get("X-Backfill-Trusted-Device") == "device-1"
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
         assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
         assert "HttpOnly" in set_cookie

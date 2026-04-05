@@ -443,9 +443,10 @@ export async function requestChallenge(input: {
   purpose: "sign_in" | "sign_up";
   locale?: string;
 }) {
-  const response = await apiFetchApp(`${API_PREFIX}/auth/challenges/request`, {
+  const response = await fetch("/auth/challenges/request", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({
       phone_e164: input.phone_e164,
       purpose: input.purpose,
@@ -478,9 +479,10 @@ export async function verifyChallenge(input: {
   phone_e164: string;
   code: string;
 }) {
-  const response = await apiFetchApp(`${API_PREFIX}/auth/challenges/verify`, {
+  const response = await fetch("/auth/challenges/verify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({
       challenge_id: input.challenge_id,
       phone_e164: input.phone_e164,
