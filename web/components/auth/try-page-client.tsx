@@ -67,6 +67,13 @@ export function TryPageClient() {
     setError("");
     try {
       const response = await requestChallengeAuto(phone.trim());
+      if (response.token) {
+        await finalizeVerifiedSessionNavigation(response);
+        return;
+      }
+      if (!response.challenge?.id) {
+        throw new Error("Could not start verification.");
+      }
       setChallengeId(response.challenge.id);
       setRequestedPurpose(response.requestedPurpose);
       setStep("code");
@@ -107,6 +114,13 @@ export function TryPageClient() {
         phone_e164: phone.trim(),
         purpose: requestedPurpose,
       });
+      if (response.token) {
+        await finalizeVerifiedSessionNavigation(response);
+        return;
+      }
+      if (!response.challenge?.id) {
+        throw new Error("Could not resend your code.");
+      }
       setChallengeId(response.challenge.id);
       startCooldown(inThirtySeconds());
     } catch (err) {

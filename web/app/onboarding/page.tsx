@@ -226,6 +226,9 @@ function OnboardingBody() {
         phone_e164: phone.trim(),
         manager_name: name.trim() || undefined,
       });
+      if (!response.challenge?.id) {
+        throw new Error("Could not send your verification code.");
+      }
       setChallengeId(response.challenge.id);
       setInviteStep("code");
       setCode("");
@@ -300,6 +303,9 @@ function OnboardingBody() {
         phone_e164: phone.trim(),
         manager_name: name.trim(),
       });
+      if (!response.challenge?.id) {
+        throw new Error("Could not resend your code.");
+      }
       setChallengeId(response.challenge.id);
       startCooldown(inThirtySeconds());
     } catch (err) {

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -36,6 +36,10 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def generate_trusted_device_id() -> str:
+    return secrets.token_urlsafe(32)
+
+
 @dataclass
 class AuthContext:
     user: User
@@ -44,11 +48,23 @@ class AuthContext:
 
 
 @dataclass
+class OTPChallengeRequestResult:
+    challenge: OTPChallenge | None
+    user_exists: bool
+    session: Session | None
+    token: str | None
+    trusted_device_id: str | None
+    onboarding_required: bool
+    otp_required: bool
+
+
+@dataclass
 class OTPChallengeVerificationResult:
     challenge: OTPChallenge
     user: User
     session: Session | None
     token: str | None
+    trusted_device_id: str | None
     onboarding_required: bool
     step_up_granted: bool
 
@@ -218,6 +234,72 @@ async def _touch_active_sessions_for_user(
         record.expires_at = next_expiry
 
 
+async def _has_active_session_for_user(
+    session_db: AsyncSession,
+    *,
+    user_id: UUID,
+    trusted_device_id: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    if not trusted_device_id:
+        return False
+    current_time = now or datetime.now(timezone.utc)
+    active_session_id = await session_db.scalar(
+        select(Session.id)
+        .where(
+            Session.user_id == user_id,
+            Session.device_fingerprint == trusted_device_id,
+            Session.revoked_at.is_(None),
+            or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
+        )
+        .limit(1)
+    )
+    return active_session_id is not None
+
+
+async def _issue_authenticated_session(
+    session_db: AsyncSession,
+    *,
+    user: User,
+    ip_address: str | None,
+    user_agent: str | None,
+    business_id: UUID | None,
+    location_id: UUID | None,
+    actor_membership_id: UUID | None = None,
+    device_fingerprint: str | None = None,
+    risk_level: str = SessionRiskLevel.low.value,
+    session_metadata: dict | None = None,
+    source: str,
+    purpose: str,
+) -> tuple[str, Session]:
+    raw_token, session_record = await _issue_session_record(
+        session_db,
+        user=user,
+        device_fingerprint=device_fingerprint,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        risk_level=risk_level,
+        elevated_actions=[],
+        ttl_hours=settings.session_ttl_hours,
+        session_metadata=session_metadata,
+    )
+    await audit_service.append(
+        session_db,
+        event_name="auth.session.created",
+        target_type="session",
+        target_id=session_record.id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=user.id,
+        actor_membership_id=actor_membership_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        payload={"source": source, "purpose": purpose},
+    )
+    return raw_token, session_record
+
+
 async def create_session(session_db: AsyncSession, payload: SessionCreateRequest) -> tuple[str, Session]:
     user = await session_db.get(User, payload.user_id)
     if user is None:
@@ -351,10 +433,12 @@ async def request_otp_challenge(
     ip_address: str | None = None,
     user_agent: str | None = None,
     auth_ctx: AuthContext | None = None,
-) -> tuple[OTPChallenge, bool]:
+    trusted_device_id: str | None = None,
+) -> OTPChallengeRequestResult:
     phone_e164 = normalize_phone(payload.phone_e164)
     if phone_e164 is None:
         raise ValueError("phone_must_be_e164_or_10_digit_us")
+    trusted_device_id = _trim_text(trusted_device_id)
 
     purpose = ChallengePurpose(payload.purpose)
     ip_key = ip_address or "unknown"
@@ -365,6 +449,66 @@ async def request_otp_challenge(
         window_seconds=300,
         detail="Too many verification requests. Please wait and try again.",
     )
+    now = datetime.now(timezone.utc)
+    user = await session_db.scalar(select(User).where(User.primary_phone_e164 == phone_e164))
+    if _is_step_up_purpose(purpose):
+        if auth_ctx is None:
+            raise PermissionError("step_up_auth_required")
+        if normalize_phone(auth_ctx.user.primary_phone_e164) != phone_e164:
+            raise PermissionError("step_up_phone_mismatch")
+
+    if (
+        purpose in {ChallengePurpose.sign_in, ChallengePurpose.sign_up}
+        and user is not None
+        and await _has_active_session_for_user(
+            session_db,
+            user_id=user.id,
+            trusted_device_id=trusted_device_id,
+            now=now,
+        )
+    ):
+        raw_token, session_record = await _issue_authenticated_session(
+            session_db,
+            user=user,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            business_id=payload.business_id,
+            location_id=payload.location_id,
+            device_fingerprint=trusted_device_id,
+            session_metadata={"auth_flow": "trusted_reentry"},
+            source="trusted_reentry",
+            purpose=purpose.value,
+        )
+        await audit_service.append(
+            session_db,
+            event_name="auth.challenge.skipped",
+            target_type="user",
+            target_id=user.id,
+            business_id=payload.business_id,
+            location_id=payload.location_id,
+            actor_type=AuditActorType.user,
+            actor_user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            payload={
+                "purpose": purpose.value,
+                "reason": "recognized_device_with_active_session",
+                "phone_e164": phone_e164,
+            },
+        )
+        await session_db.commit()
+        await session_db.refresh(user)
+        await session_db.refresh(session_record)
+        return OTPChallengeRequestResult(
+            challenge=None,
+            user_exists=True,
+            session=session_record,
+            token=raw_token,
+            trusted_device_id=trusted_device_id,
+            onboarding_required=onboarding_required_for_user(user),
+            otp_required=False,
+        )
+
     await rate_limit.assert_within_limit(
         "otp_request_phone_cooldown",
         phone_e164,
@@ -379,12 +523,6 @@ async def request_otp_challenge(
         window_seconds=900,
         detail="Too many verification requests for this phone. Please wait and try again.",
     )
-    user = await session_db.scalar(select(User).where(User.primary_phone_e164 == phone_e164))
-    if _is_step_up_purpose(purpose):
-        if auth_ctx is None:
-            raise PermissionError("step_up_auth_required")
-        if normalize_phone(auth_ctx.user.primary_phone_e164) != phone_e164:
-            raise PermissionError("step_up_phone_mismatch")
 
     challenge = OTPChallenge(
         user_id=user.id if user is not None else None,
@@ -396,7 +534,7 @@ async def request_otp_challenge(
         max_attempts=5,
         requested_for_business_id=payload.business_id,
         requested_for_location_id=payload.location_id,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        expires_at=now + timedelta(minutes=10),
         challenge_metadata={**payload.challenge_metadata, "locale": payload.locale},
     )
     session_db.add(challenge)
@@ -466,7 +604,15 @@ async def request_otp_challenge(
     )
     await session_db.commit()
     await session_db.refresh(challenge)
-    return challenge, user is not None
+    return OTPChallengeRequestResult(
+        challenge=challenge,
+        user_exists=user is not None,
+        session=None,
+        token=None,
+        trusted_device_id=None,
+        onboarding_required=False,
+        otp_required=True,
+    )
 
 
 async def verify_otp_challenge(
@@ -476,10 +622,12 @@ async def verify_otp_challenge(
     ip_address: str | None = None,
     user_agent: str | None = None,
     auth_ctx: AuthContext | None = None,
+    trusted_device_id: str | None = None,
 ) -> OTPChallengeVerificationResult:
     phone_e164 = normalize_phone(payload.phone_e164)
     if phone_e164 is None:
         raise ValueError("phone_must_be_e164_or_10_digit_us")
+    trusted_device_id = _trim_text(trusted_device_id)
 
     await rate_limit.assert_within_limit(
         "otp_verify_ip",
@@ -638,20 +786,25 @@ async def verify_otp_challenge(
             user=user,
             session=auth_ctx.session,
             token=None,
+            trusted_device_id=None,
             onboarding_required=onboarding_required_for_user(user),
             step_up_granted=True,
         )
 
-    raw_token, session_record = await _issue_session_record(
+    trusted_device_id = trusted_device_id or generate_trusted_device_id()
+    raw_token, session_record = await _issue_authenticated_session(
         session_db,
         user=user,
-        device_fingerprint=payload.device_fingerprint,
         ip_address=ip_address,
         user_agent=user_agent,
+        business_id=challenge.requested_for_business_id,
+        location_id=challenge.requested_for_location_id,
+        actor_membership_id=invite_membership.id if invite_membership is not None else None,
+        device_fingerprint=trusted_device_id,
         risk_level=payload.risk_level,
-        elevated_actions=[],
-        ttl_hours=settings.session_ttl_hours,
         session_metadata=payload.session_metadata,
+        source="otp_challenge",
+        purpose=challenge.purpose.value,
     )
     await audit_service.append(
         session_db,
@@ -685,20 +838,6 @@ async def verify_otp_challenge(
                 "invite_id": str(invite_id),
             },
         )
-    await audit_service.append(
-        session_db,
-        event_name="auth.session.created",
-        target_type="session",
-        target_id=session_record.id,
-        business_id=challenge.requested_for_business_id,
-        location_id=challenge.requested_for_location_id,
-        actor_type=AuditActorType.user,
-        actor_user_id=user.id,
-        actor_membership_id=invite_membership.id if invite_membership is not None else None,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        payload={"source": "otp_challenge", "purpose": challenge.purpose.value},
-    )
     await session_db.commit()
     await session_db.refresh(challenge)
     await session_db.refresh(user)
@@ -708,6 +847,7 @@ async def verify_otp_challenge(
         user=user,
         session=session_record,
         token=raw_token,
+        trusted_device_id=trusted_device_id,
         onboarding_required=onboarding_required_for_user(user),
         step_up_granted=False,
     )

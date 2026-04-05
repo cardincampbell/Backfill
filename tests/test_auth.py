@@ -24,7 +24,7 @@ from app.models.coverage import AuditLog
 from app.models.identity import Membership, OTPChallenge, Session, User
 from app.schemas.auth import OTPChallengeRequest, OTPChallengeVerifyRequest
 from app.services import auth
-from app.services.auth import AuthContext, OTPChallengeVerificationResult
+from app.services.auth import AuthContext, OTPChallengeRequestResult, OTPChallengeVerificationResult
 
 
 class _ScalarResult:
@@ -254,14 +254,14 @@ async def test_request_otp_challenge_records_audit(monkeypatch):
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    session.scalar_queue = [existing_user]
+    session.scalar_queue = [existing_user, None]
 
     monkeypatch.setattr(
         "app.services.messaging.send_sms_verification",
         lambda to, locale="en": {"sid": "VE123", "status": "pending", "channel": "sms", "to": to},
     )
 
-    challenge, user_exists = await auth.request_otp_challenge(
+    result = await auth.request_otp_challenge(
         session,
         OTPChallengeRequest(phone_e164="+1 (555) 555-0123", purpose="sign_in"),
         ip_address="127.0.0.1",
@@ -269,7 +269,9 @@ async def test_request_otp_challenge_records_audit(monkeypatch):
     )
 
     audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
-    assert user_exists is True
+    assert result.user_exists is True
+    assert result.challenge is not None
+    challenge = result.challenge
     assert challenge.external_sid == "VE123"
     assert challenge.status == ChallengeStatus.pending
     assert audits[-1].event_name == "auth.challenge.requested"
@@ -289,7 +291,7 @@ def test_request_challenge_route_hides_user_existence_and_rate_limits(monkeypatc
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    session.scalar_queue = [existing_user, existing_user]
+    session.scalar_queue = [existing_user, None, existing_user, None]
 
     async def override_db():
         yield session
@@ -309,6 +311,7 @@ def test_request_challenge_route_hides_user_existence_and_rate_limits(monkeypatc
         assert first.status_code == 201
         assert "user_exists" not in first.json()
         assert "user_id" not in first.json()
+        assert first.json()["otp_required"] is True
 
         second = client.post(
             "/api/auth/challenges/request",
@@ -329,15 +332,111 @@ async def test_request_sign_in_for_unknown_phone_preserves_public_purpose(monkey
         lambda to, locale="en": {"sid": "VE999", "status": "pending", "channel": "sms", "to": to},
     )
 
-    challenge, user_exists = await auth.request_otp_challenge(
+    result = await auth.request_otp_challenge(
         session,
         OTPChallengeRequest(phone_e164="+1 (555) 555-0199", purpose="sign_in"),
         ip_address="127.0.0.1",
         user_agent="pytest",
     )
 
-    assert user_exists is False
+    assert result.user_exists is False
+    assert result.challenge is not None
+    challenge = result.challenge
     assert challenge.purpose == ChallengePurpose.sign_in
+
+
+@pytest.mark.asyncio
+async def test_request_otp_challenge_skips_sms_for_known_device_with_active_session(monkeypatch):
+    session = FakeAuthSession()
+    existing_user = User(
+        id=uuid4(),
+        full_name="Existing User",
+        email="existing@example.com",
+        primary_phone_e164="+15555550123",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.scalar_queue = [existing_user, uuid4()]
+
+    send_calls: list[tuple[str, str]] = []
+
+    def fake_send_sms_verification(to, locale="en"):
+        send_calls.append((to, locale))
+        return {"sid": "VE123", "status": "pending", "channel": "sms", "to": to}
+
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        fake_send_sms_verification,
+    )
+
+    result = await auth.request_otp_challenge(
+        session,
+        OTPChallengeRequest(phone_e164="+1 (555) 555-0123", purpose="sign_in"),
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+        trusted_device_id="device-1",
+    )
+
+    audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
+    sessions = [obj for obj in session.added if isinstance(obj, Session)]
+
+    assert send_calls == []
+    assert result.otp_required is False
+    assert result.user_exists is True
+    assert result.challenge is None
+    assert result.token is not None
+    assert result.session is not None
+    assert result.trusted_device_id == "device-1"
+    assert result.session.device_fingerprint == "device-1"
+    assert len(sessions) == 1
+    assert {entry.event_name for entry in audits} == {
+        "auth.challenge.skipped",
+        "auth.session.created",
+    }
+
+
+@pytest.mark.asyncio
+async def test_request_otp_challenge_requires_otp_for_new_device_even_with_active_session(monkeypatch):
+    session = FakeAuthSession()
+    existing_user = User(
+        id=uuid4(),
+        full_name="Existing User",
+        email="existing@example.com",
+        primary_phone_e164="+15555550123",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.scalar_queue = [existing_user, None]
+
+    send_calls: list[tuple[str, str]] = []
+
+    def fake_send_sms_verification(to, locale="en"):
+        send_calls.append((to, locale))
+        return {"sid": "VE123", "status": "pending", "channel": "sms", "to": to}
+
+    monkeypatch.setattr(
+        "app.services.messaging.send_sms_verification",
+        fake_send_sms_verification,
+    )
+
+    result = await auth.request_otp_challenge(
+        session,
+        OTPChallengeRequest(phone_e164="+1 (555) 555-0123", purpose="sign_in"),
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+        trusted_device_id="new-device",
+    )
+
+    assert send_calls == [("+15555550123", "en")]
+    assert result.otp_required is True
+    assert result.challenge is not None
+    assert result.trusted_device_id is None
 
 
 @pytest.mark.asyncio
@@ -381,6 +480,8 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
 
     assert result.token is not None
     assert result.session is not None
+    assert result.trusted_device_id is not None
+    assert result.session.device_fingerprint == result.trusted_device_id
     assert challenge.status == ChallengeStatus.approved
     assert len(users) == 1
     assert users[0].primary_phone_e164 == "+15555550160"
@@ -429,6 +530,8 @@ async def test_verify_otp_challenge_sign_up_creates_user_and_session(monkeypatch
 
     assert result.token is not None
     assert result.session is not None
+    assert result.trusted_device_id is not None
+    assert result.session.device_fingerprint == result.trusted_device_id
     assert result.step_up_granted is False
     assert challenge.status == ChallengeStatus.approved
     assert len(users) == 1
@@ -545,6 +648,7 @@ async def test_verify_otp_step_up_marks_session(monkeypatch):
     audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
     assert result.step_up_granted is True
     assert result.token is None
+    assert result.trusted_device_id is None
     assert "step_up_export" in auth_ctx.session.elevated_actions
     assert "step_up_export" in auth_ctx.session.session_metadata["step_up_verified_at"]
     assert auth.has_recent_step_up(auth_ctx, ChallengePurpose.step_up_export)
@@ -613,6 +717,7 @@ def test_verify_route_sets_http_only_cookie(monkeypatch):
             user=user,
             session=issued_session,
             token="raw-token",
+            trusted_device_id="device-1",
             onboarding_required=False,
             step_up_granted=False,
         )
@@ -633,6 +738,71 @@ def test_verify_route_sets_http_only_cookie(monkeypatch):
         assert response.status_code == 200
         set_cookie = response.headers.get("set-cookie", "")
         assert f"{settings.session_cookie_name}=raw-token" in set_cookie
+        assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
+        assert "HttpOnly" in set_cookie
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_request_route_sets_http_only_cookie_when_trusted_session_issued(monkeypatch):
+    user = User(
+        id=uuid4(),
+        full_name="Session User",
+        email="session@example.com",
+        primary_phone_e164="+15555550199",
+        is_phone_verified=True,
+        onboarding_completed_at=datetime.now(timezone.utc),
+        profile_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    issued_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash="hashed",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=336),
+        session_metadata={"auth_flow": "trusted_reentry"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def override_db():
+        yield DummySession()
+
+    async def fake_request(*args, **kwargs):
+        return OTPChallengeRequestResult(
+            challenge=None,
+            user_exists=True,
+            session=issued_session,
+            token="raw-token",
+            trusted_device_id="device-1",
+            onboarding_required=False,
+            otp_required=False,
+        )
+
+    monkeypatch.setattr("app.api.routes.auth.auth.request_otp_challenge", fake_request)
+
+    app.dependency_overrides[get_db_session] = override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/auth/challenges/request",
+            json={
+                "phone_e164": "+15555550199",
+                "purpose": "sign_in",
+            },
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["otp_required"] is False
+        assert payload["token"] == "raw-token"
+        assert payload["challenge"] is None
+        set_cookie = response.headers.get("set-cookie", "")
+        assert f"{settings.session_cookie_name}=raw-token" in set_cookie
+        assert f"{settings.trusted_device_cookie_name}=device-1" in set_cookie
         assert "HttpOnly" in set_cookie
     finally:
         app.dependency_overrides.clear()

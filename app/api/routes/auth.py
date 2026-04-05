@@ -17,20 +17,48 @@ from app.services import auth, rate_limit
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        settings.session_cookie_name,
+        token,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        max_age=settings.session_ttl_hours * 3600,
+        domain=settings.session_cookie_domain,
+        path="/",
+    )
+
+
+def _set_trusted_device_cookie(response: Response, trusted_device_id: str) -> None:
+    response.set_cookie(
+        settings.trusted_device_cookie_name,
+        trusted_device_id,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        max_age=settings.session_ttl_hours * 3600,
+        domain=settings.session_cookie_domain,
+        path="/",
+    )
+
+
 @router.post("/challenges/request", response_model=OTPChallengeRequestResponse, status_code=status.HTTP_201_CREATED)
 async def request_challenge(
     payload: OTPChallengeRequest,
     session: SessionDep,
     request: Request,
+    response: Response,
     auth_ctx: OptionalAuthDep,
 ):
     try:
-        challenge, _user_exists = await auth.request_otp_challenge(
+        result = await auth.request_otp_challenge(
             session,
             payload,
             ip_address=audit_service.request_client_ip(request),
             user_agent=audit_service.request_user_agent(request),
             auth_ctx=auth_ctx,
+            trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -45,7 +73,18 @@ async def request_challenge(
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
 
-    return OTPChallengeRequestResponse(challenge=challenge)
+    if result.token:
+        _set_session_cookie(response, result.token)
+    if result.trusted_device_id:
+        _set_trusted_device_cookie(response, result.trusted_device_id)
+
+    return OTPChallengeRequestResponse(
+        challenge=result.challenge,
+        session=result.session,
+        token=result.token,
+        onboarding_required=result.onboarding_required,
+        otp_required=result.otp_required,
+    )
 
 
 @router.post("/challenges/verify", response_model=OTPChallengeVerifyResponse)
@@ -63,6 +102,7 @@ async def verify_challenge(
             ip_address=audit_service.request_client_ip(request),
             user_agent=audit_service.request_user_agent(request),
             auth_ctx=auth_ctx,
+            trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -78,16 +118,9 @@ async def verify_challenge(
         ) from exc
 
     if result.token:
-        response.set_cookie(
-            settings.session_cookie_name,
-            result.token,
-            httponly=True,
-            secure=settings.session_cookie_secure,
-            samesite="lax",
-            max_age=settings.session_ttl_hours * 3600,
-            domain=settings.session_cookie_domain,
-            path="/",
-        )
+        _set_session_cookie(response, result.token)
+    if result.trusted_device_id:
+        _set_trusted_device_cookie(response, result.trusted_device_id)
 
     return OTPChallengeVerifyResponse(
         challenge=result.challenge,

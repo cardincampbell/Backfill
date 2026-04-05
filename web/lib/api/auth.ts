@@ -128,7 +128,11 @@ export type OTPChallenge = {
 };
 
 export type OTPChallengeRequestResponse = {
-  challenge: OTPChallenge;
+  challenge?: OTPChallenge | null;
+  session?: Session | null;
+  token?: string | null;
+  onboarding_required: boolean;
+  otp_required: boolean;
 };
 
 export type OTPChallengeVerifyResponse = {
@@ -138,6 +142,12 @@ export type OTPChallengeVerifyResponse = {
   token?: string | null;
   onboarding_required: boolean;
   step_up_granted: boolean;
+};
+
+type SessionNavigationResponse = {
+  session?: Session | null;
+  token?: string | null;
+  onboarding_required: boolean;
 };
 
 const DEFAULT_SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60;
@@ -181,8 +191,8 @@ function maxAgeSecondsFromExpiry(expiresAtRaw: string | null | undefined): numbe
   return DEFAULT_SESSION_MAX_AGE_SECONDS;
 }
 
-function maxAgeSecondsFromVerifyResponse(
-  response: OTPChallengeVerifyResponse,
+function maxAgeSecondsFromSessionResponse(
+  response: SessionNavigationResponse,
 ): number {
   return maxAgeSecondsFromExpiry(response.session?.expires_at);
 }
@@ -217,14 +227,14 @@ function persistCookie(
 }
 
 export function persistVerifiedSessionHandoff(
-  response: OTPChallengeVerifyResponse,
+  response: SessionNavigationResponse,
 ): void {
   if (typeof window === "undefined" || !response.token) {
     return;
   }
 
   const domain = deriveSharedCookieDomain(window.location.hostname);
-  const maxAgeSeconds = maxAgeSecondsFromVerifyResponse(response);
+  const maxAgeSeconds = maxAgeSecondsFromSessionResponse(response);
 
   try {
     window.sessionStorage.setItem(SESSION_HANDOFF_STORAGE_KEY, response.token);
@@ -290,7 +300,7 @@ export function hasStoredSessionHandoff(): boolean {
 }
 
 export async function installVerifiedSessionForApp(
-  response: OTPChallengeVerifyResponse,
+  response: SessionNavigationResponse,
 ): Promise<void> {
   if (!response.token) {
     return;
@@ -302,7 +312,7 @@ export async function installVerifiedSessionForApp(
     credentials: "include",
     body: JSON.stringify({
       token: response.token,
-      maxAge: maxAgeSecondsFromVerifyResponse(response),
+      maxAge: maxAgeSecondsFromSessionResponse(response),
       domain:
         typeof window === "undefined"
           ? null
@@ -365,7 +375,7 @@ export function replaceWithAuthDestination(onboardingRequired: boolean): void {
 }
 
 export async function finalizeVerifiedSessionNavigation(
-  response: OTPChallengeVerifyResponse,
+  response: SessionNavigationResponse,
 ): Promise<void> {
   persistVerifiedSessionHandoff(response);
   if (
@@ -380,7 +390,7 @@ export async function finalizeVerifiedSessionNavigation(
 
     const fields = {
       token: response.token,
-      maxAge: String(maxAgeSecondsFromVerifyResponse(response)),
+      maxAge: String(maxAgeSecondsFromSessionResponse(response)),
       domain: deriveSharedCookieDomain(window.location.hostname) ?? "",
       destination: response.onboarding_required ? "/onboarding" : "/dashboard",
     };

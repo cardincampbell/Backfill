@@ -79,7 +79,11 @@ class OTPChallengeRead(BaseSchema):
 
 
 class OTPChallengeRequestResponse(BaseSchema):
-    challenge: OTPChallengeRead
+    challenge: Optional[OTPChallengeRead] = None
+    session: Optional[SessionRead] = None
+    token: Optional[str] = None
+    onboarding_required: bool = False
+    otp_required: bool = True
 
 
 class OTPChallengeVerifyRequest(BaseSchema):

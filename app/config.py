@@ -94,6 +94,10 @@ class Settings:
         )
     )
     session_cookie_name: str = os.environ.get("BACKFILL_SESSION_COOKIE_NAME", "backfill_session")
+    trusted_device_cookie_name: str = os.environ.get(
+        "BACKFILL_TRUSTED_DEVICE_COOKIE_NAME",
+        "backfill_device",
+    )
     twilio_account_sid: str = os.environ.get("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.environ.get("TWILIO_AUTH_TOKEN", "")
     twilio_verify_service_sid: str = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "")

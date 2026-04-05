@@ -67,6 +67,13 @@ export function LoginPageClient() {
         phone_e164: phone.trim(),
         purpose: "sign_in",
       });
+      if (response.token) {
+        await finalizeVerifiedSessionNavigation(response);
+        return;
+      }
+      if (!response.challenge?.id) {
+        throw new Error("Could not start verification.");
+      }
       setChallengeId(response.challenge.id);
       setStep("code");
       setCode("");
@@ -106,6 +113,13 @@ export function LoginPageClient() {
         phone_e164: phone.trim(),
         purpose: "sign_in",
       });
+      if (response.token) {
+        await finalizeVerifiedSessionNavigation(response);
+        return;
+      }
+      if (!response.challenge?.id) {
+        throw new Error("Could not resend your code.");
+      }
       setChallengeId(response.challenge.id);
       startCooldown(inThirtySeconds());
     } catch (err) {
