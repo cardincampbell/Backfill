@@ -8,6 +8,10 @@ import {
   useSessionUserDisplay,
 } from '@/components/app-session-gate';
 import {
+  persistAppShellSidebarTabPreference,
+  type AppShellSidebarTab,
+} from '@/lib/app-shell-prefs';
+import {
   Users,
   Bell,
   Search,
@@ -176,11 +180,16 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
 interface DashboardShellProps {
   activeNav: string;
   children: ReactNode;
+  initialSidebarTab?: AppShellSidebarTab;
 }
 
-export default function DashboardShell({ activeNav, children }: DashboardShellProps) {
+export default function DashboardShell({
+  activeNav,
+  children,
+  initialSidebarTab = 'nav',
+}: DashboardShellProps) {
   const [showNotifications, setShowNotifications] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'nav' | 'copilot'>('nav');
+  const [sidebarTab, setSidebarTab] = useState<AppShellSidebarTab>(initialSidebarTab);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
   const resolvedAppearance = useResolvedAppAppearance();
@@ -200,6 +209,10 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
   const searchFieldClass = isDark
     ? 'bg-white/[0.04] border-white/[0.06] text-white placeholder-[#8898AA]/50'
     : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#0A2540] placeholder-[#8898AA]/60';
+
+  useEffect(() => {
+    persistAppShellSidebarTabPreference(sidebarTab);
+  }, [sidebarTab]);
 
   // Close sidebar on navigation
   const handleNav = (path: string) => {

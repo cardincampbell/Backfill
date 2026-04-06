@@ -2,10 +2,12 @@
 
 import { AppSessionGate } from "@/components/app-session-gate";
 import DashboardShell from "@/components/source-dashboard/DashboardShell";
+import type { AppShellSidebarTab } from "@/lib/app-shell-prefs";
 import { usePathname } from "next/navigation";
 
 type AppShellLayoutProps = {
   children: React.ReactNode;
+  initialSidebarTab: AppShellSidebarTab;
 };
 
 function resolveActiveNav(pathname: string): string {
@@ -18,13 +20,21 @@ function resolveActiveNav(pathname: string): string {
   return "Overview";
 }
 
-export function AppShellLayout({ children }: AppShellLayoutProps) {
+export function AppShellLayout({
+  children,
+  initialSidebarTab,
+}: AppShellLayoutProps) {
   const pathname = usePathname();
   const activeNav = resolveActiveNav(pathname);
 
   return (
     <AppSessionGate>
-      <DashboardShell activeNav={activeNav}>{children}</DashboardShell>
+      <DashboardShell
+        activeNav={activeNav}
+        initialSidebarTab={initialSidebarTab}
+      >
+        {children}
+      </DashboardShell>
     </AppSessionGate>
   );
 }
