@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useRouter } from "next/navigation";
 import {
   Bell,
   Building2,
@@ -39,6 +40,14 @@ import {
   updateAccountProfile,
 } from "@/lib/api/auth";
 import {
+  buildSettingsPath,
+  DEFAULT_SECTION_BY_SCOPE,
+  type SettingsScope,
+  normalizeSettingsSection,
+  normalizeSettingsScope,
+  type SettingsSectionKey,
+} from "@/lib/settings-routing";
+import {
   getBusinessProfile,
   updateBusinessProfile,
   type BusinessProfile,
@@ -46,18 +55,6 @@ import {
 } from "@/lib/api/workspace";
 import { BrandedSelect } from "./BrandedSelect";
 import DashboardShell from "./DashboardShell";
-
-type SettingsScope = "business" | "personal";
-type SettingsSectionKey =
-  | "company"
-  | "locations"
-  | "billing"
-  | "business-notifications"
-  | "integrations"
-  | "profile"
-  | "security"
-  | "personal-notifications"
-  | "appearance";
 
 type Feedback = {
   tone: "success" | "error";
@@ -411,9 +408,14 @@ const personalSections = [
 
 export default function Settings({
   embeddedInShell = false,
+  scope: requestedScope = "business",
+  activeSection: requestedSection = "company",
 }: {
   embeddedInShell?: boolean;
+  scope?: SettingsScope;
+  activeSection?: SettingsSectionKey;
 }) {
+  const router = useRouter();
   const session = useAppSession();
   const updateSession = useUpdateAppSession();
   const appearancePreference = useAppAppearancePreference();
@@ -421,10 +423,6 @@ export default function Settings({
   const resolvedAppearance = useResolvedAppAppearance();
   const isDark = resolvedAppearance === "dark";
   const { fullName, initials, phone } = useSessionUserDisplay();
-
-  const [scope, setScope] = useState<SettingsScope>("business");
-  const [activeSection, setActiveSection] =
-    useState<SettingsSectionKey>("company");
   const [business, setBusiness] = useState<BusinessProfile | null>(null);
   const [businessLoading, setBusinessLoading] = useState(true);
 
@@ -485,6 +483,13 @@ export default function Settings({
     business: null,
     personal: null,
   });
+  const normalizedScope = normalizeSettingsScope(requestedScope);
+  const scope =
+    !businessLoading && !business ? "personal" : normalizedScope;
+  const activeSection = normalizeSettingsSection(
+    scope,
+    scope === normalizedScope ? requestedSection : null,
+  );
 
   useEffect(() => {
     if (!session) {
@@ -557,8 +562,6 @@ export default function Settings({
         if (!targetBusinessId) {
           setBusiness(null);
           setBusinessLoading(false);
-          setScope("personal");
-          setActiveSection("profile");
           return;
         }
         const nextBusiness = await getBusinessProfile(targetBusinessId);
@@ -803,10 +806,30 @@ export default function Settings({
     }
   }
 
-  function switchScope(nextScope: SettingsScope) {
-    setScope(nextScope);
-    setActiveSection(nextScope === "business" ? "company" : "profile");
+  function replaceSettingsLocation(
+    nextScope: SettingsScope,
+    nextSection: SettingsSectionKey,
+  ) {
+    router.replace(buildSettingsPath(nextScope, nextSection), { scroll: false });
   }
+
+  function pushSettingsLocation(
+    nextScope: SettingsScope,
+    nextSection: SettingsSectionKey,
+  ) {
+    router.push(buildSettingsPath(nextScope, nextSection), { scroll: false });
+  }
+
+  function switchScope(nextScope: SettingsScope) {
+    pushSettingsLocation(nextScope, DEFAULT_SECTION_BY_SCOPE[nextScope]);
+  }
+
+  useEffect(() => {
+    if (businessLoading || business || normalizedScope !== "business") {
+      return;
+    }
+    replaceSettingsLocation("personal", DEFAULT_SECTION_BY_SCOPE.personal);
+  }, [business, businessLoading, normalizedScope, router]);
 
   const panelClass = isDark
     ? "bg-[#0F2E4C] border-white/[0.08] shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
@@ -1426,7 +1449,9 @@ export default function Settings({
                       ? "bg-[#635BFF]/[0.08] text-[#635BFF]"
                       : `${textSecondary} ${rowHover}`
                   }`}
-                  onClick={() => setActiveSection(section.key as SettingsSectionKey)}
+                  onClick={() =>
+                    pushSettingsLocation(scope, section.key as SettingsSectionKey)
+                  }
                   type="button"
                 >
                   <section.icon size={16} className="shrink-0" />

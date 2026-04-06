@@ -288,7 +288,7 @@ export default function DashboardShell({ activeNav, children }: DashboardShellPr
                   </div>
                 </nav>
                 <div className={`border-t ${sectionBorderClass} py-3 px-3 space-y-1`}>
-                  <button onClick={() => handleNav('/settings')}
+                <button onClick={() => handleNav('/settings/business/company')}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 dashboard-rail-radius transition-all duration-200 ${
                       activeNav === 'Settings'
                         ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'

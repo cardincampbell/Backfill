@@ -10,7 +10,10 @@ export function SiteChrome({ children }: SiteChromeProps) {
   const pathname = usePathname();
   const currentYear = new Date().getFullYear();
   const isLiveAppSurface =
-    pathname === "/dashboard" || pathname === "/team" || pathname === "/settings";
+    pathname === "/dashboard" ||
+    pathname === "/team" ||
+    pathname === "/settings" ||
+    pathname.startsWith("/settings/");
   const isReferenceAppSurface =
     pathname.startsWith("/dashboard/") ||
     pathname === "/dashboard-light" ||

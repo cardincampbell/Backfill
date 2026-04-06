@@ -12,7 +12,7 @@ function resolveActiveNav(pathname: string): string {
   if (pathname === "/team") {
     return "Team";
   }
-  if (pathname === "/settings") {
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "Settings";
   }
   return "Overview";
