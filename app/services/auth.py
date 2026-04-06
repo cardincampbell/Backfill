@@ -200,6 +200,22 @@ def membership_for_scope(
     return exact_match or business_match
 
 
+def _session_sort_key(record: Session) -> tuple[datetime, datetime]:
+    return (
+        record.last_seen_at or record.updated_at or record.created_at,
+        record.created_at,
+    )
+
+
+def _next_session_expiry(
+    current_time: datetime | None = None,
+    *,
+    ttl_hours: int | None = None,
+) -> datetime:
+    base_time = current_time or datetime.now(timezone.utc)
+    return base_time + timedelta(hours=ttl_hours or settings.session_ttl_hours)
+
+
 async def _issue_session_record(
     session_db: AsyncSession,
     *,
@@ -223,7 +239,7 @@ async def _issue_session_record(
         risk_level=SessionRiskLevel(risk_level),
         elevated_actions=elevated_actions or [],
         last_seen_at=now,
-        expires_at=now + timedelta(hours=ttl_hours),
+        expires_at=_next_session_expiry(now, ttl_hours=ttl_hours),
         session_metadata=session_metadata or {},
     )
     session_db.add(record)
@@ -232,45 +248,121 @@ async def _issue_session_record(
     return raw_token, record
 
 
-async def _touch_active_sessions_for_user(
-    session_db: AsyncSession,
+async def _touch_session_record(
+    session_record: Session,
     *,
-    user_id: UUID,
     now: datetime | None = None,
 ) -> None:
     current_time = now or datetime.now(timezone.utc)
-    next_expiry = current_time + timedelta(hours=settings.session_ttl_hours)
-    result = await session_db.execute(
-        select(Session).where(Session.user_id == user_id, Session.revoked_at.is_(None))
-    )
-    for record in result.scalars().all():
-        if record.expires_at is not None and record.expires_at < current_time:
-            continue
-        record.last_seen_at = current_time
-        record.expires_at = next_expiry
+    if session_record.expires_at is not None and session_record.expires_at < current_time:
+        return
+    session_record.last_seen_at = current_time
+    session_record.expires_at = _next_session_expiry(current_time)
 
 
-async def _has_active_session_for_user(
+async def _active_sessions_for_trusted_device(
     session_db: AsyncSession,
     *,
-    user_id: UUID,
-    trusted_device_id: str | None = None,
+    trusted_device_id: str | None,
+    user_id: UUID | None = None,
     now: datetime | None = None,
-) -> bool:
+    with_user: bool = False,
+) -> list[Session]:
+    trusted_device_id = _trim_text(trusted_device_id)
     if not trusted_device_id:
-        return False
+        return []
     current_time = now or datetime.now(timezone.utc)
-    active_session_id = await session_db.scalar(
-        select(Session.id)
-        .where(
-            Session.user_id == user_id,
-            Session.device_fingerprint == trusted_device_id,
-            Session.revoked_at.is_(None),
-            or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
-        )
-        .limit(1)
+    statement = select(Session)
+    if with_user:
+        statement = statement.options(selectinload(Session.user))
+    statement = statement.where(
+        Session.device_fingerprint == trusted_device_id,
+        Session.revoked_at.is_(None),
+        or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
     )
-    return active_session_id is not None
+    if user_id is not None:
+        statement = statement.where(Session.user_id == user_id)
+    result = await session_db.execute(statement)
+    return list(result.scalars().all())
+
+
+async def _revoke_duplicate_device_sessions(
+    session_db: AsyncSession,
+    *,
+    records: list[Session],
+    keep_session_id: UUID,
+    actor_user_id: UUID | None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    reason: str,
+) -> None:
+    current_time = datetime.now(timezone.utc)
+    for record in records:
+        if record.id == keep_session_id or record.revoked_at is not None:
+            continue
+        record.revoked_at = current_time
+        await audit_service.append(
+            session_db,
+            event_name="auth.session.revoked",
+            target_type="session",
+            target_id=record.id,
+            actor_type=AuditActorType.user if actor_user_id else AuditActorType.system,
+            actor_user_id=actor_user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            payload={
+                "revoked_user_id": str(record.user_id),
+                "reason": reason,
+                "kept_session_id": str(keep_session_id),
+            },
+        )
+
+
+async def _refresh_authenticated_session(
+    session_db: AsyncSession,
+    *,
+    session_record: Session,
+    user: User,
+    ip_address: str | None,
+    user_agent: str | None,
+    business_id: UUID | None,
+    location_id: UUID | None,
+    actor_membership_id: UUID | None = None,
+    device_fingerprint: str | None = None,
+    risk_level: str = SessionRiskLevel.low.value,
+    session_metadata: dict | None = None,
+    source: str,
+    purpose: str,
+) -> tuple[str, Session]:
+    raw_token = generate_session_token()
+    current_time = datetime.now(timezone.utc)
+    session_record.token_hash = hash_session_token(raw_token)
+    session_record.device_fingerprint = device_fingerprint
+    session_record.ip_address = ip_address
+    session_record.user_agent = user_agent
+    session_record.risk_level = SessionRiskLevel(risk_level)
+    session_record.elevated_actions = []
+    session_record.last_seen_at = current_time
+    session_record.expires_at = _next_session_expiry(current_time)
+    session_record.revoked_at = None
+    session_record.session_metadata = session_metadata or {}
+    user.last_sign_in_at = current_time
+    await session_db.flush()
+    await audit_service.append(
+        session_db,
+        event_name="auth.session.refreshed",
+        target_type="session",
+        target_id=session_record.id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=user.id,
+        actor_membership_id=actor_membership_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        payload={"source": source, "purpose": purpose},
+    )
+    return raw_token, session_record
 
 
 async def _issue_authenticated_session(
@@ -362,10 +454,21 @@ async def resolve_auth_context(session_db: AsyncSession, raw_token: str) -> Opti
     if record.expires_at is not None and record.expires_at < now:
         return None
 
-    await _touch_active_sessions_for_user(
+    await _touch_session_record(record, now=now)
+    duplicate_device_sessions = await _active_sessions_for_trusted_device(
         session_db,
+        trusted_device_id=record.device_fingerprint,
         user_id=record.user_id,
         now=now,
+    )
+    await _revoke_duplicate_device_sessions(
+        session_db,
+        records=duplicate_device_sessions,
+        keep_session_id=record.id,
+        actor_user_id=record.user_id,
+        ip_address=record.ip_address,
+        user_agent=record.user_agent,
+        reason="duplicate_trusted_device_session_cleanup",
     )
     memberships_result = await session_db.execute(
         select(Membership)
@@ -395,16 +498,12 @@ async def restore_trusted_device_session(
         return None
 
     current_time = now or datetime.now(timezone.utc)
-    result = await session_db.execute(
-        select(Session)
-        .options(selectinload(Session.user))
-        .where(
-            Session.device_fingerprint == trusted_device_id,
-            Session.revoked_at.is_(None),
-            or_(Session.expires_at.is_(None), Session.expires_at >= current_time),
-        )
+    records = await _active_sessions_for_trusted_device(
+        session_db,
+        trusted_device_id=trusted_device_id,
+        now=current_time,
+        with_user=True,
     )
-    records = list(result.scalars().all())
     if not records:
         return None
 
@@ -412,15 +511,19 @@ async def restore_trusted_device_session(
     if len(user_ids) != 1:
         return None
 
-    source_session = max(
-        records,
-        key=lambda record: (
-            record.last_seen_at or record.updated_at or record.created_at,
-            record.created_at,
-        ),
-    )
-    raw_token, session_record = await _issue_authenticated_session(
+    source_session = max(records, key=_session_sort_key)
+    await _revoke_duplicate_device_sessions(
         session_db,
+        records=records,
+        keep_session_id=source_session.id,
+        actor_user_id=source_session.user.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        reason="trusted_device_restore_cleanup",
+    )
+    raw_token, session_record = await _refresh_authenticated_session(
+        session_db,
+        session_record=source_session,
         user=source_session.user,
         ip_address=ip_address,
         user_agent=user_agent,
@@ -440,7 +543,7 @@ async def restore_trusted_device_session(
         actor_user_id=source_session.user.id,
         ip_address=ip_address,
         user_agent=user_agent,
-        payload={"restored_from_session_id": str(source_session.id)},
+        payload={"trusted_device_id": trusted_device_id},
     )
     await session_db.commit()
     await session_db.refresh(source_session.user)
@@ -485,6 +588,7 @@ async def list_active_sessions_for_user(
     session_db: AsyncSession,
     *,
     user_id: UUID,
+    preferred_session_id: UUID | None = None,
     now: datetime | None = None,
 ) -> list[Session]:
     current_time = now or datetime.now(timezone.utc)
@@ -496,14 +600,28 @@ async def list_active_sessions_for_user(
         )
     )
     records = list(result.scalars().all())
-    records.sort(
-        key=lambda record: (
-            record.last_seen_at or record.updated_at or record.created_at,
-            record.created_at,
-        ),
-        reverse=True,
-    )
-    return records
+    grouped: dict[str, Session] = {}
+    for record in records:
+        group_key = (
+            f"device:{record.device_fingerprint}"
+            if record.device_fingerprint
+            else f"session:{record.id}"
+        )
+        current = grouped.get(group_key)
+        if current is None:
+            grouped[group_key] = record
+            continue
+        if preferred_session_id is not None:
+            if record.id == preferred_session_id:
+                grouped[group_key] = record
+                continue
+            if current.id == preferred_session_id:
+                continue
+        if _session_sort_key(record) > _session_sort_key(current):
+            grouped[group_key] = record
+    deduped_records = list(grouped.values())
+    deduped_records.sort(key=_session_sort_key, reverse=True)
+    return deduped_records
 
 
 async def revoke_user_session(
@@ -519,14 +637,37 @@ async def revoke_user_session(
     record = await session_db.get(Session, session_id)
     if record is None or record.user_id != user_id:
         raise LookupError("session_not_found")
-    await revoke_session_by_id(
-        session_db,
-        session_id,
-        actor_user_id=actor_user_id,
-        actor_membership_id=actor_membership_id,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
+    current_time = datetime.now(timezone.utc)
+    records_to_revoke = [record]
+    if record.device_fingerprint:
+        records_to_revoke = await _active_sessions_for_trusted_device(
+            session_db,
+            trusted_device_id=record.device_fingerprint,
+            user_id=user_id,
+            now=current_time,
+        )
+    for session_record in records_to_revoke:
+        if session_record.revoked_at is not None:
+            continue
+        session_record.revoked_at = current_time
+        await audit_service.append(
+            session_db,
+            event_name="auth.session.revoked",
+            target_type="session",
+            target_id=session_record.id,
+            actor_type=AuditActorType.user if actor_user_id else AuditActorType.system,
+            actor_user_id=actor_user_id,
+            actor_membership_id=actor_membership_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            payload={
+                "revoked_user_id": str(session_record.user_id),
+                "reason": "user_revoked_device_sessions"
+                if session_record.device_fingerprint
+                else "user_revoked_session",
+            },
+        )
+    await session_db.commit()
 
 
 def has_business_access(
@@ -592,57 +733,66 @@ async def request_otp_challenge(
         if normalize_phone(auth_ctx.user.primary_phone_e164) != phone_e164:
             raise PermissionError("step_up_phone_mismatch")
 
-    if (
-        purpose in {ChallengePurpose.sign_in, ChallengePurpose.sign_up}
-        and user is not None
-        and await _has_active_session_for_user(
+    if purpose in {ChallengePurpose.sign_in, ChallengePurpose.sign_up} and user is not None:
+        active_device_sessions = await _active_sessions_for_trusted_device(
             session_db,
-            user_id=user.id,
             trusted_device_id=trusted_device_id,
+            user_id=user.id,
             now=now,
         )
-    ):
-        raw_token, session_record = await _issue_authenticated_session(
-            session_db,
-            user=user,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            business_id=payload.business_id,
-            location_id=payload.location_id,
-            device_fingerprint=trusted_device_id,
-            session_metadata={"auth_flow": "trusted_reentry"},
-            source="trusted_reentry",
-            purpose=purpose.value,
-        )
-        await audit_service.append(
-            session_db,
-            event_name="auth.challenge.skipped",
-            target_type="user",
-            target_id=user.id,
-            business_id=payload.business_id,
-            location_id=payload.location_id,
-            actor_type=AuditActorType.user,
-            actor_user_id=user.id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            payload={
-                "purpose": purpose.value,
-                "reason": "recognized_device_with_active_session",
-                "phone_e164": phone_e164,
-            },
-        )
-        await session_db.commit()
-        await session_db.refresh(user)
-        await session_db.refresh(session_record)
-        return OTPChallengeRequestResult(
-            challenge=None,
-            user_exists=True,
-            session=session_record,
-            token=raw_token,
-            trusted_device_id=trusted_device_id,
-            onboarding_required=onboarding_required_for_user(user),
-            otp_required=False,
-        )
+        if active_device_sessions:
+            source_session = max(active_device_sessions, key=_session_sort_key)
+            await _revoke_duplicate_device_sessions(
+                session_db,
+                records=active_device_sessions,
+                keep_session_id=source_session.id,
+                actor_user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                reason="trusted_reentry_cleanup",
+            )
+            raw_token, session_record = await _refresh_authenticated_session(
+                session_db,
+                session_record=source_session,
+                user=user,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                business_id=payload.business_id,
+                location_id=payload.location_id,
+                device_fingerprint=trusted_device_id,
+                session_metadata={"auth_flow": "trusted_reentry"},
+                source="trusted_reentry",
+                purpose=purpose.value,
+            )
+            await audit_service.append(
+                session_db,
+                event_name="auth.challenge.skipped",
+                target_type="user",
+                target_id=user.id,
+                business_id=payload.business_id,
+                location_id=payload.location_id,
+                actor_type=AuditActorType.user,
+                actor_user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                payload={
+                    "purpose": purpose.value,
+                    "reason": "recognized_device_with_active_session",
+                    "phone_e164": phone_e164,
+                },
+            )
+            await session_db.commit()
+            await session_db.refresh(user)
+            await session_db.refresh(session_record)
+            return OTPChallengeRequestResult(
+                challenge=None,
+                user_exists=True,
+                session=session_record,
+                token=raw_token,
+                trusted_device_id=trusted_device_id,
+                onboarding_required=onboarding_required_for_user(user),
+                otp_required=False,
+            )
 
     await rate_limit.assert_within_limit(
         "otp_request_phone_cooldown",
@@ -889,11 +1039,7 @@ async def verify_otp_challenge(
         step_up_verified_at[challenge.purpose.value] = now.isoformat()
         next_session_metadata["step_up_verified_at"] = step_up_verified_at
         auth_ctx.session.session_metadata = next_session_metadata
-        await _touch_active_sessions_for_user(
-            session_db,
-            user_id=auth_ctx.user.id,
-            now=now,
-        )
+        await _touch_session_record(auth_ctx.session, now=now)
         membership = None
         if challenge.requested_for_business_id is not None:
             membership = membership_for_scope(

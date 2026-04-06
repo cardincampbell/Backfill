@@ -394,7 +394,21 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    session.scalar_queue = [existing_user, uuid4()]
+    existing_session = Session(
+        id=uuid4(),
+        user_id=existing_user.id,
+        token_hash="existing-token",
+        device_fingerprint="device-1",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={"auth_flow": "otp_challenge"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.scalar_queue = [existing_user]
+    session.execute_queue = [[existing_session]]
 
     send_calls: list[tuple[str, str]] = []
 
@@ -436,13 +450,14 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
     assert result.challenge is None
     assert result.token is not None
     assert result.session is not None
+    assert result.session.id == existing_session.id
     assert result.trusted_device_id == "device-1"
     assert result.session.device_fingerprint == "device-1"
     assert result.session.session_metadata == {"auth_flow": "trusted_reentry"}
-    assert len(sessions) == 1
+    assert len(sessions) == 0
     assert {entry.event_name for entry in audits} == {
         "auth.challenge.skipped",
-        "auth.session.created",
+        "auth.session.refreshed",
     }
 
 
@@ -602,7 +617,7 @@ async def test_verify_otp_challenge_sign_up_creates_user_and_session(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_resolve_auth_context_refreshes_all_active_sessions_for_user():
+async def test_resolve_auth_context_refreshes_only_current_session():
     user = User(
         id=uuid4(),
         full_name="Session User",
@@ -652,20 +667,21 @@ async def test_resolve_auth_context_refreshes_all_active_sessions_for_user():
 
     session = FakeAuthSession()
     session.scalar_queue = [current_session]
-    session.execute_queue = [[current_session, sibling_session], [membership]]
+    session.execute_queue = [[membership]]
 
     auth_ctx = await auth.resolve_auth_context(session, "raw-token")
 
     assert auth_ctx is not None
     assert auth_ctx.session.id == current_session.id
     assert auth_ctx.memberships[0].id == membership.id
-    assert sibling_session.last_seen_at is not None
-    assert sibling_session.expires_at is not None
-    assert sibling_session.expires_at > datetime.now(timezone.utc) + timedelta(days=13)
+    assert current_session.last_seen_at is not None
+    assert current_session.expires_at is not None
+    assert current_session.expires_at > datetime.now(timezone.utc) + timedelta(days=13)
+    assert sibling_session.last_seen_at < current_session.last_seen_at
 
 
 @pytest.mark.asyncio
-async def test_restore_trusted_device_session_issues_new_session():
+async def test_restore_trusted_device_session_reuses_existing_session():
     user = User(
         id=uuid4(),
         full_name="Session User",
@@ -691,9 +707,23 @@ async def test_restore_trusted_device_session_issues_new_session():
         updated_at=datetime.now(timezone.utc),
     )
     source_session.user = user
+    duplicate_session = Session(
+        id=uuid4(),
+        user_id=user.id,
+        token_hash="duplicate",
+        device_fingerprint="device-1",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=15),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        session_metadata={"auth_flow": "trusted_reentry"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    duplicate_session.user = user
 
     session = FakeAuthSession()
-    session.execute_queue = [[source_session]]
+    session.execute_queue = [[source_session, duplicate_session]]
 
     result = await auth.restore_trusted_device_session(
         session,
@@ -706,10 +736,13 @@ async def test_restore_trusted_device_session_issues_new_session():
 
     assert result is not None
     assert result.token is not None
+    assert result.session.id == source_session.id
     assert result.session.device_fingerprint == "device-1"
     assert result.session.session_metadata == {"auth_flow": "trusted_device_restore"}
+    assert duplicate_session.revoked_at is not None
     assert {entry.event_name for entry in audits} == {
-        "auth.session.created",
+        "auth.session.refreshed",
+        "auth.session.revoked",
         "auth.session.restored",
     }
 
@@ -783,6 +816,7 @@ async def test_restore_trusted_device_session_rejects_ambiguous_device():
 def test_list_sessions_route_returns_active_sessions():
     auth_ctx = _make_auth_context(with_membership=True)
     current_session = auth_ctx.session
+    current_session.device_fingerprint = "mac-device"
     current_session.user_agent = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -807,9 +841,25 @@ def test_list_sessions_route_returns_active_sessions():
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
+    sibling_session.device_fingerprint = "iphone-device"
+    duplicate_sibling_session = Session(
+        id=uuid4(),
+        user_id=auth_ctx.user.id,
+        token_hash="sibling-older",
+        device_fingerprint="iphone-device",
+        ip_address="198.51.100.8",
+        user_agent=sibling_session.user_agent,
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc) - timedelta(hours=4),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        session_metadata={"auth_flow": "trusted_reentry"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
 
     session = FakeAuthSession()
-    session.execute_queue = [[sibling_session, current_session]]
+    session.execute_queue = [[duplicate_sibling_session, sibling_session, current_session]]
 
     async def override_db():
         yield session
@@ -842,6 +892,22 @@ def test_revoke_session_route_revokes_owned_session():
         id=uuid4(),
         user_id=auth_ctx.user.id,
         token_hash="revoke-me",
+        device_fingerprint="iphone-device",
+        ip_address="198.51.100.44",
+        user_agent="pytest",
+        risk_level=SessionRiskLevel.low,
+        elevated_actions=[],
+        last_seen_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        session_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    duplicate_session = Session(
+        id=uuid4(),
+        user_id=auth_ctx.user.id,
+        token_hash="revoke-me-too",
+        device_fingerprint="iphone-device",
         ip_address="198.51.100.44",
         user_agent="pytest",
         risk_level=SessionRiskLevel.low,
@@ -855,6 +921,7 @@ def test_revoke_session_route_revokes_owned_session():
 
     session = FakeAuthSession()
     session.get_map[(Session, target_session.id)] = target_session
+    session.execute_queue = [[target_session, duplicate_session]]
 
     async def override_db():
         yield session
@@ -870,8 +937,12 @@ def test_revoke_session_route_revokes_owned_session():
         assert response.status_code == 200
         assert response.json() == {"revoked": True}
         assert target_session.revoked_at is not None
+        assert duplicate_session.revoked_at is not None
         audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
-        assert audits[-1].event_name == "auth.session.revoked"
+        assert [audit.event_name for audit in audits] == [
+            "auth.session.revoked",
+            "auth.session.revoked",
+        ]
     finally:
         app.dependency_overrides.clear()
 

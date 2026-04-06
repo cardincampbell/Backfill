@@ -190,6 +190,7 @@ async def list_sessions(session: SessionDep, auth_ctx: AuthDep):
     return await auth.list_active_sessions_for_user(
         session,
         user_id=auth_ctx.user.id,
+        preferred_session_id=auth_ctx.session.id,
     )
 
 
