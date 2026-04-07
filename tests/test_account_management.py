@@ -363,6 +363,7 @@ def test_business_profile_route_updates_current_business():
                 "primary_email": "hello@backfill.com",
                 "timezone": "America/New_York",
                 "company_address": "100 Market St, San Francisco, CA 94105",
+                "week_start_day": "monday",
             },
         )
         assert response.status_code == 200
@@ -376,6 +377,7 @@ def test_business_profile_route_updates_current_business():
         assert business.primary_email == "hello@backfill.com"
         assert business.timezone == "America/New_York"
         assert business.settings["company_profile_address"] == "100 Market St, San Francisco, CA 94105"
+        assert business.settings["week_start_day"] == "monday"
         assert business.settings["brand_name_source"] == "manual"
         assert business.settings["vertical_source"] == "manual"
         assert fake_session.commits == 1

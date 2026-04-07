@@ -410,9 +410,11 @@ async def test_update_business_profile_marks_brand_name_as_manual():
             primary_email="hello@backfill.com",
             timezone="America/New_York",
             company_address="100 Market St, San Francisco, CA 94105",
+            week_start_day="monday",
         ),
     )
 
     assert business.brand_name == "Backfill Works"
     assert business.settings["brand_name_source"] == "manual"
     assert business.settings["vertical_source"] == "manual"
+    assert business.settings["week_start_day"] == "monday"

@@ -160,6 +160,7 @@ async def update_business_profile(
     if primary_email is not None:
         primary_email = primary_email.lower()
     company_address = _normalize_optional(payload.company_address)
+    week_start_day = payload.week_start_day
 
     changes: dict[str, object] = {}
     if business.brand_name != brand_name:
@@ -190,6 +191,14 @@ async def update_business_profile(
         else:
             settings["company_profile_address"] = company_address
         changes["company_address"] = company_address
+
+    current_week_start_day = _normalize_optional(settings.get("week_start_day"))
+    if current_week_start_day != week_start_day:
+        if week_start_day is None:
+            settings.pop("week_start_day", None)
+        else:
+            settings["week_start_day"] = week_start_day
+        changes["week_start_day"] = week_start_day
 
     if settings != current_settings:
         business.settings = settings

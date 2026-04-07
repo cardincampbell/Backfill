@@ -39,9 +39,9 @@ import {
 } from 'lucide-react';
 import {
   findSourceDashboardLocationBySlug,
-  sourceDashboardLocations,
   sourceDashboardNotifications,
 } from './mock-data';
+import SegmentedControl from './SegmentedControl';
 
 const navItems = [
   { label: 'Overview', icon: LayoutGrid, path: '/dashboard' },
@@ -245,6 +245,7 @@ export default function DashboardShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
+  const [workspaceLocationsLoaded, setWorkspaceLocationsLoaded] = useState(false);
   const navigate = useNavigate();
   const pathname = usePathname();
   const resolvedAppearance = useResolvedAppAppearance();
@@ -289,11 +290,21 @@ export default function DashboardShell({
     let cancelled = false;
 
     async function loadWorkspaceLocations() {
-      const workspace = await getWorkspace();
-      if (cancelled || !workspace?.locations?.length) {
-        return;
+      try {
+        const workspace = await getWorkspace();
+        if (cancelled) {
+          return;
+        }
+        setWorkspaceLocations(workspace?.locations ?? []);
+      } catch {
+        if (!cancelled) {
+          setWorkspaceLocations([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setWorkspaceLocationsLoaded(true);
+        }
       }
-      setWorkspaceLocations(workspace.locations);
     }
 
     void loadWorkspaceLocations();
@@ -304,7 +315,7 @@ export default function DashboardShell({
   }, []);
 
   const locationShortcuts = useMemo<DashboardShellLocationShortcut[]>(() => {
-    if (workspaceLocations && workspaceLocations.length > 0) {
+    if (workspaceLocationsLoaded && workspaceLocations && workspaceLocations.length > 0) {
       return workspaceLocations.map((location) => {
         const referenceLocation = findSourceDashboardLocationBySlug(
           location.location_slug,
@@ -329,21 +340,8 @@ export default function DashboardShell({
       });
     }
 
-    return sourceDashboardLocations.map((location) => ({
-      id: String(location.id),
-      businessSlug: null,
-      slug: location.slug,
-      name: location.name,
-      logo: location.logo,
-      openShifts: location.openShifts,
-      path: buildDashboardLocationBasePathFromAny({
-        location_name: location.name,
-        location_slug: location.slug,
-        location_id: String(location.id),
-      }),
-      isWorkspaceBacked: false,
-    }));
-  }, [workspaceLocations]);
+    return [];
+  }, [workspaceLocations, workspaceLocationsLoaded]);
 
   const handleNav = (path: string) => {
     navigate(path);
@@ -390,34 +388,24 @@ export default function DashboardShell({
         </div>
 
         <div className="px-3 pt-3 pb-1">
-          <div className={`flex items-center rounded-lg p-0.5 ${subtleSurfaceClass}`}>
-            <button
-              onClick={() => setSidebarTab('nav')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
-                sidebarTab === 'nav'
-                  ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
-                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
-              }`}
-              style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}
-              type="button"
-            >
-              <LayoutGrid size={13} />
-              Navigate
-            </button>
-            <button
-              onClick={() => setSidebarTab('copilot')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
-                sidebarTab === 'copilot'
-                  ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm'
-                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
-              }`}
-              style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}
-              type="button"
-            >
-              <Sparkles size={13} />
-              Copilot
-            </button>
-          </div>
+          <SegmentedControl
+            activeItemClassName={`${panelBgClass} ${textPrimaryClass} shadow-sm`}
+            className={`flex w-full ${subtleSurfaceClass}`}
+            iconSize={13}
+            inactiveItemClassName={`${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`}
+            itemClassName="flex-1 py-2 text-[12px]"
+            items={[
+              { value: 'nav', label: 'Navigate', icon: LayoutGrid },
+              {
+                value: 'copilot',
+                label: 'Copilot',
+                icon: Sparkles,
+                activeClassName: 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm',
+              },
+            ]}
+            onChange={setSidebarTab}
+            value={sidebarTab}
+          />
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -454,31 +442,53 @@ export default function DashboardShell({
                     <span className={`text-[10px] uppercase tracking-[0.06em] px-3 mb-2 block ${mutedTextClass}`} style={{ fontWeight: 500 }}>
                       Locations
                     </span>
-                    {locationShortcuts.map((location) => {
-                      const isActiveLocation = pathname === location.path;
-                      return (
-                        <button
-                          key={location.id}
-                          onClick={() => handleNav(location.isWorkspaceBacked ? location.path : '/onboarding')}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
-                            isActiveLocation
-                              ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
-                              : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
-                          }`}
-                          type="button"
-                        >
-                          <span className="text-[14px]">{location.logo}</span>
-                          <span className="text-[12px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
-                            {location.name}
-                          </span>
-                          {typeof location.openShifts === 'number' && location.openShifts > 0 ? (
-                            <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>
-                              {location.openShifts}
+                    {!workspaceLocationsLoaded ? (
+                      <div className="space-y-2 px-3 py-1">
+                        {Array.from({ length: 3 }).map((_, index) => (
+                          <div
+                            key={index}
+                            className={`h-8 animate-pulse rounded-lg ${isDark ? 'bg-white/[0.05]' : 'bg-[#F0F0F5]'}`}
+                          />
+                        ))}
+                      </div>
+                    ) : locationShortcuts.length > 0 ? (
+                      locationShortcuts.map((location) => {
+                        const isActiveLocation = pathname === location.path;
+                        return (
+                          <button
+                            key={location.id}
+                            onClick={() => handleNav(location.path)}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
+                              isActiveLocation
+                                ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                                : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
+                            }`}
+                            type="button"
+                          >
+                            <span className="text-[14px]">{location.logo}</span>
+                            <span className="text-[12px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
+                              {location.name}
                             </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
+                            {typeof location.openShifts === 'number' && location.openShifts > 0 ? (
+                              <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>
+                                {location.openShifts}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <button
+                        onClick={() => handleNav('/onboarding')}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
+                        type="button"
+                      >
+                        <span className="text-[14px]">+</span>
+                        <span className="text-[12px]" style={{ fontWeight: 440 }}>
+                          Set up your first location
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </nav>
               </motion.div>

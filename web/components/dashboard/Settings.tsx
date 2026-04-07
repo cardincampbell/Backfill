@@ -15,6 +15,7 @@ import {
   Bell,
   Building2,
   Camera,
+  CalendarDays,
   Check,
   CreditCard,
   FileText,
@@ -65,6 +66,7 @@ import {
 import { BrandedSelect } from "./BrandedSelect";
 import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
 import DashboardShell from "./DashboardShell";
+import SegmentedControl from "./SegmentedControl";
 import SettingsLocationsSection from "./SettingsLocationsSection";
 
 type Feedback = {
@@ -84,6 +86,7 @@ type CompanyFormState = {
   businessEmail: string;
   businessAddress: string;
   timezone: string;
+  weekStartDay: string;
 };
 
 function normalizeEmail(value: string): string {
@@ -104,6 +107,14 @@ function getBusinessAddress(business: BusinessProfile | null): string {
   }
   const raw = business.settings?.["company_profile_address"];
   return typeof raw === "string" ? raw : "";
+}
+
+function getBusinessWeekStartDay(business: BusinessProfile | null): string {
+  if (!business) {
+    return "monday";
+  }
+  const raw = business.settings?.["week_start_day"];
+  return typeof raw === "string" && raw ? raw : "monday";
 }
 
 function resolveAppearancePreference(
@@ -133,6 +144,7 @@ function buildCompanyForm(business: BusinessProfile): CompanyFormState {
     businessEmail: business.primary_email ?? "",
     businessAddress: getBusinessAddress(business),
     timezone: business.timezone,
+    weekStartDay: getBusinessWeekStartDay(business),
   };
 }
 
@@ -267,41 +279,8 @@ function formsMatchCompany(
     normalizeText(left.businessType) === normalizeText(right.businessType) &&
     normalizeEmail(left.businessEmail) === normalizeEmail(right.businessEmail) &&
     normalizeText(left.businessAddress) === normalizeText(right.businessAddress) &&
-    normalizeText(left.timezone) === normalizeText(right.timezone)
-  );
-}
-
-function ScopeButton({
-  active,
-  dark,
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  dark: boolean;
-  icon: typeof Building2;
-  label: string;
-  onClick(): void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 px-5 py-2.5 text-[13px] transition-all duration-300 ${
-        active
-          ? dark
-            ? "backfill-ui-radius bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
-            : "rounded-lg bg-white text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
-          : dark
-            ? "backfill-ui-radius text-[#8898AA] hover:text-[#C1CED8]"
-            : "rounded-lg text-[#8898AA] hover:text-[#5E6D7A]"
-      }`}
-      style={{ fontWeight: active ? 540 : 420 }}
-      type="button"
-    >
-      <Icon size={15} />
-      {label}
-    </button>
+    normalizeText(left.timezone) === normalizeText(right.timezone) &&
+    normalizeText(left.weekStartDay) === normalizeText(right.weekStartDay)
   );
 }
 
@@ -444,6 +423,16 @@ const BUSINESS_TYPE_OPTIONS = [
   { value: "mixed_unknown", label: "General Business" },
 ];
 
+const WEEK_START_DAY_OPTIONS = [
+  { value: "sunday", label: "Sunday" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" },
+];
+
 const personalSections = [
   { key: "profile", label: "My Profile", icon: User, saveTarget: "personal" as const },
   { key: "security", label: "Security", icon: Shield, saveTarget: null },
@@ -510,6 +499,7 @@ export default function Settings({
     businessEmail: "",
     businessAddress: "",
     timezone: "America/Los_Angeles",
+    weekStartDay: "monday",
   });
   const [companyBaseline, setCompanyBaseline] = useState<CompanyFormState>({
     companyName: "",
@@ -517,6 +507,7 @@ export default function Settings({
     businessEmail: "",
     businessAddress: "",
     timezone: "America/Los_Angeles",
+    weekStartDay: "monday",
   });
 
   const [personalSaving, setPersonalSaving] = useState(false);
@@ -781,6 +772,7 @@ export default function Settings({
         primary_email: normalizeEmail(companyForm.businessEmail) || null,
         timezone: normalizeText(companyForm.timezone),
         company_address: normalizeText(companyForm.businessAddress) || null,
+        week_start_day: normalizeText(companyForm.weekStartDay) || null,
       });
       const nextBaseline = buildCompanyForm(response);
       setBusiness(response);
@@ -987,23 +979,44 @@ export default function Settings({
             />
           </SettingsField>
 
-          <SettingsField icon={Globe} label="Timezone">
-            <SettingsSelect
-              dark={isDark}
-              onChange={(event) =>
-                setCompanyForm((current) => ({
-                  ...current,
-                  timezone: event.target.value,
-                }))
-              }
-              value={companyForm.timezone}
-            >
-              <option value="America/Los_Angeles">Pacific Time (PT)</option>
-              <option value="America/Denver">Mountain Time (MT)</option>
-              <option value="America/Chicago">Central Time (CT)</option>
-              <option value="America/New_York">Eastern Time (ET)</option>
-            </SettingsSelect>
-          </SettingsField>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <SettingsField icon={Globe} label="Timezone">
+              <SettingsSelect
+                dark={isDark}
+                onChange={(event) =>
+                  setCompanyForm((current) => ({
+                    ...current,
+                    timezone: event.target.value,
+                  }))
+                }
+                value={companyForm.timezone}
+              >
+                <option value="America/Los_Angeles">Pacific Time (PT)</option>
+                <option value="America/Denver">Mountain Time (MT)</option>
+                <option value="America/Chicago">Central Time (CT)</option>
+                <option value="America/New_York">Eastern Time (ET)</option>
+              </SettingsSelect>
+            </SettingsField>
+
+            <SettingsField icon={CalendarDays} label="Week Start Day">
+              <SettingsSelect
+                dark={isDark}
+                onChange={(event) =>
+                  setCompanyForm((current) => ({
+                    ...current,
+                    weekStartDay: event.target.value,
+                  }))
+                }
+                value={companyForm.weekStartDay}
+              >
+                {WEEK_START_DAY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SettingsSelect>
+            </SettingsField>
+          </div>
         </div>
       );
     }
@@ -1453,10 +1466,28 @@ export default function Settings({
         </div>
 
         <div className="mb-6">
-          <div className={`inline-flex items-center p-1 gap-0.5 ${isDark ? `backfill-ui-radius ${subtleSurface}` : "rounded-xl bg-[#F0F0F5]"}`}>
-            <ScopeButton active={scope === "business"} dark={isDark} icon={Building2} label="Business" onClick={() => switchScope("business")} />
-            <ScopeButton active={scope === "personal"} dark={isDark} icon={User} label="Personal" onClick={() => switchScope("personal")} />
-          </div>
+          <SegmentedControl
+            activeItemClassName={
+              isDark
+                ? "backfill-ui-radius bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
+                : "bg-white text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
+            }
+            activeWeight={540}
+            className={isDark ? `inline-flex ${subtleSurface}` : "inline-flex bg-[#F0F0F5]"}
+            iconSize={15}
+            inactiveItemClassName={
+              isDark
+                ? "text-[#8898AA] hover:text-[#C1CED8]"
+                : "text-[#8898AA] hover:text-[#5E6D7A]"
+            }
+            inactiveWeight={420}
+            items={[
+              { value: "business", label: "Business", icon: Building2 },
+              { value: "personal", label: "Personal", icon: User },
+            ]}
+            onChange={switchScope}
+            value={scope}
+          />
         </div>
 
         <div className="flex flex-col md:flex-row gap-6">

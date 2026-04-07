@@ -75,6 +75,7 @@ export type BusinessProfileUpdatePayload = {
   primary_email?: string | null;
   timezone: string;
   company_address?: string | null;
+  week_start_day?: string | null;
 };
 
 export type Workspace = {

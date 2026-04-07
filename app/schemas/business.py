@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import Field
@@ -28,6 +28,17 @@ class BusinessProfileUpdate(BaseSchema):
     primary_email: Optional[str] = None
     timezone: str
     company_address: Optional[str] = None
+    week_start_day: Optional[
+        Literal[
+            "sunday",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+        ]
+    ] = None
 
 
 class BusinessRead(BaseSchema):

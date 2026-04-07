@@ -15,7 +15,6 @@ import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import DashboardShell from './DashboardShell';
 import {
   findSourceDashboardLocationBySlug,
-  sourceDashboardLocations,
   type SourceDashboardLocation,
 } from './mock-data';
 import { useSmartGreeting } from './use-smart-greeting';
@@ -558,7 +557,13 @@ function SingleLocationView({ location }: { location: SourceDashboardLocation })
 }
 
 /* ─── Multi Location View ─── */
-function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[] }) {
+function MultiLocationView({
+  locations,
+  locationsLoaded,
+}: {
+  locations: DashboardSurfaceLocation[];
+  locationsLoaded: boolean;
+}) {
   const {
     isDark,
     headingClass,
@@ -585,8 +590,14 @@ function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[
   const coverageDate = useCoverageDateParts(timeZone);
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
-  const avgFillRate = Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length);
+  const avgFillRate =
+    locations.length > 0
+      ? Math.round(locations.reduce((a, b) => a + b.fillRate, 0) / locations.length)
+      : 0;
   const totalOpen = locations.reduce((a, b) => a + b.openShifts, 0);
+  const totalScheduled = totalActive + totalOpen;
+  const coverageRate =
+    totalScheduled > 0 ? Math.round((totalActive / totalScheduled) * 100) : 0;
   const totalCost = `$${(totalActive * 20).toLocaleString()}`;
 
   return (
@@ -631,38 +642,64 @@ function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[
               </div>
             </div>
             <div className="flex-1 overflow-y-auto min-h-0 space-y-2 mb-3 pr-1">
-              {locations.map((loc) => (
-                <div key={loc.id} className="flex items-center gap-2.5">
-                  <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>↳</span>
-                  <span className="text-[13px]">{loc.logo}</span>
-                  <span className={`text-[13px] flex-1 truncate ${strongBodyClass}`} style={{ fontWeight: 480 }}>{loc.name.split(' ')[0]}</span>
-                  <span className={`text-[13px] tabular-nums ${bodyClass}`} style={{ fontWeight: 520 }}>{loc.activeShifts}/{loc.activeShifts + loc.openShifts}</span>
-                  {loc.openShifts === 0 ? (
-                    <CircleCheck size={14} className="text-[#00B893]" />
-                  ) : (
-                    <div className="flex items-center gap-1">
-                      <Loader size={12} className="text-[#F59E0B] animate-spin" style={{ animationDuration: '2s' }} />
-                      <span className="text-[11px] text-[#F59E0B]" style={{ fontWeight: 500 }}>{loc.openShifts}</span>
-                    </div>
-                  )}
+              {!locationsLoaded ? (
+                Array.from({ length: 3 }).map((_, index) => (
+                  <div
+                    key={`coverage-skeleton-${index}`}
+                    className={`h-8 animate-pulse ${rowRadiusClass} ${
+                      isDark ? 'bg-white/[0.05]' : 'bg-[#F7F8FA]'
+                    }`}
+                  />
+                ))
+              ) : locations.length > 0 ? (
+                locations.map((loc) => (
+                  <div key={loc.id} className="flex items-center gap-2.5">
+                    <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>↳</span>
+                    <span className="text-[13px]">{loc.logo}</span>
+                    <span className={`text-[13px] flex-1 truncate ${strongBodyClass}`} style={{ fontWeight: 480 }}>{loc.name.split(' ')[0]}</span>
+                    <span className={`text-[13px] tabular-nums ${bodyClass}`} style={{ fontWeight: 520 }}>{loc.activeShifts}/{loc.activeShifts + loc.openShifts}</span>
+                    {loc.openShifts === 0 ? (
+                      <CircleCheck size={14} className="text-[#00B893]" />
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <Loader size={12} className="text-[#F59E0B] animate-spin" style={{ animationDuration: '2s' }} />
+                        <span className="text-[11px] text-[#F59E0B]" style={{ fontWeight: 500 }}>{loc.openShifts}</span>
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className={`pt-2 text-[12px] ${mutedClass}`} style={{ fontWeight: 440 }}>
+                  Add your first location to start tracking coverage here.
                 </div>
-              ))}
+              )}
             </div>
             <div className={`pt-3 border-t shrink-0 ${borderClass}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className={`text-[22px] tracking-[-0.03em] ${headingClass}`} style={{ fontWeight: 660 }}>78%</span>
+                  <span className={`text-[22px] tracking-[-0.03em] ${headingClass}`} style={{ fontWeight: 660 }}>{coverageRate}%</span>
                   <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 440 }}>covered</span>
                 </div>
-                <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>72 of 92</span>
+                <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>
+                  {totalActive} of {totalScheduled}
+                </span>
               </div>
               <div className={`w-full h-1.5 mb-2 overflow-hidden ${progressRadiusClass} ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
-                <div className={`h-full bg-gradient-to-r from-[#00B893] to-[#00D4AA] ${progressRadiusClass}`} style={{ width: '78%' }} />
+                <div className={`h-full bg-gradient-to-r from-[#00B893] to-[#00D4AA] ${progressRadiusClass}`} style={{ width: `${coverageRate}%` }} />
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
-                <span className={`text-[10px] ${bodyClass}`} style={{ fontWeight: 460 }}>{totalOpen} filling now · ~8 min</span>
-              </div>
+              {totalOpen > 0 ? (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
+                  <span className={`text-[10px] ${bodyClass}`} style={{ fontWeight: 460 }}>{totalOpen} filling now · ~8 min</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#00B893]" />
+                  <span className={`text-[10px] ${bodyClass}`} style={{ fontWeight: 460 }}>
+                    {locationsLoaded ? 'No open shifts right now.' : 'Loading coverage...'}
+                  </span>
+                </div>
+              )}
             </div>
           </motion.div>
 
@@ -690,24 +727,39 @@ function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[
             className={`${surfaceClass} ${secondarySurfaceRadiusClass} p-5 flex flex-col overflow-hidden`}>
             <h3 className={`text-[13px] uppercase tracking-[0.04em] mb-3 shrink-0 ${mutedClass}`} style={{ fontWeight: 480 }}>Top Performers</h3>
             <div className="space-y-1 flex-1 min-h-0">
-              {locations.flatMap((loc) =>
-                loc.topStaff.map((s) => ({ ...s, locationName: loc.name, locationLogo: loc.logo, locationColor: loc.color }))
-              ).sort((a, b) => b.rating - a.rating).slice(0, 4).map((s, i) => (
-                <div key={`${s.name}-${i}`} className={`flex items-center gap-2.5 p-2 transition-colors ${rowRadiusClass} ${rowHoverClass}`}>
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: s.locationColor }}>
-                    {s.name.split(' ').map(n => n[0]).join('')}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-[12px] truncate ${headingClass}`} style={{ fontWeight: 500 }}>{s.name}</p>
-                    <div className="flex items-center gap-1">
-                      <span className={`text-[10px] ${mutedClass}`}>{s.role} · {s.shifts} shifts</span>
-                      <span className={`text-[9px] ${mutedClass}`} style={{ opacity: 0.5 }}>|</span>
-                      <span className="text-[10px]">{s.locationLogo}</span>
+              {!locationsLoaded ? (
+                Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={`performer-skeleton-${index}`}
+                    className={`h-12 animate-pulse ${rowRadiusClass} ${
+                      isDark ? 'bg-white/[0.05]' : 'bg-[#F7F8FA]'
+                    }`}
+                  />
+                ))
+              ) : locations.length > 0 ? (
+                locations.flatMap((loc) =>
+                  loc.topStaff.map((s) => ({ ...s, locationName: loc.name, locationLogo: loc.logo, locationColor: loc.color }))
+                ).sort((a, b) => b.rating - a.rating).slice(0, 4).map((s, i) => (
+                  <div key={`${s.name}-${i}`} className={`flex items-center gap-2.5 p-2 transition-colors ${rowRadiusClass} ${rowHoverClass}`}>
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: s.locationColor }}>
+                      {s.name.split(' ').map(n => n[0]).join('')}
                     </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-[12px] truncate ${headingClass}`} style={{ fontWeight: 500 }}>{s.name}</p>
+                      <div className="flex items-center gap-1">
+                        <span className={`text-[10px] ${mutedClass}`}>{s.role} · {s.shifts} shifts</span>
+                        <span className={`text-[9px] ${mutedClass}`} style={{ opacity: 0.5 }}>|</span>
+                        <span className="text-[10px]">{s.locationLogo}</span>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-[#D4A017]" style={{ fontWeight: 540 }}>★ {s.rating}</div>
                   </div>
-                  <div className="text-[11px] text-[#D4A017]" style={{ fontWeight: 540 }}>★ {s.rating}</div>
+                ))
+              ) : (
+                <div className={`pt-2 text-[12px] ${mutedClass}`} style={{ fontWeight: 440 }}>
+                  Add staff and locations to see your top performers here.
                 </div>
-              ))}
+              )}
             </div>
           </motion.div>
         </div>
@@ -716,29 +768,44 @@ function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className={`text-[18px] tracking-[-0.01em] ${headingClass}`} style={{ fontWeight: 580 }}>Your Locations</h2>
-          <span className={`text-[12px] px-2.5 py-0.5 ${pillRadiusClass} ${pillClass}`} style={{ fontWeight: 500 }}>{locations.length}</span>
+          <span className={`text-[12px] px-2.5 py-0.5 ${pillRadiusClass} ${pillClass}`} style={{ fontWeight: 500 }}>
+            {locationsLoaded ? locations.length : '...'}
+          </span>
         </div>
         <button className="flex items-center gap-1 text-[13px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 500 }}>
           View all <ChevronRight size={14} />
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {locations.map((loc, i) => (
-          <LocationCard
-            key={String(loc.location_id ?? loc.id)}
-            location={loc}
-            index={i}
-            onClick={() =>
-              navigate(
-                loc.isWorkspaceBacked
-                  ? buildDashboardLocationBasePathFromAny(loc)
-                  : '/onboarding',
-              )
-            }
-          />
-        ))}
-      </div>
+      {!locationsLoaded ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Array.from({ length: 2 }).map((_, index) => (
+            <div
+              key={`location-card-skeleton-${index}`}
+              className={`h-[248px] animate-pulse border ${emptyCardRadiusClass} ${
+                isDark ? 'border-white/[0.06] bg-white/[0.04]' : 'border-[#E5E7EB] bg-[#F7F8FA]'
+              }`}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {locations.map((loc, i) => (
+            <LocationCard
+              key={String(loc.location_id ?? loc.id)}
+              location={loc}
+              index={i}
+              onClick={() =>
+                navigate(
+                  loc.isWorkspaceBacked
+                    ? buildDashboardLocationBasePathFromAny(loc)
+                    : '/onboarding',
+                )
+              }
+            />
+          ))}
+        </div>
+      )}
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
         onClick={() => navigate('/onboarding')} className="mt-4 group cursor-pointer">
@@ -881,16 +948,27 @@ export default function DashboardLight({
   embeddedInShell?: boolean;
 }) {
   const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
+  const [workspaceLocationsLoaded, setWorkspaceLocationsLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadWorkspaceLocations() {
-      const workspace = await getWorkspace();
-      if (cancelled || !workspace?.locations?.length) {
-        return;
+      try {
+        const workspace = await getWorkspace();
+        if (cancelled) {
+          return;
+        }
+        setWorkspaceLocations(workspace?.locations ?? []);
+      } catch {
+        if (!cancelled) {
+          setWorkspaceLocations([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setWorkspaceLocationsLoaded(true);
+        }
       }
-      setWorkspaceLocations(workspace.locations);
     }
 
     void loadWorkspaceLocations();
@@ -901,7 +979,7 @@ export default function DashboardLight({
   }, []);
 
   const locations = useMemo<DashboardSurfaceLocation[]>(() => {
-    if (workspaceLocations && workspaceLocations.length > 0) {
+    if (workspaceLocationsLoaded && workspaceLocations && workspaceLocations.length > 0) {
       return workspaceLocations.map((location) => {
         const referenceLocation = findSourceDashboardLocationBySlug(
           location.location_slug,
@@ -932,13 +1010,15 @@ export default function DashboardLight({
       });
     }
 
-    return sourceDashboardLocations.map((location) => ({
-      ...location,
-      isWorkspaceBacked: false,
-    }));
-  }, [workspaceLocations]);
+    return [];
+  }, [workspaceLocations, workspaceLocationsLoaded]);
 
-  const content = <MultiLocationView locations={locations} />;
+  const content = (
+    <MultiLocationView
+      locations={locations}
+      locationsLoaded={workspaceLocationsLoaded}
+    />
+  );
 
   if (embeddedInShell) {
     return content;
