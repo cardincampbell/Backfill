@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarDays, Check, ChevronLeft, Plus, Tag, X } from "lucide-react";
 
+import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
 import {
   createAndAssignLocationRole,
@@ -59,6 +60,7 @@ export default function Location({
   backHref = "/dashboard",
 }: LocationProps) {
   const router = useRouter();
+  const isDark = useResolvedAppAppearance() === "dark";
   const [roles, setRoles] = useState<BusinessRole[]>([]);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -143,6 +145,19 @@ export default function Location({
     name: location.location_name,
     slug: location.location_slug,
   });
+  const textPrimary = isDark ? "text-white" : "text-[#0A2540]";
+  const textSecondary = isDark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const textTertiary = isDark ? "text-[#C1CED8]" : "text-[#3E4C59]";
+  const panelClass = isDark
+    ? "bg-[#0F2E4C] border-white/[0.06] shadow-[0_18px_48px_rgba(0,0,0,0.28)]"
+    : "bg-white border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.04)]";
+  const borderClass = isDark ? "border-white/[0.06]" : "border-[#F0F0F5]";
+  const subtleBorderClass = isDark ? "border-white/[0.08]" : "border-[#E5E7EB]";
+  const subtleSurfaceClass = isDark ? "bg-white/[0.04]" : "bg-[#F7F8FA]";
+  const footerSurfaceClass = isDark ? "bg-white/[0.03]" : "bg-[#FAFBFC]";
+  const chipClass = isDark
+    ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
+    : "bg-[#635BFF]/[0.06] border-[#635BFF]/15";
 
   const addRole = (roleId: string) => {
     setSelectedRoleIds((current) =>
@@ -264,7 +279,7 @@ export default function Location({
         <button
           type="button"
           onClick={() => router.push(backHref)}
-          className="flex items-center gap-1.5 text-[12px] text-[#8898AA] hover:text-[#5E6D7A] transition-colors mb-4"
+          className={`mb-4 flex items-center gap-1.5 text-[12px] transition-colors ${textSecondary} ${isDark ? "hover:text-white" : "hover:text-[#5E6D7A]"}`}
           style={{ fontWeight: 440 }}
         >
           <ChevronLeft size={14} />
@@ -280,7 +295,7 @@ export default function Location({
           </div>
           <div>
             <h1
-              className="text-[24px] sm:text-[28px] md:text-[32px] text-[#0A2540] tracking-[-0.025em]"
+              className={`text-[24px] sm:text-[28px] md:text-[32px] tracking-[-0.025em] ${textPrimary}`}
               style={{ fontWeight: 620 }}
             >
               {location.location_name}
@@ -296,7 +311,7 @@ export default function Location({
               >
                 {locationReference.typeLabel}
               </span>
-              <span className="text-[13px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+              <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {locationReference.staffLabel}
               </span>
             </div>
@@ -308,9 +323,9 @@ export default function Location({
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.1 }}
-        className="bg-white border border-[#E5E7EB] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden"
+        className={`rounded-2xl border overflow-hidden ${panelClass}`}
       >
-        <div className="px-5 sm:px-8 py-6 border-b border-[#F0F0F5]">
+        <div className={`px-5 sm:px-8 py-6 border-b ${borderClass}`}>
           <div className="flex items-start gap-4">
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -320,15 +335,15 @@ export default function Location({
             </div>
             <div className="flex-1">
               <h2
-                className="text-[18px] text-[#0A2540] tracking-[-0.01em] mb-1"
+                className={`mb-1 text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
                 Select roles for this location
               </h2>
-              <p className="text-[13px] text-[#8898AA] leading-relaxed" style={{ fontWeight: 420 }}>
+              <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
                 Choose the roles that apply to {location.location_name}. Once selected, we'll use them to build your weekly shift schedule and match available staff.
               </p>
-              <p className="text-[12px] text-[#8898AA] mt-3" style={{ fontWeight: 420 }}>
+              <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {formatLocationMeta({
                   name: location.location_name,
                   slug: location.location_slug,
@@ -360,12 +375,12 @@ export default function Location({
           </div>
         ) : null}
 
-        <div className="px-5 sm:px-8 py-5 border-b border-[#F0F0F5]">
+        <div className={`px-5 sm:px-8 py-5 border-b ${borderClass}`}>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>
+            <h3 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
               Selected Roles
             </h3>
-            <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+            <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
               {selectedRoles.length} of {roles.length}
             </span>
           </div>
@@ -378,10 +393,10 @@ export default function Location({
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg bg-[#635BFF]/[0.06] border border-[#635BFF]/15"
+                  className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${chipClass}`}
                 >
                   <Tag size={11} className="text-[#635BFF]" />
-                  <span className="text-[12px] text-[#0A2540]" style={{ fontWeight: 480 }}>
+                  <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
                     {role.name}
                   </span>
                   <button
@@ -396,12 +411,12 @@ export default function Location({
               ))}
             </AnimatePresence>
             {!loading && selectedRoles.length === 0 ? (
-              <p className="text-[12px] text-[#C1CED8] py-1" style={{ fontWeight: 420 }}>
+              <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 No roles selected yet. Add from the list below.
               </p>
             ) : null}
             {loading ? (
-              <p className="text-[12px] text-[#8898AA] py-1" style={{ fontWeight: 420 }}>
+              <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 Loading location roles...
               </p>
             ) : null}
@@ -411,7 +426,7 @@ export default function Location({
         <div className="px-5 sm:px-8 py-6 space-y-6">
           {availableRoles.length > 0 ? (
             <div className="flex items-center justify-between">
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>
+              <h3 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
                 Available Roles
               </h3>
               <button
@@ -434,7 +449,7 @@ export default function Location({
               transition={{ duration: 0.4, delay: 0.15 + index * 0.08 }}
             >
               <div className="flex items-center justify-between mb-2.5">
-                <h4 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>
+                <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
                   {group.category}
                 </h4>
                 <button
@@ -454,10 +469,14 @@ export default function Location({
                     type="button"
                     onClick={() => addRole(role.id)}
                     disabled={loading || isPending}
-                    className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03] transition-all duration-200 disabled:opacity-50"
+                    className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 disabled:opacity-50 ${
+                      isDark
+                        ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
+                        : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
+                    }`}
                   >
                     <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                    <span className="text-[12px] text-[#5E6D7A] group-hover:text-[#0A2540] transition-colors" style={{ fontWeight: 440 }}>
+                    <span className={`text-[12px] transition-colors ${isDark ? "text-[#C1CED8] group-hover:text-white" : "text-[#5E6D7A] group-hover:text-[#0A2540]"}`} style={{ fontWeight: 440 }}>
                       {role.name}
                     </span>
                   </button>
@@ -467,9 +486,9 @@ export default function Location({
           ))}
 
           {!loading && roles.length === 0 ? (
-            <div className="flex items-center gap-3 p-4 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
+            <div className={`flex items-center gap-3 p-4 rounded-xl border ${subtleSurfaceClass} ${subtleBorderClass}`}>
               <X size={16} className="text-[#8898AA] shrink-0" />
-              <p className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 440 }}>
+              <p className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 440 }}>
                 This business does not have any roles yet. Business roles are the source of truth for location assignments.
               </p>
             </div>
@@ -477,7 +496,7 @@ export default function Location({
 
           <div>
             <h3
-              className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-2"
+              className={`mb-2 text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
               style={{ fontWeight: 500 }}
             >
               Custom Role
@@ -494,7 +513,11 @@ export default function Location({
                   }
                 }}
                 placeholder="Type a new role name..."
-                className="flex-1 px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
+                  isDark
+                    ? "border-white/[0.08] bg-white/[0.04] text-white"
+                    : "border-[#E5E7EB] bg-white text-[#0A2540]"
+                }`}
                 style={{ fontWeight: 440 }}
               />
               <button
@@ -513,16 +536,20 @@ export default function Location({
           </div>
 
           {availableRoles.length === 0 && roles.length > 0 ? (
-            <div className="flex items-center gap-3 p-4 rounded-xl bg-[#00B893]/[0.04] border border-[#00B893]/10">
+            <div className={`flex items-center gap-3 p-4 rounded-xl border ${
+              isDark
+                ? "bg-[#00B893]/[0.08] border-[#00B893]/20"
+                : "bg-[#00B893]/[0.04] border-[#00B893]/10"
+            }`}>
               <Check size={16} className="text-[#00B893] shrink-0" />
-              <p className="text-[12px] text-[#0A2540]" style={{ fontWeight: 480 }}>
+              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
                 All available roles have been selected for this location.
               </p>
             </div>
           ) : null}
         </div>
 
-        <div className="px-5 sm:px-8 py-5 border-t border-[#F0F0F5] bg-[#FAFBFC]">
+        <div className={`px-5 sm:px-8 py-5 border-t ${borderClass} ${footerSurfaceClass}`}>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex-1">
               <AnimatePresence mode="wait">
@@ -532,7 +559,7 @@ export default function Location({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="text-[12px] text-[#8898AA]"
+                    className={`text-[12px] ${textSecondary}`}
                     style={{ fontWeight: 420 }}
                   >
                     Select at least one role to continue
@@ -543,7 +570,7 @@ export default function Location({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="text-[12px] text-[#0A2540]"
+                    className={`text-[12px] ${textPrimary}`}
                     style={{ fontWeight: 460 }}
                   >
                     <span style={{ fontWeight: 580, color: locationReference.color }}>

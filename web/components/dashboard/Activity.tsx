@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   RefreshCw,
 } from 'lucide-react';
+import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import DashboardShell from './DashboardShell';
 
 /* ─── Activity Data ─── */
@@ -64,6 +65,7 @@ export default function Activity({
 }: {
   embeddedInShell?: boolean;
 }) {
+  const isDark = useResolvedAppAppearance() === 'dark';
   const [selectedLocation, setSelectedLocation] = useState('All locations');
   const [selectedCategory, setSelectedCategory] = useState('All categories');
   const [locationOpen, setLocationOpen] = useState(false);
@@ -84,6 +86,30 @@ export default function Activity({
     warning: { bg: 'bg-[#E5484D]/10', text: 'text-[#E5484D]' },
     info: { bg: 'bg-[#635BFF]/10', text: 'text-[#635BFF]' },
   };
+  const textPrimary = isDark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = isDark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const textTertiary = isDark ? 'text-[#9FB0C3]' : 'text-[#3E4C59]';
+  const panelClass = isDark
+    ? 'bg-[#0F2E4C] border-white/[0.06] shadow-[0_18px_48px_rgba(0,0,0,0.28)]'
+    : 'bg-white border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.04)]';
+  const sectionHeaderClass = isDark
+    ? 'bg-white/[0.03] border-white/[0.06]'
+    : 'bg-[#FAFBFC] border-[#F0F0F5]';
+  const rowClass = isDark
+    ? 'border-white/[0.06] hover:bg-white/[0.03]'
+    : 'border-[#F0F0F5] hover:bg-[#FAFBFC]';
+  const filterButtonClass = isDark
+    ? 'bg-white/[0.04] border-white/[0.08] text-[#C1CED8] hover:border-white/[0.14] hover:bg-white/[0.06]'
+    : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:border-[#D1D5DB]';
+  const filterButtonSelectedClass = isDark
+    ? 'bg-[#635BFF]/[0.14] border-[#635BFF]/30 text-[#AFAAFF]'
+    : 'bg-[#635BFF]/[0.06] border-[#635BFF]/20 text-[#635BFF]';
+  const dropdownClass = isDark
+    ? 'bg-[#0F2E4C] border-white/[0.08] shadow-[0_24px_60px_rgba(0,0,0,0.35)]'
+    : 'bg-white border-[#E5E7EB] shadow-xl';
+  const pillClass = isDark
+    ? 'bg-white/[0.06] text-[#C1CED8]'
+    : 'bg-[#F0F0F5] text-[#8898AA]';
 
   const content = (
     <>
@@ -92,10 +118,10 @@ export default function Activity({
         <div className="mb-8">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-[24px] sm:text-[28px] md:text-[32px] text-[#0A2540] tracking-[-0.025em]" style={{ fontWeight: 620 }}>
+              <h1 className={`text-[24px] sm:text-[28px] md:text-[32px] tracking-[-0.025em] ${textPrimary}`} style={{ fontWeight: 620 }}>
                 Activity
               </h1>
-              <p className="text-[14px] text-[#8898AA] mt-1" style={{ fontWeight: 420 }}>
+              <p className={`mt-1 text-[14px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 Everything happening across your locations in one place.
               </p>
             </div>
@@ -104,7 +130,7 @@ export default function Activity({
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
-          <div className="flex items-center gap-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+          <div className={`flex items-center gap-2 text-[12px] ${textSecondary}`} style={{ fontWeight: 440 }}>
             <Filter size={14} />
             <span>Filter by</span>
           </div>
@@ -114,19 +140,21 @@ export default function Activity({
               <button onClick={() => { setLocationOpen(!locationOpen); setCategoryOpen(false); }}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] transition-all ${
                   selectedLocation !== 'All locations'
-                    ? 'bg-[#635BFF]/[0.06] border-[#635BFF]/20 text-[#635BFF]'
-                    : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:border-[#D1D5DB]'
+                    ? filterButtonSelectedClass
+                    : filterButtonClass
                 }`} style={{ fontWeight: 480 }}>
                 {selectedLocation === 'All locations' ? 'Location' : selectedLocation.split(' ')[0]}
                 <ChevronDown size={12} className={`transition-transform ${locationOpen ? 'rotate-180' : ''}`} />
               </button>
               {locationOpen && (
                 <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}
-                  className="absolute left-0 top-full mt-1 w-64 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-30">
+                  className={`absolute left-0 top-full mt-1 w-64 rounded-xl border overflow-hidden z-30 ${dropdownClass}`}>
                   {locations.map((loc) => (
                     <button key={loc} onClick={() => { setSelectedLocation(loc); setLocationOpen(false); }}
                       className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
-                        selectedLocation === loc ? 'bg-[#635BFF]/[0.06] text-[#635BFF]' : 'text-[#5E6D7A] hover:bg-[#F7F8FA]'
+                        selectedLocation === loc
+                          ? filterButtonSelectedClass
+                          : `${textSecondary} ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`
                       }`} style={{ fontWeight: selectedLocation === loc ? 520 : 440 }}>
                       {loc}
                     </button>
@@ -140,19 +168,21 @@ export default function Activity({
               <button onClick={() => { setCategoryOpen(!categoryOpen); setLocationOpen(false); }}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] transition-all ${
                   selectedCategory !== 'All categories'
-                    ? 'bg-[#635BFF]/[0.06] border-[#635BFF]/20 text-[#635BFF]'
-                    : 'bg-white border-[#E5E7EB] text-[#5E6D7A] hover:border-[#D1D5DB]'
+                    ? filterButtonSelectedClass
+                    : filterButtonClass
                 }`} style={{ fontWeight: 480 }}>
                 {selectedCategory === 'All categories' ? 'Category' : selectedCategory}
                 <ChevronDown size={12} className={`transition-transform ${categoryOpen ? 'rotate-180' : ''}`} />
               </button>
               {categoryOpen && (
                 <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}
-                  className="absolute left-0 top-full mt-1 w-48 bg-white border border-[#E5E7EB] rounded-xl shadow-xl overflow-hidden z-30">
+                  className={`absolute left-0 top-full mt-1 w-48 rounded-xl border overflow-hidden z-30 ${dropdownClass}`}>
                   {categories.map((cat) => (
                     <button key={cat} onClick={() => { setSelectedCategory(cat); setCategoryOpen(false); }}
                       className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
-                        selectedCategory === cat ? 'bg-[#635BFF]/[0.06] text-[#635BFF]' : 'text-[#5E6D7A] hover:bg-[#F7F8FA]'
+                        selectedCategory === cat
+                          ? filterButtonSelectedClass
+                          : `${textSecondary} ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`
                       }`} style={{ fontWeight: selectedCategory === cat ? 520 : 440 }}>
                       {cat}
                     </button>
@@ -163,7 +193,7 @@ export default function Activity({
 
             {(selectedLocation !== 'All locations' || selectedCategory !== 'All categories') && (
               <button onClick={() => { setSelectedLocation('All locations'); setSelectedCategory('All categories'); }}
-                className="px-3 py-2 rounded-lg text-[12px] text-[#8898AA] hover:text-[#5E6D7A] transition-colors" style={{ fontWeight: 460 }}>
+                className={`px-3 py-2 rounded-lg text-[12px] transition-colors ${textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`} style={{ fontWeight: 460 }}>
                 Clear filters
               </button>
             )}
@@ -171,33 +201,33 @@ export default function Activity({
         </div>
 
         {/* Activity Feed */}
-        <div className="bg-white border border-[#E5E7EB] rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.04)] overflow-hidden">
+        <div className={`rounded-2xl border overflow-hidden ${panelClass}`}>
           {/* Today */}
           {today.length > 0 && (
             <div>
-              <div className="px-5 sm:px-6 py-3 bg-[#FAFBFC] border-b border-[#F0F0F5]">
+              <div className={`px-5 sm:px-6 py-3 border-b ${sectionHeaderClass}`}>
                 <div className="flex items-center gap-2">
-                  <Clock size={13} className="text-[#8898AA]" />
-                  <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Today</span>
+                  <Clock size={13} className={textSecondary} />
+                  <span className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>Today</span>
                   <span className="text-[11px] text-[#C1CED8] ml-1" style={{ fontWeight: 420 }}>{today.length} events</span>
                 </div>
               </div>
               {today.map((item, i) => (
                 <motion.div key={item.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3, delay: i * 0.03 }}
-                  className="flex items-start gap-3 sm:gap-4 px-5 sm:px-6 py-4 border-b border-[#F0F0F5] last:border-0 hover:bg-[#FAFBFC] transition-colors">
+                  className={`flex items-start gap-3 sm:gap-4 px-5 sm:px-6 py-4 border-b last:border-0 transition-colors ${rowClass}`}>
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${typeColors[item.type].bg}`}>
                     <item.icon size={14} className={typeColors[item.type].text} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{item.text}</p>
+                    <p className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>{item.text}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                      <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>{item.time}</span>
+                      <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>{item.time}</span>
                       <div className="flex items-center gap-1">
                         <span className="text-[12px]">{item.locationEmoji}</span>
-                        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>{item.location}</span>
+                        <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>{item.location}</span>
                       </div>
-                      <span className="text-[10px] text-[#8898AA] bg-[#F0F0F5] px-2 py-0.5 rounded-full" style={{ fontWeight: 460 }}>{item.category}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] ${pillClass}`} style={{ fontWeight: 460 }}>{item.category}</span>
                     </div>
                   </div>
                 </motion.div>
@@ -208,29 +238,29 @@ export default function Activity({
           {/* Older */}
           {older.length > 0 && (
             <div>
-              <div className="px-5 sm:px-6 py-3 bg-[#FAFBFC] border-b border-[#F0F0F5] border-t border-t-[#E5E7EB]">
+              <div className={`px-5 sm:px-6 py-3 border-b border-t ${sectionHeaderClass}`}>
                 <div className="flex items-center gap-2">
-                  <Clock size={13} className="text-[#8898AA]" />
-                  <span className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Earlier</span>
+                  <Clock size={13} className={textSecondary} />
+                  <span className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>Earlier</span>
                   <span className="text-[11px] text-[#C1CED8] ml-1" style={{ fontWeight: 420 }}>{older.length} events</span>
                 </div>
               </div>
               {older.map((item, i) => (
                 <motion.div key={item.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3, delay: 0.2 + i * 0.03 }}
-                  className="flex items-start gap-3 sm:gap-4 px-5 sm:px-6 py-4 border-b border-[#F0F0F5] last:border-0 hover:bg-[#FAFBFC] transition-colors">
+                  className={`flex items-start gap-3 sm:gap-4 px-5 sm:px-6 py-4 border-b last:border-0 transition-colors ${rowClass}`}>
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${typeColors[item.type].bg}`}>
                     <item.icon size={14} className={typeColors[item.type].text} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>{item.text}</p>
+                    <p className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>{item.text}</p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                      <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>{item.time}</span>
+                      <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>{item.time}</span>
                       <div className="flex items-center gap-1">
                         <span className="text-[12px]">{item.locationEmoji}</span>
-                        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>{item.location}</span>
+                        <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>{item.location}</span>
                       </div>
-                      <span className="text-[10px] text-[#8898AA] bg-[#F0F0F5] px-2 py-0.5 rounded-full" style={{ fontWeight: 460 }}>{item.category}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] ${pillClass}`} style={{ fontWeight: 460 }}>{item.category}</span>
                     </div>
                   </div>
                 </motion.div>
@@ -240,8 +270,8 @@ export default function Activity({
 
           {filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16">
-              <ActivityIcon size={32} className="text-[#E5E7EB] mb-3" />
-              <p className="text-[14px] text-[#8898AA]" style={{ fontWeight: 480 }}>No activity matching your filters</p>
+              <ActivityIcon size={32} className={`mb-3 ${isDark ? 'text-white/[0.16]' : 'text-[#E5E7EB]'}`} />
+              <p className={`text-[14px] ${textSecondary}`} style={{ fontWeight: 480 }}>No activity matching your filters</p>
               <button onClick={() => { setSelectedLocation('All locations'); setSelectedCategory('All categories'); }}
                 className="text-[12px] text-[#635BFF] mt-2 hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 500 }}>
                 Clear filters

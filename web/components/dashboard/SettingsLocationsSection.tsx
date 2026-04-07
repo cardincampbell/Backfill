@@ -25,9 +25,11 @@ type Feedback = {
 } | null;
 
 function RoleTag({
+  dark,
   role,
   onRemove,
 }: {
+  dark: boolean;
   role: BusinessRole;
   onRemove(): void;
 }) {
@@ -37,10 +39,14 @@ function RoleTag({
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
-      className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg bg-[#635BFF]/[0.06] border border-[#635BFF]/15"
+      className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${
+        dark
+          ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
+          : "bg-[#635BFF]/[0.06] border-[#635BFF]/15"
+      }`}
     >
       <Tag size={11} className="text-[#635BFF]" />
-      <span className="text-[12px] text-[#0A2540]" style={{ fontWeight: 480 }}>
+      <span className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`} style={{ fontWeight: 480 }}>
         {role.name}
       </span>
       <button
@@ -55,6 +61,7 @@ function RoleTag({
 }
 
 function LocationEditSlideOver({
+  dark,
   location,
   roles,
   assignments,
@@ -65,6 +72,7 @@ function LocationEditSlideOver({
   onSave,
   onCreateRole,
 }: {
+  dark: boolean;
   location: BusinessLocation;
   roles: BusinessRole[];
   assignments: LocationRoleAssignment[];
@@ -86,6 +94,12 @@ function LocationEditSlideOver({
   const locationReference = getLocationReference(location);
   const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
   const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
+  const textPrimary = dark ? "text-white" : "text-[#0A2540]";
+  const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const textTertiary = dark ? "text-[#C1CED8]" : "text-[#3E4C59]";
+  const borderClass = dark ? "border-white/[0.06]" : "border-[#F0F0F5]";
+  const subtleBorderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
+  const subtleSurfaceClass = dark ? "bg-white/[0.04]" : "bg-[#F7F8FA]";
 
   const addRole = (roleId: string) => {
     setSelectedRoleIds((current) =>
@@ -130,15 +144,17 @@ function LocationEditSlideOver({
         animate={{ x: 0 }}
         exit={{ x: 460 }}
         transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className="w-full sm:w-[460px] h-full bg-white shadow-2xl flex flex-col overflow-hidden"
+        className={`w-full sm:w-[460px] h-full shadow-2xl flex flex-col overflow-hidden ${
+          dark ? "bg-[#0F2E4C]" : "bg-white"
+        }`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="px-6 py-5 border-b border-[#F0F0F5] shrink-0">
+        <div className={`px-6 py-5 border-b shrink-0 ${borderClass}`}>
           <div className="flex items-center justify-between mb-4">
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors"
+              className={`p-1.5 rounded-lg transition-colors ${dark ? "hover:bg-white/[0.06]" : "hover:bg-[#F7F8FA]"}`}
             >
               <X size={18} className="text-[#8898AA]" />
             </button>
@@ -164,7 +180,7 @@ function LocationEditSlideOver({
             </div>
             <div>
               <h2
-                className="text-[18px] text-[#0A2540] tracking-[-0.01em]"
+                className={`text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
                 {location.name}
@@ -180,7 +196,7 @@ function LocationEditSlideOver({
                 >
                   {locationReference.typeLabel}
                 </span>
-                <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                   {locationReference.staffLabel}
                 </span>
               </div>
@@ -188,10 +204,10 @@ function LocationEditSlideOver({
           </div>
           <div className="mt-4 space-y-2">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[#F7F8FA] flex items-center justify-center">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${subtleSurfaceClass}`}>
                 <MapPin size={14} className="text-[#8898AA]" />
               </div>
-              <span className="text-[13px] text-[#3E4C59]" style={{ fontWeight: 440 }}>
+              <span className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>
                 {formatLocationMeta(location) || location.timezone}
               </span>
             </div>
@@ -219,12 +235,12 @@ function LocationEditSlideOver({
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3
-                className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]"
+                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
                 style={{ fontWeight: 500 }}
               >
                 Active Roles
               </h3>
-              <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+              <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {selectedRoles.length} roles
               </span>
             </div>
@@ -233,18 +249,19 @@ function LocationEditSlideOver({
                 {selectedRoles.map((role) => (
                   <RoleTag
                     key={role.id}
+                    dark={dark}
                     role={role}
                     onRemove={() => removeRole(role.id)}
                   />
                 ))}
               </AnimatePresence>
               {!loading && selectedRoles.length === 0 ? (
-                <p className="text-[12px] text-[#8898AA] py-2" style={{ fontWeight: 420 }}>
+                <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
                   No roles assigned yet. Add from the list below.
                 </p>
               ) : null}
               {loading ? (
-                <p className="text-[12px] text-[#8898AA] py-2" style={{ fontWeight: 420 }}>
+                <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
                   Loading location roles...
                 </p>
               ) : null}
@@ -254,7 +271,7 @@ function LocationEditSlideOver({
               <div>
                 <div className="flex items-center justify-between mb-2.5">
                   <h3
-                    className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]"
+                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
                     style={{ fontWeight: 500 }}
                   >
                     Available Roles
@@ -274,14 +291,18 @@ function LocationEditSlideOver({
                       key={role.id}
                       type="button"
                       onClick={() => addRole(role.id)}
-                      className="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03] transition-all duration-200"
+                    className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
+                      dark
+                        ? "bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
+                        : "bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
+                    }`}
                     >
                       <Plus
                         size={11}
                         className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors"
                       />
                       <span
-                        className="text-[12px] text-[#5E6D7A] group-hover:text-[#0A2540] transition-colors"
+                        className={`text-[12px] transition-colors ${dark ? "text-[#C1CED8] group-hover:text-white" : "text-[#5E6D7A] group-hover:text-[#0A2540]"}`}
                         style={{ fontWeight: 440 }}
                       >
                         {role.name}
@@ -293,8 +314,8 @@ function LocationEditSlideOver({
             ) : null}
 
             {!loading && roles.length === 0 ? (
-              <div className="rounded-xl border border-[#E5E7EB] bg-[#F7F8FA] px-4 py-4">
-                <p className="text-[12px] text-[#5E6D7A]" style={{ fontWeight: 440 }}>
+              <div className={`rounded-xl border px-4 py-4 ${subtleBorderClass} ${subtleSurfaceClass}`}>
+                <p className={`text-[12px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 440 }}>
                   This business does not have any roles yet. Business roles are the source of truth for location assignments.
                 </p>
               </div>
@@ -302,7 +323,7 @@ function LocationEditSlideOver({
 
             <div>
               <h3
-                className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-2"
+                className={`text-[11px] uppercase tracking-[0.04em] mb-2 ${textSecondary}`}
                 style={{ fontWeight: 500 }}
               >
                 Custom Role
@@ -319,7 +340,11 @@ function LocationEditSlideOver({
                     }
                   }}
                   placeholder="Type a new role name..."
-                  className="flex-1 px-3.5 py-2.5 rounded-lg border border-[#E5E7EB] text-[13px] text-[#0A2540] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all"
+                  className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
+                    dark
+                      ? "border-white/[0.08] bg-white/[0.04] text-white"
+                      : "border-[#E5E7EB] bg-white text-[#0A2540]"
+                  }`}
                   style={{ fontWeight: 440 }}
                 />
                 <button
@@ -345,6 +370,7 @@ function LocationEditSlideOver({
 
 export default function SettingsLocationsSection({
   businessId,
+  dark,
 }: {
   businessId: string;
   dark: boolean;
@@ -359,6 +385,10 @@ export default function SettingsLocationsSection({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [editorFeedback, setEditorFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
+  const textPrimary = dark ? "text-white" : "text-[#0A2540]";
+  const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
+  const surfaceClass = dark ? "bg-white/[0.03]" : "bg-[#F7F8FA]";
 
   useEffect(() => {
     let cancelled = false;
@@ -563,19 +593,19 @@ export default function SettingsLocationsSection({
   };
 
   if (loading) {
-    return <div className="py-10 text-[13px] text-[#8898AA]">Loading business locations...</div>;
+    return <div className={`py-10 text-[13px] ${textSecondary}`}>Loading business locations...</div>;
   }
 
   if (!locations.length) {
     return (
-      <div className="rounded-2xl border border-[#E5E7EB] bg-[#F7F8FA] px-5 py-6">
+      <div className={`rounded-2xl border px-5 py-6 ${borderClass} ${surfaceClass}`}>
         <div className="flex items-start gap-3">
           <MapPin className="mt-0.5 text-[#8898AA]" size={18} />
           <div>
-            <p className="text-[13px] text-[#0A2540]" style={{ fontWeight: 520 }}>
+            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
               No locations yet
             </p>
-            <p className="mt-1 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
               Add at least one business location before assigning roles here.
             </p>
           </div>
@@ -617,7 +647,11 @@ export default function SettingsLocationsSection({
                 key={location.id}
                 type="button"
                 onClick={() => setSelectedLocation(location)}
-                className="w-full flex items-center gap-4 p-4 rounded-xl border border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)] transition-all group text-left cursor-pointer"
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all group text-left cursor-pointer ${
+                  dark
+                    ? "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.14] hover:bg-white/[0.05]"
+                    : "border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
+                }`}
               >
                 <div
                   className="w-10 h-10 rounded-xl flex items-center justify-center text-[18px]"
@@ -626,11 +660,11 @@ export default function SettingsLocationsSection({
                   {locationReference.logo}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] text-[#0A2540]" style={{ fontWeight: 520 }}>
+                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
                     {location.name}
                   </p>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                    <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                       {locationReference.typeLabel} • {locationReference.staffLabel}
                     </span>
                     <span className="text-[9px] text-[#8898AA]/40">|</span>
@@ -641,7 +675,7 @@ export default function SettingsLocationsSection({
                 </div>
                 <ChevronRight
                   size={16}
-                  className="text-[#C1CED8] group-hover:text-[#8898AA] transition-colors shrink-0"
+                  className={`transition-colors shrink-0 ${dark ? "text-[#5E6D7A] group-hover:text-[#C1CED8]" : "text-[#C1CED8] group-hover:text-[#8898AA]"}`}
                 />
               </button>
             );
@@ -653,6 +687,7 @@ export default function SettingsLocationsSection({
         {selectedLocation ? (
           <LocationEditSlideOver
             assignments={assignments}
+            dark={dark}
             feedback={editorFeedback}
             loading={assignmentLoading}
             location={selectedLocation}
