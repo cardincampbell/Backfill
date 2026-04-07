@@ -15,6 +15,8 @@ type SegmentedControlProps<T extends string> = {
   value: T;
   onChange: (value: T) => void;
   className?: string;
+  radiusClassName?: string;
+  itemRadiusClassName?: string;
   itemClassName?: string;
   activeItemClassName?: string;
   inactiveItemClassName?: string;
@@ -22,9 +24,6 @@ type SegmentedControlProps<T extends string> = {
   inactiveWeight?: number;
   iconSize?: number;
 };
-
-const OUTER_RADIUS = 20;
-const INNER_RADIUS = 17;
 
 function joinClasses(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -35,6 +34,8 @@ export default function SegmentedControl<T extends string>({
   value,
   onChange,
   className,
+  radiusClassName = "backfill-ui-radius",
+  itemRadiusClassName = "backfill-ui-radius",
   itemClassName,
   activeItemClassName,
   inactiveItemClassName,
@@ -44,8 +45,11 @@ export default function SegmentedControl<T extends string>({
 }: SegmentedControlProps<T>) {
   return (
     <div
-      className={joinClasses("inline-flex items-center gap-[3px] p-[3px]", className)}
-      style={{ borderRadius: `${OUTER_RADIUS}px` }}
+      className={joinClasses(
+        "inline-flex items-center gap-0.5 p-1",
+        radiusClassName,
+        className,
+      )}
     >
       {items.map((item) => {
         const active = item.value === value;
@@ -57,15 +61,13 @@ export default function SegmentedControl<T extends string>({
             onClick={() => onChange(item.value)}
             className={joinClasses(
               "flex items-center justify-center gap-1.5 px-4 py-2.5 text-[13px] transition-all duration-200",
+              itemRadiusClassName,
               itemClassName,
               active
                 ? item.activeClassName ?? activeItemClassName
                 : item.inactiveClassName ?? inactiveItemClassName,
             )}
-            style={{
-              borderRadius: `${INNER_RADIUS}px`,
-              fontWeight: active ? activeWeight : inactiveWeight,
-            }}
+            style={{ fontWeight: active ? activeWeight : inactiveWeight }}
             type="button"
           >
             {Icon ? <Icon size={iconSize} /> : null}
