@@ -136,6 +136,33 @@ class LocationRoleAttach(BaseSchema):
     coverage_settings: dict = Field(default_factory=dict)
 
 
+class LocationRoleUpsert(BaseSchema):
+    role_id: UUID
+    min_headcount: Optional[int] = None
+    max_headcount: Optional[int] = None
+    premium_rules: Optional[dict] = None
+    coverage_settings: Optional[dict] = None
+
+
+class LocationRoleReplace(BaseSchema):
+    roles: list[LocationRoleUpsert] = Field(default_factory=list)
+
+
+class LocationRoleCreateAndAssign(BaseSchema):
+    name: str
+    code: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    min_notice_minutes: int = 0
+    default_shift_length_minutes: Optional[int] = None
+    coverage_priority: int = 100
+    metadata_json: dict = Field(default_factory=dict)
+    min_headcount: Optional[int] = None
+    max_headcount: Optional[int] = None
+    premium_rules: dict = Field(default_factory=dict)
+    coverage_settings: dict = Field(default_factory=dict)
+
+
 class LocationRoleRead(BaseSchema):
     id: UUID
     location_id: UUID
@@ -147,3 +174,8 @@ class LocationRoleRead(BaseSchema):
     coverage_settings: dict
     created_at: datetime
     updated_at: datetime
+
+
+class LocationRoleCreateAndAssignRead(BaseSchema):
+    role: RoleRead
+    location_role: LocationRoleRead

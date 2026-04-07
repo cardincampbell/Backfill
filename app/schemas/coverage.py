@@ -78,7 +78,7 @@ class CoverageCandidatePreview(BaseSchema):
     employee_id: UUID
     employee_name: str
     phone_e164: Optional[str] = None
-    home_location_id: Optional[UUID] = None
+    primary_location_id: Optional[UUID] = None
     rank: int
     score: float
     source: str = "phase_1"

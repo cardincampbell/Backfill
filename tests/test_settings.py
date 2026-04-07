@@ -11,6 +11,7 @@ from app.models.business import Location
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
+from app.schemas.business import LocationRoleRead, RoleRead
 from app.services.auth import AuthContext
 
 
@@ -44,7 +45,7 @@ class FakeSettingsSession:
         return None
 
 
-def _make_auth_context(*, business_id, location_id=None) -> AuthContext:
+def _make_auth_context(*, business_id, location_id=None, role=MembershipRole.manager) -> AuthContext:
     now = datetime.now(timezone.utc)
     user = User(
         id=uuid4(),
@@ -74,7 +75,7 @@ def _make_auth_context(*, business_id, location_id=None) -> AuthContext:
         user_id=user.id,
         business_id=business_id,
         location_id=location_id,
-        role=MembershipRole.manager,
+        role=role,
         status=MembershipStatus.active,
         accepted_at=now,
         membership_metadata={},
@@ -187,6 +188,147 @@ def test_patch_location_settings_updates_location_and_audits():
         assert location.settings["integration_status"] == "connected"
         assert any(
             isinstance(entry, AuditLog) and entry.event_name == "location.settings.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_replace_location_roles_updates_location_roles_and_audits(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_replace(_session, incoming_business_id, incoming_location_id, payload):
+        assert incoming_business_id == business_id
+        assert incoming_location_id == location_id
+        assert payload.roles[0].role_id == role_id
+        return [
+            LocationRoleRead(
+                id=uuid4(),
+                location_id=location_id,
+                role_id=role_id,
+                is_active=True,
+                min_headcount=2,
+                max_headcount=None,
+                premium_rules={},
+                coverage_settings={},
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.replace_location_roles",
+        fake_replace,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.put(
+            f"/api/businesses/{business_id}/locations/{location_id}/roles",
+            json={"roles": [{"role_id": str(role_id), "min_headcount": 2}]},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["role_id"] == str(role_id)
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "location.roles.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_create_and_assign_location_role_creates_role_assignment_and_audits(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    location_role_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_and_assign(_session, incoming_business_id, incoming_location_id, payload):
+        assert incoming_business_id == business_id
+        assert incoming_location_id == location_id
+        assert payload.name == "Surgical Tech"
+        return (
+            RoleRead(
+                id=role_id,
+                business_id=business_id,
+                code="surgical_tech",
+                name="Surgical Tech",
+                category="Healthcare",
+                description=None,
+                min_notice_minutes=0,
+                default_shift_length_minutes=None,
+                coverage_priority=100,
+                metadata_json={},
+                created_at=now,
+                updated_at=now,
+            ),
+            LocationRoleRead(
+                id=location_role_id,
+                location_id=location_id,
+                role_id=role_id,
+                is_active=True,
+                min_headcount=None,
+                max_headcount=None,
+                premium_rules={},
+                coverage_settings={},
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_and_assign_location_role",
+        fake_create_and_assign,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/roles",
+            json={"name": "Surgical Tech", "category": "Healthcare"},
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["role"]["id"] == str(role_id)
+        assert payload["role"]["name"] == "Surgical Tech"
+        assert payload["location_role"]["id"] == str(location_role_id)
+        assert payload["location_role"]["role_id"] == str(role_id)
+        assert any(
+            isinstance(entry, AuditLog)
+            and entry.event_name == "location.role.created_and_attached"
             for entry in fake_session.added
         )
     finally:

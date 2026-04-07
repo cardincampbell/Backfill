@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import Field
 
+from app.models.common import EmployeeStatus
 from app.schemas.common import BaseSchema
 
 
@@ -17,7 +18,7 @@ class EmployeeCreate(BaseSchema):
     external_ref: Optional[str] = None
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
-    home_location_id: Optional[UUID] = None
+    primary_location_id: Optional[UUID] = None
     hire_date: Optional[date] = None
     notes: Optional[str] = None
     employee_metadata: dict = Field(default_factory=dict)
@@ -26,7 +27,10 @@ class EmployeeCreate(BaseSchema):
 class EmployeeRead(BaseSchema):
     id: UUID
     business_id: UUID
-    home_location_id: Optional[UUID]
+    primary_location_id: Optional[UUID]
+    primary_location_name: Optional[str] = None
+    primary_role_id: Optional[UUID] = None
+    primary_role_name: Optional[str] = None
     external_ref: Optional[str]
     employee_number: Optional[str]
     full_name: str
@@ -39,6 +43,8 @@ class EmployeeRead(BaseSchema):
     termination_date: Optional[date]
     notes: Optional[str]
     employee_metadata: dict
+    role_ids: list[UUID] = Field(default_factory=list)
+    location_ids: list[UUID] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -74,6 +80,8 @@ class EmployeeRoleRead(BaseSchema):
     id: UUID
     employee_id: UUID
     role_id: UUID
+    role_code: Optional[str] = None
+    role_name: Optional[str] = None
     proficiency_level: int
     is_primary: bool
     acquired_at: Optional[datetime]
@@ -82,28 +90,72 @@ class EmployeeRoleRead(BaseSchema):
     updated_at: datetime
 
 
-class EmployeeLocationClearanceCreate(BaseSchema):
+class EmployeeLocationCreate(BaseSchema):
     location_id: UUID
+    is_primary: bool = False
     access_level: str = "approved"
-    clearance_source: Optional[str] = None
+    location_source: Optional[str] = None
     can_cover_last_minute: bool = True
     can_blast: bool = True
     travel_radius_miles: Optional[int] = None
-    clearance_metadata: dict = Field(default_factory=dict)
+    location_metadata: dict = Field(default_factory=dict)
 
 
-class EmployeeLocationClearanceRead(BaseSchema):
+class EmployeeLocationRead(BaseSchema):
     id: UUID
     employee_id: UUID
     location_id: UUID
+    location_name: Optional[str] = None
+    location_slug: Optional[str] = None
+    is_primary: bool
     access_level: str
-    clearance_source: Optional[str]
+    location_source: Optional[str]
     can_cover_last_minute: bool
     can_blast: bool
     travel_radius_miles: Optional[int]
-    clearance_metadata: dict
+    location_metadata: dict
     created_at: datetime
     updated_at: datetime
+
+
+class EmployeeRoleUpsert(BaseSchema):
+    role_id: UUID
+    proficiency_level: Optional[int] = None
+    is_primary: bool = False
+    role_metadata: Optional[dict] = None
+
+
+class EmployeeLocationUpsert(BaseSchema):
+    location_id: UUID
+    is_primary: bool = False
+    access_level: Optional[str] = None
+    location_source: Optional[str] = None
+    can_cover_last_minute: Optional[bool] = None
+    can_blast: Optional[bool] = None
+    travel_radius_miles: Optional[int] = None
+    location_metadata: Optional[dict] = None
+
+
+class EmployeeUpdate(BaseSchema):
+    full_name: Optional[str] = None
+    preferred_name: Optional[str] = None
+    phone_e164: Optional[str] = None
+    email: Optional[str] = None
+    external_ref: Optional[str] = None
+    employee_number: Optional[str] = None
+    employment_type: Optional[str] = None
+    status: Optional[EmployeeStatus] = None
+    hire_date: Optional[date] = None
+    termination_date: Optional[date] = None
+    notes: Optional[str] = None
+    employee_metadata: Optional[dict] = None
+    roles: Optional[list[EmployeeRoleUpsert]] = None
+    locations: Optional[list[EmployeeLocationUpsert]] = None
+
+
+class EmployeeProfileRead(EmployeeRead):
+    roles: list[EmployeeRoleRead] = Field(default_factory=list)
+    locations: list[EmployeeLocationRead] = Field(default_factory=list)
 
 
 class EmployeeAvailabilityRuleCreate(BaseSchema):

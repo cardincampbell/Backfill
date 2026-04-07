@@ -13,6 +13,8 @@ from app.schemas.business import (
     BusinessProfileUpdate,
     LocationCreate,
     LocationRoleAttach,
+    LocationRoleCreateAndAssign,
+    LocationRoleReplace,
     RoleCreate,
 )
 from app.services import business_identity_derivation, role_derivation
@@ -305,6 +307,7 @@ async def ensure_business_role(
     min_notice_minutes: int | None = None,
     default_shift_length_minutes: int | None = None,
     coverage_priority: int | None = None,
+    metadata_json: dict | None = None,
     source_metadata: dict | None = None,
 ) -> Role:
     normalized_name = role_name.strip()
@@ -326,7 +329,7 @@ async def ensure_business_role(
             default_shift_length_minutes=default_shift_length_minutes,
             coverage_priority=max(0, int(coverage_priority if coverage_priority is not None else 100)),
             metadata_json=_merge_role_metadata(
-                {},
+                metadata_json,
                 source=source,
                 source_metadata=source_metadata,
             ),
@@ -349,7 +352,7 @@ async def ensure_business_role(
         existing.coverage_priority = max(0, int(coverage_priority))
 
     existing.metadata_json = _merge_role_metadata(
-        existing.metadata_json,
+        {**dict(existing.metadata_json or {}), **dict(metadata_json or {})},
         source=source,
         source_metadata=source_metadata,
     )
@@ -440,6 +443,135 @@ async def attach_role_to_location(
     await session.flush()
     await session.refresh(existing)
     return existing
+
+
+async def list_location_roles(
+    session: AsyncSession,
+    business_id: UUID,
+    location_id: UUID,
+) -> list[LocationRole]:
+    location = await session.get(Location, location_id)
+    if location is None or location.business_id != business_id:
+        raise LookupError("location_not_found")
+
+    result = await session.execute(
+        select(LocationRole)
+        .where(
+            LocationRole.location_id == location_id,
+            LocationRole.is_active.is_(True),
+        )
+        .order_by(LocationRole.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def replace_location_roles(
+    session: AsyncSession,
+    business_id: UUID,
+    location_id: UUID,
+    payload: LocationRoleReplace,
+) -> list[LocationRole]:
+    location = await session.get(Location, location_id)
+    if location is None or location.business_id != business_id:
+        raise LookupError("location_not_found")
+
+    requested_roles = payload.roles
+    requested_role_ids = [item.role_id for item in requested_roles]
+    if len(requested_role_ids) != len(set(requested_role_ids)):
+        raise ValueError("duplicate_role_ids")
+
+    roles_by_id: dict[UUID, Role] = {}
+    if requested_role_ids:
+        role_result = await session.execute(
+            select(Role).where(Role.business_id == business_id, Role.id.in_(requested_role_ids))
+        )
+        roles_by_id = {role.id: role for role in role_result.scalars().all()}
+        if len(roles_by_id) != len(requested_role_ids):
+            raise LookupError("role_not_found")
+
+    existing_result = await session.execute(
+        select(LocationRole).where(LocationRole.location_id == location_id)
+    )
+    existing_rows = list(existing_result.scalars().all())
+    existing_by_role_id = {row.role_id: row for row in existing_rows}
+    desired_role_ids = set(requested_role_ids)
+
+    for existing in existing_rows:
+        if existing.role_id not in desired_role_ids:
+            existing.is_active = False
+
+    for item in requested_roles:
+        existing = existing_by_role_id.get(item.role_id)
+        if existing is None:
+            existing = LocationRole(
+                location_id=location_id,
+                role_id=item.role_id,
+                is_active=True,
+                min_headcount=item.min_headcount,
+                max_headcount=item.max_headcount,
+                premium_rules=item.premium_rules or {},
+                coverage_settings=item.coverage_settings or {},
+            )
+            session.add(existing)
+            existing_by_role_id[item.role_id] = existing
+            continue
+
+        existing.is_active = True
+        if "min_headcount" in item.model_fields_set:
+            existing.min_headcount = item.min_headcount
+        if "max_headcount" in item.model_fields_set:
+            existing.max_headcount = item.max_headcount
+        if "premium_rules" in item.model_fields_set:
+            existing.premium_rules = item.premium_rules or {}
+        if "coverage_settings" in item.model_fields_set:
+            existing.coverage_settings = item.coverage_settings or {}
+
+    await session.flush()
+    return [
+        existing_by_role_id[role_id]
+        for role_id in requested_role_ids
+        if existing_by_role_id[role_id].is_active
+    ]
+
+
+async def create_and_assign_location_role(
+    session: AsyncSession,
+    business_id: UUID,
+    location_id: UUID,
+    payload: LocationRoleCreateAndAssign,
+) -> tuple[Role, LocationRole]:
+    location = await session.get(Location, location_id)
+    if location is None or location.business_id != business_id:
+        raise LookupError("location_not_found")
+
+    role = await ensure_business_role(
+        session,
+        business_id=business_id,
+        role_name=payload.name,
+        role_code=payload.code,
+        category=payload.category,
+        description=payload.description,
+        min_notice_minutes=payload.min_notice_minutes,
+        default_shift_length_minutes=payload.default_shift_length_minutes,
+        coverage_priority=payload.coverage_priority,
+        metadata_json=payload.metadata_json,
+        source="location_role_editor",
+        source_metadata={"location_id": str(location_id)},
+    )
+
+    location_role = await attach_role_to_location(
+        session,
+        business_id,
+        location_id,
+        role.id,
+        LocationRoleAttach(
+            min_headcount=payload.min_headcount,
+            max_headcount=payload.max_headcount,
+            premium_rules=payload.premium_rules,
+            coverage_settings=payload.coverage_settings,
+        ),
+    )
+    return role, location_role
 
 
 async def ensure_location_role(

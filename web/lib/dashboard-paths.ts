@@ -7,9 +7,11 @@ export type DashboardLocationRef = Pick<
 
 export type DashboardLocationLike = {
   id?: string | number;
-  location_id?: string;
-  name?: string;
-  location_name?: string;
+  location_id?: string | number;
+  business_slug?: string | null;
+  location_slug?: string | null;
+  name?: string | null;
+  location_name?: string | null;
   organization_name?: string | null;
   business_name?: string | null;
 };
@@ -50,15 +52,16 @@ export function buildDashboardLocationBasePath(
 export function buildDashboardLocationBasePathFromAny(
   location: DashboardLocationLike,
 ): string {
-  const organizationSlug = slugifySegment(
-    getDashboardOrganizationName(location),
-    "independent-business",
-  );
-  const locationSlug = slugifySegment(
-    getDashboardLocationName(location),
-    `location-${getDashboardLocationId(location)}`,
-  );
-  return `/dashboard/${organizationSlug}/${locationSlug}`;
+  const businessSlug =
+    location.business_slug ??
+    slugifySegment(getDashboardOrganizationName(location), "independent-business");
+  const locationSlug =
+    location.location_slug ??
+    slugifySegment(
+      getDashboardLocationName(location),
+      `location-${getDashboardLocationId(location)}`,
+    );
+  return `/location/${businessSlug}/${locationSlug}`;
 }
 
 export function buildDashboardLocationPath(

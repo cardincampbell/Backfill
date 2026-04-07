@@ -1,7 +1,7 @@
 "use client";
 
 import { AppSessionGate } from "@/components/app-session-gate";
-import DashboardShell from "@/components/source-dashboard/DashboardShell";
+import DashboardShell from "@/components/dashboard/DashboardShell";
 import type { AppShellSidebarTab } from "@/lib/app-shell-prefs";
 import { usePathname } from "next/navigation";
 
@@ -14,8 +14,14 @@ function resolveActiveNav(pathname: string): string {
   if (pathname === "/team") {
     return "Team";
   }
+  if (pathname === "/activity") {
+    return "Activity";
+  }
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "Settings";
+  }
+  if (pathname.startsWith("/location/")) {
+    return "";
   }
   return "Overview";
 }

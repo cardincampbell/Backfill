@@ -33,7 +33,7 @@ from app.models.coverage import (
     OutboxEvent,
 )
 from app.models.scheduling import Shift, ShiftAssignment
-from app.models.workforce import Employee, EmployeeLocationClearance, EmployeeRole
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import (
     CoverageCandidatePreview,
     CoverageExecutionDecision,
@@ -59,7 +59,7 @@ def _normalize_candidate_score(
     avg_response_time_seconds: int | None,
     proficiency_level: int,
     is_primary_role: bool,
-    is_home_location: bool,
+    is_primary_location: bool,
     can_blast: bool,
 ) -> tuple[float, dict]:
     response_speed_score = 0.5
@@ -74,14 +74,14 @@ def _normalize_candidate_score(
         "response_speed_score": response_speed_score,
         "proficiency_level": proficiency_level,
         "is_primary_role": is_primary_role,
-        "is_home_location": is_home_location,
+        "is_primary_location": is_primary_location,
         "can_blast": can_blast,
     }
     score += response_speed_score * 10
     score += min(proficiency_level, 5) * 10
     if is_primary_role:
         score += 15
-    if is_home_location:
+    if is_primary_location:
         score += 10
     if can_blast:
         score += 5
@@ -636,27 +636,35 @@ async def advance_case_after_terminal_offer(
     return [], str(coverage_case.id)
 
 
-def _clearance_is_usable(clearance, *, shift: Shift) -> tuple[bool, dict]:
+def _employee_location_is_usable(
+    employee_location,
+    *,
+    shift: Shift,
+) -> tuple[bool, dict]:
     details = {
-        "access_level": clearance.access_level,
-        "can_cover_last_minute": clearance.can_cover_last_minute,
-        "can_blast": clearance.can_blast,
-        "travel_radius_miles": clearance.travel_radius_miles,
+        "access_level": employee_location.access_level,
+        "can_cover_last_minute": employee_location.can_cover_last_minute,
+        "can_blast": employee_location.can_blast,
+        "travel_radius_miles": employee_location.travel_radius_miles,
     }
-    if clearance.access_level not in {"approved", "trusted"}:
-        details["reason"] = "clearance_level_not_approved"
+    if employee_location.access_level not in {"approved", "trusted"}:
+        details["reason"] = "employee_location_not_approved"
         return False, details
 
     distance_miles = _distance_miles(
         left_lat=float(shift.location.latitude) if getattr(shift.location, "latitude", None) is not None else None,
         left_lng=float(shift.location.longitude) if getattr(shift.location, "longitude", None) is not None else None,
-        right_lat=float(clearance.location.latitude) if getattr(clearance.location, "latitude", None) is not None else None,
-        right_lng=float(clearance.location.longitude) if getattr(clearance.location, "longitude", None) is not None else None,
+        right_lat=float(employee_location.location.latitude)
+        if getattr(employee_location.location, "latitude", None) is not None
+        else None,
+        right_lng=float(employee_location.location.longitude)
+        if getattr(employee_location.location, "longitude", None) is not None
+        else None,
     )
     if distance_miles is not None:
         details["distance_miles"] = round(distance_miles, 2)
-    if clearance.travel_radius_miles is not None and distance_miles is not None:
-        if distance_miles > clearance.travel_radius_miles:
+    if employee_location.travel_radius_miles is not None and distance_miles is not None:
+        if distance_miles > employee_location.travel_radius_miles:
             details["reason"] = "outside_travel_radius"
             return False, details
     return True, details
@@ -988,7 +996,7 @@ async def _collect_phase_1_candidates(
         .join(EmployeeRole, EmployeeRole.employee_id == Employee.id)
         .options(
             selectinload(Employee.employee_roles),
-            selectinload(Employee.clearances),
+            selectinload(Employee.employee_locations),
             selectinload(Employee.availability_rules),
             selectinload(Employee.availability_exceptions),
         )
@@ -1017,15 +1025,16 @@ async def _collect_phase_1_candidates(
 
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
-        clearance = next(
+        employee_location = next(
             (
                 record
-                for record in employee.clearances
-                if record.location_id == shift.location_id and record.access_level in {"approved", "trusted"}
+                for record in employee.employee_locations
+                if record.location_id == shift.location_id
+                and record.access_level in {"approved", "trusted"}
             ),
             None,
         )
-        if clearance is None:
+        if employee_location is None:
             continue
         if employee.id in busy_employee_ids:
             continue
@@ -1037,15 +1046,15 @@ async def _collect_phase_1_candidates(
         role_match = next((record for record in employee.employee_roles if record.role_id == shift.role_id), None)
         proficiency_level = role_match.proficiency_level if role_match else 1
         is_primary_role = bool(role_match and role_match.is_primary)
-        is_home_location = employee.home_location_id == shift.location_id
+        is_primary_location = employee.primary_location_id == shift.location_id
 
         score, scoring_factors = _normalize_candidate_score(
             reliability_score=float(employee.reliability_score or 0.7),
             avg_response_time_seconds=employee.avg_response_time_seconds,
             proficiency_level=proficiency_level,
             is_primary_role=is_primary_role,
-            is_home_location=is_home_location,
-            can_blast=clearance.can_blast,
+            is_primary_location=is_primary_location,
+            can_blast=employee_location.can_blast,
         )
 
         candidates.append(
@@ -1053,7 +1062,7 @@ async def _collect_phase_1_candidates(
                 employee_id=employee.id,
                 employee_name=employee.full_name,
                 phone_e164=employee.phone_e164,
-                home_location_id=employee.home_location_id,
+                primary_location_id=employee.primary_location_id,
                 rank=0,
                 score=score,
                 source=CandidateSource.phase_1.value,
@@ -1088,7 +1097,7 @@ async def _collect_phase_2_candidates(
         .join(EmployeeRole, EmployeeRole.employee_id == Employee.id)
         .options(
             selectinload(Employee.employee_roles),
-            selectinload(Employee.clearances).selectinload(EmployeeLocationClearance.location),
+            selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
             selectinload(Employee.availability_rules),
             selectinload(Employee.availability_exceptions),
         )
@@ -1140,23 +1149,26 @@ async def _collect_phase_2_candidates(
 
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
-        if employee.home_location_id == shift.location_id:
+        if employee.primary_location_id == shift.location_id:
             continue
         if employee.id in busy_employee_ids:
             continue
 
-        clearance = next(
+        employee_location = next(
             (
                 record
-                for record in employee.clearances
+                for record in employee.employee_locations
                 if record.location_id == shift.location_id
             ),
             None,
         )
-        if clearance is None:
+        if employee_location is None:
             continue
-        clearance_ok, clearance_details = _clearance_is_usable(clearance, shift=shift)
-        if not clearance_ok:
+        employee_location_ok, employee_location_details = _employee_location_is_usable(
+            employee_location,
+            shift=shift,
+        )
+        if not employee_location_ok:
             continue
 
         available, availability_snapshot = _is_available_for_shift(employee, shift)
@@ -1174,13 +1186,13 @@ async def _collect_phase_2_candidates(
             avg_response_time_seconds=employee.avg_response_time_seconds,
             proficiency_level=proficiency_level,
             is_primary_role=is_primary_role,
-            is_home_location=False,
-            can_blast=clearance.can_blast,
+            is_primary_location=False,
+            can_blast=employee_location.can_blast,
         )
         score += location_affinity_bonus
         scoring_factors["location_affinity_count"] = prior_location_count
         scoring_factors["location_affinity_bonus"] = location_affinity_bonus
-        scoring_factors["clearance"] = clearance_details
+        scoring_factors["employee_location"] = employee_location_details
         scoring_factors["total"] = score
 
         candidates.append(
@@ -1188,7 +1200,7 @@ async def _collect_phase_2_candidates(
                 employee_id=employee.id,
                 employee_name=employee.full_name,
                 phone_e164=employee.phone_e164,
-                home_location_id=employee.home_location_id,
+                primary_location_id=employee.primary_location_id,
                 rank=0,
                 score=score,
                 source=CandidateSource.phase_2.value,
@@ -1281,7 +1293,7 @@ async def execute_phase_1_run(
             candidate_metadata={
                 "employee_name": candidate.employee_name,
                 "phone_e164": candidate.phone_e164,
-                "home_location_id": str(candidate.home_location_id) if candidate.home_location_id else None,
+                "primary_location_id": str(candidate.primary_location_id) if candidate.primary_location_id else None,
             },
         )
         session.add(record)
@@ -1409,7 +1421,7 @@ async def execute_phase_2_run(
             candidate_metadata={
                 "employee_name": candidate.employee_name,
                 "phone_e164": candidate.phone_e164,
-                "home_location_id": str(candidate.home_location_id) if candidate.home_location_id else None,
+                "primary_location_id": str(candidate.primary_location_id) if candidate.primary_location_id else None,
             },
         )
         session.add(record)

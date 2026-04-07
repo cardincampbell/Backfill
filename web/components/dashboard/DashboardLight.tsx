@@ -1,13 +1,23 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from './router-shim';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   useResolvedAppAppearance,
   useSessionUserDisplay,
 } from '@/components/app-session-gate';
+import {
+  getWorkspace,
+  type WorkspaceLocation,
+} from '@/lib/api/workspace';
+import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import DashboardShell from './DashboardShell';
+import {
+  findSourceDashboardLocationBySlug,
+  sourceDashboardLocations,
+  type SourceDashboardLocation,
+} from './mock-data';
 import { useSmartGreeting } from './use-smart-greeting';
 import {
   Plus,
@@ -41,72 +51,6 @@ import {
   Moon,
 } from 'lucide-react';
 
-/* ─── Data ─── */
-const allLocations = [
-  {
-    id: 1, name: 'Downtown Medical Center', type: 'Healthcare', logo: '\u{1F3E5}', color: '#635BFF',
-    activeShifts: 24, totalStaff: 48, fillRate: 96, openShifts: 3, revenue: '$12,400', trend: +8.2,
-    weeklyShifts: [18, 22, 20, 24, 19, 21, 24],
-    recentActivity: [
-      { text: 'Sarah M. accepted Night Shift — ICU', time: '2 min ago', type: 'success' as const },
-      { text: '3 open shifts posted for ER coverage', time: '18 min ago', type: 'info' as const },
-      { text: 'Marcus T. called out — Shift reassigned', time: '1 hr ago', type: 'warning' as const },
-      { text: 'Weekly compliance report generated', time: '2 hrs ago', type: 'info' as const },
-    ],
-    topStaff: [
-      { name: 'Sarah Martinez', role: 'RN', shifts: 18, rating: 4.9 },
-      { name: 'James Chen', role: 'LPN', shifts: 15, rating: 4.8 },
-      { name: 'Aisha Patel', role: 'CNA', shifts: 22, rating: 4.7 },
-    ],
-  },
-  {
-    id: 2, name: 'Sunrise Senior Living', type: 'Senior Care', logo: '\u{1F305}', color: '#00B893',
-    activeShifts: 18, totalStaff: 32, fillRate: 91, openShifts: 5, revenue: '$8,750', trend: +12.5,
-    weeklyShifts: [14, 16, 15, 18, 17, 16, 18],
-    recentActivity: [
-      { text: 'New caregiver onboarded successfully', time: '15 min ago', type: 'success' as const },
-      { text: '5 weekend shifts still need coverage', time: '45 min ago', type: 'warning' as const },
-    ],
-    topStaff: [
-      { name: 'Emily Ross', role: 'Caregiver', shifts: 20, rating: 4.9 },
-      { name: 'David Kim', role: 'CNA', shifts: 16, rating: 4.6 },
-    ],
-  },
-  {
-    id: 3, name: 'Bay Area Staffing Co.', type: 'Staffing Agency', logo: '\u{1F3E2}', color: '#FF6B35',
-    activeShifts: 42, totalStaff: 120, fillRate: 88, openShifts: 12, revenue: '$34,200', trend: +5.1,
-    weeklyShifts: [35, 38, 40, 42, 39, 41, 42],
-    recentActivity: [
-      { text: '12 shifts broadcast to available staff', time: '1 hr ago', type: 'info' as const },
-    ],
-    topStaff: [
-      { name: 'Carlos Rivera', role: 'Temp RN', shifts: 24, rating: 4.8 },
-    ],
-  },
-  {
-    id: 4, name: 'Coastal Hospitality Group', type: 'Hospitality', logo: '\u{1F3E8}', color: '#3B82F6',
-    activeShifts: 8, totalStaff: 15, fillRate: 100, openShifts: 0, revenue: '$4,100', trend: -2.3,
-    weeklyShifts: [6, 7, 8, 8, 7, 8, 8],
-    recentActivity: [
-      { text: 'All shifts fully staffed for the week', time: '3 hrs ago', type: 'success' as const },
-    ],
-    topStaff: [
-      { name: 'Mia Johnson', role: 'Server Lead', shifts: 12, rating: 4.9 },
-    ],
-  },
-];
-
-const notifications = [
-  { id: 1, text: '3 shifts need coverage at Downtown Medical', time: '2m', urgent: true },
-  { id: 2, text: 'New staff member onboarded at Sunrise Senior', time: '15m', urgent: false },
-  { id: 3, text: 'Weekly report ready for Bay Area Staffing', time: '1h', urgent: false },
-];
-
-const navItems = [
-  { label: 'Overview', icon: LayoutGrid, active: true },
-  { label: 'Team', icon: Users, active: false },
-];
-
 const copilotSuggestions = [
   'Show me open shifts this week',
   'Who has the most hours?',
@@ -114,6 +58,16 @@ const copilotSuggestions = [
 ];
 
 interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
+
+type DashboardSurfaceLocation = Omit<SourceDashboardLocation, "id"> & {
+  id: string | number;
+  business_slug?: string;
+  location_slug?: string;
+  business_name?: string;
+  location_name?: string;
+  location_id?: string;
+  isWorkspaceBacked?: boolean;
+};
 
 type CoverageDateParts = {
   dayOfMonth: string;
@@ -209,17 +163,28 @@ function useDashboardTheme() {
 }
 
 function MiniBarChart({ data, color, height = 40 }: { data: number[]; color: string; height?: number }) {
+  const { isDark } = useDashboardTheme();
   const max = Math.max(...data);
   return (
     <div className="flex items-end gap-[3px]" style={{ height }}>
       {data.map((v, i) => (
-        <div key={i} className="flex-1 backfill-ui-radius transition-all duration-300" style={{ height: `${(v / max) * 100}%`, background: i === data.length - 1 ? color : `${color}30`, minWidth: 4 }} />
+        <div
+          key={i}
+          className={`flex-1 transition-all duration-300 ${
+            isDark ? 'backfill-ui-radius' : 'rounded-sm'
+          }`}
+          style={{
+            height: `${(v / max) * 100}%`,
+            background: i === data.length - 1 ? color : `${color}30`,
+            minWidth: 4,
+          }}
+        />
       ))}
     </div>
   );
 }
 
-function LocationCard({ location, index, onClick }: { location: typeof allLocations[0]; index: number; onClick: () => void }) {
+function LocationCard({ location, index, onClick }: { location: DashboardSurfaceLocation; index: number; onClick: () => void }) {
   const {
     isDark,
     headingClass,
@@ -227,6 +192,9 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
     mutedClass,
     borderClass,
   } = useDashboardTheme();
+  const cardRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-2xl';
+  const iconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const buttonRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
   const [hovered, setHovered] = useState(false);
   return (
     <motion.div
@@ -235,7 +203,7 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       onClick={onClick} className="group relative cursor-pointer"
     >
-      <div className="relative backfill-ui-radius border overflow-hidden transition-all duration-500" style={{
+      <div className={`relative border overflow-hidden transition-all duration-500 ${cardRadiusClass}`} style={{
         borderColor: hovered
           ? `${location.color}30`
           : isDark
@@ -260,7 +228,7 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
         <div className="p-6">
           <div className="flex items-start justify-between mb-5">
             <div className="flex items-center gap-3.5">
-              <div className="w-11 h-11 backfill-ui-radius flex items-center justify-center text-[20px] transition-transform duration-300 group-hover:scale-110" style={{ background: `${location.color}10` }}>
+              <div className={`w-11 h-11 flex items-center justify-center text-[20px] transition-transform duration-300 group-hover:scale-110 ${iconRadiusClass}`} style={{ background: `${location.color}10` }}>
                 {location.logo}
               </div>
               <div>
@@ -268,7 +236,7 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
                 <span className={`text-[12px] tracking-[0.02em] uppercase ${mutedClass}`} style={{ fontWeight: 480 }}>{location.type}</span>
               </div>
             </div>
-            <button className={`p-1.5 backfill-ui-radius transition-colors opacity-0 group-hover:opacity-100 ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`} onClick={(e) => e.stopPropagation()}>
+            <button className={`p-1.5 transition-colors opacity-0 group-hover:opacity-100 ${buttonRadiusClass} ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`} onClick={(e) => e.stopPropagation()}>
               <MoreHorizontal size={16} className={mutedClass} />
             </button>
           </div>
@@ -315,7 +283,7 @@ function LocationCard({ location, index, onClick }: { location: typeof allLocati
 }
 
 /* ─── Single Location Detail ─── */
-function SingleLocationView({ location }: { location: typeof allLocations[0] }) {
+function SingleLocationView({ location }: { location: SourceDashboardLocation }) {
   const {
     isDark,
     headingClass,
@@ -326,6 +294,14 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
     borderClass,
     rowHoverClass,
   } = useDashboardTheme();
+  const heroIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-2xl';
+  const primarySurfaceRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-2xl';
+  const secondarySurfaceRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const rowRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
+  const ctaRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
+  const actionCardRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const actionIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
+  const progressRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
   const navigate = useNavigate();
   const { timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
@@ -334,7 +310,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
         <div className="flex items-start justify-between mb-6">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 backfill-ui-radius flex items-center justify-center text-[28px]" style={{ background: `${location.color}10` }}>
+            <div className={`w-14 h-14 flex items-center justify-center text-[28px] ${heroIconRadiusClass}`} style={{ background: `${location.color}10` }}>
               {location.logo}
             </div>
             <div>
@@ -347,7 +323,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
             </div>
           </div>
           <button onClick={() => navigate('/onboarding')}
-            className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
+            className={`hidden sm:flex items-center gap-2 px-5 py-2.5 text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] ${ctaRadiusClass}`}
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             <Plus size={15} />Add Location
           </button>
@@ -356,7 +332,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Today's Coverage */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.05 }}
-            className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
+            className={`${surfaceClass} ${secondarySurfaceRadiusClass} p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
                 <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>
@@ -405,8 +381,8 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 </div>
                 <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>21 of 24</span>
               </div>
-              <div className={`w-full h-1.5 backfill-ui-radius mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
-                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '88%' }} />
+              <div className={`w-full h-1.5 mb-2 overflow-hidden ${progressRadiusClass} ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+                <div className={`h-full bg-gradient-to-r from-[#00B893] to-[#00D4AA] ${progressRadiusClass}`} style={{ width: '88%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
@@ -424,7 +400,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
               { label: 'Time Saved', value: '12 hrs', icon: Hourglass, color: '#8B5CF6' },
             ].map((stat, i) => (
               <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
-                className={`${surfaceClass} backfill-ui-radius px-4 py-4 flex flex-col`}>
+                className={`${surfaceClass} ${secondarySurfaceRadiusClass} px-4 py-4 flex flex-col`}>
                 <div className="flex items-center justify-between mb-auto">
                   <span className={`text-[11px] uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>{stat.label}</span>
                   <stat.icon size={14} style={{ color: stat.color }} />
@@ -435,11 +411,11 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
           </div>
 
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
+            className={`${surfaceClass} ${secondarySurfaceRadiusClass} p-5 flex flex-col overflow-hidden`}>
             <h3 className={`text-[13px] uppercase tracking-[0.04em] mb-3 shrink-0 ${mutedClass}`} style={{ fontWeight: 480 }}>Top Performers</h3>
             <div className="space-y-1 flex-1 min-h-0">
               {location.topStaff.slice(0, 4).map((s, i) => (
-                <div key={i} className={`flex items-center gap-2.5 p-2 backfill-ui-radius transition-colors ${rowHoverClass}`}>
+                <div key={i} className={`flex items-center gap-2.5 p-2 transition-colors ${rowRadiusClass} ${rowHoverClass}`}>
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: location.color }}>
                     {s.name.split(' ').map(n => n[0]).join('')}
                   </div>
@@ -459,7 +435,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="lg:col-span-2 space-y-4">
           {/* Shift Volume */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className={`${surfaceClass} backfill-ui-radius p-6`}>
+            className={`${surfaceClass} ${primarySurfaceRadiusClass} p-6`}>
             <div className="flex items-center justify-between mb-5">
               <div>
                 <h3 className={`text-[15px] ${headingClass}`} style={{ fontWeight: 560 }}>Shift Volume</h3>
@@ -482,7 +458,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 
           {/* Recent Activity */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }}
-            className={`${surfaceClass} backfill-ui-radius p-6`}>
+            className={`${surfaceClass} ${primarySurfaceRadiusClass} p-6`}>
             <h3 className={`text-[15px] mb-4 ${headingClass}`} style={{ fontWeight: 560 }}>Recent Activity</h3>
             <div className="space-y-3">
               {location.recentActivity.map((a, i) => (
@@ -511,12 +487,12 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
                 { label: 'Invite Staff', desc: 'Add to your roster', icon: Users, color: '#00B893' },
                 { label: 'View Reports', desc: 'Location analytics', icon: ArrowUpRight, color: '#3B82F6' },
               ].map((action) => (
-                <button key={action.label} className={`group flex items-center gap-4 p-4 backfill-ui-radius border transition-all duration-300 text-left ${
+                <button key={action.label} className={`group flex items-center gap-4 p-4 border transition-all duration-300 text-left ${actionCardRadiusClass} ${
                   isDark
                     ? 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/[0.12]'
                     : 'bg-white border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)]'
                 }`}>
-                  <div className="w-9 h-9 backfill-ui-radius flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110" style={{ background: `${action.color}10` }}>
+                  <div className={`w-9 h-9 flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110 ${actionIconRadiusClass}`} style={{ background: `${action.color}10` }}>
                     <action.icon size={16} style={{ color: action.color }} />
                   </div>
                   <div>
@@ -532,16 +508,16 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
         <div className="space-y-4">
           {/* Coverage */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.35 }}
-            className={`${surfaceClass} backfill-ui-radius p-6`}>
+            className={`${surfaceClass} ${primarySurfaceRadiusClass} p-6`}>
             <h3 className={`text-[15px] mb-4 ${headingClass}`} style={{ fontWeight: 560 }}>Coverage</h3>
             <div className="mb-4">
               <div className="flex justify-between mb-2">
                 <span className={`text-[12px] ${mutedClass}`} style={{ fontWeight: 440 }}>Fill rate</span>
                 <span className={`text-[12px] ${headingClass}`} style={{ fontWeight: 560 }}>{location.fillRate}%</span>
               </div>
-              <div className={`h-2 backfill-ui-radius overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+              <div className={`h-2 overflow-hidden ${progressRadiusClass} ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
                 <motion.div initial={{ width: 0 }} animate={{ width: `${location.fillRate}%` }} transition={{ duration: 1, delay: 0.5, ease: 'easeOut' }}
-                  className="h-full backfill-ui-radius" style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
+                  className={`h-full ${progressRadiusClass}`} style={{ background: `linear-gradient(90deg, ${location.color}, ${location.color}CC)` }} />
               </div>
             </div>
             <div className="space-y-3 pt-2">
@@ -563,7 +539,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 
           {/* Compliance */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
-            className={`${surfaceClass} backfill-ui-radius p-6`}>
+            className={`${surfaceClass} ${primarySurfaceRadiusClass} p-6`}>
             <h3 className={`text-[15px] mb-3 ${headingClass}`} style={{ fontWeight: 560 }}>Compliance</h3>
             <div className="space-y-2.5">
               {['Credentials current', 'Overtime limits met', 'Break compliance'].map((c) => (
@@ -582,7 +558,7 @@ function SingleLocationView({ location }: { location: typeof allLocations[0] }) 
 }
 
 /* ─── Multi Location View ─── */
-function MultiLocationView({ locations }: { locations: typeof allLocations }) {
+function MultiLocationView({ locations }: { locations: DashboardSurfaceLocation[] }) {
   const {
     isDark,
     headingClass,
@@ -595,6 +571,15 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
     pillClass,
     dashedCardClass,
   } = useDashboardTheme();
+  const ctaRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
+  const secondarySurfaceRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const rowRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
+  const pillRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
+  const emptyCardRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-2xl';
+  const emptyIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const actionCardRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
+  const actionIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
+  const progressRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
   const navigate = useNavigate();
   const { greeting, timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
@@ -617,7 +602,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
             </p>
           </div>
           <button onClick={() => navigate('/onboarding')}
-            className="hidden sm:flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)]"
+            className={`hidden sm:flex items-center gap-2 px-5 py-2.5 text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] ${ctaRadiusClass}`}
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             <Plus size={15} />Add Location
           </button>
@@ -626,7 +611,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Today's Coverage */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.05 }}
-            className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
+            className={`${surfaceClass} ${secondarySurfaceRadiusClass} p-5 flex flex-col overflow-hidden`}>
             <div className="flex items-center gap-4 mb-4">
               <div className="flex items-center gap-3">
                 <span className={`text-[42px] tracking-[-0.04em] leading-none ${headingClass}`} style={{ fontWeight: 720 }}>
@@ -671,8 +656,8 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
                 </div>
                 <span className={`text-[11px] tabular-nums ${mutedClass}`} style={{ fontWeight: 460 }}>72 of 92</span>
               </div>
-              <div className={`w-full h-1.5 backfill-ui-radius mb-2 overflow-hidden ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
-                <div className="h-full backfill-ui-radius bg-gradient-to-r from-[#00B893] to-[#00D4AA]" style={{ width: '78%' }} />
+              <div className={`w-full h-1.5 mb-2 overflow-hidden ${progressRadiusClass} ${isDark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]'}`}>
+                <div className={`h-full bg-gradient-to-r from-[#00B893] to-[#00D4AA] ${progressRadiusClass}`} style={{ width: '78%' }} />
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
@@ -690,7 +675,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
               { label: 'Time Saved', value: '34 hrs', icon: Hourglass, color: '#8B5CF6' },
             ].map((stat, i) => (
               <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 + i * 0.06 }}
-                className={`${surfaceClass} backfill-ui-radius px-4 py-4 flex flex-col`}>
+                className={`${surfaceClass} ${secondarySurfaceRadiusClass} px-4 py-4 flex flex-col`}>
                 <div className="flex items-center justify-between mb-auto">
                   <span className={`text-[11px] uppercase tracking-[0.04em] ${mutedClass}`} style={{ fontWeight: 480 }}>{stat.label}</span>
                   <stat.icon size={14} style={{ color: stat.color }} />
@@ -702,13 +687,13 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
           {/* Top Performers */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}
-            className={`${surfaceClass} backfill-ui-radius p-5 flex flex-col overflow-hidden`}>
+            className={`${surfaceClass} ${secondarySurfaceRadiusClass} p-5 flex flex-col overflow-hidden`}>
             <h3 className={`text-[13px] uppercase tracking-[0.04em] mb-3 shrink-0 ${mutedClass}`} style={{ fontWeight: 480 }}>Top Performers</h3>
             <div className="space-y-1 flex-1 min-h-0">
               {locations.flatMap((loc) =>
                 loc.topStaff.map((s) => ({ ...s, locationName: loc.name, locationLogo: loc.logo, locationColor: loc.color }))
               ).sort((a, b) => b.rating - a.rating).slice(0, 4).map((s, i) => (
-                <div key={`${s.name}-${i}`} className={`flex items-center gap-2.5 p-2 backfill-ui-radius transition-colors ${rowHoverClass}`}>
+                <div key={`${s.name}-${i}`} className={`flex items-center gap-2.5 p-2 transition-colors ${rowRadiusClass} ${rowHoverClass}`}>
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] text-white shrink-0" style={{ fontWeight: 600, background: s.locationColor }}>
                     {s.name.split(' ').map(n => n[0]).join('')}
                   </div>
@@ -731,7 +716,7 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className={`text-[18px] tracking-[-0.01em] ${headingClass}`} style={{ fontWeight: 580 }}>Your Locations</h2>
-          <span className={`text-[12px] px-2.5 py-0.5 backfill-ui-radius ${pillClass}`} style={{ fontWeight: 500 }}>{locations.length}</span>
+          <span className={`text-[12px] px-2.5 py-0.5 ${pillRadiusClass} ${pillClass}`} style={{ fontWeight: 500 }}>{locations.length}</span>
         </div>
         <button className="flex items-center gap-1 text-[13px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 500 }}>
           View all <ChevronRight size={14} />
@@ -740,14 +725,25 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {locations.map((loc, i) => (
-          <LocationCard key={loc.id} location={loc} index={i} onClick={() => {}} />
+          <LocationCard
+            key={String(loc.location_id ?? loc.id)}
+            location={loc}
+            index={i}
+            onClick={() =>
+              navigate(
+                loc.isWorkspaceBacked
+                  ? buildDashboardLocationBasePathFromAny(loc)
+                  : '/onboarding',
+              )
+            }
+          />
         ))}
       </div>
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
         onClick={() => navigate('/onboarding')} className="mt-4 group cursor-pointer">
-        <div className={`backfill-ui-radius border border-dashed transition-all duration-500 p-8 flex items-center justify-center gap-3 ${dashedCardClass}`}>
-          <div className={`w-10 h-10 backfill-ui-radius border flex items-center justify-center transition-all duration-300 group-hover:border-[#635BFF]/30 group-hover:bg-[#635BFF]/[0.06] ${isDark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
+        <div className={`${emptyCardRadiusClass} border border-dashed transition-all duration-500 p-8 flex items-center justify-center gap-3 ${dashedCardClass}`}>
+          <div className={`w-10 h-10 border flex items-center justify-center transition-all duration-300 group-hover:border-[#635BFF]/30 group-hover:bg-[#635BFF]/[0.06] ${emptyIconRadiusClass} ${isDark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
             <Plus size={18} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
           </div>
           <div>
@@ -765,12 +761,12 @@ function MultiLocationView({ locations }: { locations: typeof allLocations }) {
             { label: 'Invite Staff', desc: 'Add team members to your roster', icon: Users, color: '#00B893' },
             { label: 'View Reports', desc: 'Analytics across all locations', icon: ArrowUpRight, color: '#3B82F6' },
           ].map((action) => (
-            <button key={action.label} className={`group flex items-center gap-4 p-4 backfill-ui-radius border transition-all duration-300 text-left ${
+            <button key={action.label} className={`group flex items-center gap-4 p-4 border transition-all duration-300 text-left ${actionCardRadiusClass} ${
               isDark
                 ? 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.05] hover:border-white/[0.12]'
                 : 'bg-white border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)]'
             }`}>
-              <div className="w-9 h-9 backfill-ui-radius flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110" style={{ background: `${action.color}10` }}>
+              <div className={`w-9 h-9 flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-110 ${actionIconRadiusClass}`} style={{ background: `${action.color}10` }}>
                 <action.icon size={16} style={{ color: action.color }} />
               </div>
               <div>
@@ -827,7 +823,7 @@ function CopilotPanel() {
                 <Sparkles size={11} className="text-white" />
               </div>
             )}
-            <div className={`max-w-[85%] backfill-ui-radius px-3.5 py-2.5 text-[12px] leading-relaxed ${
+            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
               msg.role === 'user' ? 'bg-[#635BFF] text-white rounded-br-md' : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md'
             }`} style={{ fontWeight: 420, whiteSpace: 'pre-line' }}>
               {msg.text}
@@ -839,7 +835,7 @@ function CopilotPanel() {
             <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
               <Sparkles size={11} className="text-white" />
             </div>
-            <div className="bg-[#F0F0F5] backfill-ui-radius rounded-bl-md px-4 py-3 flex items-center gap-1.5">
+            <div className="bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '0ms' }} />
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '150ms' }} />
               <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -853,7 +849,7 @@ function CopilotPanel() {
         <div className="px-3 pb-2 space-y-1.5">
           {copilotSuggestions.map((s) => (
             <button key={s} onClick={() => sendMessage(s)}
-              className="w-full text-left px-3 py-2 backfill-ui-radius bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]"
+              className="w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]"
               style={{ fontWeight: 440 }}>
               {s}
             </button>
@@ -862,14 +858,14 @@ function CopilotPanel() {
       )}
 
       <div className="p-3 border-t border-[#F0F0F5]">
-        <div className="flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] backfill-ui-radius px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all">
+        <div className="flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all">
           <input type="text" value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage(input)}
             placeholder="Ask Copilot..."
             className="flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none"
             style={{ fontWeight: 420 }} />
           <button onClick={() => sendMessage(input)} disabled={!input.trim()}
-            className="p-1.5 backfill-ui-radius hover:bg-[#E5E7EB] transition-colors disabled:opacity-30">
+            className="p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30">
             <Send size={14} className="text-[#635BFF]" />
           </button>
         </div>
@@ -884,7 +880,65 @@ export default function DashboardLight({
 }: {
   embeddedInShell?: boolean;
 }) {
-  const content = <MultiLocationView locations={allLocations} />;
+  const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspaceLocations() {
+      const workspace = await getWorkspace();
+      if (cancelled || !workspace?.locations?.length) {
+        return;
+      }
+      setWorkspaceLocations(workspace.locations);
+    }
+
+    void loadWorkspaceLocations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const locations = useMemo<DashboardSurfaceLocation[]>(() => {
+    if (workspaceLocations && workspaceLocations.length > 0) {
+      return workspaceLocations.map((location) => {
+        const referenceLocation = findSourceDashboardLocationBySlug(
+          location.location_slug,
+        );
+        return {
+          id: referenceLocation?.id ?? location.location_id,
+          slug: referenceLocation?.slug ?? location.location_slug,
+          name: location.location_name,
+          type: referenceLocation?.type ?? location.business_name,
+          logo: referenceLocation?.logo ?? '\u{1F4CD}',
+          color: referenceLocation?.color ?? '#635BFF',
+          activeShifts: referenceLocation?.activeShifts ?? 0,
+          totalStaff: referenceLocation?.totalStaff ?? 0,
+          fillRate: referenceLocation?.fillRate ?? 0,
+          openShifts: referenceLocation?.openShifts ?? 0,
+          revenue: referenceLocation?.revenue ?? '$0',
+          trend: referenceLocation?.trend ?? 0,
+          weeklyShifts: referenceLocation?.weeklyShifts ?? [0, 0, 0, 0, 0, 0, 0],
+          recentActivity: referenceLocation?.recentActivity ?? [],
+          topStaff: referenceLocation?.topStaff ?? [],
+          business_slug: location.business_slug,
+          location_slug: location.location_slug,
+          business_name: location.business_name,
+          location_name: location.location_name,
+          location_id: location.location_id,
+          isWorkspaceBacked: true,
+        };
+      });
+    }
+
+    return sourceDashboardLocations.map((location) => ({
+      ...location,
+      isWorkspaceBacked: false,
+    }));
+  }, [workspaceLocations]);
+
+  const content = <MultiLocationView locations={locations} />;
 
   if (embeddedInShell) {
     return content;

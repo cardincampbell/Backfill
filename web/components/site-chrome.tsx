@@ -12,6 +12,8 @@ export function SiteChrome({ children }: SiteChromeProps) {
   const isLiveAppSurface =
     pathname === "/dashboard" ||
     pathname === "/team" ||
+    pathname === "/activity" ||
+    pathname.startsWith("/location/") ||
     pathname === "/settings" ||
     pathname.startsWith("/settings/");
   const isReferenceAppSurface =

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from './router-shim';
+import { Link, useNavigate } from '../router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSessionUserDisplay } from '@/components/app-session-gate';
 import {

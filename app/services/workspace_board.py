@@ -174,7 +174,7 @@ async def get_location_board(
         select(Employee)
         .options(
             selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
-            selectinload(Employee.clearances),
+            selectinload(Employee.employee_locations),
         )
         .where(Employee.business_id == business_id)
         .order_by(Employee.created_at.asc())
@@ -214,12 +214,17 @@ async def get_location_board(
                 if assignment.role is not None and assignment.role_id in enabled_role_ids
             }
         )
-        clearance = next(
-            (item for item in (employee.clearances or []) if item.location_id == location_id),
+        employee_location = next(
+            (
+                item
+                for item in (employee.employee_locations or [])
+                if item.location_id == location_id
+            ),
             None,
         )
-        can_cover_here = employee.home_location_id == location_id or clearance is not None
-        can_blast_here = bool(clearance.can_blast) if clearance is not None else employee.home_location_id == location_id
+        primary_location_id = employee.primary_location_id
+        can_cover_here = employee_location is not None
+        can_blast_here = bool(employee_location.can_blast) if employee_location is not None else False
         workers.append(
             WorkspaceBoardWorkerRead(
                 employee_id=employee.id,
@@ -227,7 +232,7 @@ async def get_location_board(
                 preferred_name=employee.preferred_name,
                 phone_e164=employee.phone_e164,
                 email=employee.email,
-                home_location_id=employee.home_location_id,
+                primary_location_id=primary_location_id,
                 reliability_score=_to_float(employee.reliability_score),
                 avg_response_time_seconds=employee.avg_response_time_seconds,
                 role_ids=role_ids,

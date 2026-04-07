@@ -10,7 +10,13 @@ from app.main import app
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
-from app.schemas.workforce import EmployeeEnrollmentRead, EmployeeRead, EmployeeRoleRead
+from app.schemas.workforce import (
+    EmployeeEnrollmentRead,
+    EmployeeLocationRead,
+    EmployeeProfileRead,
+    EmployeeRead,
+    EmployeeRoleRead,
+)
 from app.services.auth import AuthContext
 
 
@@ -89,7 +95,7 @@ def test_enroll_employee_route_records_audit(monkeypatch):
             employee=EmployeeRead(
                 id=employee_id,
                 business_id=business_id,
-                home_location_id=location_id,
+                primary_location_id=location_id,
                 external_ref=None,
                 employee_number=None,
                 full_name="Jamie Rivera",
@@ -145,6 +151,204 @@ def test_enroll_employee_route_records_audit(monkeypatch):
         assert response.json()["employee"]["full_name"] == "Jamie Rivera"
         assert any(
             isinstance(entry, AuditLog) and entry.event_name == "employee.enrolled"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_employee_profile_route_returns_profile(monkeypatch):
+    fake_session = DummyWorkforceSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_get_profile(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return EmployeeProfileRead(
+            id=employee_id,
+            business_id=business_id,
+            primary_location_id=location_id,
+            primary_location_name="Downtown",
+            primary_role_id=role_id,
+            primary_role_name="Server",
+            external_ref=None,
+            employee_number=None,
+            full_name="Jamie Rivera",
+            preferred_name="Jamie",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            status="active",
+            employment_type=None,
+            hire_date=None,
+            termination_date=None,
+            notes=None,
+            employee_metadata={},
+            role_ids=[role_id],
+            location_ids=[location_id],
+            created_at=now,
+            updated_at=now,
+            roles=[
+                EmployeeRoleRead(
+                    id=uuid4(),
+                    employee_id=employee_id,
+                    role_id=role_id,
+                    role_code="server",
+                    role_name="Server",
+                    proficiency_level=1,
+                    is_primary=True,
+                    acquired_at=None,
+                    role_metadata={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+            locations=[
+                EmployeeLocationRead(
+                    id=uuid4(),
+                    employee_id=employee_id,
+                    location_id=location_id,
+                    location_name="Downtown",
+                    location_slug="downtown",
+                    is_primary=True,
+                    access_level="approved",
+                    location_source="seed",
+                    can_cover_last_minute=True,
+                    can_blast=True,
+                    travel_radius_miles=None,
+                    location_metadata={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.workforce.workforce.get_employee_profile",
+        fake_get_profile,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(f"/api/businesses/{business_id}/employees/{employee_id}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["primary_role_name"] == "Server"
+        assert payload["locations"][0]["location_slug"] == "downtown"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_patch_employee_route_records_audit(monkeypatch):
+    fake_session = DummyWorkforceSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_update(_session, incoming_business_id, incoming_employee_id, payload):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        assert payload.roles[0].role_id == role_id
+        return EmployeeProfileRead(
+            id=employee_id,
+            business_id=business_id,
+            primary_location_id=location_id,
+            primary_location_name="Downtown",
+            primary_role_id=role_id,
+            primary_role_name="Server",
+            external_ref=None,
+            employee_number=None,
+            full_name="Jamie Rivera",
+            preferred_name="Jamie",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            status="active",
+            employment_type="part_time",
+            hire_date=None,
+            termination_date=None,
+            notes="Weekend closer",
+            employee_metadata={},
+            role_ids=[role_id],
+            location_ids=[location_id],
+            created_at=now,
+            updated_at=now,
+            roles=[
+                EmployeeRoleRead(
+                    id=uuid4(),
+                    employee_id=employee_id,
+                    role_id=role_id,
+                    role_code="server",
+                    role_name="Server",
+                    proficiency_level=1,
+                    is_primary=True,
+                    acquired_at=None,
+                    role_metadata={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+            locations=[
+                EmployeeLocationRead(
+                    id=uuid4(),
+                    employee_id=employee_id,
+                    location_id=location_id,
+                    location_name="Downtown",
+                    location_slug="downtown",
+                    is_primary=True,
+                    access_level="approved",
+                    location_source="seed",
+                    can_cover_last_minute=True,
+                    can_blast=True,
+                    travel_radius_miles=None,
+                    location_metadata={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.workforce.workforce.update_employee",
+        fake_update,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/employees/{employee_id}",
+            json={
+                "full_name": "Jamie Rivera",
+                "roles": [{"role_id": str(role_id), "is_primary": True}],
+                "locations": [{"location_id": str(location_id), "is_primary": True}],
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["primary_location_name"] == "Downtown"
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "employee.updated"
             for entry in fake_session.added
         )
     finally:

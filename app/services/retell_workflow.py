@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.business import Location
 from app.models.common import OfferStatus, RetellConversationType, ShiftStatus
@@ -273,7 +274,11 @@ async def _respond_to_offer(
 async def lookup_caller(session: AsyncSession, phone: str) -> dict:
     normalized = phone.strip()
     user = await session.scalar(select(User).where(User.primary_phone_e164 == normalized))
-    employee = await session.scalar(select(Employee).where(Employee.phone_e164 == normalized))
+    employee = await session.scalar(
+        select(Employee)
+        .options(selectinload(Employee.employee_locations))
+        .where(Employee.phone_e164 == normalized)
+    )
     context = await delivery.find_latest_actionable_offer_for_phone(session, normalized)
     return {
         "phone": normalized,
@@ -286,7 +291,7 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
             "id": str(employee.id),
             "full_name": employee.full_name,
             "business_id": str(employee.business_id),
-            "location_id": str(employee.home_location_id) if employee.home_location_id else None,
+            "location_id": str(employee.primary_location_id) if employee.primary_location_id else None,
         } if employee is not None else None,
         "actionable_offer_id": str(context.offer.id) if context is not None else None,
     }

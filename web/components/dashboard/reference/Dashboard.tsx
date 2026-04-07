@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from 'react';
-import { Link, useNavigate } from './router-shim';
+import { Link, useNavigate } from '../router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSessionUserDisplay } from '@/components/app-session-gate';
-import { useSmartGreeting } from './use-smart-greeting';
+import { useSmartGreeting } from '../use-smart-greeting';
 import {
   Building2,
   Plus,

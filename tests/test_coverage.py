@@ -186,7 +186,7 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
             employee_id=employee_id,
             employee_name="Taylor Smith",
             phone_e164="+15555550100",
-            home_location_id=location_id,
+            primary_location_id=location_id,
             rank=1,
             score=92.0,
             scoring_factors={"total": 92.0},
@@ -911,7 +911,7 @@ async def test_execute_phase_2_run_uses_blast_mode_when_urgent(monkeypatch):
         CoverageCandidatePreview(
             employee_id=employee_id,
             employee_name="Cross Location Candidate",
-            home_location_id=uuid4(),
+            primary_location_id=uuid4(),
             rank=1,
             score=88.0,
             source="phase_2",

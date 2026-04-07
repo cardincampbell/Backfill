@@ -21,7 +21,7 @@ from app.models.common import (
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.identity import Membership, Session, User
 from app.models.scheduling import Shift, ShiftAssignment
-from app.models.workforce import Employee, EmployeeLocationClearance, EmployeeRole
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.workspace_board import WorkspaceBoardActionSummaryRead, WorkspaceLocationBoardRead
 from app.services import workspace_board
 from app.services.auth import AuthContext
@@ -214,7 +214,6 @@ async def _build_board() -> WorkspaceLocationBoardRead:
     employee = Employee(
         id=employee_id,
         business_id=business_id,
-        home_location_id=location_id,
         full_name="Jamie Rivera",
         phone_e164="+15555550123",
         email="jamie@example.com",
@@ -238,15 +237,16 @@ async def _build_board() -> WorkspaceLocationBoardRead:
             updated_at=now,
         )
     ]
-    employee.clearances = [
-        EmployeeLocationClearance(
+    employee.employee_locations = [
+        EmployeeLocation(
             id=uuid4(),
             employee_id=employee_id,
             location_id=location_id,
+            is_primary=True,
             access_level="approved",
             can_cover_last_minute=True,
             can_blast=True,
-            clearance_metadata={},
+            location_metadata={},
             created_at=now,
             updated_at=now,
         )
@@ -382,7 +382,6 @@ async def _build_board_without_location_roles() -> WorkspaceLocationBoardRead:
     employee = Employee(
         id=employee_id,
         business_id=business_id,
-        home_location_id=location_id,
         full_name="Jamie Rivera",
         phone_e164="+15555550123",
         email="jamie@example.com",
@@ -406,7 +405,7 @@ async def _build_board_without_location_roles() -> WorkspaceLocationBoardRead:
             updated_at=now,
         )
     ]
-    employee.clearances = []
+    employee.employee_locations = []
 
     session.get_map[(Business, business_id)] = business
     session.get_map[(Location, location_id)] = location

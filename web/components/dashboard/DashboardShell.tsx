@@ -1,0 +1,683 @@
+"use client";
+
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
+import { Link, useNavigate } from './router-shim';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  useResolvedAppAppearance,
+  useSessionUserDisplay,
+} from '@/components/app-session-gate';
+import { signOutClientSession } from '@/lib/auth/client-signout';
+import {
+  getWorkspace,
+  type WorkspaceLocation,
+} from '@/lib/api/workspace';
+import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import {
+  persistAppShellSidebarTabPreference,
+  type AppShellSidebarTab,
+} from '@/lib/app-shell-prefs';
+import { buildSettingsPath } from '@/lib/settings-routing';
+import { usePathname } from 'next/navigation';
+import {
+  Users,
+  Activity,
+  Bell,
+  Search,
+  Settings,
+  CheckCircle2,
+  AlertCircle,
+  LayoutGrid,
+  HelpCircle,
+  LifeBuoy,
+  Send,
+  Sparkles,
+  Menu,
+  X,
+  LogOut,
+  ChevronDown,
+} from 'lucide-react';
+import {
+  findSourceDashboardLocationBySlug,
+  sourceDashboardLocations,
+  sourceDashboardNotifications,
+} from './mock-data';
+
+const navItems = [
+  { label: 'Overview', icon: LayoutGrid, path: '/dashboard' },
+  { label: 'Team', icon: Users, path: '/team' },
+  { label: 'Activity', icon: Activity, path: '/activity' },
+  { label: 'Settings', icon: Settings, path: '/settings' },
+];
+
+const copilotSuggestions = [
+  'Show me open shifts this week',
+  'Who has the most hours?',
+  'Draft a shift for tomorrow 7am',
+];
+
+interface ChatMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+function buildInitialMessages(firstName: string): ChatMessage[] {
+  return [
+    {
+      id: 1,
+      role: 'assistant',
+      text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
+    },
+  ];
+}
+
+function CopilotPanel({ isDark }: { isDark: boolean }) {
+  const { firstName } = useSessionUserDisplay();
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    buildInitialMessages(firstName),
+  );
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const assistantBubbleClass = isDark
+    ? 'bg-white/[0.06] text-[#C1CED8] rounded-bl-md'
+    : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md';
+  const typingBubbleClass = isDark
+    ? 'bg-white/[0.06] backfill-ui-radius rounded-bl-md px-4 py-3 flex items-center gap-1.5'
+    : 'bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5';
+  const suggestionButtonClass = isDark
+    ? 'w-full text-left px-3 py-2 backfill-ui-radius bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors text-[11px] text-[#C1CED8]'
+    : 'w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]';
+  const inputWrapClass = isDark
+    ? 'flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] backfill-ui-radius px-3 py-2 focus-within:border-[#635BFF]/40 transition-colors'
+    : 'flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all';
+  const inputClass = isDark
+    ? 'flex-1 bg-transparent text-[12px] text-white placeholder-[#8898AA]/50 focus:outline-none'
+    : 'flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none';
+  const sendButtonClass = isDark
+    ? 'p-1.5 backfill-ui-radius hover:bg-white/[0.06] transition-colors disabled:opacity-30'
+    : 'p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30';
+  const footerBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isTyping]);
+
+  const sendMessage = (text: string) => {
+    if (!text.trim()) return;
+    setMessages((current) => [
+      ...current,
+      { id: Date.now(), role: 'user', text: text.trim() },
+    ]);
+    setInput('');
+    setIsTyping(true);
+    setTimeout(() => {
+      const responses: Record<string, string> = {
+        'Show me open shifts this week': "You have 20 open shifts this week across all locations:\n\n• Downtown Medical — 3 (ER, ICU)\n• Sunrise Senior — 5 (Weekend AM/PM)\n• Bay Area Staffing — 12 (Various)\n\nWould you like me to auto-broadcast these to available staff?",
+        'Who has the most hours?': "Top hours this pay period:\n\n1. Carlos Rivera — 42 hrs (Bay Area)\n2. Aisha Patel — 38 hrs (Downtown Medical)\n3. Sarah Martinez — 36 hrs (Downtown Medical)\n\nCarlos is approaching overtime. Want me to flag shifts for rebalancing?",
+        'Draft a shift for tomorrow 7am': "Here's a draft shift:\n\n📋 **New Shift**\nDate: Tomorrow, 7:00 AM — 3:00 PM\nLocation: Downtown Medical Center\nRole: RN\nRate: $45/hr\n\nShall I post this and notify qualified staff?",
+      };
+      const reply =
+        responses[text] ??
+        "I can help with that! Let me pull up the relevant data for you. What specifically would you like to know?";
+      setMessages((current) => [
+        ...current,
+        { id: Date.now() + 1, role: 'assistant', text: reply },
+      ]);
+      setIsTyping(false);
+    }, 1200);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
+        {messages.map((msg) => (
+          <motion.div
+            key={msg.id}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            {msg.role === 'assistant' ? (
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0 mr-2 mt-0.5">
+                <Sparkles size={11} className="text-white" />
+              </div>
+            ) : null}
+            <div
+              className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
+                msg.role === 'user'
+                  ? 'bg-[#635BFF] text-white rounded-br-md'
+                  : assistantBubbleClass
+              }`}
+              style={{ fontWeight: 420, whiteSpace: 'pre-line' }}
+            >
+              {msg.text}
+            </div>
+          </motion.div>
+        ))}
+        {isTyping ? (
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
+              <Sparkles size={11} className="text-white" />
+            </div>
+            <div className={typingBubbleClass}>
+              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        ) : null}
+        <div ref={bottomRef} />
+      </div>
+
+      {messages.length <= 2 ? (
+        <div className="px-3 pb-2 space-y-1.5">
+          {copilotSuggestions.map((suggestion) => (
+            <button
+              key={suggestion}
+              onClick={() => sendMessage(suggestion)}
+              className={suggestionButtonClass}
+              style={{ fontWeight: 440 }}
+              type="button"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className={`p-3 border-t ${footerBorderClass}`}>
+        <div className={inputWrapClass}>
+          <input
+            type="text"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                sendMessage(input);
+              }
+            }}
+            placeholder="Ask Copilot..."
+            className={inputClass}
+            style={{ fontWeight: 420 }}
+          />
+          <button
+            onClick={() => sendMessage(input)}
+            disabled={!input.trim()}
+            className={sendButtonClass}
+            type="button"
+          >
+            <Send size={14} className="text-[#635BFF]" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface DashboardShellProps {
+  activeNav: string;
+  children: ReactNode;
+  initialSidebarTab?: AppShellSidebarTab;
+}
+
+type DashboardShellLocationShortcut = {
+  id: string;
+  businessSlug?: string | null;
+  slug: string;
+  name: string;
+  logo: string;
+  openShifts?: number | null;
+  path: string;
+  isWorkspaceBacked: boolean;
+};
+
+export default function DashboardShell({
+  activeNav,
+  children,
+  initialSidebarTab = 'nav',
+}: DashboardShellProps) {
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<AppShellSidebarTab>(initialSidebarTab);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
+  const navigate = useNavigate();
+  const pathname = usePathname();
+  const resolvedAppearance = useResolvedAppAppearance();
+  const isDark = resolvedAppearance === 'dark';
+  const { fullName, email, phone, initials } = useSessionUserDisplay();
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const shellBgClass = isDark ? 'bg-[#071B2F]' : 'bg-[#F7F8FA]';
+  const panelBgClass = isDark ? 'bg-[#0F2E4C]' : 'bg-white';
+  const panelBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#E5E7EB]';
+  const sectionBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
+  const textPrimaryClass = isDark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondaryClass = isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedTextClass = 'text-[#8898AA]';
+  const subtleSurfaceClass = isDark ? 'bg-white/[0.03]' : 'bg-[#F0F0F5]';
+  const hoverSurfaceClass = isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]';
+  const searchFieldClass = isDark
+    ? 'bg-white/[0.04] border-white/[0.06] text-white placeholder-[#8898AA]/50'
+    : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#0A2540] placeholder-[#8898AA]/60';
+
+  useEffect(() => {
+    persistAppShellSidebarTabPreference(sidebarTab);
+  }, [sidebarTab]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowUserMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspaceLocations() {
+      const workspace = await getWorkspace();
+      if (cancelled || !workspace?.locations?.length) {
+        return;
+      }
+      setWorkspaceLocations(workspace.locations);
+    }
+
+    void loadWorkspaceLocations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const locationShortcuts = useMemo<DashboardShellLocationShortcut[]>(() => {
+    if (workspaceLocations && workspaceLocations.length > 0) {
+      return workspaceLocations.map((location) => {
+        const referenceLocation = findSourceDashboardLocationBySlug(
+          location.location_slug,
+        );
+        const path = buildDashboardLocationBasePathFromAny({
+          business_slug: location.business_slug,
+          location_slug: location.location_slug,
+          business_name: location.business_name,
+          location_name: location.location_name,
+          location_id: location.location_id,
+        });
+        return {
+          id: location.location_id,
+          businessSlug: location.business_slug,
+          slug: location.location_slug,
+          name: location.location_name,
+          logo: referenceLocation?.logo ?? '📍',
+          openShifts: referenceLocation?.openShifts ?? null,
+          path,
+          isWorkspaceBacked: true,
+        };
+      });
+    }
+
+    return sourceDashboardLocations.map((location) => ({
+      id: String(location.id),
+      businessSlug: null,
+      slug: location.slug,
+      name: location.name,
+      logo: location.logo,
+      openShifts: location.openShifts,
+      path: buildDashboardLocationBasePathFromAny({
+        location_name: location.name,
+        location_slug: location.slug,
+        location_id: String(location.id),
+      }),
+      isWorkspaceBacked: false,
+    }));
+  }, [workspaceLocations]);
+
+  const handleNav = (path: string) => {
+    navigate(path);
+    setSidebarOpen(false);
+    setShowNotifications(false);
+    setShowUserMenu(false);
+  };
+
+  return (
+    <div
+      className={`min-h-screen flex ${shellBgClass}`}
+      style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+    >
+      <AnimatePresence>
+        {sidebarOpen ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <aside
+        className={`fixed top-0 left-0 h-full z-50 w-[280px] flex flex-col border-r ${panelBorderClass} ${panelBgClass} transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className={`flex items-center justify-between h-16 px-5 border-b ${sectionBorderClass}`}>
+          <Link to="/" className="flex items-center gap-2.5">
+            <span className={`text-[18px] tracking-[-0.02em] ${textPrimaryClass}`} style={{ fontWeight: 620 }}>
+              Backfill
+            </span>
+          </Link>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className={`p-1.5 rounded-lg transition-colors lg:hidden ${hoverSurfaceClass}`}
+            type="button"
+          >
+            <X size={18} className={mutedTextClass} />
+          </button>
+        </div>
+
+        <div className="px-3 pt-3 pb-1">
+          <div className={`flex items-center rounded-lg p-0.5 ${subtleSurfaceClass}`}>
+            <button
+              onClick={() => setSidebarTab('nav')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
+                sidebarTab === 'nav'
+                  ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
+                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+              }`}
+              style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}
+              type="button"
+            >
+              <LayoutGrid size={13} />
+              Navigate
+            </button>
+            <button
+              onClick={() => setSidebarTab('copilot')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-[12px] transition-all duration-200 ${
+                sidebarTab === 'copilot'
+                  ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm'
+                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+              }`}
+              style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}
+              type="button"
+            >
+              <Sparkles size={13} />
+              Copilot
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <AnimatePresence mode="wait">
+            {sidebarTab === 'nav' ? (
+              <motion.div
+                key="nav"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                transition={{ duration: 0.2 }}
+                className="flex-1 flex flex-col"
+              >
+                <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
+                  {navItems.map((item) => (
+                    <button
+                      key={item.label}
+                      onClick={() => handleNav(item.path)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                        activeNav === item.label
+                          ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                          : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
+                      }`}
+                      type="button"
+                    >
+                      <item.icon size={18} className="shrink-0" />
+                      <span className="text-[13px]" style={{ fontWeight: activeNav === item.label ? 540 : 440 }}>
+                        {item.label}
+                      </span>
+                    </button>
+                  ))}
+
+                  <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
+                    <span className={`text-[10px] uppercase tracking-[0.06em] px-3 mb-2 block ${mutedTextClass}`} style={{ fontWeight: 500 }}>
+                      Locations
+                    </span>
+                    {locationShortcuts.map((location) => {
+                      const isActiveLocation = pathname === location.path;
+                      return (
+                        <button
+                          key={location.id}
+                          onClick={() => handleNav(location.isWorkspaceBacked ? location.path : '/onboarding')}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
+                            isActiveLocation
+                              ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                              : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
+                          }`}
+                          type="button"
+                        >
+                          <span className="text-[14px]">{location.logo}</span>
+                          <span className="text-[12px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
+                            {location.name}
+                          </span>
+                          {typeof location.openShifts === 'number' && location.openShifts > 0 ? (
+                            <span className="ml-auto text-[10px] text-[#E5484D] bg-[#E5484D]/10 px-1.5 py-0.5 rounded-full" style={{ fontWeight: 540 }}>
+                              {location.openShifts}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </nav>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="copilot"
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 10 }}
+                transition={{ duration: 0.2 }}
+                className="flex-1 flex flex-col overflow-hidden"
+              >
+                <CopilotPanel isDark={isDark} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </aside>
+
+      <div className="flex-1 min-h-screen lg:ml-[280px]">
+        <header className={`sticky top-0 z-20 border-b backdrop-blur-xl ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'}`}>
+          <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className={`p-2 rounded-lg transition-colors lg:hidden ${hoverSurfaceClass}`}
+                type="button"
+              >
+                <Menu size={20} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+              </button>
+              <div className="relative hidden sm:block">
+                <Search size={15} className={`absolute left-3 top-1/2 -translate-y-1/2 ${mutedTextClass}`} />
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  className={`w-48 md:w-64 pl-9 pr-4 py-2 rounded-lg border text-[12px] transition-all focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${searchFieldClass}`}
+                  style={{ fontWeight: 420 }}
+                />
+              </div>
+              <span className={`text-[16px] tracking-[-0.02em] ${textPrimaryClass} lg:hidden sm:hidden`} style={{ fontWeight: 620 }}>
+                Backfill
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowNotifications((current) => !current);
+                    setShowUserMenu(false);
+                  }}
+                  className={`relative p-2 rounded-lg transition-colors ${hoverSurfaceClass}`}
+                  type="button"
+                >
+                  <Bell size={18} className={isDark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E5484D] rounded-full" />
+                </button>
+                <AnimatePresence>
+                  {showNotifications ? (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                      transition={{ duration: 0.2 }}
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 overflow-hidden border shadow-xl z-50 ${panelBgClass} ${panelBorderClass} rounded-xl`}
+                    >
+                      <div className={`px-4 py-3 border-b ${sectionBorderClass}`}>
+                        <span className={`text-[13px] ${textPrimaryClass}`} style={{ fontWeight: 560 }}>
+                          Notifications
+                        </span>
+                      </div>
+                      {sourceDashboardNotifications.map((notification) => (
+                        <div
+                          key={notification.id}
+                          className={`px-4 py-3 transition-colors border-b last:border-0 ${sectionBorderClass} ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-[#F7F8FA]'}`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            {notification.urgent ? (
+                              <AlertCircle size={14} className="text-[#E5484D] mt-0.5 shrink-0" />
+                            ) : (
+                              <CheckCircle2 size={14} className="text-[#00B893] mt-0.5 shrink-0" />
+                            )}
+                            <div>
+                              <p className={`text-[12px] ${isDark ? 'text-[#C1CED8]' : 'text-[#3E4C59]'}`} style={{ fontWeight: 440 }}>
+                                {notification.text}
+                              </p>
+                              <span className={`text-[11px] ${mutedTextClass}`}>{notification.time} ago</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </div>
+
+              <div className="relative" ref={userMenuRef}>
+                <button
+                  onClick={() => {
+                    setShowUserMenu((current) => !current);
+                    setShowNotifications(false);
+                  }}
+                  className={`flex items-center gap-2 p-1 pr-2 rounded-full transition-all ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}
+                  type="button"
+                >
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
+                    <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>
+                      {initials}
+                    </span>
+                  </div>
+                  <ChevronDown
+                    size={13}
+                    className={`hidden sm:block text-[#8898AA] transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                <AnimatePresence>
+                  {showUserMenu ? (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                      transition={{ duration: 0.2 }}
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-64 max-w-64 overflow-hidden border shadow-xl z-50 ${panelBgClass} ${panelBorderClass} rounded-xl`}
+                    >
+                      <div className={`px-4 py-3.5 border-b ${sectionBorderClass}`}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
+                            <span className="text-[11px] text-white" style={{ fontWeight: 600 }}>
+                              {initials}
+                            </span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-[13px] truncate ${textPrimaryClass}`} style={{ fontWeight: 540 }}>
+                              {fullName}
+                            </p>
+                            <p className={`text-[11px] truncate ${mutedTextClass}`} style={{ fontWeight: 420 }}>
+                              {email ?? phone ?? 'Phone sign-in'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="py-1.5">
+                        {[
+                          {
+                            icon: Settings,
+                            label: 'Settings',
+                            action: () => handleNav(buildSettingsPath('personal', 'profile')),
+                          },
+                          {
+                            icon: LifeBuoy,
+                            label: 'Help & support',
+                            action: () => setShowUserMenu(false),
+                          },
+                          {
+                            icon: HelpCircle,
+                            label: "What's new",
+                            action: () => setShowUserMenu(false),
+                          },
+                        ].map((item) => (
+                          <button
+                            key={item.label}
+                            onClick={item.action}
+                            className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                            type="button"
+                          >
+                            <item.icon size={15} className="text-[#8898AA] shrink-0" />
+                            <span className={`text-[12px] ${isDark ? 'text-[#C1CED8]' : 'text-[#3E4C59]'}`} style={{ fontWeight: 480 }}>
+                              {item.label}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                      <div className={`border-t py-1.5 ${sectionBorderClass}`}>
+                        <button
+                          onClick={() => {
+                            setShowUserMenu(false);
+                            void signOutClientSession();
+                          }}
+                          className={`group w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-[#2A1A24]' : 'hover:bg-[#FEF2F2]'}`}
+                          type="button"
+                        >
+                          <LogOut size={15} className="text-[#8898AA] shrink-0 transition-colors group-hover:text-[#E5484D]" />
+                          <span className={`text-[12px] transition-colors ${isDark ? 'text-[#C1CED8] group-hover:text-[#E5484D]' : 'text-[#5E6D7A] group-hover:text-[#E5484D]'}`} style={{ fontWeight: 460 }}>
+                            Sign out
+                          </span>
+                        </button>
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}

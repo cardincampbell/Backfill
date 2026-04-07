@@ -194,7 +194,6 @@ async def test_expire_due_offers_advances_next_candidate_and_updates_reliability
     employee = Employee(
         id=employee_id,
         business_id=business_id,
-        home_location_id=location_id,
         full_name="Taylor Smith",
         phone_e164="+15555550100",
         reliability_score=0.7,
@@ -380,7 +379,6 @@ async def test_apply_twilio_status_callback_advances_next_candidate_on_failure()
     employee = Employee(
         id=employee_id,
         business_id=business_id,
-        home_location_id=location_id,
         full_name="Taylor Smith",
         phone_e164="+15555550100",
         reliability_score=0.7,

@@ -140,7 +140,15 @@ export type WorkspaceBoard = {
   timezone: string;
   week_start_date: string;
   week_end_date: string;
+  location_role_setup_required: boolean;
   roles: Array<{
+    role_id: string;
+    role_code: string;
+    role_name: string;
+    min_headcount?: number | null;
+    max_headcount?: number | null;
+  }>;
+  available_roles: Array<{
     role_id: string;
     role_code: string;
     role_name: string;
@@ -153,7 +161,7 @@ export type WorkspaceBoard = {
     preferred_name?: string | null;
     phone_e164?: string | null;
     email?: string | null;
-    home_location_id?: string | null;
+    primary_location_id?: string | null;
     avg_response_time_seconds?: number | null;
     role_ids: string[];
     role_names: string[];
@@ -339,6 +347,37 @@ export async function updateBusinessProfile(
   return (await response.json()) as BusinessProfile;
 }
 
+export async function deriveBusinessRoles(businessId: string) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/roles/derive`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as {
+    business_id: string;
+    vertical?: string | null;
+    settings: Record<string, unknown>;
+    roles: Array<{
+      id: string;
+      business_id: string;
+      code: string;
+      name: string;
+      category?: string | null;
+      description?: string | null;
+      min_notice_minutes: number;
+      default_shift_length_minutes?: number | null;
+      coverage_priority: number;
+      metadata_json: Record<string, unknown>;
+      created_at: string;
+      updated_at: string;
+    }>;
+  };
+}
+
 export async function createLocationFromPlace(
   businessId: string,
   place: PlaceSuggestion,
@@ -486,6 +525,42 @@ export async function updateLocationSettings(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as LocationSettings;
+}
+
+export async function attachRoleToLocation(
+  businessId: string,
+  locationId: string,
+  roleId: string,
+  payload?: {
+    min_headcount?: number | null;
+    max_headcount?: number | null;
+    premium_rules?: Record<string, unknown>;
+    coverage_settings?: Record<string, unknown>;
+  },
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/roles/${roleId}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as {
+    id: string;
+    location_id: string;
+    role_id: string;
+    is_active: boolean;
+    min_headcount?: number | null;
+    max_headcount?: number | null;
+    premium_rules: Record<string, unknown>;
+    coverage_settings: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  };
 }
 
 export async function getLocationBoard(

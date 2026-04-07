@@ -32,6 +32,7 @@ type BrandedSelectProps = {
   value: string;
   onChange?: ChangeEventHandler<HTMLSelectElement> | ((event: SelectLikeEvent) => void);
   dark?: boolean;
+  disabled?: boolean;
   className?: string;
   children?: ReactNode;
   options?: SelectOption[];
@@ -68,6 +69,7 @@ export function BrandedSelect({
   value,
   onChange,
   dark = false,
+  disabled = false,
   className,
   children,
   options,
@@ -183,6 +185,9 @@ export function BrandedSelect({
     : "bg-[#635BFF]/[0.08] text-[#635BFF]";
 
   function handleSelect(nextValue: string) {
+    if (disabled) {
+      return;
+    }
     setOpen(false);
     onChange?.({ target: { value: nextValue } } as never);
   }
@@ -229,9 +234,14 @@ export function BrandedSelect({
         type="button"
         aria-expanded={open}
         aria-haspopup="listbox"
-        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) {
+            setOpen((current) => !current);
+          }
+        }}
         className={`flex min-h-[44px] w-full items-center justify-between gap-3 backfill-ui-radius border px-3.5 py-2.5 text-left text-[13px] transition-all focus:outline-none focus:border-[#635BFF]/60 focus:shadow-[0_0_0_4px_rgba(99,91,255,0.12)] ${controlClass}`}
-        style={{ fontWeight: 440 }}
+        style={{ fontWeight: 440, opacity: disabled ? 0.55 : 1 }}
       >
         <span className="min-w-0 truncate">
           {selectedOption?.label ?? <span className="text-[#8898AA]">Select</span>}

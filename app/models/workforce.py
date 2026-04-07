@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime, time
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, SmallInteger, String, Text, Time, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, SmallInteger, String, Text, Time, UniqueConstraint, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,7 +20,6 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     business_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
-    home_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("locations.id", ondelete="SET NULL"))
     external_ref: Mapped[Optional[str]] = mapped_column(String(255))
     employee_number: Mapped[Optional[str]] = mapped_column(String(80))
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -42,18 +41,91 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     employee_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
     business: Mapped["Business"] = relationship(back_populates="employees")
-    home_location: Mapped[Optional["Location"]] = relationship()
-    employee_roles: Mapped[list["EmployeeRole"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
-    clearances: Mapped[list["EmployeeLocationClearance"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
+    employee_roles: Mapped[list["EmployeeRole"]] = relationship(
+        back_populates="employee",
+        cascade="all, delete-orphan",
+        order_by="EmployeeRole.created_at.asc()",
+    )
+    employee_locations: Mapped[list["EmployeeLocation"]] = relationship(
+        back_populates="employee",
+        cascade="all, delete-orphan",
+        order_by="EmployeeLocation.created_at.asc()",
+    )
     availability_rules: Mapped[list["EmployeeAvailabilityRule"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
     availability_exceptions: Mapped[list["EmployeeAvailabilityException"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
     assignments: Mapped[list["ShiftAssignment"]] = relationship(back_populates="employee")
+
+    def _loaded_employee_roles(self) -> list["EmployeeRole"]:
+        state = inspect(self)
+        if "employee_roles" in state.unloaded:
+            return []
+        return list(self.employee_roles or [])
+
+    def _loaded_employee_locations(self) -> list["EmployeeLocation"]:
+        state = inspect(self)
+        if "employee_locations" in state.unloaded:
+            return []
+        return list(self.employee_locations or [])
+
+    @property
+    def primary_location_id(self) -> Optional[uuid.UUID]:
+        employee_locations = self._loaded_employee_locations()
+        for employee_location in employee_locations:
+            if employee_location.is_primary:
+                return employee_location.location_id
+        if employee_locations:
+            return employee_locations[0].location_id
+        return None
+
+    @property
+    def primary_location_name(self) -> Optional[str]:
+        employee_locations = self._loaded_employee_locations()
+        for employee_location in employee_locations:
+            if employee_location.is_primary:
+                return employee_location.location_name
+        if employee_locations:
+            return employee_locations[0].location_name
+        return None
+
+    @property
+    def primary_role_id(self) -> Optional[uuid.UUID]:
+        employee_roles = self._loaded_employee_roles()
+        for employee_role in employee_roles:
+            if employee_role.is_primary:
+                return employee_role.role_id
+        if employee_roles:
+            return employee_roles[0].role_id
+        return None
+
+    @property
+    def primary_role_name(self) -> Optional[str]:
+        employee_roles = self._loaded_employee_roles()
+        for employee_role in employee_roles:
+            if employee_role.is_primary:
+                return employee_role.role_name
+        if employee_roles:
+            return employee_roles[0].role_name
+        return None
+
+    @property
+    def role_ids(self) -> list[uuid.UUID]:
+        return [employee_role.role_id for employee_role in self._loaded_employee_roles()]
+
+    @property
+    def location_ids(self) -> list[uuid.UUID]:
+        return [employee_location.location_id for employee_location in self._loaded_employee_locations()]
 
 
 class EmployeeRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "employee_roles"
     __table_args__ = (
         UniqueConstraint("employee_id", "role_id", name="uq_employee_roles_employee_id_role_id"),
+        Index(
+            "uq_employee_roles_employee_id_primary",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("is_primary = true"),
+        ),
     )
 
     employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
@@ -66,24 +138,59 @@ class EmployeeRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     employee: Mapped["Employee"] = relationship(back_populates="employee_roles")
     role: Mapped["Role"] = relationship(back_populates="employee_roles")
 
+    @property
+    def role_code(self) -> Optional[str]:
+        state = inspect(self)
+        if "role" in state.unloaded:
+            return None
+        return self.role.code if self.role is not None else None
 
-class EmployeeLocationClearance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "employee_location_clearances"
+    @property
+    def role_name(self) -> Optional[str]:
+        state = inspect(self)
+        if "role" in state.unloaded:
+            return None
+        return self.role.name if self.role is not None else None
+
+
+class EmployeeLocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "employee_locations"
     __table_args__ = (
-        UniqueConstraint("employee_id", "location_id", name="uq_employee_location_clearances_employee_id_location_id"),
+        UniqueConstraint("employee_id", "location_id", name="uq_employee_locations_employee_id_location_id"),
+        Index(
+            "uq_employee_locations_employee_id_primary",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("is_primary = true"),
+        ),
     )
 
     employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
     location_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("locations.id", ondelete="CASCADE"), nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     access_level: Mapped[str] = mapped_column(String(32), nullable=False, server_default="approved")
-    clearance_source: Mapped[Optional[str]] = mapped_column(String(64))
+    location_source: Mapped[Optional[str]] = mapped_column(String(64))
     can_cover_last_minute: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     can_blast: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     travel_radius_miles: Mapped[Optional[int]] = mapped_column(Integer)
-    clearance_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    location_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
-    employee: Mapped["Employee"] = relationship(back_populates="clearances")
-    location: Mapped["Location"] = relationship(back_populates="clearances")
+    employee: Mapped["Employee"] = relationship(back_populates="employee_locations")
+    location: Mapped["Location"] = relationship(back_populates="employee_locations")
+
+    @property
+    def location_name(self) -> Optional[str]:
+        state = inspect(self)
+        if "location" in state.unloaded:
+            return None
+        return self.location.name if self.location is not None else None
+
+    @property
+    def location_slug(self) -> Optional[str]:
+        state = inspect(self)
+        if "location" in state.unloaded:
+            return None
+        return self.location.slug if self.location is not None else None
 
 
 class EmployeeAvailabilityRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):

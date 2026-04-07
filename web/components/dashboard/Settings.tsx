@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Children,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import {
@@ -8,7 +16,6 @@ import {
   Building2,
   Camera,
   Check,
-  ChevronRight,
   CreditCard,
   FileText,
   Globe,
@@ -16,10 +23,12 @@ import {
   Mail,
   MapPin,
   Monitor,
+  Moon,
   Palette,
   Phone,
   Shield,
   Smartphone,
+  Sun,
   User,
   Zap,
 } from "lucide-react";
@@ -54,7 +63,9 @@ import {
   getWorkspace,
 } from "@/lib/api/workspace";
 import { BrandedSelect } from "./BrandedSelect";
+import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
 import DashboardShell from "./DashboardShell";
+import SettingsLocationsSection from "./SettingsLocationsSection";
 
 type Feedback = {
   tone: "success" | "error";
@@ -276,14 +287,14 @@ function ScopeButton({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-5 py-2.5 backfill-ui-radius text-[13px] transition-all duration-300 ${
+      className={`flex items-center gap-2 px-5 py-2.5 text-[13px] transition-all duration-300 ${
         active
           ? dark
-            ? "bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
-            : "bg-white text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
+            ? "backfill-ui-radius bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
+            : "rounded-lg bg-white text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
           : dark
-            ? "text-[#8898AA] hover:text-[#C1CED8]"
-            : "text-[#8898AA] hover:text-[#5E6D7A]"
+            ? "backfill-ui-radius text-[#8898AA] hover:text-[#C1CED8]"
+            : "rounded-lg text-[#8898AA] hover:text-[#5E6D7A]"
       }`}
       style={{ fontWeight: active ? 540 : 420 }}
       type="button"
@@ -296,7 +307,7 @@ function ScopeButton({
 
 function SettingsField({
   label,
-  icon: Icon,
+  icon: _Icon,
   children,
 }: {
   label: string;
@@ -305,11 +316,7 @@ function SettingsField({
 }) {
   return (
     <label className="block">
-      <span
-        className="mb-1.5 flex items-center gap-2 text-[11px] text-[#8898AA] uppercase tracking-[0.04em]"
-        style={{ fontWeight: 500 }}
-      >
-        <Icon size={12} />
+      <span className="mb-1.5 block text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>
         {label}
       </span>
       {children}
@@ -325,10 +332,10 @@ function SettingsInput({
   return (
     <input
       {...rest}
-      className={`w-full px-3.5 py-2.5 backfill-ui-radius border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
+      className={`w-full px-3.5 py-2.5 border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
         dark
-          ? "border-white/[0.08] bg-white/[0.04] text-white"
-          : "border-[#E5E7EB] text-[#0A2540]"
+          ? "backfill-ui-radius border-white/[0.08] bg-white/[0.04] text-white"
+          : "rounded-lg border-[#E5E7EB] bg-white text-[#0A2540]"
       } ${className ?? ""}`}
       style={{ fontWeight: 440 }}
     />
@@ -339,6 +346,44 @@ function SettingsSelect(
   props: React.SelectHTMLAttributes<HTMLSelectElement> & { dark?: boolean },
 ) {
   const { className, dark: _dark, value, ...rest } = props;
+  const options = Children.toArray(props.children).flatMap((child) => {
+    if (!isValidElement(child) || child.type !== "option") {
+      return [];
+    }
+
+    const option = child as ReactElement<{
+      value?: string;
+      children?: React.ReactNode;
+    }>;
+
+    return [
+      {
+        value:
+          typeof option.props.value === "string"
+            ? option.props.value
+            : String(option.props.value ?? ""),
+        label:
+          typeof option.props.children === "string"
+            ? option.props.children
+            : String(option.props.children ?? ""),
+      } satisfies CustomSelectOption,
+    ];
+  });
+
+  if (!_dark) {
+    return (
+      <CustomSelect
+        onChange={(nextValue) =>
+          rest.onChange?.({
+            target: { value: nextValue },
+          } as never)
+        }
+        options={options}
+        value={typeof value === "string" ? value : String(value ?? "")}
+      />
+    );
+  }
+
   return (
     <BrandedSelect
       {...rest}
@@ -358,7 +403,7 @@ function Toggle({
 }) {
   return (
     <button
-      className={`relative h-[22px] w-10 backfill-ui-radius transition-all duration-300 ${
+      className={`relative h-[22px] w-10 rounded-full transition-all duration-300 ${
         enabled ? "bg-[#635BFF]" : "bg-[#E5E7EB]"
       }`}
       onClick={() => onChange(!enabled)}
@@ -374,7 +419,7 @@ function Toggle({
 }
 
 const businessSections = [
-  { key: "company", label: "Business Profile", icon: Building2, saveTarget: "business" as const },
+  { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
@@ -431,6 +476,7 @@ export default function Settings({
   const [weeklyReports, setWeeklyReports] = useState(false);
   const [escalations, setEscalations] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
+  const [pushNotifications, setPushNotifications] = useState(true);
   const [smsNotifications, setSmsNotifications] = useState(false);
   const [dailyDigest, setDailyDigest] = useState(true);
   const [twoFactor, setTwoFactor] = useState(true);
@@ -668,16 +714,8 @@ export default function Settings({
     return business.brand_name ?? business.legal_name;
   }, [business]);
 
-  const businessDescription =
-    activeSection === "company"
-      ? business
-        ? `High-level profile for ${businessLabel}.`
-        : "No business profile is available on this account yet."
-      : "Organization-wide setting";
-  const personalDescription =
-    activeSection === "appearance"
-      ? "Control how Backfill looks on this device."
-      : "Your personal preference";
+  const businessDescription = "Organization-wide setting";
+  const personalDescription = "Your personal preference";
 
   async function savePersonal() {
     if (!personalCanSave) {
@@ -971,31 +1009,15 @@ export default function Settings({
     }
 
     if (scope === "business" && activeSection === "locations") {
-      const locations = [
-        { name: "Downtown Medical Center", type: "Healthcare", emoji: "🏥", color: "#635BFF", staff: 48 },
-        { name: "Sunrise Senior Living", type: "Senior Care", emoji: "🌅", color: "#00B893", staff: 32 },
-        { name: "Bay Area Staffing Co.", type: "Staffing Agency", emoji: "🏢", color: "#FF6B35", staff: 120 },
-        { name: "Coastal Hospitality Group", type: "Hospitality", emoji: "🏨", color: "#3B82F6", staff: 15 },
-      ];
+      if (!business) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Create a business first, then you can manage location role assignments here.
+          </div>
+        );
+      }
 
-      return (
-        <div className="space-y-3">
-          {locations.map((location) => (
-            <div key={location.name} className={`flex items-center gap-4 p-4 backfill-ui-radius border transition-all ${isDark ? "border-white/[0.08] hover:border-white/[0.14] hover:bg-white/[0.03]" : "border-[#E5E7EB] hover:border-[#D1D5DB] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"}`}>
-              <div className="w-10 h-10 backfill-ui-radius flex items-center justify-center text-[18px]" style={{ background: `${location.color}10` }}>
-                {location.emoji}
-              </div>
-              <div className="flex-1">
-                <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>{location.name}</p>
-                <p className={`text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>
-                  {location.type} • {location.staff} staff
-                </p>
-              </div>
-              <ChevronRight size={16} className={textMuted} />
-            </div>
-          ))}
-        </div>
-      );
+      return <SettingsLocationsSection businessId={business.id} dark={isDark} />;
     }
 
     if (scope === "business" && activeSection === "billing") {
@@ -1285,6 +1307,7 @@ export default function Settings({
     if (scope === "personal" && activeSection === "personal-notifications") {
       const items = [
         { label: "Email Notifications", desc: "Receive updates and alerts via email", enabled: emailNotifications, onChange: setEmailNotifications },
+        { label: "Push Notifications", desc: "Get real-time push notifications on your devices", enabled: pushNotifications, onChange: setPushNotifications },
         { label: "SMS Notifications", desc: "Receive urgent alerts via text message", enabled: smsNotifications, onChange: setSmsNotifications },
         { label: "Daily Digest", desc: "Get a summary of the day's activity each evening", enabled: dailyDigest, onChange: setDailyDigest },
       ];
@@ -1306,9 +1329,9 @@ export default function Settings({
 
     if (scope === "personal" && activeSection === "appearance") {
       const themes = [
-        { key: "light" as const, label: "Light", colors: ["#FFFFFF", "#F7F8FA"] },
-        { key: "system" as const, label: "System", colors: ["#FFFFFF", "#0A2540"] },
-        { key: "dark" as const, label: "Dark", colors: ["#0A2540", "#071B30"] },
+        { key: "light" as const, label: "Light", icon: Sun, colors: ["#FFFFFF", "#F7F8FA"] },
+        { key: "dark" as const, label: "Dark", icon: Moon, colors: ["#0A2540", "#071B30"] },
+        { key: "system" as const, label: "System", icon: Monitor, colors: ["#FFFFFF", "#0A2540"] },
       ];
 
       return (
@@ -1347,6 +1370,10 @@ export default function Settings({
                         <div className="flex-1" style={{ background: theme.colors[1] }} />
                       </div>
                     </div>
+                    <theme.icon
+                      size={16}
+                      className={`mx-auto mb-1.5 ${selected ? "text-[#635BFF]" : isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}
+                    />
                     <span
                       className="text-[12px] block"
                       style={{
@@ -1406,9 +1433,9 @@ export default function Settings({
             </p>
           </div>
           {activeDirty ? (
-            <motion.button
-              animate={{ opacity: 1, scale: 1 }}
-              className="hidden sm:block px-5 py-2.5 backfill-ui-radius text-[13px] text-white whitespace-nowrap transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-60 disabled:hover:shadow-none"
+              <motion.button
+                animate={{ opacity: 1, scale: 1 }}
+                className="hidden sm:block px-5 py-2.5 rounded-full text-[13px] text-white whitespace-nowrap transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-60 disabled:hover:shadow-none"
               disabled={!activeCanSave}
               initial={{ opacity: 0, scale: 0.95 }}
               onClick={() => {
@@ -1420,19 +1447,13 @@ export default function Settings({
               }}
               type="button"
             >
-              {activeSaving
-                ? "Saving…"
-                : activeSaveTarget === "business"
-                  ? "Save business profile"
-                  : activeSection === "appearance"
-                    ? "Save appearance"
-                    : "Save personal info"}
+              {activeSaving ? "Saving…" : "Save Changes"}
             </motion.button>
           ) : null}
         </div>
 
         <div className="mb-6">
-          <div className={`inline-flex items-center backfill-ui-radius p-1 gap-0.5 ${subtleSurface}`}>
+          <div className={`inline-flex items-center p-1 gap-0.5 ${isDark ? `backfill-ui-radius ${subtleSurface}` : "rounded-xl bg-[#F0F0F5]"}`}>
             <ScopeButton active={scope === "business"} dark={isDark} icon={Building2} label="Business" onClick={() => switchScope("business")} />
             <ScopeButton active={scope === "personal"} dark={isDark} icon={User} label="Personal" onClick={() => switchScope("personal")} />
           </div>
@@ -1444,11 +1465,11 @@ export default function Settings({
               {sections.map((section) => (
                 <button
                   key={section.key}
-                  className={`flex items-center gap-2 md:gap-3 px-3 md:px-3.5 py-2.5 backfill-ui-radius text-left transition-all duration-200 md:w-full ${
+                  className={`flex items-center gap-2 md:gap-3 px-3 md:px-3.5 py-2.5 text-left transition-all duration-200 md:w-full ${
                     activeSection === section.key
                       ? "bg-[#635BFF]/[0.08] text-[#635BFF]"
                       : `${textSecondary} ${rowHover}`
-                  }`}
+                  } ${isDark ? "backfill-ui-radius" : "rounded-lg"}`}
                   onClick={() =>
                     pushSettingsLocation(scope, section.key as SettingsSectionKey)
                   }
@@ -1464,11 +1485,11 @@ export default function Settings({
           </motion.div>
 
           <div className="flex-1 min-w-0">
-            <div className={`${panelClass} border backfill-ui-radius p-4 sm:p-6`}>
+            <div className={`${panelClass} border ${isDark ? "backfill-ui-radius" : "rounded-2xl"} p-4 sm:p-6`}>
               <div className={`flex items-center gap-3 mb-6 pb-5 border-b ${borderClass}`}>
                 {currentSection ? (
                   <>
-                    <div className={`w-9 h-9 backfill-ui-radius ${isDark ? "bg-white/[0.06]" : "bg-[#635BFF]/10"} flex items-center justify-center`}>
+                    <div className={`w-9 h-9 ${isDark ? "backfill-ui-radius bg-white/[0.06]" : "rounded-xl bg-[#635BFF]/10"} flex items-center justify-center`}>
                       <currentSection.icon size={16} className="text-[#635BFF]" />
                     </div>
                     <div>
@@ -1485,7 +1506,7 @@ export default function Settings({
 
               {activeFeedback ? (
                 <div
-                  className="mb-5 backfill-ui-radius px-4 py-3 text-[13px]"
+                  className={`mb-5 px-4 py-3 text-[13px] ${isDark ? "backfill-ui-radius" : "rounded-xl"}`}
                   data-tone={activeFeedback.tone}
                   role="status"
                   style={{
@@ -1522,7 +1543,7 @@ export default function Settings({
             transition={{ duration: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
           >
             <button
-              className="w-full py-3 backfill-ui-radius text-[14px] text-white transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+              className="w-full py-3 rounded-full text-[14px] text-white transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
               disabled={!activeCanSave}
               onClick={() => {
                 void handleSaveActive();
@@ -1533,13 +1554,7 @@ export default function Settings({
               }}
               type="button"
             >
-              {activeSaving
-                ? "Saving…"
-                : activeSaveTarget === "business"
-                  ? "Save business profile"
-                  : activeSection === "appearance"
-                    ? "Save appearance"
-                    : "Save personal info"}
+              {activeSaving ? "Saving…" : "Save Changes"}
             </button>
           </motion.div>
         ) : null}

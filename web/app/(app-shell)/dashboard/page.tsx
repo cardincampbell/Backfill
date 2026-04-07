@@ -1,4 +1,4 @@
-import DashboardLight from "@/components/source-dashboard/DashboardLight";
+import DashboardLight from "@/components/dashboard/DashboardLight";
 
 export const dynamic = "force-dynamic";
 

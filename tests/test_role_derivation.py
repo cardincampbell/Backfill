@@ -195,7 +195,7 @@ async def test_enroll_employee_at_location_creates_location_role_from_employee_a
     )
 
     location_roles = [obj for obj in session.added if isinstance(obj, LocationRole)]
-    assert result.employee.home_location_id == location.id
+    assert result.employee.primary_location_id == location.id
     assert location_roles == []
 
 

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import Settings from "@/components/source-dashboard/Settings";
+import Settings from "@/components/dashboard/Settings";
 import {
   buildSettingsPath,
   normalizeSettingsScope,

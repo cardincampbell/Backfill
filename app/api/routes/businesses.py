@@ -18,6 +18,9 @@ from app.schemas.business import (
     LocationDeleteResponse,
     LocationRead,
     LocationRoleAttach,
+    LocationRoleCreateAndAssign,
+    LocationRoleCreateAndAssignRead,
+    LocationRoleReplace,
     LocationRoleRead,
     RoleCreate,
     RoleRead,
@@ -451,3 +454,124 @@ async def attach_role_to_location(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await session.commit()
     return location_role
+
+
+@router.get(
+    "/{business_id}/locations/{location_id}/roles",
+    response_model=list[LocationRoleRead],
+)
+async def list_location_roles(
+    business_id: UUID,
+    location_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    try:
+        return await businesses.list_location_roles(session, business_id, location_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{business_id}/locations/{location_id}/roles",
+    response_model=LocationRoleCreateAndAssignRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_and_assign_location_role(
+    business_id: UUID,
+    location_id: UUID,
+    payload: LocationRoleCreateAndAssign,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        role, location_role = await businesses.create_and_assign_location_role(
+            session,
+            business_id,
+            location_id,
+            payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
+    await audit_service.append(
+        session,
+        event_name="location.role.created_and_attached",
+        target_type="location_role",
+        target_id=location_role.id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "role_id": str(role.id),
+            "role_name": role.name,
+            "location_role_id": str(location_role.id),
+        },
+    )
+    await session.commit()
+    return LocationRoleCreateAndAssignRead(role=role, location_role=location_role)
+
+
+@router.put(
+    "/{business_id}/locations/{location_id}/roles",
+    response_model=list[LocationRoleRead],
+)
+async def replace_location_roles(
+    business_id: UUID,
+    location_id: UUID,
+    payload: LocationRoleReplace,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        location_roles = await businesses.replace_location_roles(
+            session,
+            business_id,
+            location_id,
+            payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
+    await audit_service.append(
+        session,
+        event_name="location.roles.updated",
+        target_type="location",
+        target_id=location_id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "active_role_ids": [str(location_role.role_id) for location_role in location_roles],
+            "active_role_count": len(location_roles),
+        },
+    )
+    await session.commit()
+    return location_roles

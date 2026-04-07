@@ -57,7 +57,10 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     business: Mapped["Business"] = relationship(back_populates="locations")
     memberships: Mapped[list["Membership"]] = relationship(back_populates="location", cascade="all, delete-orphan")
     location_roles: Mapped[list["LocationRole"]] = relationship(back_populates="location", cascade="all, delete-orphan")
-    clearances: Mapped[list["EmployeeLocationClearance"]] = relationship(back_populates="location", cascade="all, delete-orphan")
+    employee_locations: Mapped[list["EmployeeLocation"]] = relationship(
+        back_populates="location",
+        cascade="all, delete-orphan",
+    )
     shifts: Mapped[list["Shift"]] = relationship(back_populates="location", cascade="all, delete-orphan")
 
 
@@ -103,4 +106,4 @@ class LocationRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 from app.models.identity import Membership  # noqa: E402
 from app.models.scheduling import Shift  # noqa: E402
-from app.models.workforce import Employee, EmployeeLocationClearance, EmployeeRole  # noqa: E402
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole  # noqa: E402

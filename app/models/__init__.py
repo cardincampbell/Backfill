@@ -23,7 +23,7 @@ from app.models.workforce import (
     Employee,
     EmployeeAvailabilityException,
     EmployeeAvailabilityRule,
-    EmployeeLocationClearance,
+    EmployeeLocation,
     EmployeeRole,
 )
 
@@ -39,7 +39,7 @@ __all__ = [
     "Employee",
     "EmployeeAvailabilityException",
     "EmployeeAvailabilityRule",
-    "EmployeeLocationClearance",
+    "EmployeeLocation",
     "EmployeeRole",
     "Location",
     "LocationRole",

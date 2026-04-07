@@ -21,7 +21,7 @@ class WorkspaceBoardWorkerRead(BaseSchema):
     preferred_name: Optional[str] = None
     phone_e164: Optional[str] = None
     email: Optional[str] = None
-    home_location_id: Optional[UUID] = None
+    primary_location_id: Optional[UUID] = None
     reliability_score: float
     avg_response_time_seconds: Optional[int] = None
     role_ids: list[UUID]

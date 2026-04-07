@@ -30,7 +30,7 @@ from app.models.integrations import (
     SchedulerSyncRun,
 )
 from app.models.scheduling import Shift, ShiftAssignment
-from app.models.workforce import Employee, EmployeeLocationClearance, EmployeeRole
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import CoverageCaseCreate, CoverageExecutionDispatchRequest
 from app.schemas.integrations import (
     SchedulerConnectionRead,
@@ -448,7 +448,6 @@ async def _get_or_create_employee(
     if employee is None:
         employee = Employee(
             business_id=connection.business_id,
-            home_location_id=connection.location_id,
             external_ref=record.external_ref,
             full_name=record.full_name,
             phone_e164=record.phone_e164,
@@ -468,13 +467,11 @@ async def _get_or_create_employee(
             "source": "scheduler_sync",
             **record.metadata,
         }
-        if employee.home_location_id is None:
-            employee.home_location_id = connection.location_id
         await session.flush()
     return employee, created
 
 
-async def _sync_employee_roles_and_clearance(
+async def _sync_employee_roles_and_location(
     session: AsyncSession,
     *,
     connection: SchedulerConnection,
@@ -508,24 +505,40 @@ async def _sync_employee_roles_and_clearance(
             )
             await session.flush()
 
-    clearance = await session.scalar(
-        select(EmployeeLocationClearance).where(
-            EmployeeLocationClearance.employee_id == employee.id,
-            EmployeeLocationClearance.location_id == connection.location_id,
-        )
+    existing_employee_locations = await session.execute(
+        select(EmployeeLocation)
+        .where(EmployeeLocation.employee_id == employee.id)
+        .order_by(EmployeeLocation.created_at.asc())
     )
-    if clearance is None:
+    employee_locations = list(existing_employee_locations.scalars().all())
+    current_employee_location = next(
+        (
+            item
+            for item in employee_locations
+            if item.location_id == connection.location_id
+        ),
+        None,
+    )
+    has_primary_location = any(item.is_primary for item in employee_locations)
+
+    if current_employee_location is None:
         session.add(
-            EmployeeLocationClearance(
+            EmployeeLocation(
                 employee_id=employee.id,
                 location_id=connection.location_id,
+                is_primary=not has_primary_location,
                 access_level="approved",
-                clearance_source="scheduler_sync",
+                location_source="scheduler_sync",
                 can_cover_last_minute=True,
                 can_blast=True,
-                clearance_metadata={},
+                location_metadata={},
             )
         )
+        await session.flush()
+        return
+
+    if not has_primary_location:
+        current_employee_location.is_primary = True
         await session.flush()
 
 
@@ -552,7 +565,7 @@ async def sync_connection_roster(
             created += 1
         else:
             updated += 1
-        await _sync_employee_roles_and_clearance(
+        await _sync_employee_roles_and_location(
             session,
             connection=connection,
             employee=employee,
