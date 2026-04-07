@@ -157,8 +157,8 @@ function OnboardingBody() {
           email: email.trim(),
         },
         business: {
-          legal_name: organizationName,
-          brand_name: organizationName,
+          name: selectedPlace.name,
+          display_name: organizationName,
           primary_email: email.trim(),
           vertical: selectedPlace.primary_type ?? undefined,
           timezone: "America/Los_Angeles",

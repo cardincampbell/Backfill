@@ -13,8 +13,8 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class Business(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "businesses"
 
-    legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    brand_name: Mapped[Optional[str]] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     vertical: Mapped[Optional[str]] = mapped_column(String(80))
     primary_phone_e164: Mapped[Optional[str]] = mapped_column(String(24))
@@ -29,6 +29,28 @@ class Business(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     employees: Mapped[list["Employee"]] = relationship(back_populates="business", cascade="all, delete-orphan")
     memberships: Mapped[list["Membership"]] = relationship(back_populates="business", cascade="all, delete-orphan")
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not getattr(self, "display_name", None) and getattr(self, "name", None):
+            self.display_name = self.name
+
+    # Temporary compatibility aliases while the codebase migrates off the old names.
+    @property
+    def legal_name(self) -> str:
+        return self.name
+
+    @legal_name.setter
+    def legal_name(self, value: str) -> None:
+        self.name = value
+
+    @property
+    def brand_name(self) -> str:
+        return self.display_name
+
+    @brand_name.setter
+    def brand_name(self, value: str | None) -> None:
+        self.display_name = value or self.name
+
 
 class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "locations"
@@ -39,6 +61,7 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     business_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(120), nullable=False)
     address_line_1: Mapped[Optional[str]] = mapped_column(String(255))
     address_line_2: Mapped[Optional[str]] = mapped_column(String(255))
@@ -63,8 +86,15 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     shifts: Mapped[list["Shift"]] = relationship(back_populates="location", cascade="all, delete-orphan")
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not getattr(self, "display_name", None) and getattr(self, "name", None):
+            self.display_name = self.name
+
     @property
     def location_display_name(self) -> str:
+        if self.display_name and self.display_name.strip() and self.display_name != self.name:
+            return self.display_name
         derived_identity = self.settings.get("derived_identity") if isinstance(self.settings, dict) else None
         if isinstance(derived_identity, dict):
             location_label = derived_identity.get("location_label")
@@ -72,7 +102,7 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
                 normalized = location_label.strip()
                 if normalized:
                     return normalized
-        return self.name
+        return self.display_name or self.name
 
 
 class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):

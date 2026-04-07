@@ -218,8 +218,8 @@ def test_create_business_bootstraps_owner_membership(monkeypatch):
     session = DummySession()
     created_business = Business(
         id=uuid4(),
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         status="active",
@@ -247,8 +247,8 @@ def test_create_business_bootstraps_owner_membership(monkeypatch):
         response = client.post(
             "/api/businesses",
             json={
-                "legal_name": "Casa Vega LLC",
-                "brand_name": "Casa Vega",
+                "name": "Casa Vega LLC",
+                "display_name": "Casa Vega",
                 "timezone": "America/Los_Angeles",
             },
         )

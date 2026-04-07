@@ -183,7 +183,7 @@ class EmployeeLocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         state = inspect(self)
         if "location" in state.unloaded:
             return None
-        return self.location.name if self.location is not None else None
+        return self.location.display_name if self.location is not None else None
 
     @property
     def location_slug(self) -> Optional[str]:

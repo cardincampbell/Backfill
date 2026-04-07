@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.business import Business, Location
-from app.schemas.business import BusinessProfileUpdate
+from app.schemas.business import BusinessCreate, BusinessProfileUpdate, LocationCreate
 from app.schemas.onboarding import OwnerWorkspaceBootstrapRequest
 from app.services import business_identity_derivation, businesses, onboarding
 from app.services.auth import AuthContext
@@ -75,15 +75,16 @@ class FakeSession:
 
 def _make_business(
     *,
-    brand_name: str,
+    name: str | None = None,
+    display_name: str,
     settings: dict | None = None,
     place_metadata: dict | None = None,
 ) -> Business:
     now = datetime.now(timezone.utc)
     return Business(
         id=uuid4(),
-        legal_name="Urth Caffe LLC",
-        brand_name=brand_name,
+        name=name or display_name,
+        display_name=display_name,
         slug="urth-caffe",
         timezone="America/Los_Angeles",
         status="active",
@@ -170,7 +171,7 @@ def _make_auth_context() -> AuthContext:
 
 def test_derive_business_identity_confirms_sibling_locality_suffixes():
     business = _make_business(
-        brand_name="Urth Caffe Pasadena",
+        display_name="Urth Caffe Pasadena",
         place_metadata={"name": "Urth Caffe Pasadena"},
     )
     pasadena = _make_location(
@@ -200,7 +201,7 @@ def test_derive_business_identity_confirms_sibling_locality_suffixes():
 
 def test_derive_business_identity_protects_intrinsic_city_names():
     business = _make_business(
-        brand_name="Boston Market Pasadena",
+        display_name="Boston Market Pasadena",
         place_metadata={"name": "Boston Market Pasadena"},
     )
     pasadena = _make_location(
@@ -219,7 +220,7 @@ def test_derive_business_identity_protects_intrinsic_city_names():
 async def test_sync_business_identity_promotes_clean_business_name_and_persists_evidence():
     session = FakeSession()
     business = _make_business(
-        brand_name="Urth Caffe Pasadena",
+        display_name="Urth Caffe Pasadena",
         place_metadata={"name": "Urth Caffe Pasadena"},
     )
     pasadena = _make_location(
@@ -239,12 +240,13 @@ async def test_sync_business_identity_promotes_clean_business_name_and_persists_
         locations=[pasadena, santa_monica],
     )
 
-    assert business.brand_name == "Urth Caffe"
-    assert business.settings["brand_name_source"] == "derived"
+    assert business.display_name == "Urth Caffe"
+    assert business.settings["display_name_source"] == "derived"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
     assert pasadena.settings["derived_identity"]["suggested_location_name"] == "Pasadena"
-    assert pasadena.settings["derived_identity"]["location_name_promoted"] is True
-    assert pasadena.name == "Pasadena"
+    assert pasadena.settings["derived_identity"]["location_name_promoted"] is False
+    assert pasadena.name == "Urth Caffe Pasadena"
+    assert pasadena.display_name == "Pasadena"
     assert result.support_location_count == 2
 
 
@@ -252,8 +254,8 @@ async def test_sync_business_identity_promotes_clean_business_name_and_persists_
 async def test_sync_business_identity_respects_manual_brand_override():
     session = FakeSession()
     business = _make_business(
-        brand_name="Urth Caffe",
-        settings={"brand_name_source": "manual"},
+        display_name="Urth Caffe",
+        settings={"display_name_source": "manual"},
         place_metadata={"name": "Urth Caffe Pasadena"},
     )
     pasadena = _make_location(
@@ -273,8 +275,8 @@ async def test_sync_business_identity_respects_manual_brand_override():
         locations=[pasadena, santa_monica],
     )
 
-    assert business.brand_name == "Urth Caffe"
-    assert business.settings["brand_name_source"] == "manual"
+    assert business.display_name == "Urth Caffe"
+    assert business.settings["display_name_source"] == "manual"
     assert business.settings["derived_identity"]["manual_override_active"] is True
 
 
@@ -282,7 +284,7 @@ async def test_sync_business_identity_respects_manual_brand_override():
 async def test_sync_business_identity_does_not_promote_single_location_name():
     session = FakeSession()
     business = _make_business(
-        brand_name="Urth Caffe Pasadena",
+        display_name="Urth Caffe Pasadena",
         place_metadata={"name": "Urth Caffe Pasadena"},
     )
     pasadena = _make_location(
@@ -297,7 +299,7 @@ async def test_sync_business_identity_does_not_promote_single_location_name():
         locations=[pasadena],
     )
 
-    assert business.brand_name == "Urth Caffe"
+    assert business.display_name == "Urth Caffe"
     assert pasadena.settings["derived_identity"]["location_name_promoted"] is False
     assert pasadena.name == "Urth Caffe Pasadena"
 
@@ -321,8 +323,8 @@ async def test_bootstrap_owner_workspace_derives_identity_once_after_first_locat
         OwnerWorkspaceBootstrapRequest(
             profile={"full_name": "Cardin Campbell", "email": "cardin@example.com"},
             business={
-                "legal_name": "Urth Caffe LLC",
-                "brand_name": "Urth Caffe Pasadena",
+                "name": "Urth Caffe LLC",
+                "display_name": "Urth Caffe Pasadena",
                 "timezone": "America/Los_Angeles",
                 "place_metadata": {"name": "Urth Caffe Pasadena"},
             },
@@ -363,8 +365,8 @@ async def test_bootstrap_owner_workspace_promotes_clean_business_name():
         OwnerWorkspaceBootstrapRequest(
             profile={"full_name": "Cardin Campbell", "email": "cardin@example.com"},
             business={
-                "legal_name": "Urth Caffe LLC",
-                "brand_name": "Urth Caffe Pasadena",
+                "name": "Urth Caffe LLC",
+                "display_name": "Urth Caffe Pasadena",
                 "timezone": "America/Los_Angeles",
                 "place_metadata": {"name": "Urth Caffe Pasadena"},
             },
@@ -390,7 +392,7 @@ async def test_bootstrap_owner_workspace_promotes_clean_business_name():
         ),
     )
 
-    assert business.brand_name == "Urth Caffe"
+    assert business.display_name == "Urth Caffe"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
     assert location.settings["derived_identity"]["suggested_location_name"] == "Pasadena"
     assert location.settings["derived_identity"]["location_name_promoted"] is False
@@ -399,13 +401,13 @@ async def test_bootstrap_owner_workspace_promotes_clean_business_name():
 @pytest.mark.asyncio
 async def test_update_business_profile_marks_brand_name_as_manual():
     session = FakeSession()
-    business = _make_business(brand_name="Backfill")
+    business = _make_business(display_name="Backfill")
 
     await businesses.update_business_profile(
         session,
         business,
         payload=BusinessProfileUpdate(
-            brand_name="Backfill Works",
+            display_name="Backfill Works",
             vertical="healthcare",
             primary_email="hello@backfill.com",
             timezone="America/New_York",
@@ -414,7 +416,51 @@ async def test_update_business_profile_marks_brand_name_as_manual():
         ),
     )
 
-    assert business.brand_name == "Backfill Works"
-    assert business.settings["brand_name_source"] == "manual"
+    assert business.display_name == "Backfill Works"
+    assert business.settings["display_name_source"] == "manual"
     assert business.settings["vertical_source"] == "manual"
     assert business.settings["week_start_day"] == "monday"
+
+
+@pytest.mark.asyncio
+async def test_create_business_record_seeds_slug_from_display_name():
+    session = FakeSession()
+
+    business = await businesses.create_business_record(
+        session,
+        BusinessCreate(
+            name="Urth Caffe Pasadena",
+            display_name="Urth Caffe",
+            timezone="America/Los_Angeles",
+        ),
+        derive_identity=False,
+        derive_roles=False,
+    )
+
+    assert business.name == "Urth Caffe Pasadena"
+    assert business.display_name == "Urth Caffe"
+    assert business.slug == "urth-caffe"
+
+
+@pytest.mark.asyncio
+async def test_create_location_record_seeds_slug_from_display_name_or_location_label():
+    session = FakeSession()
+    business = _make_business(name="Urth Caffe Pasadena", display_name="Urth Caffe")
+    session.add(business)
+
+    location = await businesses.create_location_record(
+        session,
+        business.id,
+        LocationCreate(
+            name="Urth Caffe Pasadena",
+            timezone="America/Los_Angeles",
+            google_place_id="place_pasadena",
+            google_place_metadata={"location_label": "Pasadena"},
+        ),
+        derive_identity=False,
+        derive_roles=False,
+    )
+
+    assert location.name == "Urth Caffe Pasadena"
+    assert location.display_name == "Pasadena"
+    assert location.slug == "pasadena"

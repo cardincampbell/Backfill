@@ -13,7 +13,7 @@ export type BusinessLocation = {
   id: string;
   business_id: string;
   name: string;
-  location_display_name: string;
+  display_name: string;
   slug: string;
   address_line_1?: string | null;
   address_line_2?: string | null;

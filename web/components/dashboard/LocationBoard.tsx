@@ -241,7 +241,7 @@ function SetupMode({
         );
         setFeedback({
           tone: "success",
-          message: `${selectedRoleIds.length} roles enabled for ${location.location_name}.`,
+          message: `${selectedRoleIds.length} roles enabled for ${location.location_display_name ?? location.location_name}.`,
         });
         router.refresh();
       } catch (error) {
@@ -281,7 +281,7 @@ function SetupMode({
             className={`text-[24px] sm:text-[28px] md:text-[32px] tracking-[-0.025em] ${textPrimary}`}
             style={{ fontWeight: 620 }}
           >
-            {location.location_name}
+            {location.location_display_name ?? location.location_name}
           </h1>
           <p
             className={`mt-1 max-w-2xl text-[14px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}
@@ -457,7 +457,7 @@ function SetupMode({
                   </p>
                   <p className={`mt-1 text-[12px] ${textMuted}`} style={{ fontWeight: 420 }}>
                     Generate the role catalog first, then come back and attach the roles that
-                    belong at {location.location_name}.
+                    belong at {location.location_display_name ?? location.location_name}.
                   </p>
                 </div>
               </div>
@@ -624,13 +624,13 @@ function LiveMode({
       <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <span className={`text-[12px] uppercase tracking-[0.08em] ${textMuted}`} style={{ fontWeight: 520 }}>
-            {location.business_name}
+            {location.business_display_name ?? location.business_name}
           </span>
           <h1
             className={`mt-2 text-[24px] sm:text-[28px] md:text-[32px] tracking-[-0.025em] ${textPrimary}`}
             style={{ fontWeight: 620 }}
           >
-            {location.location_name}
+            {location.location_display_name ?? location.location_name}
           </h1>
           <p className={`mt-1 max-w-2xl text-[14px] ${textSecondary}`} style={{ fontWeight: 420 }}>
             {locationMeta(location) || "Live operating view for this location."}

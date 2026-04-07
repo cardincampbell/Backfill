@@ -59,6 +59,22 @@ async def _next_unique_role_code(session: AsyncSession, business_id: UUID, reque
     return code
 
 
+def _initial_business_display_name(payload: BusinessCreate) -> str:
+    return (
+        _normalize_optional(payload.display_name)
+        or _normalize_optional((payload.place_metadata or {}).get("brand_name"))
+        or payload.name.strip()
+    )
+
+
+def _initial_location_display_name(payload: LocationCreate) -> str:
+    return (
+        _normalize_optional(payload.display_name)
+        or _normalize_optional((payload.google_place_metadata or {}).get("location_label"))
+        or payload.name.strip()
+    )
+
+
 def _merge_role_metadata(
     existing: dict | None,
     *,
@@ -102,17 +118,16 @@ async def create_business_record(
     derive_identity: bool = True,
     derive_roles: bool = True,
 ) -> Business:
-    slug = await _next_unique_business_slug(session, payload.slug or payload.brand_name or payload.legal_name)
+    business_name = payload.name.strip()
+    business_display_name = _initial_business_display_name(payload)
+    requested_name = business_display_name or business_name
+    slug = await _next_unique_business_slug(session, payload.slug or requested_name)
     settings = dict(payload.settings or {})
-    if (
-        not settings.get("brand_name_source")
-        and not payload.place_metadata
-        and _normalize_optional(payload.brand_name) is not None
-    ):
-        settings["brand_name_source"] = "manual"
+    if not settings.get("display_name_source") and not payload.place_metadata:
+        settings["display_name_source"] = "manual"
     business = Business(
-        legal_name=payload.legal_name,
-        brand_name=payload.brand_name,
+        name=business_name,
+        display_name=business_display_name,
         slug=slug,
         vertical=payload.vertical,
         primary_phone_e164=payload.primary_phone_e164,
@@ -148,9 +163,9 @@ async def update_business_profile(
     business: Business,
     payload: BusinessProfileUpdate,
 ) -> dict[str, object]:
-    brand_name = payload.brand_name.strip()
+    display_name = payload.display_name.strip()
     timezone = payload.timezone.strip()
-    if not brand_name:
+    if not display_name:
         raise ValueError("business_name_required")
     if not timezone:
         raise ValueError("timezone_required")
@@ -163,12 +178,13 @@ async def update_business_profile(
     week_start_day = payload.week_start_day
 
     changes: dict[str, object] = {}
-    if business.brand_name != brand_name:
-        business.brand_name = brand_name
-        changes["brand_name"] = brand_name
+    if business.display_name != display_name:
+        business.display_name = display_name
+        changes["display_name"] = display_name
     current_settings = dict(business.settings or {})
     settings = dict(current_settings)
-    settings["brand_name_source"] = "manual"
+    settings["display_name_source"] = "manual"
+    settings.pop("brand_name_source", None)
 
     if business.vertical != vertical:
         business.vertical = vertical
@@ -238,10 +254,13 @@ async def create_location_record(
     if business is None:
         raise LookupError("business_not_found")
 
-    slug = await _next_unique_location_slug(session, business_id, payload.slug or payload.name)
+    location_name = payload.name.strip()
+    location_display_name = _initial_location_display_name(payload)
+    slug = await _next_unique_location_slug(session, business_id, payload.slug or location_display_name)
     location = Location(
         business_id=business_id,
-        name=payload.name,
+        name=location_name,
+        display_name=location_display_name,
         slug=slug,
         address_line_1=payload.address_line_1,
         address_line_2=payload.address_line_2,

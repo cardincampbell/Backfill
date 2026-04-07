@@ -5,23 +5,11 @@ export function inferOrganizationName(place: PlaceSuggestion): string {
 }
 
 export function inferLocationName(place: PlaceSuggestion): string {
-  const businessName = inferOrganizationName(place);
-  const locationLabel = place.location_label?.trim();
-  const rawName = place.name.trim();
-  if (locationLabel) {
-    const normalizedLabel = locationLabel.toLowerCase();
-    if (rawName.toLowerCase().endsWith(normalizedLabel)) {
-      return rawName;
-    }
-    if (businessName.toLowerCase().endsWith(normalizedLabel)) {
-      return businessName;
-    }
-    return `${businessName} · ${locationLabel}`;
-  }
-  if (rawName && rawName.toLowerCase() !== businessName.toLowerCase()) {
-    return rawName;
-  }
-  return businessName;
+  return place.name.trim();
+}
+
+export function inferLocationDisplayName(place: PlaceSuggestion): string {
+  return place.location_label?.trim() || place.name.trim();
 }
 
 function firstAddressLine(place: PlaceSuggestion): string | undefined {
@@ -60,6 +48,7 @@ export function buildLocationPayloadFromPlace(
   const workspaceOptions = isWorkspaceLocationOptions(options) ? options : undefined;
   const basePayload = {
     name: inferLocationName(place),
+    display_name: inferLocationDisplayName(place),
     address_line_1: firstAddressLine(place),
     locality: place.city ?? undefined,
     region: place.state_region ?? undefined,

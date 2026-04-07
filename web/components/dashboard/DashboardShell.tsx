@@ -296,7 +296,7 @@ export default function DashboardShell({
         const path = buildDashboardLocationBasePathFromAny({
           business_slug: location.business_slug,
           location_slug: location.location_slug,
-          business_name: location.business_name,
+          business_name: location.business_display_name,
           location_name: location.location_name,
           location_display_name: location.location_display_name,
           location_id: location.location_id,

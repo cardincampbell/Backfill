@@ -121,12 +121,12 @@ def _make_location(*, business_id, location_id, name="Downtown Los Angeles") -> 
     )
 
 
-def _make_business(*, business_id, legal_name="Backfill Works, Inc.") -> Business:
+def _make_business(*, business_id, name="Backfill Works, Inc.") -> Business:
     now = datetime.now(timezone.utc)
     return Business(
         id=business_id,
-        legal_name=legal_name,
-        brand_name="Backfill",
+        name=name,
+        display_name="Backfill",
         slug="backfill",
         vertical="staffing",
         primary_email="ops@backfill.io",
@@ -358,7 +358,7 @@ def test_business_profile_route_updates_current_business():
         response = client.patch(
             f"/api/businesses/{business_id}",
             json={
-                "brand_name": "Backfill Works",
+                "display_name": "Backfill Works",
                 "vertical": "healthcare",
                 "primary_email": "hello@backfill.com",
                 "timezone": "America/New_York",
@@ -368,17 +368,17 @@ def test_business_profile_route_updates_current_business():
         )
         assert response.status_code == 200
         payload = response.json()
-        assert payload["brand_name"] == "Backfill Works"
+        assert payload["display_name"] == "Backfill Works"
         assert payload["vertical"] == "healthcare"
         assert payload["primary_email"] == "hello@backfill.com"
         assert payload["timezone"] == "America/New_York"
-        assert business.brand_name == "Backfill Works"
+        assert business.display_name == "Backfill Works"
         assert business.vertical == "healthcare"
         assert business.primary_email == "hello@backfill.com"
         assert business.timezone == "America/New_York"
         assert business.settings["company_profile_address"] == "100 Market St, San Francisco, CA 94105"
         assert business.settings["week_start_day"] == "monday"
-        assert business.settings["brand_name_source"] == "manual"
+        assert business.settings["display_name_source"] == "manual"
         assert business.settings["vertical_source"] == "manual"
         assert fake_session.commits == 1
         assert any(

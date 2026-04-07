@@ -63,7 +63,7 @@ async def create_business(payload: BusinessCreate, session: SessionDep, auth_ctx
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=owner_membership.id,
-        payload={"brand_name": business.brand_name, "legal_name": business.legal_name},
+        payload={"name": business.name, "display_name": business.display_name},
     )
     await audit_service.append(
         session,
@@ -181,7 +181,7 @@ async def create_location(
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
-        payload={"name": location.name, "slug": location.slug},
+        payload={"name": location.name, "display_name": location.display_name, "slug": location.slug},
     )
     await session.commit()
     return location
@@ -225,7 +225,7 @@ async def delete_location(
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
-        payload={"name": location.name, "slug": location.slug},
+        payload={"name": location.name, "display_name": location.display_name, "slug": location.slug},
     )
     await session.commit()
     return LocationDeleteResponse(deleted=True, location_id=location.id)
@@ -420,7 +420,7 @@ async def derive_business_identity(
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={
-            "brand_name": business.brand_name,
+            "display_name": business.display_name,
             "confidence": derived_identity.get("name_derivation_confidence"),
             "derivation_version": derived_identity.get("derivation_version"),
         },
@@ -428,7 +428,7 @@ async def derive_business_identity(
     await session.commit()
     return BusinessIdentityDerivationRead(
         business_id=business.id,
-        brand_name=business.brand_name,
+        display_name=business.display_name,
         settings=business.settings,
     )
 

@@ -139,7 +139,7 @@ function buildPersonalForm(
 
 function buildCompanyForm(business: BusinessProfile): CompanyFormState {
   return {
-    companyName: business.brand_name ?? business.legal_name,
+    companyName: business.display_name ?? business.name,
     businessType: business.vertical ?? "",
     businessEmail: business.primary_email ?? "",
     businessAddress: getBusinessAddress(business),
@@ -704,7 +704,7 @@ export default function Settings({
     if (!business) {
       return "No business selected";
     }
-    return business.brand_name ?? business.legal_name;
+    return business.display_name ?? business.name;
   }, [business]);
   const primaryBusinessId = business?.id ?? workspace?.businesses[0]?.business_id ?? null;
 
@@ -770,7 +770,7 @@ export default function Settings({
     setFeedback((current) => ({ ...current, business: null }));
     try {
       const response = await updateBusinessProfile(business.id, {
-        brand_name: normalizeText(companyForm.companyName),
+        display_name: normalizeText(companyForm.companyName),
         vertical: normalizeText(companyForm.businessType) || null,
         primary_email: normalizeEmail(companyForm.businessEmail) || null,
         timezone: normalizeText(companyForm.timezone),

@@ -112,8 +112,8 @@ async def test_bootstrap_owner_workspace_creates_business_location_membership():
         OwnerWorkspaceBootstrapRequest(
             profile={"full_name": "Cardin Campbell", "email": "cardin@example.com"},
             business={
-                "legal_name": "Whole Foods Market LLC",
-                "brand_name": "Whole Foods Market",
+                "name": "Whole Foods Market LLC",
+                "display_name": "Whole Foods Market",
                 "vertical": "retail",
                 "timezone": "America/Los_Angeles",
             },
@@ -135,7 +135,7 @@ async def test_bootstrap_owner_workspace_creates_business_location_membership():
     assert user.full_name == "Cardin Campbell"
     assert user.email == "cardin@example.com"
     assert user.onboarding_completed_at is not None
-    assert business.brand_name == "Whole Foods Market"
+    assert business.display_name == "Whole Foods Market"
     assert location.business_id == business.id
     assert owner_membership.business_id == business.id
     assert owner_membership.role == MembershipRole.owner
@@ -172,8 +172,8 @@ async def test_bootstrap_owner_workspace_derives_roles_once_after_location_exist
         OwnerWorkspaceBootstrapRequest(
             profile={"full_name": "Cardin Campbell", "email": "cardin@example.com"},
             business={
-                "legal_name": "Whole Foods Market LLC",
-                "brand_name": "Whole Foods Market",
+                "name": "Whole Foods Market LLC",
+                "display_name": "Whole Foods Market",
                 "vertical": "retail",
                 "timezone": "America/Los_Angeles",
             },
@@ -236,8 +236,8 @@ async def test_workspace_expands_business_membership_to_all_locations():
 
     business = Business(
         id=business_id,
-        legal_name="Whole Foods Market LLC",
-        brand_name="Whole Foods Market",
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
         slug="whole-foods-market",
         timezone="America/Los_Angeles",
         status="active",
@@ -320,8 +320,8 @@ def test_workspace_route_returns_locations(monkeypatch):
                 membership=membership,
                 business=Business(
                     id=business_id,
-                    legal_name="Whole Foods Market LLC",
-                    brand_name="Whole Foods Market",
+                    name="Whole Foods Market LLC",
+                    display_name="Whole Foods Market",
                     slug="whole-foods-market",
                     timezone="America/Los_Angeles",
                     status="active",
@@ -369,6 +369,8 @@ def test_workspace_route_returns_locations(monkeypatch):
         assert payload["locations"][0]["membership_scope"] == "location"
         assert payload["locations"][0]["location_name"] == "Whole Foods Market · Downtown Los Angeles"
         assert payload["locations"][0]["location_display_name"] == "Downtown Los Angeles"
+        assert payload["locations"][0]["business_name"] == "Whole Foods Market LLC"
+        assert payload["locations"][0]["business_display_name"] == "Whole Foods Market"
     finally:
         app.dependency_overrides.clear()
 
@@ -405,8 +407,8 @@ def test_workspace_route_includes_business_without_locations(monkeypatch):
         return [
             Business(
                 id=business_id,
-                legal_name="Urth Caffe LLC",
-                brand_name="Urth Caffe",
+                name="Urth Caffe LLC",
+                display_name="Urth Caffe",
                 slug="urth-caffe",
                 timezone="America/Los_Angeles",
                 status="active",
@@ -436,7 +438,8 @@ def test_workspace_route_includes_business_without_locations(monkeypatch):
         assert payload["businesses"] == [
             {
                 "business_id": str(business_id),
-                "business_name": "Urth Caffe",
+                "business_name": "Urth Caffe LLC",
+                "business_display_name": "Urth Caffe",
                 "business_slug": "urth-caffe",
                 "membership_role": "owner",
                 "location_count": 0,

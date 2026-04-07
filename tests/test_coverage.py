@@ -171,8 +171,8 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
     )
     business = Business(
         id=business_id,
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         settings={},
@@ -826,8 +826,8 @@ async def test_execute_phase_2_run_requires_exhaustion_or_opt_in(monkeypatch):
     )
     business = Business(
         id=business_id,
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         settings={},
@@ -897,8 +897,8 @@ async def test_execute_phase_2_run_uses_blast_mode_when_urgent(monkeypatch):
     )
     business = Business(
         id=business_id,
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         settings={},
@@ -979,8 +979,8 @@ async def test_plan_coverage_case_execution_prefers_phase_1_when_available(monke
     )
     business = Business(
         id=business_id,
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         settings={},
@@ -1040,8 +1040,8 @@ async def test_execute_next_coverage_phase_exhausts_case_when_no_candidates(monk
     )
     business = Business(
         id=business_id,
-        legal_name="Casa Vega LLC",
-        brand_name="Casa Vega",
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
         settings={},

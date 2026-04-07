@@ -423,8 +423,8 @@ export async function renderLocationDetailPage({
               {location.location_name.slice(0, 1).toUpperCase()}
             </div>
             <div className="dashboard-page-copy">
-              <span className="dashboard-page-kicker">{location.business_name}</span>
-              <h1>{location.location_name}</h1>
+              <span className="dashboard-page-kicker">{location.business_display_name ?? location.business_name}</span>
+              <h1>{location.location_display_name ?? location.location_name}</h1>
               <p>
                 {locationMeta(location) || "Live operating view for this location."}
               </p>

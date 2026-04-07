@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.business import Business, Location
 
 DERIVATION_VERSION = "business_identity_places_v1"
-_PROMOTE_LOCATION_NAME_CONFIDENCE = 0.9
 _GENERIC_BASE_NAMES = {"location", "store", "shop", "office", "branch"}
 _PROTECTED_BASE_NAMES = {
     "boston market",
@@ -180,9 +179,10 @@ def _raw_place_name(location: Location) -> str | None:
 
 def _fallback_business_name(business: Business, locations: Sequence[Location]) -> str:
     for candidate in (
-        _as_text(business.brand_name),
+        _as_text(business.name),
         _as_text((business.place_metadata or {}).get("name")),
         _as_text((business.place_metadata or {}).get("brand_name")),
+        _as_text(business.display_name),
     ):
         if candidate is not None:
             return candidate
@@ -190,7 +190,7 @@ def _fallback_business_name(business: Business, locations: Sequence[Location]) -
         candidate = _raw_place_name(location)
         if candidate is not None:
             return candidate
-    return business.legal_name.strip()
+    return business.name.strip()
 
 
 def _suggested_location_name(raw_place_name: str | None, location_label: str | None, fallback_name: str) -> str:
@@ -378,7 +378,10 @@ async def sync_business_identity(
     derivation = derive_business_identity(business, locations=locations)
 
     business_settings = dict(business.settings or {})
-    manual_override_active = business_settings.get("brand_name_source") == "manual"
+    manual_override_active = (
+        business_settings.get("display_name_source") == "manual"
+        or business_settings.get("brand_name_source") == "manual"
+    )
     business_settings["derived_identity"] = {
         "raw_place_name": _as_text((business.place_metadata or {}).get("name")),
         "canonical_business_name": derivation.canonical_business_name,
@@ -391,8 +394,9 @@ async def sync_business_identity(
         "evidence": derivation.evidence,
     }
     if not manual_override_active:
-        business.brand_name = derivation.canonical_business_name
-        business_settings["brand_name_source"] = "derived"
+        business.display_name = derivation.canonical_business_name
+        business_settings["display_name_source"] = "derived"
+        business_settings.pop("brand_name_source", None)
     business.settings = business_settings
 
     locations_by_id = {identity.location_id: identity for identity in derivation.locations}
@@ -410,13 +414,10 @@ async def sync_business_identity(
             "derivation_version": DERIVATION_VERSION,
             "reason_codes": identity.reason_codes,
             "suggested_location_name": identity.suggested_location_name,
-            "location_name_promoted": bool(
-                identity.location_label is not None and identity.confidence >= _PROMOTE_LOCATION_NAME_CONFIDENCE
-            ),
+            "location_name_promoted": False,
             "evidence": identity.evidence,
         }
-        if identity.location_label is not None and identity.confidence >= _PROMOTE_LOCATION_NAME_CONFIDENCE:
-            location.name = identity.suggested_location_name
+        location.display_name = identity.suggested_location_name
         location.settings = location_settings
 
     await session.flush()

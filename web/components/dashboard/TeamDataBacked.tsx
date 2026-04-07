@@ -1016,7 +1016,10 @@ export default function Team({
   const inputClass = isDark
     ? "border-white/[0.08] bg-white/[0.04] text-white"
     : "border-[#E5E7EB] bg-white text-[#0A2540]";
-  const businessName = workspace?.businesses[0]?.business_name ?? "Backfill";
+  const businessName =
+    workspace?.businesses[0]?.business_display_name ??
+    workspace?.businesses[0]?.business_name ??
+    "Backfill";
 
   const content = (
     <>

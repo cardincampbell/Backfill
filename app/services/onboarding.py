@@ -128,7 +128,7 @@ async def bootstrap_owner_workspace(
         actor_membership_id=owner_membership.id,
         ip_address=ip_address,
         user_agent=user_agent,
-        payload={"brand_name": business.brand_name, "legal_name": business.legal_name},
+        payload={"name": business.name, "display_name": business.display_name},
     )
     await audit_service.append(
         session,
@@ -155,7 +155,7 @@ async def bootstrap_owner_workspace(
         actor_membership_id=owner_membership.id,
         ip_address=ip_address,
         user_agent=user_agent,
-        payload={"name": location.name, "slug": location.slug},
+        payload={"name": location.name, "display_name": location.display_name, "slug": location.slug},
     )
     await audit_service.append(
         session,

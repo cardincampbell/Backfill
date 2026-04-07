@@ -53,7 +53,9 @@ export function AccountLocationsPanel({
   const businesses = useMemo(
     () =>
       [...workspace.businesses].sort((left, right) =>
-        left.business_name.localeCompare(right.business_name),
+        (left.business_display_name ?? left.business_name).localeCompare(
+          right.business_display_name ?? right.business_name,
+        ),
       ),
     [workspace.businesses],
   );
@@ -97,7 +99,11 @@ export function AccountLocationsPanel({
   const spotlightLocations = useMemo(
     () =>
       [...workspace.locations]
-        .sort((left, right) => left.location_name.localeCompare(right.location_name))
+        .sort((left, right) =>
+          (left.location_display_name ?? left.location_name).localeCompare(
+            right.location_display_name ?? right.location_name,
+          ),
+        )
         .slice(0, 4),
     [workspace.locations],
   );
@@ -117,15 +123,15 @@ export function AccountLocationsPanel({
 
     try {
       const created = await createBusiness({
-        legal_name: trimmedName,
-        brand_name: trimmedName,
+        name: trimmedName,
+        display_name: trimmedName,
         primary_email: workspace.user.email ?? undefined,
       });
       setBusinessName("");
       setExpandedAddLocationBusinessId(created.id);
       setFeedback({
         type: "success",
-        message: `${created.brand_name ?? created.legal_name} is ready. Add a location to get it live.`,
+        message: `${created.display_name ?? created.name} is ready. Add a location to get it live.`,
       });
       router.refresh();
     } catch (error) {
@@ -186,7 +192,7 @@ export function AccountLocationsPanel({
       setExpandedAddLocationBusinessId(null);
       setFeedback({
         type: "success",
-        message: `${createdLocation.name} was added to ${business.business_name}.`,
+        message: `${createdLocation.display_name ?? createdLocation.name} was added to ${business.business_display_name ?? business.business_name}.`,
       });
       router.refresh();
     } catch (error) {
@@ -203,7 +209,7 @@ export function AccountLocationsPanel({
   function handleDelete(location: WorkspaceLocation) {
     if (deletingLocationId || isPending) return;
     const confirmed = window.confirm(
-      `Delete ${location.location_name}? This only works for locations that do not already have operational data.`,
+      `Delete ${location.location_display_name ?? location.location_name}? This only works for locations that do not already have operational data.`,
     );
     if (!confirmed) return;
 
@@ -215,7 +221,7 @@ export function AccountLocationsPanel({
         await deleteLocation(location.business_id, location.location_id);
         setFeedback({
           type: "success",
-          message: `${location.location_name} was removed from ${location.business_name}.`,
+          message: `${location.location_display_name ?? location.location_name} was removed from ${location.business_display_name ?? location.business_name}.`,
         });
         router.refresh();
       } catch (error) {
@@ -316,7 +322,7 @@ export function AccountLocationsPanel({
         const accessLabel = result.created ? "was invited to" : "already has access to";
         setFeedback({
           type: "success",
-          message: `${result.access.manager_email ?? email} ${accessLabel} ${location.location_name}.`,
+          message: `${result.access.manager_email ?? email} ${accessLabel} ${location.location_display_name ?? location.location_name}.`,
         });
         setInviteDrafts((current) => ({
           ...current,
@@ -351,7 +357,7 @@ export function AccountLocationsPanel({
       membership.phone_e164 ||
       "this manager";
     const confirmed = window.confirm(
-      `Remove ${label} from ${location.location_name}?`,
+      `Remove ${label} from ${location.location_display_name ?? location.location_name}?`,
     );
     if (!confirmed) return;
 
@@ -375,7 +381,7 @@ export function AccountLocationsPanel({
         }
         setFeedback({
           type: "success",
-          message: `${label} was removed from ${location.location_name}.`,
+          message: `${label} was removed from ${location.location_display_name ?? location.location_name}.`,
         });
         await loadMemberships(location.business_id, location.location_id, true);
         router.refresh();
@@ -485,7 +491,7 @@ export function AccountLocationsPanel({
               businesses.slice(0, 4).map((business) => (
                 <div className="account-ops-list-row" key={business.business_id}>
                   <div className="account-ops-list-copy">
-                    <strong>{business.business_name}</strong>
+                    <strong>{business.business_display_name ?? business.business_name}</strong>
                     <span>{roleLabel(business.membership_role)} access</span>
                   </div>
                   <span className="account-ops-list-pill">
@@ -539,8 +545,8 @@ export function AccountLocationsPanel({
                   key={location.location_id}
                 >
                   <div className="account-ops-list-copy">
-                    <strong>{location.location_name}</strong>
-                    <span>{location.business_name}</span>
+                    <strong>{location.location_display_name ?? location.location_name}</strong>
+                    <span>{location.business_display_name ?? location.business_name}</span>
                   </div>
                   <span className="account-ops-list-pill">Open</span>
                 </Link>
@@ -619,7 +625,9 @@ export function AccountLocationsPanel({
         {businesses.length ? (
           businesses.map((business) => {
             const businessLocations = [...business.locations].sort((left, right) =>
-              left.location_name.localeCompare(right.location_name),
+              (left.location_display_name ?? left.location_name).localeCompare(
+                right.location_display_name ?? right.location_name,
+              ),
             );
             const addLocationValue = addLocationValues[business.business_id] ?? "";
             const addLocationPlace = addLocationPlaces[business.business_id] ?? null;
@@ -633,7 +641,7 @@ export function AccountLocationsPanel({
                     <span className="account-business-kicker">
                       {roleLabel(business.membership_role)} access
                     </span>
-                    <h2>{business.business_name}</h2>
+                    <h2>{business.business_display_name ?? business.business_name}</h2>
                     <p>
                       {business.location_count
                         ? `${business.location_count} ${
@@ -656,7 +664,7 @@ export function AccountLocationsPanel({
                 {showAddLocation ? (
                   <div className="account-business-location-create">
                     <div className="account-business-location-create-copy">
-                      <strong>Add a location to {business.business_name}</strong>
+                      <strong>Add a location to {business.business_display_name ?? business.business_name}</strong>
                       <span>
                         Search the real place so we can prefill the address and keep the
                         dashboard URLs clean.
@@ -765,9 +773,9 @@ export function AccountLocationsPanel({
                           <div className="account-location-card-main">
                             <div className="account-location-card-copy">
                               <span className="account-location-card-kicker">
-                                {location.business_name}
+                                {location.business_display_name ?? location.business_name}
                               </span>
-                              <strong>{location.location_name}</strong>
+                              <strong>{location.location_display_name ?? location.location_name}</strong>
                             </div>
                             <div className="account-location-card-meta">
                               <span>{formatAddress(location) || "No address yet"}</span>
@@ -993,7 +1001,7 @@ export function AccountLocationsPanel({
                   <div className="account-business-empty">
                     <strong>No locations yet</strong>
                     <span>
-                      Add the first location for {business.business_name} to activate
+                      Add the first location for {business.business_display_name ?? business.business_name} to activate
                       schedule, coverage, team, and location settings URLs.
                     </span>
                   </div>

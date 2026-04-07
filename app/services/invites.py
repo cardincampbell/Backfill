@@ -348,7 +348,7 @@ async def create_manager_invite(
             recipient_email=normalized_email,
             token_hash=_invite_token_hash(raw_token),
             status=InviteStatus.pending,
-            subject_business_name=business.brand_name or business.legal_name,
+            subject_business_name=business.display_name,
             sent_at=now,
             expires_at=now + timedelta(hours=INVITE_TTL_HOURS),
             invite_metadata=metadata,
@@ -361,14 +361,14 @@ async def create_manager_invite(
         invite.role = MembershipRole(role)
         invite.token_hash = _invite_token_hash(raw_token)
         invite.status = InviteStatus.pending
-        invite.subject_business_name = business.brand_name or business.legal_name
+        invite.subject_business_name = business.display_name
         invite.sent_at = now
         invite.expires_at = now + timedelta(hours=INVITE_TTL_HOURS)
         invite.invite_metadata = metadata
 
     subject, text_body, html_body = build_manager_invite_email_content(
-        business_name=business.brand_name or business.legal_name,
-        location_name=location.name,
+        business_name=business.display_name,
+        location_name=location.display_name,
         inviter_name=inviter_name.strip() or "A Backfill manager",
         raw_token=raw_token,
         recipient_has_existing_account=bool(

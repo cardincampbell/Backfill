@@ -302,13 +302,13 @@ async def get_location_board(
             )
         )
 
-    business_name = business.brand_name or business.legal_name
+    business_name = business.display_name
     return WorkspaceLocationBoardRead(
         business_id=business.id,
         business_name=business_name,
         business_slug=business.slug,
         location_id=location.id,
-        location_name=location.name,
+        location_name=location.display_name,
         location_slug=location.slug,
         address_line_1=location.address_line_1,
         locality=location.locality,

@@ -90,8 +90,8 @@ async def test_create_manager_invite_uses_business_name_in_email_subject(monkeyp
     session = FakeInviteSession()
     session.get_map[(Business, business_id)] = Business(
         id=business_id,
-        legal_name="Whole Foods Market LLC",
-        brand_name="Whole Foods Market",
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
         slug="whole-foods-market",
         timezone="America/Los_Angeles",
         status="active",
@@ -318,8 +318,8 @@ def test_request_manager_invite_challenge_sets_invite_acceptance_purpose(monkeyp
         ),
         business=Business(
             id=business_id,
-            legal_name="Whole Foods Market LLC",
-            brand_name="Whole Foods Market",
+            name="Whole Foods Market LLC",
+            display_name="Whole Foods Market",
             slug="whole-foods-market",
             timezone="America/Los_Angeles",
             status="active",

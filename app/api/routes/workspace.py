@@ -35,7 +35,8 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
             membership_role=item.membership.role,
             membership_scope=item.membership_scope,
             business_id=item.business.id,
-            business_name=item.business.brand_name or item.business.legal_name,
+            business_name=item.business.name,
+            business_display_name=item.business.display_name,
             business_slug=item.business.slug,
             location_id=item.location.id,
             location_name=item.location.name,
@@ -64,7 +65,8 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
     businesses = [
         WorkspaceBusinessRead(
             business_id=business.id,
-            business_name=business.brand_name or business.legal_name,
+            business_name=business.name,
+            business_display_name=business.display_name,
             business_slug=business.slug,
             membership_role=max(
                 membership_roles_by_business.get(str(business.id), ["viewer"]),
@@ -75,7 +77,7 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
         )
         for business in business_rows
     ]
-    businesses.sort(key=lambda item: item.business_name.lower())
+    businesses.sort(key=lambda item: item.business_display_name.lower())
 
     return WorkspaceRead(
         user=auth_ctx.user,

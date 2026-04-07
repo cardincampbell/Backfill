@@ -11,8 +11,8 @@ from app.schemas.common import BaseSchema
 
 
 class BusinessCreate(BaseSchema):
-    legal_name: str
-    brand_name: Optional[str] = None
+    name: str
+    display_name: Optional[str] = None
     slug: Optional[str] = None
     vertical: Optional[str] = None
     primary_phone_e164: Optional[str] = None
@@ -23,7 +23,7 @@ class BusinessCreate(BaseSchema):
 
 
 class BusinessProfileUpdate(BaseSchema):
-    brand_name: str
+    display_name: str
     vertical: Optional[str] = None
     primary_email: Optional[str] = None
     timezone: str
@@ -43,8 +43,8 @@ class BusinessProfileUpdate(BaseSchema):
 
 class BusinessRead(BaseSchema):
     id: UUID
-    legal_name: str
-    brand_name: Optional[str]
+    name: str
+    display_name: str
     slug: str
     vertical: Optional[str]
     primary_phone_e164: Optional[str]
@@ -59,6 +59,7 @@ class BusinessRead(BaseSchema):
 
 class LocationCreate(BaseSchema):
     name: str
+    display_name: Optional[str] = None
     slug: Optional[str] = None
     address_line_1: Optional[str] = None
     address_line_2: Optional[str] = None
@@ -78,7 +79,7 @@ class LocationRead(BaseSchema):
     id: UUID
     business_id: UUID
     name: str
-    location_display_name: str
+    display_name: str
     slug: str
     address_line_1: Optional[str]
     address_line_2: Optional[str]
@@ -137,7 +138,7 @@ class BusinessRoleDerivationRead(BaseSchema):
 
 class BusinessIdentityDerivationRead(BaseSchema):
     business_id: UUID
-    brand_name: Optional[str]
+    display_name: str
     settings: dict
 
 

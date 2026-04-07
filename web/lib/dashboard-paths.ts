@@ -15,6 +15,7 @@ export type DashboardLocationLike = {
   location_display_name?: string | null;
   organization_name?: string | null;
   business_name?: string | null;
+  business_display_name?: string | null;
 };
 
 function getDashboardLocationId(location: DashboardLocationLike): string {
@@ -27,7 +28,12 @@ function getDashboardLocationName(location: DashboardLocationLike): string {
 }
 
 function getDashboardOrganizationName(location: DashboardLocationLike): string | null {
-  return location.business_name ?? location.organization_name ?? null;
+  return (
+    location.business_display_name ??
+    location.business_name ??
+    location.organization_name ??
+    null
+  );
 }
 
 export function slugifySegment(

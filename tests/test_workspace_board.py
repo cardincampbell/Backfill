@@ -163,8 +163,8 @@ async def _build_board() -> WorkspaceLocationBoardRead:
 
     business = Business(
         id=business_id,
-        legal_name="Whole Foods Market LLC",
-        brand_name="Whole Foods Market",
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
         slug="whole-foods-market",
         timezone="America/Los_Angeles",
         status="active",
@@ -344,8 +344,8 @@ async def _build_board_without_location_roles() -> WorkspaceLocationBoardRead:
 
     business = Business(
         id=business_id,
-        legal_name="Whole Foods Market LLC",
-        brand_name="Whole Foods Market",
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
         slug="whole-foods-market",
         timezone="America/Los_Angeles",
         status="active",

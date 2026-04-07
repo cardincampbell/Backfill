@@ -24,6 +24,7 @@ export type WorkspaceLocation = {
   membership_scope: string;
   business_id: string;
   business_name: string;
+  business_display_name: string;
   business_slug: string;
   location_id: string;
   location_name: string;
@@ -41,6 +42,7 @@ export type WorkspaceLocation = {
 export type WorkspaceBusiness = {
   business_id: string;
   business_name: string;
+  business_display_name: string;
   business_slug: string;
   membership_role: string;
   location_count: number;
@@ -48,16 +50,16 @@ export type WorkspaceBusiness = {
 };
 
 export type BusinessCreatePayload = {
-  legal_name: string;
-  brand_name?: string;
+  name: string;
+  display_name?: string;
   timezone?: string;
   primary_email?: string | null;
 };
 
 export type BusinessProfile = {
   id: string;
-  legal_name: string;
-  brand_name?: string | null;
+  name: string;
+  display_name: string;
   slug: string;
   vertical?: string | null;
   primary_phone_e164?: string | null;
@@ -71,7 +73,7 @@ export type BusinessProfile = {
 };
 
 export type BusinessProfileUpdatePayload = {
-  brand_name: string;
+  display_name: string;
   vertical?: string | null;
   primary_email?: string | null;
   timezone: string;
@@ -319,8 +321,8 @@ export async function createBusiness(payload: BusinessCreatePayload) {
   }
   return (await response.json()) as {
     id: string;
-    legal_name: string;
-    brand_name?: string | null;
+    name: string;
+    display_name: string;
     slug: string;
     timezone: string;
   };
@@ -403,6 +405,7 @@ export async function createLocationFromPlace(
     id: string;
     business_id: string;
     name: string;
+    display_name: string;
     slug: string;
   };
 }

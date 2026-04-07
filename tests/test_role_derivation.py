@@ -98,8 +98,8 @@ def _make_business(*, vertical: str | None = None, place_metadata: dict | None =
     now = datetime.now(timezone.utc)
     return Business(
         id=uuid4(),
-        legal_name="Backfill Test LLC",
-        brand_name="Backfill Test",
+        name="Backfill Test LLC",
+        display_name="Backfill Test",
         slug="backfill-test",
         vertical=vertical,
         primary_email="ops@example.com",

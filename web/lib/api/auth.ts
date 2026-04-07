@@ -620,8 +620,8 @@ export async function updateAccountProfile(input: {
 export async function bootstrapOwnerWorkspace(input: {
   profile: { full_name: string; email: string };
   business: {
-    legal_name: string;
-    brand_name?: string | null;
+    name: string;
+    display_name?: string | null;
     vertical?: string | null;
     primary_phone_e164?: string | null;
     primary_email?: string | null;
@@ -656,8 +656,8 @@ export async function bootstrapOwnerWorkspace(input: {
   }
   return (await response.json()) as {
     user: AuthUser;
-    business: { id: string; brand_name?: string | null; legal_name: string; slug: string };
-    location: { id: string; name: string; slug: string };
+    business: { id: string; name: string; display_name: string; slug: string };
+    location: { id: string; name: string; display_name: string; slug: string };
     owner_membership: Membership;
     onboarding_required: boolean;
     created_at: string;

@@ -13,6 +13,7 @@ class WorkspaceLocationRead(BaseSchema):
     membership_scope: str
     business_id: UUID
     business_name: str
+    business_display_name: str
     business_slug: str
     location_id: UUID
     location_name: str
@@ -30,6 +31,7 @@ class WorkspaceLocationRead(BaseSchema):
 class WorkspaceBusinessRead(BaseSchema):
     business_id: UUID
     business_name: str
+    business_display_name: str
     business_slug: str
     membership_role: str
     location_count: int

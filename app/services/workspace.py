@@ -85,7 +85,7 @@ async def list_workspace_locations(
     return sorted(
         by_location.values(),
         key=lambda item: (
-            item.business.brand_name or item.business.legal_name,
-            item.location.name,
+            item.business.display_name,
+            item.location.display_name,
         ),
     )

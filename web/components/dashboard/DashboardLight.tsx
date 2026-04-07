@@ -63,6 +63,7 @@ type DashboardSurfaceLocation = Omit<SourceDashboardLocation, "id"> & {
   business_slug?: string;
   location_slug?: string;
   business_name?: string;
+  business_display_name?: string;
   location_name?: string;
   location_display_name?: string;
   location_id?: string;
@@ -962,7 +963,7 @@ export default function DashboardLight({
           id: referenceLocation?.id ?? location.location_id,
           slug: referenceLocation?.slug ?? location.location_slug,
           name: location.location_display_name ?? location.location_name,
-          type: referenceLocation?.type ?? location.business_name,
+          type: referenceLocation?.type ?? location.business_display_name,
           logo: referenceLocation?.logo ?? '\u{1F4CD}',
           color: referenceLocation?.color ?? '#635BFF',
           activeShifts: referenceLocation?.activeShifts ?? 0,
@@ -977,6 +978,7 @@ export default function DashboardLight({
           business_slug: location.business_slug,
           location_slug: location.location_slug,
           business_name: location.business_name,
+          business_display_name: location.business_display_name,
           location_name: location.location_name,
           location_display_name: location.location_display_name,
           location_id: location.location_id,
