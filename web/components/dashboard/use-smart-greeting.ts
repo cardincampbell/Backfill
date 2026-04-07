@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { useSessionUserDisplay } from "@/components/app-session-gate";
-import { getWorkspace } from "@/lib/api/workspace";
+import { useAppWorkspace } from "@/components/app-workspace";
 
 function resolveBrowserTimeZone(): string | null {
   try {
@@ -43,35 +43,12 @@ function resolveGreetingLabel(timeZone: string): string {
 
 export function useSmartGreeting() {
   const { firstName } = useSessionUserDisplay();
+  const workspace = useAppWorkspace();
   const [browserTimeZone] = useState<string | null>(() => resolveBrowserTimeZone());
-  const [businessTimeZone, setBusinessTimeZone] = useState<string | null>(null);
   const [salutation, setSalutation] = useState<string>(() =>
     resolveGreetingLabel(browserTimeZone ?? "America/Los_Angeles"),
   );
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadWorkspaceFallbackTimeZone() {
-      try {
-        const workspace = await getWorkspace();
-        if (cancelled) {
-          return;
-        }
-        setBusinessTimeZone(workspace?.locations?.[0]?.timezone ?? null);
-      } catch {
-        if (!cancelled) {
-          setBusinessTimeZone(null);
-        }
-      }
-    }
-
-    void loadWorkspaceFallbackTimeZone();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const businessTimeZone = workspace?.locations?.[0]?.timezone ?? null;
 
   const activeTimeZone =
     browserTimeZone ?? businessTimeZone ?? "America/Los_Angeles";

@@ -8,9 +8,9 @@ import {
   useSessionUserDisplay,
 } from '@/components/app-session-gate';
 import {
-  getWorkspace,
-  type WorkspaceLocation,
-} from '@/lib/api/workspace';
+  useAppWorkspace,
+  useAppWorkspaceReady,
+} from '@/components/app-workspace';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import DashboardShell from './DashboardShell';
 import {
@@ -947,39 +947,12 @@ export default function DashboardLight({
 }: {
   embeddedInShell?: boolean;
 }) {
-  const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
-  const [workspaceLocationsLoaded, setWorkspaceLocationsLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadWorkspaceLocations() {
-      try {
-        const workspace = await getWorkspace();
-        if (cancelled) {
-          return;
-        }
-        setWorkspaceLocations(workspace?.locations ?? []);
-      } catch {
-        if (!cancelled) {
-          setWorkspaceLocations([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setWorkspaceLocationsLoaded(true);
-        }
-      }
-    }
-
-    void loadWorkspaceLocations();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const workspace = useAppWorkspace();
+  const workspaceLocationsLoaded = useAppWorkspaceReady();
+  const workspaceLocations = workspace?.locations ?? [];
 
   const locations = useMemo<DashboardSurfaceLocation[]>(() => {
-    if (workspaceLocationsLoaded && workspaceLocations && workspaceLocations.length > 0) {
+    if (workspaceLocationsLoaded && workspaceLocations.length > 0) {
       return workspaceLocations.map((location) => {
         const referenceLocation = findSourceDashboardLocationBySlug(
           location.location_slug,

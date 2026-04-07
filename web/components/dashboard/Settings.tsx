@@ -43,6 +43,7 @@ import {
   useUpdateAppAppearancePreference,
   useUpdateAppSession,
 } from "@/components/app-session-gate";
+import { useAppWorkspace } from "@/components/app-workspace";
 import {
   getAuthSessions,
   revokeAuthSession,
@@ -61,7 +62,6 @@ import {
   getBusinessProfile,
   updateBusinessProfile,
   type BusinessProfile,
-  getWorkspace,
 } from "@/lib/api/workspace";
 import { BrandedSelect } from "./BrandedSelect";
 import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
@@ -452,6 +452,7 @@ export default function Settings({
   const router = useRouter();
   const routeSegments = useSelectedLayoutSegments();
   const session = useAppSession();
+  const workspace = useAppWorkspace();
   const updateSession = useUpdateAppSession();
   const appearancePreference = useAppAppearancePreference();
   const updateAppearancePreference = useUpdateAppAppearancePreference();
@@ -596,11 +597,7 @@ export default function Settings({
     async function loadBusiness() {
       try {
         setBusinessLoading(true);
-        const nextWorkspace = await getWorkspace();
-        if (cancelled) {
-          return;
-        }
-        const targetBusinessId = nextWorkspace?.businesses[0]?.business_id ?? null;
+        const targetBusinessId = workspace?.businesses[0]?.business_id ?? null;
         if (!targetBusinessId) {
           setBusiness(null);
           setBusinessLoading(false);
@@ -636,7 +633,7 @@ export default function Settings({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspace]);
 
   const personalDirty = !formsMatchPersonal(personalForm, personalBaseline);
   const companyDirty =
@@ -709,6 +706,7 @@ export default function Settings({
     }
     return business.brand_name ?? business.legal_name;
   }, [business]);
+  const primaryBusinessId = business?.id ?? workspace?.businesses[0]?.business_id ?? null;
 
   const businessDescription = "Organization-wide setting";
   const personalDescription = "Your personal preference";
@@ -1027,7 +1025,7 @@ export default function Settings({
     }
 
     if (scope === "business" && activeSection === "locations") {
-      if (!business) {
+      if (!primaryBusinessId) {
         return (
           <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
             Create a business first, then you can manage location role assignments here.
@@ -1035,7 +1033,7 @@ export default function Settings({
         );
       }
 
-      return <SettingsLocationsSection businessId={business.id} dark={isDark} />;
+      return <SettingsLocationsSection businessId={primaryBusinessId} dark={isDark} />;
     }
 
     if (scope === "business" && activeSection === "billing") {

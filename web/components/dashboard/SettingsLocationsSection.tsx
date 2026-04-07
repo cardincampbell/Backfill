@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, MapPin, Plus, Tag, X } from "lucide-react";
 
+import { useAppWorkspace } from "@/components/app-workspace";
 import {
   createAndAssignLocationRole,
   getLocationRoles,
@@ -14,6 +15,7 @@ import {
   type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
+import type { WorkspaceLocation } from "@/lib/api/workspace";
 import {
   formatLocationMeta,
   getLocationReference,
@@ -23,6 +25,34 @@ type Feedback = {
   tone: "success" | "error";
   message: string;
 } | null;
+
+const locationsCache = new Map<string, BusinessLocation[]>();
+const rolesCache = new Map<string, BusinessRole[]>();
+const roleCountCache = new Map<string, Record<string, number>>();
+
+function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
+  return {
+    id: location.location_id,
+    business_id: location.business_id,
+    name: location.location_name,
+    slug: location.location_slug,
+    address_line_1: location.address_line_1 ?? null,
+    address_line_2: null,
+    locality: location.locality ?? null,
+    region: location.region ?? null,
+    postal_code: location.postal_code ?? null,
+    country_code: location.country_code,
+    timezone: location.timezone,
+    latitude: null,
+    longitude: null,
+    google_place_id: location.google_place_id ?? null,
+    google_place_metadata: {},
+    is_active: true,
+    settings: {},
+    created_at: "",
+    updated_at: "",
+  };
+}
 
 function RoleTag({
   dark,
@@ -375,12 +405,28 @@ export default function SettingsLocationsSection({
   businessId: string;
   dark: boolean;
 }) {
-  const [locations, setLocations] = useState<BusinessLocation[]>([]);
-  const [roles, setRoles] = useState<BusinessRole[]>([]);
-  const [roleCounts, setRoleCounts] = useState<Record<string, number>>({});
+  const workspace = useAppWorkspace();
+  const workspaceLocations = useMemo(
+    () =>
+      (workspace?.locations ?? [])
+        .filter((location) => location.business_id === businessId)
+        .map(adaptWorkspaceLocation),
+    [businessId, workspace],
+  );
+  const [locations, setLocations] = useState<BusinessLocation[]>(
+    () => locationsCache.get(businessId) ?? workspaceLocations,
+  );
+  const [roles, setRoles] = useState<BusinessRole[]>(
+    () => rolesCache.get(businessId) ?? [],
+  );
+  const [roleCounts, setRoleCounts] = useState<Record<string, number>>(
+    () => roleCountCache.get(businessId) ?? {},
+  );
   const [selectedLocation, setSelectedLocation] = useState<BusinessLocation | null>(null);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(
+    () => (locationsCache.get(businessId) ?? workspaceLocations).length === 0,
+  );
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [editorFeedback, setEditorFeedback] = useState<Feedback>(null);
@@ -391,11 +437,32 @@ export default function SettingsLocationsSection({
   const surfaceClass = dark ? "bg-white/[0.03]" : "bg-[#F7F8FA]";
 
   useEffect(() => {
+    const cachedLocations = locationsCache.get(businessId);
+    const cachedRoles = rolesCache.get(businessId);
+    const cachedRoleCounts = roleCountCache.get(businessId);
+
+    setLocations(cachedLocations ?? workspaceLocations);
+    setRoles(cachedRoles ?? []);
+    setRoleCounts(cachedRoleCounts ?? {});
+    setLoading((cachedLocations ?? workspaceLocations).length === 0);
+    setSelectedLocation(null);
+    setAssignments([]);
+    setEditorFeedback(null);
+  }, [businessId, workspaceLocations]);
+
+  useEffect(() => {
+    if (workspaceLocations.length === 0) {
+      return;
+    }
+    setLocations((current) => (current.length > 0 ? current : workspaceLocations));
+    setLoading(false);
+  }, [workspaceLocations]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
-        setLoading(true);
         setFeedback(null);
         const [nextLocations, nextRoles] = await Promise.all([
           listBusinessLocations(businessId),
@@ -407,15 +474,26 @@ export default function SettingsLocationsSection({
         const activeLocations = nextLocations.filter((location) => location.is_active);
         setLocations(activeLocations);
         setRoles(nextRoles);
-        const counts = await Promise.all(
+        locationsCache.set(businessId, activeLocations);
+        rolesCache.set(businessId, nextRoles);
+        setLoading(false);
+        void Promise.allSettled(
           activeLocations.map(async (location) => {
             const nextAssignments = await getLocationRoles(businessId, location.id);
             return [location.id, nextAssignments.length] as const;
           }),
-        );
-        if (!cancelled) {
-          setRoleCounts(Object.fromEntries(counts));
-        }
+        ).then((results) => {
+          if (cancelled) {
+            return;
+          }
+          const nextCounts = Object.fromEntries(
+            results.flatMap((result) =>
+              result.status === "fulfilled" ? [result.value] : [],
+            ),
+          );
+          roleCountCache.set(businessId, nextCounts);
+          setRoleCounts(nextCounts);
+        });
       } catch (error) {
         if (!cancelled) {
           setFeedback({
@@ -641,7 +719,7 @@ export default function SettingsLocationsSection({
         <div className="space-y-3">
           {locations.map((location) => {
             const locationReference = getLocationReference(location);
-            const assignedRoleCount = roleCounts[location.id] ?? 0;
+            const assignedRoleCount = roleCounts[location.id];
             return (
               <button
                 key={location.id}
@@ -667,10 +745,14 @@ export default function SettingsLocationsSection({
                     <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                       {locationReference.typeLabel} • {locationReference.staffLabel}
                     </span>
-                    <span className="text-[9px] text-[#8898AA]/40">|</span>
-                    <span className="text-[11px] text-[#635BFF]" style={{ fontWeight: 460 }}>
-                      {assignedRoleCount} roles
-                    </span>
+                    {typeof assignedRoleCount === "number" ? (
+                      <>
+                        <span className="text-[9px] text-[#8898AA]/40">|</span>
+                        <span className="text-[11px] text-[#635BFF]" style={{ fontWeight: 460 }}>
+                          {assignedRoleCount} roles
+                        </span>
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 <ChevronRight

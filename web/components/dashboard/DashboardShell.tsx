@@ -7,11 +7,11 @@ import {
   useResolvedAppAppearance,
   useSessionUserDisplay,
 } from '@/components/app-session-gate';
-import { signOutClientSession } from '@/lib/auth/client-signout';
 import {
-  getWorkspace,
-  type WorkspaceLocation,
-} from '@/lib/api/workspace';
+  useAppWorkspace,
+  useAppWorkspaceReady,
+} from '@/components/app-workspace';
+import { signOutClientSession } from '@/lib/auth/client-signout';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import {
   persistAppShellSidebarTabPreference,
@@ -244,10 +244,11 @@ export default function DashboardShell({
   const [sidebarTab, setSidebarTab] = useState<AppShellSidebarTab>(initialSidebarTab);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [workspaceLocations, setWorkspaceLocations] = useState<WorkspaceLocation[] | null>(null);
-  const [workspaceLocationsLoaded, setWorkspaceLocationsLoaded] = useState(false);
   const navigate = useNavigate();
   const pathname = usePathname();
+  const workspace = useAppWorkspace();
+  const workspaceLocationsLoaded = useAppWorkspaceReady();
+  const workspaceLocations = workspace?.locations ?? [];
   const resolvedAppearance = useResolvedAppAppearance();
   const isDark = resolvedAppearance === 'dark';
   const { fullName, email, phone, initials } = useSessionUserDisplay();
@@ -286,36 +287,8 @@ export default function DashboardShell({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadWorkspaceLocations() {
-      try {
-        const workspace = await getWorkspace();
-        if (cancelled) {
-          return;
-        }
-        setWorkspaceLocations(workspace?.locations ?? []);
-      } catch {
-        if (!cancelled) {
-          setWorkspaceLocations([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setWorkspaceLocationsLoaded(true);
-        }
-      }
-    }
-
-    void loadWorkspaceLocations();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const locationShortcuts = useMemo<DashboardShellLocationShortcut[]>(() => {
-    if (workspaceLocationsLoaded && workspaceLocations && workspaceLocations.length > 0) {
+    if (workspaceLocationsLoaded && workspaceLocations.length > 0) {
       return workspaceLocations.map((location) => {
         const referenceLocation = findSourceDashboardLocationBySlug(
           location.location_slug,
