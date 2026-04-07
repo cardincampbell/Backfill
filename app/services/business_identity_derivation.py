@@ -193,14 +193,10 @@ def _fallback_business_name(business: Business, locations: Sequence[Location]) -
     return business.legal_name.strip()
 
 
-def _suggested_location_name(canonical_business_name: str, raw_place_name: str | None, location_label: str | None) -> str:
+def _suggested_location_name(raw_place_name: str | None, location_label: str | None, fallback_name: str) -> str:
     if location_label:
-        raw_normalized = _normalize_match_text(raw_place_name)
-        canonical_normalized = _normalize_match_text(canonical_business_name)
-        if raw_normalized and raw_normalized == canonical_normalized:
-            return raw_place_name or f"{canonical_business_name} · {location_label}"
-        return f"{canonical_business_name} · {location_label}"
-    return raw_place_name or canonical_business_name
+        return location_label
+    return raw_place_name or fallback_name
 
 
 def derive_business_identity(business: Business, *, locations: Sequence[Location]) -> BusinessIdentityResult:
@@ -340,7 +336,7 @@ def derive_business_identity(business: Business, *, locations: Sequence[Location
             reason_codes = sorted(set(reason_codes + ["location.context_label"]))
             confidence_score = round(min(confidence_score, 0.65), 3)
 
-        suggested_location_name = _suggested_location_name(canonical_business_name, raw_place_name, location_label)
+        suggested_location_name = _suggested_location_name(raw_place_name, location_label, canonical_business_name)
         business_locations.append(
             LocationIdentity(
                 location_id=location.id,

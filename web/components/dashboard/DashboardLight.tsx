@@ -64,6 +64,7 @@ type DashboardSurfaceLocation = Omit<SourceDashboardLocation, "id"> & {
   location_slug?: string;
   business_name?: string;
   location_name?: string;
+  location_display_name?: string;
   location_id?: string;
   isWorkspaceBacked?: boolean;
 };
@@ -656,7 +657,7 @@ function MultiLocationView({
                   <div key={loc.id} className="flex items-center gap-2.5">
                     <span className={`text-[11px] ${mutedClass}`} style={{ fontWeight: 420 }}>↳</span>
                     <span className="text-[13px]">{loc.logo}</span>
-                    <span className={`text-[13px] flex-1 truncate ${strongBodyClass}`} style={{ fontWeight: 480 }}>{loc.name.split(' ')[0]}</span>
+                    <span className={`text-[13px] flex-1 truncate ${strongBodyClass}`} style={{ fontWeight: 480 }}>{loc.name}</span>
                     <span className={`text-[13px] tabular-nums ${bodyClass}`} style={{ fontWeight: 520 }}>{loc.activeShifts}/{loc.activeShifts + loc.openShifts}</span>
                     {loc.openShifts === 0 ? (
                       <CircleCheck size={14} className="text-[#00B893]" />
@@ -960,7 +961,7 @@ export default function DashboardLight({
         return {
           id: referenceLocation?.id ?? location.location_id,
           slug: referenceLocation?.slug ?? location.location_slug,
-          name: location.location_name,
+          name: location.location_display_name ?? location.location_name,
           type: referenceLocation?.type ?? location.business_name,
           logo: referenceLocation?.logo ?? '\u{1F4CD}',
           color: referenceLocation?.color ?? '#635BFF',
@@ -977,6 +978,7 @@ export default function DashboardLight({
           location_slug: location.location_slug,
           business_name: location.business_name,
           location_name: location.location_name,
+          location_display_name: location.location_display_name,
           location_id: location.location_id,
           isWorkspaceBacked: true,
         };

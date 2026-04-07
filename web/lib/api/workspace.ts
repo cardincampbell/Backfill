@@ -27,6 +27,7 @@ export type WorkspaceLocation = {
   business_slug: string;
   location_id: string;
   location_name: string;
+  location_display_name: string;
   location_slug: string;
   address_line_1?: string | null;
   locality?: string | null;

@@ -57,6 +57,14 @@ def _set_session_token_header(response: Response, token: str) -> None:
     response.headers[SESSION_TOKEN_HEADER] = token
 
 
+def _delete_auth_cookie(response: Response, name: str) -> None:
+    response.delete_cookie(
+        name,
+        path="/",
+        domain=settings.session_cookie_domain,
+    )
+
+
 @router.post("/challenges/request", response_model=OTPChallengeRequestResponse, status_code=status.HTTP_201_CREATED)
 async def request_challenge(
     payload: OTPChallengeRequest,
@@ -224,18 +232,16 @@ async def logout(session: SessionDep, auth_ctx: AuthDep, request: Request, respo
     membership = None
     if auth_ctx.memberships:
         membership = auth.membership_for_scope(auth_ctx, auth_ctx.memberships[0].business_id)
-    await auth.revoke_session_by_id(
+    await auth.revoke_user_session(
         session,
-        auth_ctx.session.id,
+        session_id=auth_ctx.session.id,
+        user_id=auth_ctx.user.id,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
     )
-    response.delete_cookie(
-        settings.session_cookie_name,
-        path="/",
-        domain=settings.session_cookie_domain,
-    )
+    _delete_auth_cookie(response, settings.session_cookie_name)
+    _delete_auth_cookie(response, settings.trusted_device_cookie_name)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

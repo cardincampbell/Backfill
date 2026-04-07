@@ -194,7 +194,7 @@ def test_derive_business_identity_confirms_sibling_locality_suffixes():
     assert result.support_location_count == 2
     location_map = {identity.location_id: identity for identity in result.locations}
     assert location_map[pasadena.id].location_label == "Pasadena"
-    assert location_map[pasadena.id].suggested_location_name == "Urth Caffe · Pasadena"
+    assert location_map[pasadena.id].suggested_location_name == "Pasadena"
     assert location_map[santa_monica.id].location_label == "Santa Monica"
 
 
@@ -242,9 +242,9 @@ async def test_sync_business_identity_promotes_clean_business_name_and_persists_
     assert business.brand_name == "Urth Caffe"
     assert business.settings["brand_name_source"] == "derived"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
-    assert pasadena.settings["derived_identity"]["suggested_location_name"] == "Urth Caffe · Pasadena"
+    assert pasadena.settings["derived_identity"]["suggested_location_name"] == "Pasadena"
     assert pasadena.settings["derived_identity"]["location_name_promoted"] is True
-    assert pasadena.name == "Urth Caffe · Pasadena"
+    assert pasadena.name == "Pasadena"
     assert result.support_location_count == 2
 
 
@@ -392,7 +392,7 @@ async def test_bootstrap_owner_workspace_promotes_clean_business_name():
 
     assert business.brand_name == "Urth Caffe"
     assert business.settings["derived_identity"]["canonical_business_name"] == "Urth Caffe"
-    assert location.settings["derived_identity"]["suggested_location_name"] == "Urth Caffe · Pasadena"
+    assert location.settings["derived_identity"]["suggested_location_name"] == "Pasadena"
     assert location.settings["derived_identity"]["location_name_promoted"] is False
 
 

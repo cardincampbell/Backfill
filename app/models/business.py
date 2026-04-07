@@ -63,6 +63,17 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     shifts: Mapped[list["Shift"]] = relationship(back_populates="location", cascade="all, delete-orphan")
 
+    @property
+    def location_display_name(self) -> str:
+        derived_identity = self.settings.get("derived_identity") if isinstance(self.settings, dict) else None
+        if isinstance(derived_identity, dict):
+            location_label = derived_identity.get("location_label")
+            if isinstance(location_label, str):
+                normalized = location_label.strip()
+                if normalized:
+                    return normalized
+        return self.name
+
 
 class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "roles"

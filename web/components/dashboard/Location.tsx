@@ -61,6 +61,7 @@ export default function Location({
 }: LocationProps) {
   const router = useRouter();
   const isDark = useResolvedAppAppearance() === "dark";
+  const locationDisplayName = location.location_display_name ?? location.location_name;
   const [roles, setRoles] = useState<BusinessRole[]>([]);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -142,7 +143,7 @@ export default function Location({
     }));
   }, [availableRoles]);
   const locationReference = getLocationReference({
-    name: location.location_name,
+    name: locationDisplayName,
     slug: location.location_slug,
   });
   const textPrimary = isDark ? "text-white" : "text-[#0A2540]";
@@ -217,8 +218,8 @@ export default function Location({
       setFeedback({
         tone: "success",
         message: existing
-          ? `${created.role.name} was assigned to ${location.location_name}.`
-          : `${created.role.name} was added to Roles and assigned to ${location.location_name}.`,
+          ? `${created.role.name} was assigned to ${locationDisplayName}.`
+          : `${created.role.name} was added to Roles and assigned to ${locationDisplayName}.`,
       });
     } catch (error) {
       setFeedback({
@@ -298,7 +299,7 @@ export default function Location({
               className={`text-[24px] sm:text-[28px] md:text-[32px] tracking-[-0.025em] ${textPrimary}`}
               style={{ fontWeight: 620 }}
             >
-              {location.location_name}
+              {locationDisplayName}
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
               <span
@@ -341,11 +342,11 @@ export default function Location({
                 Select roles for this location
               </h2>
               <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Choose the roles that apply to {location.location_name}. Once selected, we'll use them to build your weekly shift schedule and match available staff.
+                Choose the roles that apply to {locationDisplayName}. Once selected, we'll use them to build your weekly shift schedule and match available staff.
               </p>
               <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {formatLocationMeta({
-                  name: location.location_name,
+                  name: locationDisplayName,
                   slug: location.location_slug,
                   address_line_1: location.address_line_1,
                   locality: location.locality,
@@ -616,7 +617,7 @@ export default function Location({
             </div>
             <div>
               <p className="text-[13px] text-white" style={{ fontWeight: 520 }}>
-                {selectedRoles.length} roles confirmed for {location.location_name}
+                {selectedRoles.length} roles confirmed for {locationDisplayName}
               </p>
               <p className="text-[11px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
                 Scheduler coming soon — we'll notify you when it's ready.
@@ -639,5 +640,5 @@ export default function Location({
     return content;
   }
 
-  return <DashboardShell activeNav={location.location_name}>{content}</DashboardShell>;
+  return <DashboardShell activeNav={locationDisplayName}>{content}</DashboardShell>;
 }

@@ -333,7 +333,7 @@ def test_workspace_route_returns_locations(monkeypatch):
                 location=Location(
                     id=location_id,
                     business_id=business_id,
-                    name="Downtown Los Angeles",
+                    name="Whole Foods Market · Downtown Los Angeles",
                     slug="downtown-los-angeles",
                     address_line_1="788 S Grand Ave",
                     locality="Los Angeles",
@@ -341,7 +341,11 @@ def test_workspace_route_returns_locations(monkeypatch):
                     postal_code="90017",
                     country_code="US",
                     timezone="America/Los_Angeles",
-                    settings={},
+                    settings={
+                        "derived_identity": {
+                            "location_label": "Downtown Los Angeles",
+                        }
+                    },
                     google_place_metadata={},
                     is_active=True,
                     created_at=datetime.now(timezone.utc),
@@ -363,6 +367,8 @@ def test_workspace_route_returns_locations(monkeypatch):
         assert payload["onboarding_required"] is False
         assert len(payload["locations"]) == 1
         assert payload["locations"][0]["membership_scope"] == "location"
+        assert payload["locations"][0]["location_name"] == "Whole Foods Market · Downtown Los Angeles"
+        assert payload["locations"][0]["location_display_name"] == "Downtown Los Angeles"
     finally:
         app.dependency_overrides.clear()
 

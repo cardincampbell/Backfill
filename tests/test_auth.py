@@ -947,6 +947,62 @@ def test_revoke_session_route_revokes_owned_session():
         app.dependency_overrides.clear()
 
 
+def test_logout_route_revokes_current_device_sessions_and_clears_cookies(monkeypatch):
+    auth_ctx = _make_auth_context(with_membership=True)
+    auth_ctx.session.device_fingerprint = "iphone-device"
+    session = DummySession()
+    captured: dict[str, object] = {}
+
+    async def override_db():
+        yield session
+
+    async def override_auth():
+        return auth_ctx
+
+    async def fake_revoke_user_session(
+        _session,
+        *,
+        session_id,
+        user_id,
+        actor_user_id=None,
+        actor_membership_id=None,
+        ip_address=None,
+        user_agent=None,
+    ):
+        captured.update(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "actor_user_id": actor_user_id,
+                "actor_membership_id": actor_membership_id,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+            }
+        )
+
+    async def fail_revoke_session_by_id(*args, **kwargs):
+        raise AssertionError("logout should revoke the trusted-device session group")
+
+    monkeypatch.setattr("app.api.routes.auth.auth.revoke_user_session", fake_revoke_user_session)
+    monkeypatch.setattr("app.api.routes.auth.auth.revoke_session_by_id", fail_revoke_session_by_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.post("/api/auth/logout")
+        assert response.status_code == 204
+        assert captured["session_id"] == auth_ctx.session.id
+        assert captured["user_id"] == auth_ctx.user.id
+        assert captured["actor_user_id"] == auth_ctx.user.id
+        assert captured["actor_membership_id"] == auth_ctx.memberships[0].id
+        set_cookie = response.headers.get("set-cookie", "")
+        assert f"{settings.session_cookie_name}=" in set_cookie
+        assert f"{settings.trusted_device_cookie_name}=" in set_cookie
+    finally:
+        app.dependency_overrides.clear()
+
+
 @pytest.mark.asyncio
 async def test_verify_otp_step_up_marks_session(monkeypatch):
     auth_ctx = _make_auth_context(with_membership=True)

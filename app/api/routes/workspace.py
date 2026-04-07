@@ -39,6 +39,7 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
             business_slug=item.business.slug,
             location_id=item.location.id,
             location_name=item.location.name,
+            location_display_name=item.location.location_display_name,
             location_slug=item.location.slug,
             address_line_1=item.location.address_line_1,
             locality=item.location.locality,

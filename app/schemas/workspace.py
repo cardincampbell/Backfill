@@ -16,6 +16,7 @@ class WorkspaceLocationRead(BaseSchema):
     business_slug: str
     location_id: UUID
     location_name: str
+    location_display_name: str
     location_slug: str
     address_line_1: Optional[str]
     locality: Optional[str]

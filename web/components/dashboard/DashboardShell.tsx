@@ -298,13 +298,14 @@ export default function DashboardShell({
           location_slug: location.location_slug,
           business_name: location.business_name,
           location_name: location.location_name,
+          location_display_name: location.location_display_name,
           location_id: location.location_id,
         });
         return {
           id: location.location_id,
           businessSlug: location.business_slug,
           slug: location.location_slug,
-          name: location.location_name,
+          name: location.location_display_name ?? location.location_name,
           logo: referenceLocation?.logo ?? '📍',
           openShifts: referenceLocation?.openShifts ?? null,
           path,

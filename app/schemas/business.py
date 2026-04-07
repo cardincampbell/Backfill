@@ -78,6 +78,7 @@ class LocationRead(BaseSchema):
     id: UUID
     business_id: UUID
     name: str
+    location_display_name: str
     slug: str
     address_line_1: Optional[str]
     address_line_2: Optional[str]

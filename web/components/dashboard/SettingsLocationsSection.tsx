@@ -35,6 +35,7 @@ function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
     id: location.location_id,
     business_id: location.business_id,
     name: location.location_name,
+    location_display_name: location.location_display_name ?? location.location_name,
     slug: location.location_slug,
     address_line_1: location.address_line_1 ?? null,
     address_line_2: null,
@@ -213,7 +214,7 @@ function LocationEditSlideOver({
                 className={`text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
-                {location.name}
+                {location.location_display_name ?? location.name}
               </h2>
               <div className="flex items-center gap-2 mt-0.5">
                 <span
@@ -602,7 +603,7 @@ export default function SettingsLocationsSection({
         }));
         setEditorFeedback({
           tone: "success",
-          message: `${roleIds.length} role${roleIds.length === 1 ? "" : "s"} enabled for ${activeLocation.name}.`,
+          message: `${roleIds.length} role${roleIds.length === 1 ? "" : "s"} enabled for ${activeLocation.location_display_name ?? activeLocation.name}.`,
         });
       } catch (error) {
         setEditorFeedback({
@@ -657,8 +658,8 @@ export default function SettingsLocationsSection({
       setEditorFeedback({
         tone: "success",
         message: existing
-          ? `${created.role.name} was assigned to ${activeLocation.name}.`
-          : `${created.role.name} was added to Roles and assigned to ${activeLocation.name}.`,
+          ? `${created.role.name} was assigned to ${activeLocation.location_display_name ?? activeLocation.name}.`
+          : `${created.role.name} was added to Roles and assigned to ${activeLocation.location_display_name ?? activeLocation.name}.`,
       });
       return created.role;
     } catch (error) {
@@ -739,7 +740,7 @@ export default function SettingsLocationsSection({
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                    {location.name}
+                    {location.location_display_name ?? location.name}
                   </p>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>

@@ -12,6 +12,7 @@ export type DashboardLocationLike = {
   location_slug?: string | null;
   name?: string | null;
   location_name?: string | null;
+  location_display_name?: string | null;
   organization_name?: string | null;
   business_name?: string | null;
 };
@@ -22,7 +23,7 @@ function getDashboardLocationId(location: DashboardLocationLike): string {
 }
 
 function getDashboardLocationName(location: DashboardLocationLike): string {
-  return location.location_name ?? location.name ?? "Location";
+  return location.location_display_name ?? location.location_name ?? location.name ?? "Location";
 }
 
 function getDashboardOrganizationName(location: DashboardLocationLike): string | null {

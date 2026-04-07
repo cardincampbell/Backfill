@@ -527,13 +527,18 @@ export async function verifyChallenge(input: {
 }
 
 export async function logout(): Promise<void> {
-  const response = await apiFetchApp(`${API_PREFIX}/auth/logout`, {
-    method: "POST",
-  });
+  let response: Response;
+  try {
+    response = await fetch("/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+  } finally {
+    clearVerifiedSessionHandoff();
+  }
   if (!response.ok && response.status !== 204) {
     throw new Error(await parseError(response));
   }
-  clearVerifiedSessionHandoff();
 }
 
 export async function getManagerInvitePreview(
