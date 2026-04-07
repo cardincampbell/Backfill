@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 
-import Settings from "@/components/dashboard/Settings";
 import {
   buildSettingsPath,
   normalizeSettingsScope,
@@ -22,11 +21,5 @@ export default async function SettingsSectionPage({
     redirect(buildSettingsPath(normalizedScope, normalizedSection));
   }
 
-  return (
-    <Settings
-      embeddedInShell
-      scope={normalizedScope}
-      activeSection={normalizedSection}
-    />
-  );
+  return null;
 }

@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSelectedLayoutSegments } from "next/navigation";
 import {
   Bell,
   Building2,
@@ -442,14 +442,15 @@ const personalSections = [
 
 export default function Settings({
   embeddedInShell = false,
-  scope: requestedScope = "business",
-  activeSection: requestedSection = "company",
+  scope: requestedScope,
+  activeSection: requestedSection,
 }: {
   embeddedInShell?: boolean;
   scope?: SettingsScope;
   activeSection?: SettingsSectionKey;
 }) {
   const router = useRouter();
+  const routeSegments = useSelectedLayoutSegments();
   const session = useAppSession();
   const updateSession = useUpdateAppSession();
   const appearancePreference = useAppAppearancePreference();
@@ -520,12 +521,16 @@ export default function Settings({
     business: null,
     personal: null,
   });
-  const normalizedScope = normalizeSettingsScope(requestedScope);
+  const normalizedScope = normalizeSettingsScope(
+    requestedScope ?? routeSegments[0],
+  );
   const scope =
     !businessLoading && !business ? "personal" : normalizedScope;
   const activeSection = normalizeSettingsSection(
     scope,
-    scope === normalizedScope ? requestedSection : null,
+    scope === normalizedScope
+      ? requestedSection ?? routeSegments[1]
+      : null,
   );
 
   useEffect(() => {
