@@ -7,6 +7,12 @@ import pytest
 
 from app.models.business import Business, Location, LocationRole, Role
 from app.models.common import ShiftStatus
+from app.models.role_taxonomy import (
+    BusinessVertical,
+    BusinessVerticalTypeMapping,
+    BusinessRoleArchetype,
+    BusinessVerticalRoleArchetype,
+)
 from app.models.scheduling import Shift
 from app.schemas.scheduling import ShiftCreate
 from app.schemas.workforce import EmployeeEnrollAtLocationCreate
@@ -112,6 +118,155 @@ def _make_business(*, vertical: str | None = None, place_metadata: dict | None =
     )
 
 
+def _make_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
+    return role_derivation.RoleDerivationTaxonomy(
+        business_vertical_type_mappings={
+            "restaurant": ("restaurant", "full_service_restaurant"),
+            "bar": ("bar", "bar"),
+            "cafe": ("cafe", "cafe"),
+            "coffee_shop": ("cafe", "coffee_shop"),
+            "bakery": ("bakery", "bakery"),
+            "store": ("retail", None),
+        },
+        business_vertical_role_archetypes={
+            "restaurant": (
+                "general_manager",
+                "assistant_manager",
+                "shift_lead",
+                "server",
+                "host",
+                "line_cook",
+                "dishwasher",
+            ),
+            "cafe": (
+                "general_manager",
+                "shift_lead",
+                "barista",
+                "cashier",
+                "prep_kitchen",
+            ),
+            "bakery": (
+                "general_manager",
+                "shift_lead",
+                "baker",
+                "cashier",
+                "prep_kitchen",
+            ),
+            "retail": (
+                "store_manager",
+                "assistant_manager",
+                "shift_lead",
+                "sales_associate",
+                "cashier",
+                "stock_associate",
+            ),
+            "bar": (
+                "general_manager",
+                "assistant_manager",
+                "shift_lead",
+                "bartender",
+                "barback",
+                "host",
+            ),
+            "mixed_unknown": ("general_manager",),
+        },
+        business_role_archetypes={
+            "general_manager": role_derivation.BusinessRoleArchetypeDefinition("General Manager", "management"),
+            "assistant_manager": role_derivation.BusinessRoleArchetypeDefinition("Assistant Manager", "management"),
+            "shift_lead": role_derivation.BusinessRoleArchetypeDefinition("Shift Lead", "operations"),
+            "server": role_derivation.BusinessRoleArchetypeDefinition("Server", "front_of_house"),
+            "host": role_derivation.BusinessRoleArchetypeDefinition("Host", "front_of_house"),
+            "line_cook": role_derivation.BusinessRoleArchetypeDefinition("Line Cook", "back_of_house"),
+            "dishwasher": role_derivation.BusinessRoleArchetypeDefinition("Dishwasher", "back_of_house"),
+            "bartender": role_derivation.BusinessRoleArchetypeDefinition("Bartender", "front_of_house"),
+            "barback": role_derivation.BusinessRoleArchetypeDefinition("Barback", "front_of_house"),
+            "barista": role_derivation.BusinessRoleArchetypeDefinition("Barista", "front_of_house"),
+            "cashier": role_derivation.BusinessRoleArchetypeDefinition("Cashier", "front_of_house"),
+            "prep_kitchen": role_derivation.BusinessRoleArchetypeDefinition("Prep Kitchen", "back_of_house"),
+            "baker": role_derivation.BusinessRoleArchetypeDefinition("Baker", "back_of_house"),
+            "store_manager": role_derivation.BusinessRoleArchetypeDefinition("Store Manager", "management"),
+            "sales_associate": role_derivation.BusinessRoleArchetypeDefinition("Sales Associate", "sales"),
+            "stock_associate": role_derivation.BusinessRoleArchetypeDefinition("Stock Associate", "inventory"),
+            "delivery_coordinator": role_derivation.BusinessRoleArchetypeDefinition("Delivery Coordinator", "operations"),
+            "expeditor": role_derivation.BusinessRoleArchetypeDefinition("Expeditor", "operations"),
+            "inventory_lead": role_derivation.BusinessRoleArchetypeDefinition("Inventory Lead", "inventory"),
+        },
+    )
+
+
+def _make_taxonomy_execute_queue() -> list[list[object]]:
+    verticals = [
+        BusinessVertical(code="restaurant", display_name="Restaurant", is_active=True, metadata_json={}),
+        BusinessVertical(code="cafe", display_name="Cafe", is_active=True, metadata_json={}),
+        BusinessVertical(code="bakery", display_name="Bakery", is_active=True, metadata_json={}),
+        BusinessVertical(code="bar", display_name="Bar", is_active=True, metadata_json={}),
+        BusinessVertical(code="retail", display_name="Retail", is_active=True, metadata_json={}),
+        BusinessVertical(code="mixed_unknown", display_name="Mixed / Unknown", is_active=True, metadata_json={}),
+    ]
+    mappings = [
+        BusinessVerticalTypeMapping(place_type="restaurant", business_vertical_code="restaurant", subvertical_code="full_service_restaurant", is_active=True, metadata_json={}),
+        BusinessVerticalTypeMapping(place_type="bar", business_vertical_code="bar", subvertical_code="bar", is_active=True, metadata_json={}),
+        BusinessVerticalTypeMapping(place_type="cafe", business_vertical_code="cafe", subvertical_code="cafe", is_active=True, metadata_json={}),
+        BusinessVerticalTypeMapping(place_type="coffee_shop", business_vertical_code="cafe", subvertical_code="coffee_shop", is_active=True, metadata_json={}),
+        BusinessVerticalTypeMapping(place_type="bakery", business_vertical_code="bakery", subvertical_code="bakery", is_active=True, metadata_json={}),
+        BusinessVerticalTypeMapping(place_type="store", business_vertical_code="retail", subvertical_code=None, is_active=True, metadata_json={}),
+    ]
+    role_templates = [
+        BusinessRoleArchetype(code="general_manager", display_name="General Manager", role_family="management", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="assistant_manager", display_name="Assistant Manager", role_family="management", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="shift_lead", display_name="Shift Lead", role_family="operations", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="server", display_name="Server", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="host", display_name="Host", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="line_cook", display_name="Line Cook", role_family="back_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="dishwasher", display_name="Dishwasher", role_family="back_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="bartender", display_name="Bartender", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="barback", display_name="Barback", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="barista", display_name="Barista", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="cashier", display_name="Cashier", role_family="front_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="prep_kitchen", display_name="Prep Kitchen", role_family="back_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="baker", display_name="Baker", role_family="back_of_house", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="store_manager", display_name="Store Manager", role_family="management", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="sales_associate", display_name="Sales Associate", role_family="sales", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="stock_associate", display_name="Stock Associate", role_family="inventory", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="delivery_coordinator", display_name="Delivery Coordinator", role_family="operations", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="expeditor", display_name="Expeditor", role_family="operations", is_active=True, metadata_json={}),
+        BusinessRoleArchetype(code="inventory_lead", display_name="Inventory Lead", role_family="inventory", is_active=True, metadata_json={}),
+    ]
+    vertical_roles = [
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="assistant_manager", sort_order=20, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="shift_lead", sort_order=30, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="server", sort_order=40, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="host", sort_order=50, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="line_cook", sort_order=60, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="restaurant", business_role_code="dishwasher", sort_order=70, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="cafe", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="cafe", business_role_code="shift_lead", sort_order=20, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="cafe", business_role_code="barista", sort_order=30, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="cafe", business_role_code="cashier", sort_order=40, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="cafe", business_role_code="prep_kitchen", sort_order=50, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bakery", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bakery", business_role_code="shift_lead", sort_order=20, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bakery", business_role_code="baker", sort_order=30, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bakery", business_role_code="cashier", sort_order=40, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bakery", business_role_code="prep_kitchen", sort_order=50, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="store_manager", sort_order=10, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="assistant_manager", sort_order=20, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="shift_lead", sort_order=30, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="sales_associate", sort_order=40, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="cashier", sort_order=50, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="retail", business_role_code="stock_associate", sort_order=60, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="assistant_manager", sort_order=20, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="shift_lead", sort_order=30, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="bartender", sort_order=40, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="barback", sort_order=50, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="host", sort_order=60, is_active=True, metadata_json={}),
+        BusinessVerticalRoleArchetype(business_vertical_code="mixed_unknown", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
+    ]
+    return [verticals, mappings, role_templates, vertical_roles]
+
+
 def test_derive_business_catalog_builds_business_level_role_pack():
     business_id = uuid4()
     cafe_location = _make_location(
@@ -121,6 +276,7 @@ def test_derive_business_catalog_builds_business_level_role_pack():
         hours={"periods": [{"open": {"time": "0600"}}]},
     )
     result = role_derivation.derive_business_catalog(
+        taxonomy=_make_taxonomy(),
         business_place_metadata={"primary_type": "coffee_shop", "types": ["cafe", "coffee_shop"]},
         locations=[cafe_location],
     )
@@ -145,7 +301,7 @@ async def test_sync_business_role_catalog_persists_classification_and_roles():
         hours={"periods": [{"open": {"time": "1700"}}]},
     )
     session = FakeSession()
-    session.execute_queue = [[]]
+    session.execute_queue = [*_make_taxonomy_execute_queue(), []]
 
     derivation = await role_derivation.sync_business_role_catalog(session, business, locations=[location])
 

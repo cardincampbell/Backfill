@@ -101,10 +101,28 @@ def _make_auth_context() -> AuthContext:
     return AuthContext(user=user, session=session, memberships=[])
 
 
+def _make_role_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
+    return role_derivation.RoleDerivationTaxonomy(
+        business_vertical_type_mappings={"store": ("retail", None)},
+        business_vertical_role_archetypes={"mixed_unknown": ("general_manager",)},
+        business_role_archetypes={
+            "general_manager": role_derivation.BusinessRoleArchetypeDefinition(
+                "General Manager",
+                "management",
+            )
+        },
+    )
+
+
 @pytest.mark.asyncio
-async def test_bootstrap_owner_workspace_creates_business_location_membership():
+async def test_bootstrap_owner_workspace_creates_business_location_membership(monkeypatch):
     session = FakeSession()
     auth_ctx = _make_auth_context()
+
+    async def fake_load_taxonomy(_session):
+        return _make_role_taxonomy()
+
+    monkeypatch.setattr(role_derivation, "load_role_derivation_taxonomy", fake_load_taxonomy)
 
     user, business, location, owner_membership = await onboarding.bootstrap_owner_workspace(
         session,
@@ -155,6 +173,9 @@ async def test_bootstrap_owner_workspace_derives_roles_once_after_location_exist
     derive_calls: list[tuple[str, list[str]]] = []
     original_sync = role_derivation.sync_business_role_catalog
 
+    async def fake_load_taxonomy(_session):
+        return _make_role_taxonomy()
+
     async def instrumented_sync(db_session, business, *, locations=None):
         derive_calls.append(
             (
@@ -164,6 +185,7 @@ async def test_bootstrap_owner_workspace_derives_roles_once_after_location_exist
         )
         return await original_sync(db_session, business, locations=locations)
 
+    monkeypatch.setattr(role_derivation, "load_role_derivation_taxonomy", fake_load_taxonomy)
     monkeypatch.setattr(role_derivation, "sync_business_role_catalog", instrumented_sync)
 
     await onboarding.bootstrap_owner_workspace(

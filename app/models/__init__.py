@@ -17,6 +17,13 @@ from app.models.integrations import (
     SchedulerSyncJob,
     SchedulerSyncRun,
 )
+from app.models.role_taxonomy import (
+    BusinessPlaceType,
+    BusinessRoleArchetype,
+    BusinessVertical,
+    BusinessVerticalRoleArchetype,
+    BusinessVerticalTypeMapping,
+)
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.webhooks import WebhookDelivery, WebhookSubscription
 from app.models.workforce import (
@@ -29,7 +36,12 @@ from app.models.workforce import (
 
 __all__ = [
     "AuditLog",
+    "BusinessPlaceType",
+    "BusinessRoleArchetype",
     "Business",
+    "BusinessVertical",
+    "BusinessVerticalRoleArchetype",
+    "BusinessVerticalTypeMapping",
     "CoverageCandidate",
     "CoverageCase",
     "CoverageCaseRun",

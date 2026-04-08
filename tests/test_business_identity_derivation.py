@@ -8,7 +8,7 @@ import pytest
 from app.models.business import Business, Location
 from app.schemas.business import BusinessCreate, BusinessProfileUpdate, LocationCreate
 from app.schemas.onboarding import OwnerWorkspaceBootstrapRequest
-from app.services import business_identity_derivation, businesses, onboarding
+from app.services import business_identity_derivation, businesses, onboarding, role_derivation
 from app.services.auth import AuthContext
 from app.models.identity import Session, User
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
@@ -169,6 +169,34 @@ def _make_auth_context() -> AuthContext:
     return AuthContext(user=user, session=session, memberships=[membership])
 
 
+def _make_role_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
+    return role_derivation.RoleDerivationTaxonomy(
+        business_vertical_type_mappings={
+            "cafe": ("cafe", "cafe"),
+            "coffee_shop": ("cafe", "coffee_shop"),
+        },
+        business_vertical_role_archetypes={
+            "cafe": (
+                "general_manager",
+                "shift_lead",
+                "barista",
+                "cashier",
+                "prep_kitchen",
+            ),
+            "mixed_unknown": ("general_manager",),
+        },
+        business_role_archetypes={
+            "general_manager": role_derivation.BusinessRoleArchetypeDefinition("General Manager", "management"),
+            "shift_lead": role_derivation.BusinessRoleArchetypeDefinition("Shift Lead", "operations"),
+            "barista": role_derivation.BusinessRoleArchetypeDefinition("Barista", "front_of_house"),
+            "cashier": role_derivation.BusinessRoleArchetypeDefinition("Cashier", "front_of_house"),
+            "prep_kitchen": role_derivation.BusinessRoleArchetypeDefinition("Prep Kitchen", "back_of_house"),
+            "assistant_manager": role_derivation.BusinessRoleArchetypeDefinition("Assistant Manager", "management"),
+            "baker": role_derivation.BusinessRoleArchetypeDefinition("Baker", "back_of_house"),
+        },
+    )
+
+
 def test_derive_business_identity_confirms_sibling_locality_suffixes():
     business = _make_business(
         display_name="Urth Caffe Pasadena",
@@ -311,10 +339,14 @@ async def test_bootstrap_owner_workspace_derives_identity_once_after_first_locat
     identity_calls: list[list[str]] = []
     original_sync = business_identity_derivation.sync_business_identity
 
+    async def fake_load_taxonomy(_session):
+        return _make_role_taxonomy()
+
     async def instrumented_sync(db_session, business, *, locations=None):
         identity_calls.append([str(location.id) for location in (locations or [])])
         return await original_sync(db_session, business, locations=locations)
 
+    monkeypatch.setattr(role_derivation, "load_role_derivation_taxonomy", fake_load_taxonomy)
     monkeypatch.setattr(business_identity_derivation, "sync_business_identity", instrumented_sync)
 
     await onboarding.bootstrap_owner_workspace(
@@ -355,9 +387,14 @@ async def test_bootstrap_owner_workspace_derives_identity_once_after_first_locat
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_owner_workspace_promotes_clean_business_name():
+async def test_bootstrap_owner_workspace_promotes_clean_business_name(monkeypatch):
     session = FakeSession()
     auth_ctx = _make_auth_context()
+
+    async def fake_load_taxonomy(_session):
+        return _make_role_taxonomy()
+
+    monkeypatch.setattr(role_derivation, "load_role_derivation_taxonomy", fake_load_taxonomy)
 
     _user, business, location, _owner_membership = await onboarding.bootstrap_owner_workspace(
         session,

@@ -25,6 +25,10 @@ class Business(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     place_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
     locations: Mapped[list["Location"]] = relationship(back_populates="business", cascade="all, delete-orphan")
+    place_types: Mapped[list["BusinessPlaceType"]] = relationship(
+        back_populates="business",
+        cascade="all, delete-orphan",
+    )
     roles: Mapped[list["Role"]] = relationship(back_populates="business", cascade="all, delete-orphan")
     employees: Mapped[list["Employee"]] = relationship(back_populates="business", cascade="all, delete-orphan")
     memberships: Mapped[list["Membership"]] = relationship(back_populates="business", cascade="all, delete-orphan")
@@ -79,6 +83,10 @@ class Location(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     business: Mapped["Business"] = relationship(back_populates="locations")
     memberships: Mapped[list["Membership"]] = relationship(back_populates="location", cascade="all, delete-orphan")
+    place_types: Mapped[list["BusinessPlaceType"]] = relationship(
+        back_populates="location",
+        cascade="all, delete-orphan",
+    )
     location_roles: Mapped[list["LocationRole"]] = relationship(back_populates="location", cascade="all, delete-orphan")
     employee_locations: Mapped[list["EmployeeLocation"]] = relationship(
         back_populates="location",
@@ -146,5 +154,6 @@ class LocationRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 from app.models.identity import Membership  # noqa: E402
+from app.models.role_taxonomy import BusinessPlaceType  # noqa: E402
 from app.models.scheduling import Shift  # noqa: E402
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole  # noqa: E402

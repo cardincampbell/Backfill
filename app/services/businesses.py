@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, LocationRole, Role
 from app.models.common import ShiftStatus
+from app.models.role_taxonomy import BusinessPlaceType
 from app.models.scheduling import Shift
 from app.schemas.business import (
     BusinessCreate,
@@ -85,6 +86,48 @@ def _initial_location_display_name(payload: LocationCreate) -> str:
     )
 
 
+def _extract_business_place_types(metadata: dict | None) -> list[tuple[str, bool]]:
+    payload = metadata or {}
+    primary_type = _normalize_optional(str(payload.get("primary_type") or "").lower() or None)
+    ordered: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+
+    if primary_type:
+        ordered.append((primary_type, True))
+        seen.add(primary_type)
+
+    for value in payload.get("types") or []:
+        if not isinstance(value, str):
+            continue
+        normalized = _normalize_optional(value.lower())
+        if not normalized or normalized in seen:
+            continue
+        ordered.append((normalized, False))
+        seen.add(normalized)
+
+    return ordered
+
+
+def _add_business_place_type_rows(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID | None,
+    metadata: dict | None,
+) -> None:
+    for place_type, is_primary in _extract_business_place_types(metadata):
+        session.add(
+            BusinessPlaceType(
+                business_id=business_id,
+                location_id=location_id,
+                source_provider="google_places",
+                place_type=place_type,
+                is_primary=is_primary,
+                metadata_json={},
+            )
+        )
+
+
 def _merge_role_metadata(
     existing: dict | None,
     *,
@@ -148,6 +191,12 @@ async def create_business_record(
     )
     session.add(business)
     await session.flush()
+    _add_business_place_type_rows(
+        session,
+        business_id=business.id,
+        location_id=None,
+        metadata=payload.place_metadata,
+    )
     if derive_identity:
         await business_identity_derivation.sync_business_identity(session, business, locations=[])
     if derive_roles:
@@ -287,6 +336,12 @@ async def create_location_record(
     )
     session.add(location)
     await session.flush()
+    _add_business_place_type_rows(
+        session,
+        business_id=business_id,
+        location_id=location.id,
+        metadata=payload.google_place_metadata,
+    )
     if derive_identity or derive_roles:
         existing_locations = await list_locations(session, business_id)
         if derive_identity:

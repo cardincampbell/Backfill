@@ -8,9 +8,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, Role
+from app.models.role_taxonomy import (
+    BusinessRoleArchetype,
+    BusinessVertical,
+    BusinessVerticalRoleArchetype,
+    BusinessVerticalTypeMapping,
+)
 from app.services.utils import role_code_from_name
 
-DERIVATION_VERSION = "places_rules_v1"
+DERIVATION_VERSION = "places_rules_v2_db_taxonomy"
 
 
 @dataclass(frozen=True)
@@ -48,215 +54,90 @@ class _SourceContext:
 
 
 @dataclass(frozen=True)
-class _RoleDefinition:
+class BusinessRoleArchetypeDefinition:
     display_name: str
     role_family: str
 
 
-_VERTICAL_TOKEN_RULES: dict[str, tuple[str, str | None]] = {
-    "restaurant": ("restaurant", "full_service_restaurant"),
-    "meal_takeaway": ("restaurant", "takeout_restaurant"),
-    "meal_delivery": ("restaurant", "delivery_restaurant"),
-    "cafe": ("cafe", "cafe"),
-    "coffee_shop": ("cafe", "coffee_shop"),
-    "bakery": ("bakery", "bakery"),
-    "bar": ("bar", "bar"),
-    "pub": ("bar", "pub"),
-    "wine_bar": ("bar", "wine_bar"),
-    "night_club": ("bar", "nightlife"),
-    "grocery_store": ("retail", "grocery"),
-    "supermarket": ("retail", "grocery"),
-    "convenience_store": ("retail", "convenience"),
-    "store": ("retail", None),
-    "department_store": ("retail", "department_store"),
-    "shopping_mall": ("retail", "shopping_center"),
-    "clothing_store": ("retail", "apparel"),
-    "shoe_store": ("retail", "apparel"),
-    "book_store": ("retail", "specialty_retail"),
-    "hair_salon": ("beauty", "hair_salon"),
-    "beauty_salon": ("beauty", "beauty_salon"),
-    "barber_shop": ("beauty", "barber_shop"),
-    "nail_salon": ("beauty", "nail_salon"),
-    "spa": ("beauty", "spa"),
-    "gym": ("fitness", "gym"),
-    "fitness_center": ("fitness", "fitness_center"),
-    "yoga_studio": ("fitness", "yoga_studio"),
-    "pilates_studio": ("fitness", "pilates_studio"),
-    "dentist": ("dental_clinic", "dentistry"),
-    "orthodontist": ("dental_clinic", "orthodontics"),
-    "doctor": ("medical_clinic", "doctor_office"),
-    "hospital": ("medical_clinic", "hospital"),
-    "medical_lab": ("medical_clinic", "medical_lab"),
-    "urgent_care_center": ("medical_clinic", "urgent_care"),
-    "pharmacy": ("medical_clinic", "pharmacy"),
-    "electrician": ("home_services", "electrical"),
-    "plumber": ("home_services", "plumbing"),
-    "roofing_contractor": ("home_services", "roofing"),
-    "hvac_contractor": ("home_services", "hvac"),
-    "general_contractor": ("home_services", "contracting"),
-    "locksmith": ("home_services", "locksmith"),
-    "moving_company": ("home_services", "moving"),
-    "painter": ("home_services", "painting"),
-    "warehouse": ("warehouse", "warehouse"),
-    "storage": ("warehouse", "storage"),
-    "self_storage": ("warehouse", "storage"),
-    "lodging": ("hotel", "lodging"),
-    "hotel": ("hotel", "hotel"),
-    "motel": ("hotel", "motel"),
-    "resort_hotel": ("hotel", "resort"),
-    "lawyer": ("professional_office", "legal"),
-    "accounting": ("professional_office", "accounting"),
-    "insurance_agency": ("professional_office", "insurance"),
-    "real_estate_agency": ("professional_office", "real_estate"),
-    "bank": ("professional_office", "finance"),
-    "corporate_office": ("professional_office", "office"),
-}
+@dataclass(frozen=True)
+class RoleDerivationTaxonomy:
+    business_vertical_type_mappings: dict[str, tuple[str, str | None]]
+    business_vertical_role_archetypes: dict[str, tuple[str, ...]]
+    business_role_archetypes: dict[str, BusinessRoleArchetypeDefinition]
 
-_BASE_ROLE_PACKS: dict[str, tuple[str, ...]] = {
-    "restaurant": (
-        "general_manager",
-        "assistant_manager",
-        "shift_lead",
-        "server",
-        "host",
-        "line_cook",
-        "dishwasher",
-    ),
-    "cafe": (
-        "general_manager",
-        "shift_lead",
-        "barista",
-        "cashier",
-        "prep_kitchen",
-    ),
-    "bakery": (
-        "general_manager",
-        "shift_lead",
-        "baker",
-        "cashier",
-        "prep_kitchen",
-    ),
-    "bar": (
-        "general_manager",
-        "assistant_manager",
-        "shift_lead",
-        "bartender",
-        "barback",
-        "host",
-    ),
-    "retail": (
-        "store_manager",
-        "assistant_manager",
-        "shift_lead",
-        "sales_associate",
-        "cashier",
-        "stock_associate",
-    ),
-    "beauty": (
-        "location_manager",
-        "receptionist",
-        "stylist",
-        "assistant",
-    ),
-    "fitness": (
-        "general_manager",
-        "shift_lead",
-        "front_desk_associate",
-        "coach_trainer",
-    ),
-    "medical_clinic": (
-        "practice_manager",
-        "receptionist",
-        "medical_assistant",
-    ),
-    "dental_clinic": (
-        "practice_manager",
-        "receptionist",
-        "dental_assistant",
-        "dental_hygienist",
-    ),
-    "home_services": (
-        "operations_manager",
-        "dispatcher",
-        "field_technician",
-        "estimator",
-        "customer_support",
-    ),
-    "warehouse": (
-        "site_manager",
-        "shift_supervisor",
-        "picker_packer",
-        "inventory_associate",
-        "receiving_clerk",
-    ),
-    "hotel": (
-        "general_manager",
-        "front_desk_associate",
-        "housekeeper",
-        "maintenance_technician",
-        "night_auditor",
-    ),
-    "professional_office": (
-        "office_manager",
-        "receptionist",
-        "coordinator",
-    ),
-    "mixed_unknown": ("general_manager",),
-}
 
-_ROLE_DEFINITIONS: dict[str, _RoleDefinition] = {
-    "general_manager": _RoleDefinition("General Manager", "management"),
-    "assistant_manager": _RoleDefinition("Assistant Manager", "management"),
-    "shift_lead": _RoleDefinition("Shift Lead", "operations"),
-    "server": _RoleDefinition("Server", "front_of_house"),
-    "host": _RoleDefinition("Host", "front_of_house"),
-    "line_cook": _RoleDefinition("Line Cook", "back_of_house"),
-    "dishwasher": _RoleDefinition("Dishwasher", "back_of_house"),
-    "bartender": _RoleDefinition("Bartender", "front_of_house"),
-    "barback": _RoleDefinition("Barback", "front_of_house"),
-    "barista": _RoleDefinition("Barista", "front_of_house"),
-    "cashier": _RoleDefinition("Cashier", "front_of_house"),
-    "prep_kitchen": _RoleDefinition("Prep Kitchen", "back_of_house"),
-    "baker": _RoleDefinition("Baker", "back_of_house"),
-    "store_manager": _RoleDefinition("Store Manager", "management"),
-    "sales_associate": _RoleDefinition("Sales Associate", "sales"),
-    "stock_associate": _RoleDefinition("Stock Associate", "inventory"),
-    "pickup_associate": _RoleDefinition("Pickup Associate", "front_of_house"),
-    "inventory_lead": _RoleDefinition("Inventory Lead", "inventory"),
-    "location_manager": _RoleDefinition("Location Manager", "management"),
-    "receptionist": _RoleDefinition("Receptionist", "front_desk"),
-    "stylist": _RoleDefinition("Stylist", "service"),
-    "assistant": _RoleDefinition("Assistant", "service"),
-    "esthetician": _RoleDefinition("Esthetician", "service"),
-    "nail_technician": _RoleDefinition("Nail Technician", "service"),
-    "coach_trainer": _RoleDefinition("Coach / Trainer", "service"),
-    "front_desk_associate": _RoleDefinition("Front Desk Associate", "front_desk"),
-    "practice_manager": _RoleDefinition("Practice Manager", "management"),
-    "medical_assistant": _RoleDefinition("Medical Assistant", "clinical"),
-    "dental_assistant": _RoleDefinition("Dental Assistant", "clinical"),
-    "dental_hygienist": _RoleDefinition("Dental Hygienist", "clinical"),
-    "operations_manager": _RoleDefinition("Operations Manager", "management"),
-    "dispatcher": _RoleDefinition("Dispatcher", "operations"),
-    "field_technician": _RoleDefinition("Field Technician", "field"),
-    "installer": _RoleDefinition("Installer", "field"),
-    "estimator": _RoleDefinition("Estimator", "operations"),
-    "customer_support": _RoleDefinition("Customer Support", "support"),
-    "site_manager": _RoleDefinition("Site Manager", "management"),
-    "shift_supervisor": _RoleDefinition("Shift Supervisor", "operations"),
-    "picker_packer": _RoleDefinition("Picker / Packer", "warehouse"),
-    "inventory_associate": _RoleDefinition("Inventory Associate", "warehouse"),
-    "receiving_clerk": _RoleDefinition("Receiving Clerk", "warehouse"),
-    "forklift_operator": _RoleDefinition("Forklift Operator", "warehouse"),
-    "housekeeper": _RoleDefinition("Housekeeper", "operations"),
-    "maintenance_technician": _RoleDefinition("Maintenance Technician", "operations"),
-    "night_auditor": _RoleDefinition("Night Auditor", "operations"),
-    "office_manager": _RoleDefinition("Office Manager", "management"),
-    "coordinator": _RoleDefinition("Coordinator", "operations"),
-    "delivery_coordinator": _RoleDefinition("Delivery Coordinator", "operations"),
-    "expeditor": _RoleDefinition("Expeditor", "operations"),
-    "food_runner": _RoleDefinition("Food Runner", "front_of_house"),
-    "expo": _RoleDefinition("Expo", "back_of_house"),
-}
+async def load_role_derivation_taxonomy(session: AsyncSession) -> RoleDerivationTaxonomy:
+    vertical_rows = (
+        await session.execute(
+            select(BusinessVertical).where(BusinessVertical.is_active.is_(True))
+        )
+    ).scalars().all()
+    active_vertical_codes = {row.code for row in vertical_rows}
+
+    mapping_rows = (
+        await session.execute(
+            select(BusinessVerticalTypeMapping).where(
+                BusinessVerticalTypeMapping.is_active.is_(True)
+            )
+        )
+    ).scalars().all()
+
+    archetype_rows = (
+        await session.execute(
+            select(BusinessRoleArchetype).where(BusinessRoleArchetype.is_active.is_(True))
+        )
+    ).scalars().all()
+    active_role_codes = {row.code for row in archetype_rows}
+
+    vertical_role_rows = (
+        await session.execute(
+            select(BusinessVerticalRoleArchetype)
+            .where(BusinessVerticalRoleArchetype.is_active.is_(True))
+            .order_by(
+                BusinessVerticalRoleArchetype.business_vertical_code,
+                BusinessVerticalRoleArchetype.sort_order,
+                BusinessVerticalRoleArchetype.business_role_code,
+            )
+        )
+    ).scalars().all()
+
+    business_vertical_type_mappings = {
+        row.place_type.strip().lower(): (row.business_vertical_code, row.subvertical_code)
+        for row in mapping_rows
+        if row.business_vertical_code in active_vertical_codes and row.place_type.strip()
+    }
+    business_vertical_role_archetypes: dict[str, list[str]] = {
+        code: [] for code in active_vertical_codes
+    }
+    for row in vertical_role_rows:
+        if (
+            row.business_vertical_code not in active_vertical_codes
+            or row.business_role_code not in active_role_codes
+        ):
+            continue
+        business_vertical_role_archetypes.setdefault(
+            row.business_vertical_code,
+            [],
+        ).append(row.business_role_code)
+
+    business_role_archetypes = {
+        row.code: BusinessRoleArchetypeDefinition(
+            display_name=row.display_name,
+            role_family=row.role_family,
+        )
+        for row in archetype_rows
+    }
+
+    if not business_vertical_type_mappings or not business_role_archetypes:
+        raise ValueError("role_derivation_taxonomy_missing")
+
+    return RoleDerivationTaxonomy(
+        business_vertical_type_mappings=business_vertical_type_mappings,
+        business_vertical_role_archetypes={
+            key: tuple(value) for key, value in business_vertical_role_archetypes.items()
+        },
+        business_role_archetypes=business_role_archetypes,
+    )
 
 
 def _as_text(value: object) -> str | None:
@@ -319,13 +200,17 @@ def _opening_hours_flags(regular_opening_hours: dict) -> set[str]:
     return flags
 
 
-def _classify_source(source: _SourceContext) -> DerivedClassification:
+def _classify_source(
+    source: _SourceContext,
+    *,
+    taxonomy: RoleDerivationTaxonomy,
+) -> DerivedClassification:
     scores: dict[str, float] = {}
     subvertical_scores: dict[str, float] = {}
     reason_codes: dict[str, set[str]] = {}
 
     def apply_token(token: str, *, weight: float, origin: str) -> None:
-        match = _VERTICAL_TOKEN_RULES.get(token)
+        match = taxonomy.business_vertical_type_mappings.get(token)
         if match is None:
             return
         vertical, subvertical = match
@@ -362,13 +247,23 @@ def _classify_source(source: _SourceContext) -> DerivedClassification:
     )
 
 
-def _derive_source_roles(source: _SourceContext) -> tuple[DerivedClassification, list[tuple[str, str, list[str]]]]:
-    classification = _classify_source(source)
+def _derive_source_roles(
+    source: _SourceContext,
+    *,
+    taxonomy: RoleDerivationTaxonomy,
+) -> tuple[DerivedClassification, list[tuple[str, str, list[str]]]]:
+    classification = _classify_source(source, taxonomy=taxonomy)
     tokens = set(source.types)
     if source.primary_type is not None:
         tokens.add(source.primary_type)
     flags = _opening_hours_flags(source.regular_opening_hours)
-    base_roles = list(_BASE_ROLE_PACKS.get(classification.vertical, _BASE_ROLE_PACKS["mixed_unknown"]))
+    fallback_roles = taxonomy.business_vertical_role_archetypes.get("mixed_unknown", ())
+    base_roles = list(
+        taxonomy.business_vertical_role_archetypes.get(
+            classification.vertical,
+            fallback_roles,
+        )
+    )
     derived: list[tuple[str, str, list[str]]] = [
         (role_key, "base", [f"vertical.{classification.vertical}", *classification.reason_codes])
         for role_key in base_roles
@@ -418,7 +313,12 @@ def _derive_source_roles(source: _SourceContext) -> tuple[DerivedClassification,
     return classification, derived
 
 
-def derive_business_catalog(*, business_place_metadata: dict | None, locations: Sequence[Location]) -> DerivationResult:
+def derive_business_catalog(
+    *,
+    taxonomy: RoleDerivationTaxonomy,
+    business_place_metadata: dict | None,
+    locations: Sequence[Location],
+) -> DerivationResult:
     contexts: list[_SourceContext] = []
     business_context = _source_context(None, business_place_metadata)
     if business_context is not None:
@@ -445,7 +345,7 @@ def derive_business_catalog(*, business_place_metadata: dict | None, locations: 
     role_support: dict[str, dict] = {}
 
     for source in contexts:
-        classification, role_entries = _derive_source_roles(source)
+        classification, role_entries = _derive_source_roles(source, taxonomy=taxonomy)
         vertical_scores[classification.vertical] = vertical_scores.get(classification.vertical, 0.0) + classification.confidence
         vertical_reason_codes.setdefault(classification.vertical, set()).update(classification.reason_codes)
         if classification.subvertical:
@@ -479,7 +379,7 @@ def derive_business_catalog(*, business_place_metadata: dict | None, locations: 
 
     roles: list[DerivedRole] = []
     for role_key, support in role_support.items():
-        definition = _ROLE_DEFINITIONS.get(role_key)
+        definition = taxonomy.business_role_archetypes.get(role_key)
         if definition is None:
             display_name = role_key.replace("_", " ").title()
             role_family = "operations"
@@ -524,7 +424,10 @@ async def sync_business_role_catalog(
         result = await session.execute(select(Location).where(Location.business_id == business.id))
         locations = list(result.scalars().all())
 
+    taxonomy = await load_role_derivation_taxonomy(session)
+
     derivation = derive_business_catalog(
+        taxonomy=taxonomy,
         business_place_metadata=business.place_metadata,
         locations=locations,
     )
