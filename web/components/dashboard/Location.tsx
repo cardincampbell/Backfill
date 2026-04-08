@@ -18,7 +18,6 @@ import {
 } from "@/lib/api/businesses";
 import DashboardShell from "./DashboardShell";
 import {
-  formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
 
@@ -343,17 +342,6 @@ export default function Location({
               </h2>
               <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
                 Choose the roles that apply to {locationDisplayName}. Once selected, we'll use them to build your weekly shift schedule and match available staff.
-              </p>
-              <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                {formatLocationMeta({
-                  name: locationDisplayName,
-                  slug: location.location_slug,
-                  address_line_1: location.address_line_1,
-                  locality: location.locality,
-                  region: location.region,
-                  postal_code: location.postal_code,
-                  timezone: location.timezone,
-                }) || location.timezone}
               </p>
             </div>
           </div>

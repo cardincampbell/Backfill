@@ -1,7 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import Location from "@/components/dashboard/Location";
-import { getWorkspace } from "@/lib/api/workspace";
+import { getLocationBoard, getWorkspace } from "@/lib/api/workspace";
+import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,11 @@ export default async function LocationPage({
 
   if (!location) {
     notFound();
+  }
+
+  const board = await getLocationBoard(location.business_id, location.location_id);
+  if (board && !board.location_role_setup_required) {
+    redirect(buildSchedulerBasePathFromAny(location));
   }
 
   return (
