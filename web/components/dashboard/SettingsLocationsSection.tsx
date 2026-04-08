@@ -16,6 +16,7 @@ import {
   type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
+import { getLocationBoard } from "@/lib/api/workspace";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
 import {
   LocationRoleEditor,
@@ -257,9 +258,10 @@ export default function SettingsLocationsSection({
           ...current,
           [activeLocation.id]: nextAssignments.length,
         }));
+        const board = await getLocationBoard(businessId, activeLocation.id);
         setLocationEntryMode(
           activeLocation.id,
-          nextAssignments.length > 0 ? "scheduler" : "setup",
+          board?.location_setup_required ? "setup" : "scheduler",
         );
         setEditorFeedback({
           tone: "success",

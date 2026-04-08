@@ -3,7 +3,17 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CalendarDays, Check, ChevronLeft, Plus, Tag, X } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  CalendarDays,
+  Check,
+  ChevronLeft,
+  Plus,
+  Tag,
+  User,
+  X,
+} from "lucide-react";
 
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
@@ -12,12 +22,21 @@ import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import {
   createAndAssignLocationRole,
   getLocationRoles,
+  listBusinessLocations,
   listBusinessRoles,
   replaceLocationRoles,
+  type BusinessLocation,
   type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
+import {
+  listEmployees,
+  updateEmployee,
+  type EmployeeProfile,
+  type EmployeeSummary,
+} from "@/lib/api/workforce";
 import DashboardShell from "./DashboardShell";
+import { EmployeeAssignmentDrawer } from "./EmployeeAssignmentDrawer";
 import {
   formatDisplayLabel,
   getLocationReference,
@@ -68,6 +87,81 @@ function sortCategoryLabels(labels: string[]): string[] {
   });
 }
 
+function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
+  return {
+    id: location.location_id,
+    business_id: location.business_id,
+    name: location.location_name,
+    display_name: location.location_display_name ?? location.location_name,
+    slug: location.location_slug,
+    address_line_1: location.address_line_1 ?? null,
+    address_line_2: null,
+    locality: location.locality ?? null,
+    region: location.region ?? null,
+    postal_code: location.postal_code ?? null,
+    country_code: location.country_code,
+    timezone: location.timezone,
+    latitude: null,
+    longitude: null,
+    google_place_id: location.google_place_id ?? null,
+    google_place_metadata: {},
+    is_active: true,
+    settings: {},
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function employeeDisplayName(employee: Pick<EmployeeSummary, "full_name" | "preferred_name">) {
+  return employee.preferred_name?.trim() || employee.full_name;
+}
+
+function employeeInitials(name: string) {
+  return (
+    name
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "BF"
+  );
+}
+
+function employeeHasAssignedRoles(employee: EmployeeSummary) {
+  return employee.role_ids.length > 0;
+}
+
+function employeeAssignedHere(employee: EmployeeSummary, locationId: string) {
+  return employee.location_ids.includes(locationId);
+}
+
+function buildEmployeeLocationAssignments(
+  employee: EmployeeSummary,
+  locationId: string,
+  includeLocation: boolean,
+) {
+  const nextLocationIds = employee.location_ids.filter((item) => item !== locationId);
+  if (includeLocation) {
+    nextLocationIds.push(locationId);
+  }
+
+  if (!nextLocationIds.length) {
+    return [];
+  }
+
+  const preservedPrimaryLocationId =
+    employee.primary_location_id && nextLocationIds.includes(employee.primary_location_id)
+      ? employee.primary_location_id
+      : includeLocation
+        ? locationId
+        : nextLocationIds[0];
+
+  return nextLocationIds.map((item) => ({
+    location_id: item,
+    is_primary: item === preservedPrimaryLocationId,
+  }));
+}
+
 export default function Location({
   embeddedInShell = false,
   location,
@@ -78,12 +172,16 @@ export default function Location({
   const setLocationEntryMode = useSetLocationEntryMode();
   const locationDisplayName = location.location_display_name ?? location.location_name;
   const [roles, setRoles] = useState<BusinessRole[]>([]);
+  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
+  const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [customRole, setCustomRole] = useState("");
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isCreatingRole, setIsCreatingRole] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<EmployeeSummary | null>(null);
   const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -93,16 +191,33 @@ export default function Location({
       try {
         setLoading(true);
         setFeedback(null);
-        const [nextRoles, nextAssignments] = await Promise.all([
+        const [nextRoles, nextLocations, nextEmployees, nextAssignments] = await Promise.all([
           listBusinessRoles(location.business_id),
+          listBusinessLocations(location.business_id),
+          listEmployees(location.business_id),
           getLocationRoles(location.business_id, location.location_id),
         ]);
         if (cancelled) {
           return;
         }
         setRoles(nextRoles);
+        setBusinessLocations(nextLocations.filter((item) => item.is_active));
+        setEmployees(nextEmployees);
+        const syncedRoleIds = Array.from(
+          new Set([
+            ...nextAssignments.map((assignment) => assignment.role_id),
+            ...nextEmployees
+              .filter((employee) => employeeAssignedHere(employee, location.location_id))
+              .flatMap((employee) => employee.role_ids),
+          ]),
+        );
         setAssignments(nextAssignments);
-        setSelectedRoleIds(nextAssignments.map((assignment) => assignment.role_id));
+        setSelectedRoleIds(syncedRoleIds);
+        setSelectedEmployeeIds(
+          nextEmployees
+            .filter((employee) => employeeAssignedHere(employee, location.location_id))
+            .map((employee) => employee.id),
+        );
       } catch (error) {
         if (!cancelled) {
           setFeedback({
@@ -110,7 +225,7 @@ export default function Location({
             message:
               error instanceof Error
                 ? error.message
-                : "Could not load location roles.",
+                : "Could not load the location setup.",
           });
         }
       } finally {
@@ -126,6 +241,14 @@ export default function Location({
       cancelled = true;
     };
   }, [location.business_id, location.location_id]);
+
+  useEffect(() => {
+    setSelectedEmployeeIds((current) =>
+      current.filter((employeeId) =>
+        employees.some((employee) => employee.id === employeeId),
+      ),
+    );
+  }, [employees]);
 
   const assignmentsByRoleId = useMemo(
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
@@ -157,6 +280,49 @@ export default function Location({
       roles: grouped.get(categoryKey) ?? [],
     }));
   }, [availableRoles]);
+  const selectedEmployeeSet = useMemo(
+    () => new Set(selectedEmployeeIds),
+    [selectedEmployeeIds],
+  );
+  const effectiveBusinessLocations = useMemo(
+    () =>
+      businessLocations.length > 0
+        ? businessLocations
+        : [adaptWorkspaceLocation(location)],
+    [businessLocations, location],
+  );
+  const sortedEmployees = useMemo(
+    () =>
+      [...employees].sort((left, right) =>
+        employeeDisplayName(left).localeCompare(employeeDisplayName(right)),
+      ),
+    [employees],
+  );
+  const selectedEmployees = useMemo(
+    () =>
+      sortedEmployees.filter(
+        (employee) =>
+          selectedEmployeeSet.has(employee.id) && employeeHasAssignedRoles(employee),
+      ),
+    [selectedEmployeeSet, sortedEmployees],
+  );
+  const availableEmployees = useMemo(
+    () =>
+      sortedEmployees.filter(
+        (employee) =>
+          !selectedEmployeeSet.has(employee.id) && employeeHasAssignedRoles(employee),
+      ),
+    [selectedEmployeeSet, sortedEmployees],
+  );
+  const ineligibleEmployees = useMemo(
+    () => sortedEmployees.filter((employee) => !employeeHasAssignedRoles(employee)),
+    [sortedEmployees],
+  );
+  const ineligibleSelectedEmployeeCount = useMemo(
+    () =>
+      ineligibleEmployees.filter((employee) => selectedEmployeeSet.has(employee.id)).length,
+    [ineligibleEmployees, selectedEmployeeSet],
+  );
   const locationReference = getLocationReference({
     name: locationDisplayName,
     slug: location.location_slug,
@@ -194,6 +360,28 @@ export default function Location({
 
   const addAllRoles = () => {
     setSelectedRoleIds(roles.map((role) => role.id));
+  };
+
+  const addEmployee = (employeeId: string) => {
+    const employee = employees.find((item) => item.id === employeeId);
+    setSelectedEmployeeIds((current) =>
+      current.includes(employeeId) ? current : [...current, employeeId],
+    );
+    if (employee) {
+      setSelectedRoleIds((current) =>
+        Array.from(new Set([...current, ...employee.role_ids])),
+      );
+    }
+  };
+
+  const removeEmployee = (employeeId: string) => {
+    setSelectedEmployeeIds((current) => current.filter((item) => item !== employeeId));
+  };
+
+  const addAllEmployees = () => {
+    setSelectedEmployeeIds((current) =>
+      Array.from(new Set([...current, ...availableEmployees.map((employee) => employee.id)])),
+    );
   };
 
   const handleCreateRole = async () => {
@@ -246,18 +434,47 @@ export default function Location({
     }
   };
 
+  const handleEmployeeSaved = async (nextEmployee: EmployeeProfile) => {
+    setEmployees((current) =>
+      current.map((employee) =>
+        employee.id === nextEmployee.id ? nextEmployee : employee,
+      ),
+    );
+    setSelectedEmployeeIds((current) => {
+      const assignedToLocation = employeeAssignedHere(nextEmployee, location.location_id);
+      if (assignedToLocation) {
+        return current.includes(nextEmployee.id)
+          ? current
+          : [...current, nextEmployee.id];
+      }
+      return current.filter((item) => item !== nextEmployee.id);
+    });
+    if (selectedEmployeeSet.has(nextEmployee.id)) {
+      setSelectedRoleIds((current) =>
+        Array.from(new Set([...current, ...nextEmployee.role_ids])),
+      );
+    }
+    setEditingEmployee(nextEmployee);
+  };
+
   const handleContinue = () => {
-    if (!selectedRoleIds.length) {
+    if (!selectedRoleIds.length || !selectedEmployees.length) {
       return;
     }
 
     startTransition(async () => {
       try {
         setFeedback(null);
+        const roleIdsToSave = Array.from(
+          new Set([
+            ...selectedRoleIds,
+            ...selectedEmployees.flatMap((employee) => employee.role_ids),
+          ]),
+        );
         const nextAssignments = await replaceLocationRoles(
           location.business_id,
           location.location_id,
-          selectedRoleIds.map((roleId) => {
+          roleIdsToSave.map((roleId) => {
             const existing = assignmentsByRoleId.get(roleId);
             return existing
               ? {
@@ -270,11 +487,37 @@ export default function Location({
               : { role_id: roleId };
           }),
         );
+        const changedEmployees = employees.filter((employee) => {
+          const currentlyAssigned = employeeAssignedHere(employee, location.location_id);
+          const shouldBeAssigned = selectedEmployeeIds.includes(employee.id);
+          return currentlyAssigned !== shouldBeAssigned;
+        });
+        const updatedEmployees = await Promise.all(
+          changedEmployees.map((employee) =>
+            updateEmployee(location.business_id, employee.id, {
+              locations: buildEmployeeLocationAssignments(
+                employee,
+                location.location_id,
+                selectedEmployeeIds.includes(employee.id),
+              ),
+            }),
+          ),
+        );
         setAssignments(nextAssignments);
         setSelectedRoleIds(nextAssignments.map((assignment) => assignment.role_id));
+        if (updatedEmployees.length > 0) {
+          const updatedById = new Map(
+            updatedEmployees.map((employee) => [employee.id, employee]),
+          );
+          setEmployees((current) =>
+            current.map((employee) => updatedById.get(employee.id) ?? employee),
+          );
+        }
         setLocationEntryMode(
           location.location_id,
-          nextAssignments.length > 0 ? "scheduler" : "setup",
+          nextAssignments.length > 0 && selectedEmployees.length > 0
+            ? "scheduler"
+            : "setup",
         );
         router.push(buildSchedulerBasePathFromAny(location));
       } catch (error) {
@@ -360,10 +603,10 @@ export default function Location({
                 className={`mb-1 text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
-                Select roles for this location
+                Select roles and employees for this location
               </h2>
               <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Choose the roles that apply to {locationDisplayName}. Once selected, we'll use them to build your weekly shift schedule and match available staff.
+                Choose the roles and the employees that belong on {locationDisplayName}. Employees need at least one assigned role before they can be added to this location for scheduling.
               </p>
             </div>
           </div>
@@ -546,6 +789,187 @@ export default function Location({
             </div>
           </div>
 
+          <div className={`space-y-6 border-t pt-6 ${borderClass}`}>
+            <div className="flex items-center justify-between">
+              <h3
+                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                style={{ fontWeight: 500 }}
+              >
+                Selected Employees
+              </h3>
+              <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                {selectedEmployees.length} ready
+              </span>
+            </div>
+
+            <div className="flex min-h-[36px] flex-wrap gap-2">
+              <AnimatePresence>
+                {selectedEmployees.map((employee) => (
+                  <motion.div
+                    key={employee.id}
+                    layout
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className={`flex items-center gap-2 rounded-lg border py-1.5 pl-2.5 pr-2 ${chipClass}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setEditingEmployee(employee)}
+                      className="flex min-w-0 items-center gap-2 text-left"
+                    >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
+                        {employeeInitials(employeeDisplayName(employee))}
+                      </span>
+                      <span
+                        className={`truncate text-[12px] ${textPrimary}`}
+                        style={{ fontWeight: 480 }}
+                      >
+                        {employeeDisplayName(employee)}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeEmployee(employee.id)}
+                      disabled={loading || isPending}
+                      className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10 disabled:opacity-50"
+                    >
+                      <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              {!loading && selectedEmployees.length === 0 ? (
+                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  No schedule-ready employees selected yet. Add at least one employee with a role.
+                </p>
+              ) : null}
+              {loading ? (
+                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  Loading business employees...
+                </p>
+              ) : null}
+            </div>
+
+            {availableEmployees.length > 0 ? (
+              <div>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <h4
+                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                    style={{ fontWeight: 500 }}
+                  >
+                    Eligible Employees
+                  </h4>
+                  {availableEmployees.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={addAllEmployees}
+                      disabled={loading || isPending}
+                      className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9] disabled:opacity-50"
+                      style={{ fontWeight: 520 }}
+                    >
+                      + Add all
+                    </button>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {availableEmployees.map((employee) => (
+                    <button
+                      key={employee.id}
+                      type="button"
+                      onClick={() => addEmployee(employee.id)}
+                      disabled={loading || isPending}
+                      className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 disabled:opacity-50 ${
+                        isDark
+                          ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
+                          : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
+                      }`}
+                    >
+                      <Plus
+                        size={11}
+                        className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                      />
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
+                        {employeeInitials(employeeDisplayName(employee))}
+                      </span>
+                      <span
+                        className={`text-[12px] transition-colors ${
+                          isDark
+                            ? "text-[#C1CED8] group-hover:text-white"
+                            : "text-[#5E6D7A] group-hover:text-[#0A2540]"
+                        }`}
+                        style={{ fontWeight: 440 }}
+                      >
+                        {employeeDisplayName(employee)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {ineligibleEmployees.length > 0 ? (
+              <div>
+                <div className="mb-2.5 flex items-center justify-between">
+                  <h4
+                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                    style={{ fontWeight: 500 }}
+                  >
+                    Needs Role Assignment
+                  </h4>
+                  <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                    Click any employee to edit their profile
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {ineligibleEmployees.map((employee) => {
+                    const assignedToThisLocation = selectedEmployeeSet.has(employee.id);
+                    return (
+                      <button
+                        key={employee.id}
+                        type="button"
+                        onClick={() => setEditingEmployee(employee)}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 ${
+                          isDark
+                            ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]"
+                            : "border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]"
+                        }`}
+                      >
+                        <AlertCircle size={12} className="text-[#FFB800]" />
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
+                          {employeeInitials(employeeDisplayName(employee))}
+                        </span>
+                        <span
+                          className={`text-[12px] ${textPrimary}`}
+                          style={{ fontWeight: 480 }}
+                        >
+                          {employeeDisplayName(employee)}
+                        </span>
+                        <span className="text-[10px] text-[#FFB800]" style={{ fontWeight: 520 }}>
+                          {assignedToThisLocation ? "Role needed" : "Add role first"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {!loading && employees.length === 0 ? (
+              <div
+                className={`flex items-center gap-3 rounded-xl border p-4 ${subtleSurfaceClass} ${subtleBorderClass}`}
+              >
+                <User size={16} className="shrink-0 text-[#8898AA]" />
+                <p
+                  className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
+                  style={{ fontWeight: 440 }}
+                >
+                  This business does not have any employees yet. Add team members before opening the scheduler for this location.
+                </p>
+              </div>
+            ) : null}
+          </div>
+
           {availableRoles.length === 0 && roles.length > 0 ? (
             <div className={`flex items-center gap-3 p-4 rounded-xl border ${
               isDark
@@ -575,6 +999,19 @@ export default function Location({
                   >
                     Select at least one role to continue
                   </motion.p>
+                ) : selectedEmployees.length === 0 ? (
+                  <motion.p
+                    key="employees"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className={`text-[12px] ${textSecondary}`}
+                    style={{ fontWeight: 420 }}
+                  >
+                    {ineligibleSelectedEmployeeCount > 0
+                      ? `${ineligibleSelectedEmployeeCount} assigned teammate${ineligibleSelectedEmployeeCount === 1 ? "" : "s"} still need a role before you can continue`
+                      : "Add at least one employee with a role to continue"}
+                  </motion.p>
                 ) : (
                   <motion.p
                     key="count"
@@ -587,7 +1024,11 @@ export default function Location({
                     <span style={{ fontWeight: 580, color: locationReference.color }}>
                       {selectedRoles.length}
                     </span>{" "}
-                    {selectedRoles.length === 1 ? "role" : "roles"} selected — ready to build your schedule
+                    {selectedRoles.length === 1 ? "role" : "roles"} and{" "}
+                    <span style={{ fontWeight: 580, color: locationReference.color }}>
+                      {selectedEmployees.length}
+                    </span>{" "}
+                    {selectedEmployees.length === 1 ? "employee" : "employees"} selected — ready to build your schedule
                   </motion.p>
                 )}
               </AnimatePresence>
@@ -595,10 +1036,10 @@ export default function Location({
             <motion.button
               type="button"
               onClick={handleContinue}
-              disabled={selectedRoles.length === 0 || isPending || loading}
-              whileTap={selectedRoles.length > 0 && !isPending ? { scale: 0.97 } : undefined}
+              disabled={selectedRoles.length === 0 || selectedEmployees.length === 0 || isPending || loading}
+              whileTap={selectedRoles.length > 0 && selectedEmployees.length > 0 && !isPending ? { scale: 0.97 } : undefined}
               className={`flex items-center justify-center gap-2 px-6 py-3 rounded-full text-[13px] text-white transition-all duration-300 ${
-                selectedRoles.length > 0 && !loading && !isPending
+                selectedRoles.length > 0 && selectedEmployees.length > 0 && !loading && !isPending
                   ? "hover:shadow-[0_0_24px_rgba(99,91,255,0.3)] cursor-pointer"
                   : "opacity-30 cursor-not-allowed"
               }`}
@@ -613,6 +1054,20 @@ export default function Location({
           </div>
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {editingEmployee ? (
+          <EmployeeAssignmentDrawer
+            businessId={location.business_id}
+            dark={isDark}
+            employee={editingEmployee}
+            locations={effectiveBusinessLocations}
+            onClose={() => setEditingEmployee(null)}
+            onSaved={handleEmployeeSaved}
+            roles={roles}
+          />
+        ) : null}
+      </AnimatePresence>
 
     </motion.div>
   );

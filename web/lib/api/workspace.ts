@@ -145,6 +145,8 @@ export type WorkspaceBoard = {
   week_start_date: string;
   week_end_date: string;
   location_role_setup_required: boolean;
+  location_employee_setup_required: boolean;
+  location_setup_required: boolean;
   roles: Array<{
     role_id: string;
     role_code: string;

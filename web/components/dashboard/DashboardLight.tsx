@@ -26,6 +26,7 @@ import {
 } from '@/lib/api/businesses';
 import {
   deleteLocation as deleteWorkspaceLocation,
+  getLocationBoard,
   type WorkspaceBusiness,
 } from '@/lib/api/workspace';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
@@ -844,7 +845,11 @@ function MultiLocationView({
           }),
         );
         setEditorAssignments(nextAssignments);
-        setLocationEntryMode(activeLocation.id, roleIds.length > 0 ? 'scheduler' : 'setup');
+        const board = await getLocationBoard(activeLocation.business_id, activeLocation.id);
+        setLocationEntryMode(
+          activeLocation.id,
+          board?.location_setup_required ? 'setup' : 'scheduler',
+        );
         setEditorFeedback({
           tone: 'success',
           message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,

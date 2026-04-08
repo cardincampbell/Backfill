@@ -84,6 +84,8 @@ class WorkspaceLocationBoardRead(BaseSchema):
     week_start_date: date
     week_end_date: date
     location_role_setup_required: bool = False
+    location_employee_setup_required: bool = False
+    location_setup_required: bool = False
     roles: list[WorkspaceBoardRoleRead]
     available_roles: list[WorkspaceBoardRoleRead] = []
     workers: list[WorkspaceBoardWorkerRead]

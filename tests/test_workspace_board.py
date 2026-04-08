@@ -418,12 +418,113 @@ async def _build_board_without_location_roles() -> WorkspaceLocationBoardRead:
         week_start=date(2026, 4, 6),
     )
 
+
+async def _build_board_without_location_employee() -> WorkspaceLocationBoardRead:
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+        role=role,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        reliability_score=0.925,
+        avg_response_time_seconds=120,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            proficiency_level=3,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = []
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], []]
+
+    return await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
 @pytest.mark.asyncio
 async def test_location_board_summarizes_roles_workers_and_actions():
     board = await _build_board()
 
     assert board.business_name == "Whole Foods Market"
     assert board.location_name == "Downtown Los Angeles"
+    assert board.location_role_setup_required is False
+    assert board.location_employee_setup_required is False
+    assert board.location_setup_required is False
     assert len(board.roles) == 1
     assert board.roles[0].role_name == "Cashier"
     assert len(board.workers) == 1
@@ -445,10 +546,24 @@ async def test_location_board_reports_setup_required_when_location_roles_missing
     board = await _build_board_without_location_roles()
 
     assert board.location_role_setup_required is True
+    assert board.location_employee_setup_required is True
+    assert board.location_setup_required is True
     assert board.roles == []
     assert len(board.available_roles) == 1
     assert board.available_roles[0].role_code == "cashier"
     assert board.workers == []
+
+
+@pytest.mark.asyncio
+async def test_location_board_reports_setup_required_when_no_schedulable_location_workers():
+    board = await _build_board_without_location_employee()
+
+    assert board.location_role_setup_required is False
+    assert board.location_employee_setup_required is True
+    assert board.location_setup_required is True
+    assert len(board.roles) == 1
+    assert len(board.workers) == 1
+    assert all(worker.can_cover_here is False for worker in board.workers)
 
 
 def test_board_window_uses_location_timezone_boundaries():

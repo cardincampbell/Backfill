@@ -180,7 +180,6 @@ async def get_location_board(
         .order_by(Employee.created_at.asc())
     )
     employees = list(employee_rows.scalars().all())
-
     shift_rows = await session.execute(
         select(Shift)
         .options(
@@ -303,6 +302,8 @@ async def get_location_board(
         )
 
     business_name = business.display_name
+    location_role_setup_required = not bool(location_roles)
+    location_employee_setup_required = not any(worker.can_cover_here for worker in workers)
     return WorkspaceLocationBoardRead(
         business_id=business.id,
         business_name=business_name,
@@ -318,7 +319,11 @@ async def get_location_board(
         timezone=location.timezone,
         week_start_date=window.week_start,
         week_end_date=window.week_end,
-        location_role_setup_required=not bool(location_roles),
+        location_role_setup_required=location_role_setup_required,
+        location_employee_setup_required=location_employee_setup_required,
+        location_setup_required=(
+            location_role_setup_required or location_employee_setup_required
+        ),
         roles=roles,
         available_roles=available_roles,
         workers=workers,

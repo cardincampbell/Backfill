@@ -175,7 +175,7 @@ function SetupMode({
   useEffect(() => {
     setSelectedRoleIds([]);
     setFeedback(null);
-  }, [location.location_id, board.location_role_setup_required]);
+  }, [location.location_id, board.location_setup_required]);
 
   const availableRoles = board.available_roles;
   const selectedRoles = availableRoles.filter((role) =>
@@ -963,7 +963,7 @@ export default function Location({
         </button>
       </div>
 
-      {board.location_role_setup_required ? (
+      {board.location_setup_required ? (
         <SetupMode
           board={board}
           canConfigureRoles={canConfigureRoles}

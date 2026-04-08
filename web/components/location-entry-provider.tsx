@@ -33,7 +33,7 @@ type LocationEntryContextValue = {
 const LocationEntryContext = createContext<LocationEntryContextValue | null>(null);
 
 function schedulerReadyFromBoard(locationBoard: Awaited<ReturnType<typeof getLocationBoard>>) {
-  return Boolean(locationBoard && !locationBoard.location_role_setup_required);
+  return Boolean(locationBoard && !locationBoard.location_setup_required);
 }
 
 export function LocationEntryProvider({ children }: { children: ReactNode }) {
