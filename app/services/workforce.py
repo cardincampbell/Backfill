@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.business import Business, Location, Role
 from app.models.workforce import (
@@ -590,9 +591,10 @@ async def _replace_employee_locations(
 
 async def create_employee(session: AsyncSession, business_id: UUID, payload: EmployeeCreate) -> Employee:
     await _require_business(session, business_id)
+    primary_business_location: Location | None = None
     if payload.primary_location_id is not None:
-        location = await session.get(Location, payload.primary_location_id)
-        if location is None or location.business_id != business_id:
+        primary_business_location = await session.get(Location, payload.primary_location_id)
+        if primary_business_location is None or primary_business_location.business_id != business_id:
             raise LookupError("primary_location_not_found")
 
     employee = Employee(
@@ -610,8 +612,7 @@ async def create_employee(session: AsyncSession, business_id: UUID, payload: Emp
     )
     session.add(employee)
     await session.flush()
-
-    employee_locations: list[EmployeeLocation] = []
+    primary_location: EmployeeLocation | None = None
     if payload.primary_location_id is not None:
         primary_location = EmployeeLocation(
             employee_id=employee.id,
@@ -624,11 +625,16 @@ async def create_employee(session: AsyncSession, business_id: UUID, payload: Emp
             location_metadata={},
         )
         session.add(primary_location)
-        employee_locations.append(primary_location)
 
     await session.flush()
     await session.refresh(employee)
-    employee.employee_locations = employee_locations
+    if primary_location is not None:
+        if primary_business_location is not None:
+            set_committed_value(primary_location, "location", primary_business_location)
+        set_committed_value(employee, "employee_locations", [primary_location])
+    else:
+        set_committed_value(employee, "employee_locations", [])
+    set_committed_value(employee, "employee_roles", [])
     return employee
 
 
@@ -734,9 +740,11 @@ async def enroll_employee_at_location(
 
     await session.flush()
     await session.refresh(employee)
-    employee.employee_locations = [primary_employee_location]
-    for employee_role in employee_roles:
-        await session.refresh(employee_role)
+    set_committed_value(primary_employee_location, "location", location)
+    for employee_role, role in zip(employee_roles, roles):
+        set_committed_value(employee_role, "role", role)
+    set_committed_value(employee, "employee_locations", [primary_employee_location])
+    set_committed_value(employee, "employee_roles", employee_roles)
 
     return EmployeeEnrollmentRead(employee=employee, roles=employee_roles)
 
