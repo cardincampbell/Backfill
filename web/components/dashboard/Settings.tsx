@@ -244,6 +244,39 @@ function formatSessionDeviceLabel(session: AuthSessionRecord): string {
   return formatUserAgentDeviceLabel(session.user_agent);
 }
 
+function formatSessionLocationLabel(session: AuthSessionRecord): string | null {
+  const raw = session.session_metadata?.session_start_location;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const location = raw as {
+    label?: unknown;
+    city?: unknown;
+    region?: unknown;
+    country?: unknown;
+  };
+  const label =
+    typeof location.label === "string" ? location.label.trim() : "";
+  if (label) {
+    return label;
+  }
+
+  const city = typeof location.city === "string" ? location.city.trim() : "";
+  const region =
+    typeof location.region === "string" ? location.region.trim() : "";
+  const country =
+    typeof location.country === "string" ? location.country.trim() : "";
+
+  if (city && region) {
+    return `${city}, ${region}`;
+  }
+  if (city && country) {
+    return `${city}, ${country}`;
+  }
+  return city || region || country || null;
+}
+
 function formatSessionMeta(session: AuthSessionRecord): string {
   const parts: string[] = [];
   const lastSeen =
@@ -252,6 +285,10 @@ function formatSessionMeta(session: AuthSessionRecord): string {
     );
   if (lastSeen) {
     parts.push(lastSeen);
+  }
+  const locationLabel = formatSessionLocationLabel(session);
+  if (locationLabel) {
+    parts.push(locationLabel);
   }
   if (session.ip_address?.trim()) {
     parts.push(session.ip_address.trim());

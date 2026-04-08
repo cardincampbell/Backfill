@@ -6,7 +6,7 @@ export type LocationReference = {
   color: string;
   logo: string;
   staffLabel: string;
-  typeLabel: string;
+  typeLabel: string | null;
 };
 
 export type LocationReferenceLike = {
@@ -18,6 +18,19 @@ export type LocationReferenceLike = {
   postal_code?: string | null;
   timezone?: string | null;
 };
+
+export function formatDisplayLabel(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.replace(/\b\w/g, (segment) => segment.toUpperCase());
+}
 
 export function formatLocationMeta(location: LocationReferenceLike): string {
   return [
@@ -42,7 +55,7 @@ export function getLocationReference(
       color: "#635BFF",
       logo: "📍",
       staffLabel: "Team configured in Backfill",
-      typeLabel: "Location",
+      typeLabel: null,
     };
   }
 
@@ -50,6 +63,6 @@ export function getLocationReference(
     color: match.color,
     logo: match.logo,
     staffLabel: `${match.totalStaff} staff`,
-    typeLabel: match.type,
+    typeLabel: formatDisplayLabel(match.type),
   };
 }

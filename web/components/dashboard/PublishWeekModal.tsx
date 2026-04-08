@@ -15,11 +15,12 @@ interface PublishWeekModalProps {
   weekLabel: string;
   shifts: Shift[];
   employees: Employee[];
+  dark?: boolean;
   onClose: () => void;
   onComplete: () => void;
 }
 
-export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComplete }: PublishWeekModalProps) {
+export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, onClose, onComplete }: PublishWeekModalProps) {
   const [stage, setStage] = useState<'confirm' | 'publishing' | 'success'>('confirm');
   const [progress, setProgress] = useState(0);
   const [notifiedEmployees, setNotifiedEmployees] = useState<string[]>([]);
@@ -30,6 +31,18 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
 
   const totalShifts = shifts.length;
   const totalHours = shifts.reduce((sum, s) => sum + shiftDuration(s), 0);
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const metricCardClass = dark ? 'bg-white/[0.04] border border-white/[0.08]' : 'bg-[#F7F8FA] border border-[#E5E7EB]';
+  const subtleSurfaceClass = dark ? 'bg-white/[0.03]' : 'bg-[#F7F8FA]/50';
+  const rowSurfaceClass = dark ? 'bg-white/[0.03] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const closeButtonClass = dark ? 'p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors' : 'p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors';
+  const progressTrackClass = dark ? 'bg-white/[0.08]' : 'bg-[#F0F0F5]';
+  const footerButtonClass = dark
+    ? 'flex-1 py-2.5 rounded-xl border border-white/[0.08] text-[12px] text-[#C1CED8] hover:bg-white/[0.04] transition-colors'
+    : 'flex-1 py-2.5 rounded-xl border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-colors';
 
   const handlePublish = () => {
     setStage('publishing');
@@ -73,9 +86,9 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ duration: 0.2 }}
-        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[520px] bg-white rounded-2xl shadow-2xl border border-[#E5E7EB] overflow-hidden">
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[520px] rounded-2xl shadow-2xl overflow-hidden ${modalClass}`}>
 
-        <div className="px-6 py-5 border-b border-[#F0F0F5] flex items-center justify-between">
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
               stage === 'success' ? 'bg-[#00B893]/10' : 'bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]'
@@ -87,12 +100,12 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
               )}
             </div>
             <div>
-              <h3 className="text-[17px] text-[#0A2540]" style={{ fontWeight: 600 }}>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
                 {stage === 'confirm' && 'Publish Schedule'}
                 {stage === 'publishing' && 'Publishing...'}
                 {stage === 'success' && 'Schedule Published!'}
               </h3>
-              <p className="text-[11px] text-[#8898AA] mt-0.5" style={{ fontWeight: 440 }}>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {stage === 'confirm' && `${weekLabel}`}
                 {stage === 'publishing' && `Notifying ${affectedEmployees.length} staff members`}
                 {stage === 'success' && 'All notifications sent successfully'}
@@ -100,8 +113,8 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
             </div>
           </div>
           {stage === 'confirm' && (
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-              <X size={18} className="text-[#8898AA]" />
+            <button onClick={onClose} className={closeButtonClass}>
+              <X size={18} className={textSecondary} />
             </button>
           )}
         </div>
@@ -110,33 +123,33 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
           {stage === 'confirm' && (
             <>
               <div className="grid grid-cols-3 gap-3 mb-5">
-                <div className="px-4 py-3 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
-                  <p className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>Shifts</p>
-                  <p className="text-[20px] text-[#0A2540] mt-1" style={{ fontWeight: 620 }}>{totalShifts}</p>
+                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
+                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Shifts</p>
+                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{totalShifts}</p>
                 </div>
-                <div className="px-4 py-3 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
-                  <p className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>Staff</p>
-                  <p className="text-[20px] text-[#0A2540] mt-1" style={{ fontWeight: 620 }}>{affectedEmployees.length}</p>
+                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
+                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Staff</p>
+                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{affectedEmployees.length}</p>
                 </div>
-                <div className="px-4 py-3 rounded-xl bg-[#F7F8FA] border border-[#E5E7EB]">
-                  <p className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>Hours</p>
-                  <p className="text-[20px] text-[#0A2540] mt-1" style={{ fontWeight: 620 }}>{totalHours}</p>
+                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
+                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Hours</p>
+                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{totalHours}</p>
                 </div>
               </div>
 
               <div className="space-y-3 mb-5">
-                <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>What will happen</p>
+                <p className={`text-[11px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>What will happen</p>
                 <div className="space-y-2">
                   {[
                     { icon: '📧', text: 'Email notifications sent to all staff', detail: `${affectedEmployees.length} recipients` },
                     { icon: '📱', text: 'Push notifications via Backfill mobile app', detail: 'Instant delivery' },
                     { icon: '📅', text: 'Shifts added to employee calendars', detail: 'Auto-sync enabled' },
                   ].map((item, idx) => (
-                    <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-[#F7F8FA]/50">
+                    <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg ${subtleSurfaceClass}`}>
                       <span className="text-[18px]">{item.icon}</span>
                       <div className="flex-1">
-                        <p className="text-[12px] text-[#0A2540]" style={{ fontWeight: 500 }}>{item.text}</p>
-                        <p className="text-[10px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>{item.detail}</p>
+                        <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{item.text}</p>
+                        <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{item.detail}</p>
                       </div>
                     </div>
                   ))}
@@ -144,21 +157,21 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
               </div>
 
               <div className="space-y-2">
-                <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>Staff receiving notifications</p>
+                <p className={`text-[11px] uppercase tracking-[0.05em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Staff receiving notifications</p>
                 <div className="max-h-[180px] overflow-y-auto space-y-1.5 pr-1">
                   {affectedEmployees.map(emp => {
                     const empShifts = shifts.filter(s => s.employeeId === emp.id);
                     const empHours = empShifts.reduce((sum, s) => sum + shiftDuration(s), 0);
                     return (
-                      <div key={emp.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-white border border-[#E5E7EB]">
-                        <img src={emp.avatar} alt={emp.name} className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-[#E5E7EB]" />
+                      <div key={emp.id} className={`flex items-center gap-3 p-2.5 rounded-lg ${rowSurfaceClass}`}>
+                        <img src={emp.avatar} alt={emp.name} className={`w-8 h-8 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>{emp.name}</p>
-                          <p className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>{emp.role}</p>
+                          <p className={`text-[12px] truncate ${textPrimary}`} style={{ fontWeight: 500 }}>{emp.name}</p>
+                          <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>{emp.role}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[11px] text-[#0A2540]" style={{ fontWeight: 540 }}>{empShifts.length} shifts</p>
-                          <p className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>{empHours}h</p>
+                          <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 540 }}>{empShifts.length} shifts</p>
+                          <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>{empHours}h</p>
                         </div>
                       </div>
                     );
@@ -172,10 +185,10 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
             <div className="py-6">
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>Publishing progress</p>
+                  <p className={`text-[11px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Publishing progress</p>
                   <p className="text-[12px] text-[#635BFF]" style={{ fontWeight: 540 }}>{Math.round(progress)}%</p>
                 </div>
-                <div className="h-2 bg-[#F0F0F5] rounded-full overflow-hidden">
+                <div className={`h-2 rounded-full overflow-hidden ${progressTrackClass}`}>
                   <motion.div
                     className="h-full rounded-full bg-gradient-to-r from-[#635BFF] to-[#8B5CF6]"
                     initial={{ width: 0 }}
@@ -186,7 +199,7 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
               </div>
 
               <div className="space-y-2">
-                <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em] mb-3" style={{ fontWeight: 500 }}>Notifying staff</p>
+                <p className={`text-[11px] uppercase tracking-[0.05em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Notifying staff</p>
                 <div className="max-h-[240px] overflow-y-auto space-y-1.5 pr-1">
                   {affectedEmployees.map((emp, idx) => {
                     const isNotified = notifiedEmployees.includes(emp.id);
@@ -199,12 +212,12 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
                         className={`flex items-center gap-3 p-2.5 rounded-lg transition-all ${
                           isNotified ? 'bg-[#00B893]/[0.06] border border-[#00B893]/20' :
                           isCurrent ? 'bg-[#635BFF]/[0.06] border border-[#635BFF]/20' :
-                          'bg-[#F7F8FA] border border-[#E5E7EB]'
+                          dark ? 'bg-white/[0.04] border border-white/[0.08]' : 'bg-[#F7F8FA] border border-[#E5E7EB]'
                         }`}>
                         <img src={emp.avatar} alt={emp.name} className="w-7 h-7 rounded-full object-cover shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-[11px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>{emp.name}</p>
-                          <p className="text-[9px] text-[#8898AA]" style={{ fontWeight: 420 }}>{emp.role}</p>
+                          <p className={`text-[11px] truncate ${textPrimary}`} style={{ fontWeight: 500 }}>{emp.name}</p>
+                          <p className={`text-[9px] ${textSecondary}`} style={{ fontWeight: 420 }}>{emp.role}</p>
                         </div>
                         {isNotified && (
                           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 400, damping: 15 }}
@@ -236,22 +249,22 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
                 className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#00B893]/10 flex items-center justify-center">
                 <Check size={32} className="text-[#00B893]" />
               </motion.div>
-              <h4 className="text-[16px] text-[#0A2540] mb-2" style={{ fontWeight: 620 }}>All Set!</h4>
-              <p className="text-[12px] text-[#8898AA] mb-4" style={{ fontWeight: 440 }}>
+              <h4 className={`text-[16px] mb-2 ${textPrimary}`} style={{ fontWeight: 620 }}>All Set!</h4>
+              <p className={`text-[12px] mb-4 ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {totalShifts} shifts published to {affectedEmployees.length} staff members
               </p>
               <div className="flex items-center justify-center gap-6 pt-4">
                 <div className="text-center">
                   <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📧</p>
-                  <p className="text-[10px] text-[#8898AA] mt-1" style={{ fontWeight: 440 }}>Emails sent</p>
+                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Emails sent</p>
                 </div>
                 <div className="text-center">
                   <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📱</p>
-                  <p className="text-[10px] text-[#8898AA] mt-1" style={{ fontWeight: 440 }}>Push sent</p>
+                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Push sent</p>
                 </div>
                 <div className="text-center">
                   <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📅</p>
-                  <p className="text-[10px] text-[#8898AA] mt-1" style={{ fontWeight: 440 }}>Calendars synced</p>
+                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Calendars synced</p>
                 </div>
               </div>
             </div>
@@ -259,9 +272,9 @@ export function PublishWeekModal({ weekLabel, shifts, employees, onClose, onComp
         </div>
 
         {stage === 'confirm' && (
-          <div className="px-6 py-4 border-t border-[#F0F0F5] flex gap-2.5">
+          <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>
             <button onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-colors"
+              className={footerButtonClass}
               style={{ fontWeight: 500 }}>
               Cancel
             </button>

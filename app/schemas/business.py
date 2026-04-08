@@ -181,6 +181,8 @@ class LocationRoleRead(BaseSchema):
     location_id: UUID
     role_id: UUID
     is_active: bool
+    assigned_shift_count: int = 0
+    is_locked: bool = False
     min_headcount: Optional[int]
     max_headcount: Optional[int]
     premium_rules: dict

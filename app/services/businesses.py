@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, LocationRole, Role
+from app.models.common import ShiftStatus
 from app.models.scheduling import Shift
 from app.schemas.business import (
     BusinessCreate,
@@ -19,6 +20,15 @@ from app.schemas.business import (
 )
 from app.services import business_identity_derivation, role_derivation
 from app.services.utils import role_code_from_name, slugify
+
+LOCKED_SHIFT_STATUSES = (
+    ShiftStatus.draft,
+    ShiftStatus.scheduled,
+    ShiftStatus.open,
+    ShiftStatus.filling,
+    ShiftStatus.covered,
+    ShiftStatus.no_fill,
+)
 
 
 async def _next_unique_business_slug(session: AsyncSession, requested: str) -> str:
@@ -490,7 +500,13 @@ async def list_location_roles(
         )
         .order_by(LocationRole.created_at.asc())
     )
-    return list(result.scalars().all())
+    rows = list(result.scalars().all())
+    shift_counts = await _locked_shift_counts_by_role_id(session, location_id)
+    for row in rows:
+        count = shift_counts.get(row.role_id, 0)
+        setattr(row, "assigned_shift_count", count)
+        setattr(row, "is_locked", count > 0)
+    return rows
 
 
 async def replace_location_roles(
@@ -523,9 +539,14 @@ async def replace_location_roles(
     existing_rows = list(existing_result.scalars().all())
     existing_by_role_id = {row.role_id: row for row in existing_rows}
     desired_role_ids = set(requested_role_ids)
+    locked_shift_counts = await _locked_shift_counts_by_role_id(session, location_id)
 
     for existing in existing_rows:
         if existing.role_id not in desired_role_ids:
+            if locked_shift_counts.get(existing.role_id, 0) > 0:
+                raise ValueError(
+                    "Cannot remove a role that still has active shifts at this location."
+                )
             existing.is_active = False
 
     for item in requested_roles:
@@ -555,11 +576,17 @@ async def replace_location_roles(
             existing.coverage_settings = item.coverage_settings or {}
 
     await session.flush()
-    return [
+    active_rows = [
         existing_by_role_id[role_id]
         for role_id in requested_role_ids
         if existing_by_role_id[role_id].is_active
     ]
+    refreshed_shift_counts = await _locked_shift_counts_by_role_id(session, location_id)
+    for row in active_rows:
+        count = refreshed_shift_counts.get(row.role_id, 0)
+        setattr(row, "assigned_shift_count", count)
+        setattr(row, "is_locked", count > 0)
+    return active_rows
 
 
 async def create_and_assign_location_role(
@@ -634,3 +661,18 @@ async def ensure_location_role(
 
     await session.flush()
     return existing
+
+
+async def _locked_shift_counts_by_role_id(
+    session: AsyncSession,
+    location_id: UUID,
+) -> dict[UUID, int]:
+    result = await session.execute(
+        select(Shift.role_id, func.count(Shift.id))
+        .where(
+            Shift.location_id == location_id,
+            Shift.status.in_(LOCKED_SHIFT_STATUSES),
+        )
+        .group_by(Shift.role_id)
+    )
+    return {role_id: int(count) for role_id, count in result.all()}

@@ -48,6 +48,13 @@ import {
   Hourglass,
   CircleCheck,
   Loader,
+  ExternalLink,
+  Edit3,
+  MapPin,
+  Star,
+  Trash2,
+  Copy,
+  Archive,
 } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
@@ -198,6 +205,26 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
   const iconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-xl';
   const buttonRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
   const [hovered, setHovered] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) {
+      return;
+    }
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showMenu]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -238,9 +265,124 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
                 <span className={`text-[12px] tracking-[0.02em] uppercase ${mutedClass}`} style={{ fontWeight: 480 }}>{location.type}</span>
               </div>
             </div>
-            <button className={`p-1.5 transition-colors opacity-0 group-hover:opacity-100 ${buttonRadiusClass} ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`} onClick={(e) => e.stopPropagation()}>
-              <MoreHorizontal size={16} className={mutedClass} />
-            </button>
+            <div className="relative" ref={menuRef}>
+              <button
+                className={`p-1.5 transition-colors opacity-0 group-hover:opacity-100 ${buttonRadiusClass} ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMenu((current) => !current);
+                }}
+                type="button"
+              >
+                <MoreHorizontal size={16} className={mutedClass} />
+              </button>
+
+              <AnimatePresence>
+                {showMenu ? (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    transition={{ duration: 0.15 }}
+                    className={`absolute right-0 top-full mt-2 z-50 w-64 overflow-hidden border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'} ${cardRadiusClass}`}
+                    style={{
+                      boxShadow: isDark
+                        ? '0 20px 60px -12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)'
+                        : '0 20px 60px -12px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05)',
+                    }}
+                  >
+                    <div className={`px-4 py-3 border-b ${borderClass} ${isDark ? 'bg-white/[0.03]' : 'bg-[#FAFBFF]'}`}>
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className={`w-8 h-8 flex items-center justify-center text-[16px] ${buttonRadiusClass}`}
+                          style={{ background: `${location.color}10` }}
+                        >
+                          {location.logo}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`truncate text-[12px] ${headingClass}`} style={{ fontWeight: 560 }}>
+                            {location.name}
+                          </p>
+                          <p className={`text-[10px] uppercase tracking-[0.02em] ${mutedClass}`} style={{ fontWeight: 460 }}>
+                            {location.type}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="py-1.5">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMenu(false);
+                          onClick();
+                        }}
+                        className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                        type="button"
+                      >
+                        <ExternalLink size={15} className={mutedClass} />
+                        <div className="flex-1 text-left">
+                          <p className={`text-[12px] ${headingClass}`} style={{ fontWeight: 520 }}>View Details</p>
+                          <p className={`text-[10px] ${mutedClass}`} style={{ fontWeight: 420 }}>Open location dashboard</p>
+                        </div>
+                      </button>
+
+                      {[
+                        { icon: Edit3, title: 'Edit Location', subtitle: 'Update details & settings' },
+                        { icon: MapPin, title: 'View on Map', subtitle: 'See location & directions' },
+                        { divider: true },
+                        { icon: Copy, title: 'Duplicate Location', subtitle: 'Copy as template' },
+                        { icon: Star, title: 'Mark as Favorite', subtitle: 'Pin to top of list' },
+                        { divider: true },
+                        { icon: Archive, title: 'Archive Location', subtitle: 'Hide from active list' },
+                        { icon: Trash2, title: 'Delete Location', subtitle: 'Permanently remove', danger: true },
+                      ].map((item, itemIndex) =>
+                        'divider' in item ? (
+                          <div
+                            key={`divider-${itemIndex}`}
+                            className={`my-1.5 h-px ${isDark ? 'bg-white/[0.06]' : 'bg-[#F0F0F5]'}`}
+                          />
+                        ) : (
+                          <button
+                            key={item.title}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowMenu(false);
+                            }}
+                            className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${
+                              item.danger
+                                ? isDark
+                                  ? 'hover:bg-[#E5484D]/15'
+                                  : 'hover:bg-[#E5484D]/10'
+                                : isDark
+                                  ? 'hover:bg-white/[0.04]'
+                                  : 'hover:bg-[#F7F8FA]'
+                            }`}
+                            type="button"
+                          >
+                            <item.icon
+                              size={15}
+                              className={item.danger ? 'text-[#E5484D]' : mutedClass}
+                            />
+                            <div className="flex-1 text-left">
+                              <p
+                                className={`text-[12px] ${item.danger ? 'text-[#E5484D]' : headingClass}`}
+                                style={{ fontWeight: 520 }}
+                              >
+                                {item.title}
+                              </p>
+                              <p className={`text-[10px] ${mutedClass}`} style={{ fontWeight: 420 }}>
+                                {item.subtitle}
+                              </p>
+                            </div>
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-5">
             <div>

@@ -26,6 +26,7 @@ import {
   Info,
 } from 'lucide-react';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
+import { FloatingDropdown } from '@/components/floating-dropdown';
 import DashboardShell from './DashboardShell';
 
 /* ─── Types ─── */
@@ -738,6 +739,8 @@ export default function Team({
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const locationFilterRef = useRef<HTMLButtonElement>(null);
+  const statusFilterRef = useRef<HTMLButtonElement>(null);
 
   const filtered = employees
     .filter((e) => {
@@ -799,6 +802,7 @@ export default function Team({
             {/* Location filter */}
             <div className="relative">
               <button onClick={() => { setShowLocationDropdown(!showLocationDropdown); setShowStatusDropdown(false); }}
+                ref={locationFilterRef}
                 className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${theme.filterButtonClass}`}
                 style={{ fontWeight: 440 }}>
                 <MapPin size={13} />
@@ -807,8 +811,14 @@ export default function Team({
               </button>
               <AnimatePresence>
                 {showLocationDropdown && (
-                  <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className={`absolute top-full mt-1 left-0 w-64 rounded-xl border overflow-hidden z-40 ${theme.dropdownClass}`}>
+                  <FloatingDropdown
+                    open={showLocationDropdown}
+                    anchorRef={locationFilterRef}
+                    className={`rounded-xl border overflow-hidden ${theme.dropdownClass}`}
+                    onClose={() => setShowLocationDropdown(false)}
+                    width={256}
+                    zIndex={10010}
+                  >
                     {locationOptions.map((opt) => (
                       <button key={opt} onClick={() => { setLocationFilter(opt); setShowLocationDropdown(false); }}
                         className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
@@ -820,7 +830,7 @@ export default function Team({
                         {opt}
                       </button>
                     ))}
-                  </motion.div>
+                  </FloatingDropdown>
                 )}
               </AnimatePresence>
             </div>
@@ -828,6 +838,7 @@ export default function Team({
             {/* Status filter */}
             <div className="relative">
               <button onClick={() => { setShowStatusDropdown(!showStatusDropdown); setShowLocationDropdown(false); }}
+                ref={statusFilterRef}
                 className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${theme.filterButtonClass}`}
                 style={{ fontWeight: 440 }}>
                 <Filter size={13} />
@@ -836,8 +847,14 @@ export default function Team({
               </button>
               <AnimatePresence>
                 {showStatusDropdown && (
-                  <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                    className={`absolute top-full mt-1 left-0 w-48 rounded-xl border overflow-hidden z-40 ${theme.dropdownClass}`}>
+                  <FloatingDropdown
+                    open={showStatusDropdown}
+                    anchorRef={statusFilterRef}
+                    className={`rounded-xl border overflow-hidden ${theme.dropdownClass}`}
+                    onClose={() => setShowStatusDropdown(false)}
+                    width={192}
+                    zIndex={10010}
+                  >
                     {statusOptions.map((opt) => (
                       <button key={opt} onClick={() => { setStatusFilter(opt); setShowStatusDropdown(false); }}
                         className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
@@ -849,7 +866,7 @@ export default function Team({
                         {opt}
                       </button>
                     ))}
-                  </motion.div>
+                  </FloatingDropdown>
                 )}
               </AnimatePresence>
             </div>

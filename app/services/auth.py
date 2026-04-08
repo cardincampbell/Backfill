@@ -92,6 +92,54 @@ def _merged_client_challenge_metadata(value: object | None, *, locale: str | Non
     return metadata
 
 
+def _normalized_session_location(value: object | None) -> dict | None:
+    raw = value if isinstance(value, dict) else {}
+    city = _trim_text(raw.get("city"))
+    region = _trim_text(raw.get("region"))
+    country = _trim_text(raw.get("country"))
+    if not any((city, region, country)):
+        return None
+
+    label: str | None = None
+    if city and region:
+        label = f"{city}, {region}"
+    elif city and country:
+        label = f"{city}, {country}"
+    else:
+        label = city or region or country
+
+    normalized: dict[str, str] = {}
+    if city:
+        normalized["city"] = city
+    if region:
+        normalized["region"] = region
+    if country:
+        normalized["country"] = country
+    if label:
+        normalized["label"] = label
+    return normalized
+
+
+def _merge_session_metadata(*values: object | None) -> dict:
+    metadata: dict = {}
+    for value in values:
+        if isinstance(value, dict):
+            metadata.update(value)
+    return metadata
+
+
+def _auth_flow_session_metadata(
+    *,
+    auth_flow: str,
+    session_location: dict | None = None,
+) -> dict:
+    metadata: dict[str, object] = {"auth_flow": auth_flow}
+    normalized_location = _normalized_session_location(session_location)
+    if normalized_location is not None:
+        metadata["session_start_location"] = normalized_location
+    return metadata
+
+
 def normalize_phone(value: object | None) -> Optional[str]:
     text = _trim_text(value)
     if not text:
@@ -240,7 +288,7 @@ async def _issue_session_record(
         elevated_actions=elevated_actions or [],
         last_seen_at=now,
         expires_at=_next_session_expiry(now, ttl_hours=ttl_hours),
-        session_metadata=session_metadata or {},
+        session_metadata=_merge_session_metadata(session_metadata),
     )
     session_db.add(record)
     user.last_sign_in_at = now
@@ -345,7 +393,10 @@ async def _refresh_authenticated_session(
     session_record.last_seen_at = current_time
     session_record.expires_at = _next_session_expiry(current_time)
     session_record.revoked_at = None
-    session_record.session_metadata = session_metadata or {}
+    session_record.session_metadata = _merge_session_metadata(
+        session_record.session_metadata,
+        session_metadata,
+    )
     user.last_sign_in_at = current_time
     await session_db.flush()
     await audit_service.append(
@@ -491,6 +542,7 @@ async def restore_trusted_device_session(
     trusted_device_id: str | None,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    session_location: dict | None = None,
     now: datetime | None = None,
 ) -> TrustedDeviceSessionRestoreResult | None:
     trusted_device_id = _trim_text(trusted_device_id)
@@ -530,7 +582,10 @@ async def restore_trusted_device_session(
         business_id=None,
         location_id=None,
         device_fingerprint=trusted_device_id,
-        session_metadata={"auth_flow": "trusted_device_restore"},
+        session_metadata=_auth_flow_session_metadata(
+            auth_flow="trusted_device_restore",
+            session_location=session_location,
+        ),
         source="trusted_device_restore",
         purpose="restore",
     )
@@ -710,6 +765,7 @@ async def request_otp_challenge(
     user_agent: str | None = None,
     auth_ctx: AuthContext | None = None,
     trusted_device_id: str | None = None,
+    session_location: dict | None = None,
 ) -> OTPChallengeRequestResult:
     phone_e164 = normalize_phone(payload.phone_e164)
     if phone_e164 is None:
@@ -760,7 +816,10 @@ async def request_otp_challenge(
                 business_id=payload.business_id,
                 location_id=payload.location_id,
                 device_fingerprint=trusted_device_id,
-                session_metadata={"auth_flow": "trusted_reentry"},
+                session_metadata=_auth_flow_session_metadata(
+                    auth_flow="trusted_reentry",
+                    session_location=session_location,
+                ),
                 source="trusted_reentry",
                 purpose=purpose.value,
             )
@@ -911,6 +970,7 @@ async def verify_otp_challenge(
     user_agent: str | None = None,
     auth_ctx: AuthContext | None = None,
     trusted_device_id: str | None = None,
+    session_location: dict | None = None,
 ) -> OTPChallengeVerificationResult:
     phone_e164 = normalize_phone(payload.phone_e164)
     if phone_e164 is None:
@@ -1086,7 +1146,10 @@ async def verify_otp_challenge(
         actor_membership_id=invite_membership.id if invite_membership is not None else None,
         device_fingerprint=trusted_device_id,
         risk_level=payload.risk_level,
-        session_metadata={},
+        session_metadata=_auth_flow_session_metadata(
+            auth_flow="otp_challenge",
+            session_location=session_location,
+        ),
         source="otp_challenge",
         purpose=challenge.purpose.value,
     )

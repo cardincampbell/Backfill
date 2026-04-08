@@ -18,6 +18,7 @@ import {
 } from "@/lib/api/businesses";
 import DashboardShell from "./DashboardShell";
 import {
+  formatDisplayLabel,
   getLocationReference,
 } from "./location-role-reference";
 
@@ -32,11 +33,23 @@ type LocationProps = {
   backHref?: string;
 };
 
-const CATEGORY_PRIORITY = ["Healthcare", "Senior Care", "Hospitality"];
+const CATEGORY_PRIORITY = [
+  "management",
+  "operations",
+  "front_of_house",
+  "back_of_house",
+  "healthcare",
+  "senior_care",
+  "hospitality",
+];
 
-function getRoleCategoryLabel(role: BusinessRole): string {
+function getRoleCategoryKey(role: BusinessRole): string {
   const category = role.category?.trim();
-  return category && category.length > 0 ? category : "Other";
+  return category && category.length > 0 ? category.toLowerCase() : "other";
+}
+
+function getRoleCategoryLabel(categoryKey: string): string {
+  return formatDisplayLabel(categoryKey);
 }
 
 function sortCategoryLabels(labels: string[]): string[] {
@@ -127,18 +140,19 @@ export default function Location({
   const groupedAvailableRoles = useMemo(() => {
     const grouped = new Map<string, BusinessRole[]>();
     for (const role of availableRoles) {
-      const category = getRoleCategoryLabel(role);
-      const existing = grouped.get(category);
+      const categoryKey = getRoleCategoryKey(role);
+      const existing = grouped.get(categoryKey);
       if (existing) {
         existing.push(role);
       } else {
-        grouped.set(category, [role]);
+        grouped.set(categoryKey, [role]);
       }
     }
 
-    return sortCategoryLabels(Array.from(grouped.keys())).map((category) => ({
-      category,
-      roles: grouped.get(category) ?? [],
+    return sortCategoryLabels(Array.from(grouped.keys())).map((categoryKey) => ({
+      categoryKey,
+      categoryLabel: getRoleCategoryLabel(categoryKey),
+      roles: grouped.get(categoryKey) ?? [],
     }));
   }, [availableRoles]);
   const locationReference = getLocationReference({
@@ -171,7 +185,7 @@ export default function Location({
 
   const addAllInCategory = (category: string) => {
     const roleIds = roles
-      .filter((role) => getRoleCategoryLabel(role) === category)
+      .filter((role) => getRoleCategoryKey(role) === category)
       .map((role) => role.id);
     setSelectedRoleIds((current) => Array.from(new Set([...current, ...roleIds])));
   };
@@ -301,16 +315,18 @@ export default function Location({
               {locationDisplayName}
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
-              <span
-                className="text-[12px] px-2.5 py-0.5 rounded-full"
-                style={{
-                  fontWeight: 500,
-                  color: locationReference.color,
-                  background: `${locationReference.color}10`,
-                }}
-              >
-                {locationReference.typeLabel}
-              </span>
+              {locationReference.typeLabel ? (
+                <span
+                  className="text-[12px] px-2.5 py-0.5 rounded-full"
+                  style={{
+                    fontWeight: 500,
+                    color: locationReference.color,
+                    background: `${locationReference.color}10`,
+                  }}
+                >
+                  {locationReference.typeLabel}
+                </span>
+              ) : null}
               <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {locationReference.staffLabel}
               </span>
@@ -432,18 +448,18 @@ export default function Location({
 
           {groupedAvailableRoles.map((group, index) => (
             <motion.div
-              key={group.category}
+              key={group.categoryKey}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.15 + index * 0.08 }}
             >
               <div className="flex items-center justify-between mb-2.5">
                 <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
-                  {group.category}
+                  {group.categoryLabel}
                 </h4>
                 <button
                   type="button"
-                  onClick={() => addAllInCategory(group.category)}
+                  onClick={() => addAllInCategory(group.categoryKey)}
                   disabled={loading || isPending}
                   className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors disabled:opacity-50"
                   style={{ fontWeight: 520 }}

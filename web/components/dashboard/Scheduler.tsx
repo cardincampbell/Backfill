@@ -21,6 +21,8 @@ import {
   Sunset,
   ClipboardCopy,
 } from 'lucide-react';
+import { useResolvedAppAppearance } from '@/components/app-session-gate';
+import { FloatingDropdown } from '@/components/floating-dropdown';
 import type { WorkspaceLocation } from '@/lib/api/workspace';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import DashboardShell from './DashboardShell';
@@ -100,6 +102,47 @@ const shiftTemplates = [
   { label: 'Night', icon: Moon, start: 23, end: 7 },
 ];
 
+function getSchedulerTheme(isDark: boolean) {
+  return {
+    pageClass: isDark ? 'bg-[#081A2C]' : 'bg-white',
+    topBarClass: isDark
+      ? 'border-white/[0.08] bg-[#0B2239]/88 backdrop-blur-xl'
+      : 'border-[#F0F0F5] bg-white/80 backdrop-blur-sm',
+    mobileDayBorderClass: isDark ? 'border-white/[0.08]' : 'border-[#F0F0F5]',
+    stickyHeaderClass: isDark ? 'bg-[#0B2239] border-white/[0.08]' : 'bg-white border-[#E5E7EB]',
+    roleBandClass: isDark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#F5F6F8] border-[#F0F0F5]',
+    rowClass: isDark ? 'border-white/[0.06] hover:bg-white/[0.02]' : 'border-[#F0F0F5] hover:bg-[#FAFBFC]/50',
+    cellBorderClass: isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]',
+    todayCellClass: isDark ? 'bg-[#635BFF]/[0.08]' : 'bg-[#635BFF]/[0.015]',
+    todayHeaderClass: isDark ? 'bg-[#635BFF]/[0.06]' : 'bg-[#635BFF]/[0.02]',
+    todayRoleBandClass: isDark ? 'bg-[#635BFF]/[0.04]' : 'bg-[#635BFF]/[0.01]',
+    textPrimary: isDark ? 'text-white' : 'text-[#0A2540]',
+    textSecondary: isDark ? 'text-[#C1CED8]' : 'text-[#8898AA]',
+    textMuted: isDark ? 'text-[#8FA3B8]' : 'text-[#5E6D7A]',
+    textSubtle: isDark ? 'text-[#708399]' : 'text-[#B0B8C1]',
+    ghostButtonClass: isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]',
+    daySelectorIdleClass: isDark ? 'text-[#C1CED8] hover:bg-white/[0.06]' : 'text-[#5E6D7A] hover:bg-[#F7F8FA]',
+    todaySelectorClass: isDark ? 'bg-[#635BFF]/[0.14] text-[#AFAAFF]' : 'bg-[#635BFF]/[0.06] text-[#635BFF]',
+    mobileSelectedDayClass: isDark ? 'bg-[#635BFF] text-white' : 'bg-[#635BFF] text-white',
+    cardClass: isDark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]',
+    modalClass: isDark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]',
+    modalBorderClass: isDark ? 'border-white/[0.08]' : 'border-[#F0F0F5]',
+    inputButtonClass: isDark
+      ? 'bg-white/[0.05] border-white/[0.1] text-white hover:border-[#635BFF]/40'
+      : 'bg-[#F7F8FA] border-[#E5E7EB] text-[#0A2540] hover:border-[#635BFF]/30',
+    dropdownClass: isDark
+      ? 'bg-[#102B46] border border-white/[0.08] shadow-[0_24px_60px_rgba(0,0,0,0.4)]'
+      : 'bg-white border border-[#E5E7EB] shadow-lg',
+    iconButtonClass: isDark ? 'bg-white/[0.92] border-white/10' : 'bg-white/90 border-[#E5E7EB]',
+    emptyStateClass: isDark
+      ? 'border border-dashed border-white/[0.08] hover:bg-white/[0.04] hover:border-[#635BFF]/30'
+      : 'border border-transparent hover:bg-[#635BFF]/[0.03] hover:border-dashed hover:border-[#635BFF]/20',
+    toastClass: isDark
+      ? 'bg-[#0B2239] border border-white/[0.08]'
+      : 'bg-[#0A2540] border border-[#1A3A5C]',
+  };
+}
+
 /* ─── Initial shifts ─── */
 function generateInitialShifts(): Shift[] {
   return [
@@ -136,50 +179,65 @@ function generateInitialShifts(): Shift[] {
 }
 
 /* ─── InlineSelect ─── */
-function InlineSelect({ value, options, onChange, placeholder }: {
-  value: string; options: { label: string; value: string }[]; onChange: (v: string) => void; placeholder?: string;
+function InlineSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  dark = false,
+}: {
+  value: string;
+  options: { label: string; value: string }[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+  dark?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const theme = getSchedulerTheme(dark);
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:border-[#635BFF]/30 transition-all text-[12px] text-[#0A2540] min-w-[120px] justify-between"
+      <button ref={buttonRef} onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all text-[12px] min-w-[120px] justify-between ${theme.inputButtonClass}`}
         style={{ fontWeight: 460 }}>
-        <span className={value ? '' : 'text-[#8898AA]'}>{value || placeholder || 'Select...'}</span>
-        <ChevronDown size={12} className="text-[#8898AA]" />
+        <span className={value ? '' : theme.textSecondary}>{value || placeholder || 'Select...'}</span>
+        <ChevronDown size={12} className={theme.textSecondary} />
       </button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
-              className="absolute top-full left-0 mt-1 z-50 bg-white border border-[#E5E7EB] rounded-xl shadow-lg py-1 min-w-[180px] max-h-[240px] overflow-y-auto">
-              {options.map(opt => (
-                <button key={opt.value} onClick={() => { onChange(opt.value); setOpen(false); }}
-                  className={`w-full text-left px-3 py-2 text-[12px] hover:bg-[#635BFF]/[0.04] transition-colors flex items-center gap-2 ${
-                    value === opt.value ? 'text-[#635BFF]' : 'text-[#0A2540]'
-                  }`} style={{ fontWeight: value === opt.value ? 520 : 440 }}>
-                  {value === opt.value && <Check size={12} className="text-[#635BFF]" />}
-                  <span className={value === opt.value ? '' : 'ml-5'}>{opt.label}</span>
-                </button>
-              ))}
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <FloatingDropdown
+        open={open}
+        anchorRef={buttonRef}
+        className={`${theme.dropdownClass} rounded-xl py-1 overflow-y-auto`}
+        maxHeight={240}
+        minWidth={180}
+        onClose={() => setOpen(false)}
+        width={180}
+        zIndex={10020}
+      >
+        {options.map(opt => (
+          <button key={opt.value} onClick={() => { onChange(opt.value); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-[12px] transition-colors flex items-center gap-2 ${
+              value === opt.value
+                ? 'text-[#635BFF] bg-[#635BFF]/[0.08]'
+                : `${theme.textPrimary} ${theme.ghostButtonClass}`
+            }`} style={{ fontWeight: value === opt.value ? 520 : 440 }}>
+            {value === opt.value && <Check size={12} className="text-[#635BFF]" />}
+            <span className={value === opt.value ? '' : 'ml-5'}>{opt.label}</span>
+          </button>
+        ))}
+      </FloatingDropdown>
     </div>
   );
 }
 
 /* ─── Draggable Shift Chip ─── */
-function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
-  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; onDuplicate: () => void;
+function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dark = false }: {
+  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; onDuplicate: () => void; dark?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
   const DescIcon = descriptor.icon;
   const dur = shiftDuration(shift);
+  const theme = getSchedulerTheme(dark);
 
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: DRAG_TYPE,
@@ -212,10 +270,10 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
                 {descriptor.label}
               </span>
             </div>
-            <p className="text-[9px] text-[#5E6D7A] mt-0.5" style={{ fontWeight: 420 }}>
+            <p className={`text-[9px] mt-0.5 ${theme.textMuted}`} style={{ fontWeight: 420 }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
             </p>
-            <p className="text-[9px] text-[#B0B8C1] mt-px" style={{ fontWeight: 400 }}>
+            <p className={`text-[9px] mt-px ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
               {dur}h
             </p>
           </div>
@@ -225,12 +283,12 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex flex-col gap-0.5 shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                  className="p-0.5 rounded bg-white/90 shadow-sm border border-[#E5E7EB] hover:border-[#635BFF]/30 transition-all" title="Duplicate">
-                  <Copy size={9} className="text-[#5E6D7A]" />
+                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Duplicate">
+                  <Copy size={9} className={theme.textMuted} />
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                  className="p-0.5 rounded bg-white/90 shadow-sm border border-[#E5E7EB] hover:border-red-300 transition-all" title="Delete">
-                  <Trash2 size={9} className="text-[#5E6D7A]" />
+                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
+                  <Trash2 size={9} className={theme.textMuted} />
                 </button>
               </motion.div>
             )}
@@ -265,20 +323,20 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
             </span>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
-            <span className="text-[8px] text-[#B0B8C1]" style={{ fontWeight: 420 }}>
+            <span className={`text-[8px] ${theme.textSubtle}`} style={{ fontWeight: 420 }}>
               {dur}h
             </span>
             <AnimatePresence>
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  className="flex gap-0.5">
+                className="flex gap-0.5">
                   <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                    className="p-0.5 rounded bg-white/90 shadow-sm border border-[#E5E7EB] hover:border-[#635BFF]/30 transition-all" title="Duplicate">
-                    <Copy size={7} className="text-[#5E6D7A]" />
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Duplicate">
+                    <Copy size={7} className={theme.textMuted} />
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                    className="p-0.5 rounded bg-white/90 shadow-sm border border-[#E5E7EB] hover:border-red-300 transition-all" title="Delete">
-                    <Trash2 size={7} className="text-[#5E6D7A]" />
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
+                    <Trash2 size={7} className={theme.textMuted} />
                   </button>
                 </motion.div>
               )}
@@ -286,7 +344,7 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
           </div>
         </div>
         {/* Row 2: time span */}
-        <p className="text-[8px] text-[#5E6D7A] mt-0.5 truncate" style={{ fontWeight: 420 }}>
+        <p className={`text-[8px] mt-0.5 truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
           {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
         </p>
       </div>
@@ -295,10 +353,10 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate }: {
 }
 
 /* ─── Droppable Cell ─── */
-function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToday: isTodayCell }: {
+function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToday: isTodayCell, dark = false }: {
   employeeId: string; day: number; children: React.ReactNode;
   onDrop: (shiftId: string, newEmpId: string, newDay: number) => void;
-  onClickEmpty: () => void; isToday: boolean;
+  onClickEmpty: () => void; isToday: boolean; dark?: boolean;
 }) {
   const [{ isOver, canDrop }, dropRef] = useDrop(() => ({
     accept: DRAG_TYPE,
@@ -307,17 +365,18 @@ function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToda
   }), [employeeId, day]);
 
   const hasChildren = Array.isArray(children) ? children.some(Boolean) : !!children;
+  const theme = getSchedulerTheme(dark);
 
   return (
     <div
       ref={dropRef as unknown as React.RefObject<HTMLDivElement>}
-      className={`flex-1 border-l border-[#F0F0F5] py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${
-        isTodayCell ? 'bg-[#635BFF]/[0.015]' : ''
+      className={`flex-1 border-l py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${theme.cellBorderClass} ${
+        isTodayCell ? theme.todayCellClass : ''
       } ${isOver && canDrop ? 'bg-[#635BFF]/[0.06]' : ''} ${canDrop && !isOver ? '' : ''}`}
     >
       {hasChildren ? children : (
         <div onClick={onClickEmpty}
-          className="h-full min-h-[44px] flex items-center justify-center cursor-pointer group/empty mx-0.5 my-0.5 rounded-lg hover:bg-[#635BFF]/[0.03] transition-colors border border-transparent hover:border-dashed hover:border-[#635BFF]/20">
+          className={`h-full min-h-[44px] flex items-center justify-center cursor-pointer group/empty mx-0.5 my-0.5 rounded-lg transition-colors ${theme.emptyStateClass}`}>
           <div className="opacity-0 group-hover/empty:opacity-100 transition-opacity">
             <Plus size={12} className="text-[#635BFF]/50" />
           </div>
@@ -340,6 +399,8 @@ function SchedulerContent({
   backHref,
 }: SchedulerProps) {
   const router = useRouter();
+  const isDark = useResolvedAppAppearance() === 'dark';
+  const theme = getSchedulerTheme(isDark);
   const locationDisplayName = location.location_display_name ?? location.location_name;
   const locationReference = getLocationReference({
     name: locationDisplayName,
@@ -436,14 +497,14 @@ function SchedulerContent({
   const EMP_COL = 'w-[180px] min-w-[180px]';
 
   const content = (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className="flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
 
         {/* ─── Top Bar: Location | Week Nav | Buttons ─── */}
-        <div className="px-4 sm:px-6 md:px-8 py-3.5 border-b border-[#F0F0F5] bg-white/80 backdrop-blur-sm sticky top-0 z-30">
+        <div className={`px-4 sm:px-6 md:px-8 py-3.5 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
           {/* Row 1: Location name + subtext */}
           <div className="flex items-center gap-2.5 mb-3">
             <button onClick={() => router.push(resolvedBackHref)}
-              className="flex items-center text-[#8898AA] hover:text-[#5E6D7A] transition-colors"
+              className={`flex items-center transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`}
               style={{ fontWeight: 440 }}>
               <ChevronLeft size={16} />
             </button>
@@ -453,10 +514,10 @@ function SchedulerContent({
                 {loc.emoji}
               </div>
               <div>
-                <h1 className="text-[18px] sm:text-[20px] text-[#0A2540] tracking-[-0.02em] leading-none" style={{ fontWeight: 600 }}>
+                <h1 className={`text-[18px] sm:text-[20px] tracking-[-0.02em] leading-none ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
                   {loc.name}
                 </h1>
-                <p className="text-[11px] text-[#8898AA] mt-1" style={{ fontWeight: 440 }}>
+                <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
                   Weekly Scheduler
                 </p>
               </div>
@@ -469,25 +530,25 @@ function SchedulerContent({
             <div className="flex items-center gap-2">
               <button onClick={() => setWeekOffset(0)}
                 className={`text-[12px] px-2.5 py-1.5 rounded-lg transition-colors ${
-                  weekOffset === 0 ? 'bg-[#635BFF]/[0.06] text-[#635BFF]' : 'text-[#5E6D7A] hover:bg-[#F7F8FA]'
+                  weekOffset === 0 ? theme.todaySelectorClass : theme.daySelectorIdleClass
                 }`} style={{ fontWeight: 500 }}>
                 Today
               </button>
-              <button onClick={() => setWeekOffset(w => w - 1)} className="p-1 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-                <ChevronLeft size={15} className="text-[#5E6D7A]" />
+              <button onClick={() => setWeekOffset(w => w - 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+                <ChevronLeft size={15} className={theme.textMuted} />
               </button>
-              <span className="text-[12px] text-[#0A2540] hidden md:inline" style={{ fontWeight: 520 }}>
+              <span className={`text-[12px] hidden md:inline ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
                 {weekLabel}
               </span>
-              <button onClick={() => setWeekOffset(w => w + 1)} className="p-1 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-                <ChevronRight size={15} className="text-[#5E6D7A]" />
+              <button onClick={() => setWeekOffset(w => w + 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+                <ChevronRight size={15} className={theme.textMuted} />
               </button>
             </div>
 
             {/* Copy Schedule + Publish Week */}
             <div className="flex items-center gap-2">
               <button onClick={() => setShowCopyModal(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-[#5E6D7A] border border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA] transition-all cursor-pointer"
+                className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border hover:border-[#635BFF]/30 transition-all cursor-pointer ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
                 style={{ fontWeight: 500 }}>
                 <ClipboardCopy size={13} />
                 <span className="hidden lg:inline">Copy Schedule</span>
@@ -506,13 +567,13 @@ function SchedulerContent({
         </div>
 
         {/* ─── Mobile Day Selector ─── */}
-        <div className="lg:hidden px-4 py-2 border-b border-[#F0F0F5] flex gap-1 overflow-x-auto no-scrollbar">
+        <div className={`lg:hidden px-4 py-2 border-b flex gap-1 overflow-x-auto no-scrollbar ${theme.mobileDayBorderClass}`}>
           {DAYS.map((day, i) => (
             <button key={day} onClick={() => setMobileDay(i)}
               className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all min-w-[44px] ${
-                mobileDay === i ? 'bg-[#635BFF] text-white'
-                  : isToday(weekDates[i]) ? 'bg-[#635BFF]/[0.06] text-[#635BFF]'
-                  : 'text-[#5E6D7A] hover:bg-[#F7F8FA]'
+                mobileDay === i ? theme.mobileSelectedDayClass
+                  : isToday(weekDates[i]) ? theme.todaySelectorClass
+                  : theme.daySelectorIdleClass
               }`}>
               <span className="text-[14px]" style={{ fontWeight: mobileDay === i ? 600 : 500 }}>{weekDates[i].getDate()}</span>
               <span className="text-[10px]" style={{ fontWeight: 480 }}>{day}</span>
@@ -524,11 +585,11 @@ function SchedulerContent({
         <div className="flex-1 overflow-auto hidden lg:block">
           <div className="min-w-[900px]">
             {/* Sticky Header: Consolidated day + hours row */}
-            <div className="sticky top-0 z-20 bg-white border-b border-[#E5E7EB]">
+            <div className={`sticky top-0 z-20 border-b ${theme.stickyHeaderClass}`}>
               <div className="flex">
                 {/* Left column: Week total */}
                 <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-end`}>
-                  <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 480 }}>
+                  <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 480 }}>
                     Week: {weekTotalHours}h
                   </span>
                 </div>
@@ -537,22 +598,22 @@ function SchedulerContent({
                   const dayHours = getDayTotalHours(i);
                   const today = isToday(weekDates[i]);
                   return (
-                    <div key={day} className={`flex-1 border-l border-[#F0F0F5] px-3 py-3 flex items-end justify-between ${
-                      today ? 'bg-[#635BFF]/[0.02]' : ''
+                    <div key={day} className={`flex-1 border-l px-3 py-3 flex items-end justify-between ${theme.cellBorderClass} ${
+                      today ? theme.todayHeaderClass : ''
                     }`}>
                       {/* Left-aligned: date + day name */}
                       <div>
                         <p className={`text-[24px] leading-none ${
-                          today ? 'text-[#635BFF]' : 'text-[#0A2540]'
+                          today ? 'text-[#635BFF]' : theme.textPrimary
                         }`} style={{ fontWeight: today ? 620 : 540 }}>
                           {weekDates[i].getDate()}
                         </p>
-                        <p className="text-[10px] text-[#8898AA] uppercase tracking-[0.04em] mt-1" style={{ fontWeight: 460 }}>
+                        <p className={`text-[10px] uppercase tracking-[0.04em] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
                           {day}
                         </p>
                       </div>
                       {/* Right-aligned: hours */}
-                      <span className="text-[11px] text-[#8898AA]"
+                      <span className={`text-[11px] ${theme.textSecondary}`}
                         style={{ fontWeight: 440 }}>
                         {dayHours}h
                       </span>
@@ -571,23 +632,23 @@ function SchedulerContent({
               return (
                 <div key={role}>
                   {/* Role Header Row */}
-                  <div className="flex border-b border-[#F0F0F5] bg-[#F5F6F8]">
+                  <div className={`flex border-b ${theme.roleBandClass}`}>
                     <div className={`${EMP_COL} shrink-0 px-4 py-2 flex items-center gap-2`}>
                       <button onClick={() => toggleRoleCollapse(role)} className="flex items-center gap-2 group">
                         <motion.div animate={{ rotate: isCollapsed ? -90 : 0 }} transition={{ duration: 0.2 }}>
-                          <ChevronDown size={12} className="text-[#8898AA] group-hover:text-[#5E6D7A] transition-colors" />
+                          <ChevronDown size={12} className={`${theme.textSecondary} transition-colors ${isDark ? 'group-hover:text-white' : 'group-hover:text-[#5E6D7A]'}`} />
                         </motion.div>
                         <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                        <span className="text-[11px] text-[#0A2540] uppercase tracking-[0.03em]" style={{ fontWeight: 580 }}>
+                        <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
                           {role}
                         </span>
-                        <span className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                        <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                           {roleEmps.length}
                         </span>
                       </button>
                     </div>
                     {DAYS.map((day, i) => (
-                      <div key={day} className={`flex-1 border-l border-[#F0F0F5] ${isToday(weekDates[i]) ? 'bg-[#635BFF]/[0.01]' : ''}`} />
+                      <div key={day} className={`flex-1 border-l ${theme.cellBorderClass} ${isToday(weekDates[i]) ? theme.todayRoleBandClass : ''}`} />
                     ))}
                   </div>
 
@@ -599,16 +660,16 @@ function SchedulerContent({
                         <motion.div key={emp.id}
                           initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
                           transition={{ duration: 0.2 }}
-                          className="flex border-b border-[#F0F0F5] hover:bg-[#FAFBFC]/50 transition-colors">
+                          className={`flex border-b transition-colors ${theme.rowClass}`}>
                           {/* Employee Info */}
                           <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-center gap-2.5`}>
                             <img src={emp.avatar} alt={emp.name}
-                              className="w-7 h-7 rounded-full object-cover shrink-0 ring-1 ring-[#E5E7EB]" />
+                              className={`w-7 h-7 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                             <div className="min-w-0">
-                              <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>
+                              <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
                                 {emp.name}
                               </p>
-                              <p className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                              <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                                 {empWeekHours}h this week
                               </p>
                             </div>
@@ -622,10 +683,12 @@ function SchedulerContent({
                               <DroppableCell key={dayIdx} employeeId={emp.id} day={dayIdx}
                                 onDrop={moveShift}
                                 onClickEmpty={() => setCreatingAt({ employeeId: emp.id, day: dayIdx, role: emp.role })}
-                                isToday={isToday(weekDates[dayIdx])}>
+                                isToday={isToday(weekDates[dayIdx])}
+                                dark={isDark}>
                                 {cellShifts.length > 0 ? (
                                   cellShifts.map(shift => (
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
+                                      dark={isDark}
                                       onEdit={() => setEditingShift(shift)}
                                       onDelete={() => deleteShift(shift.id)}
                                       onDuplicate={() => duplicateShift(shift)} />
@@ -648,13 +711,13 @@ function SchedulerContent({
         <div className="flex-1 overflow-auto lg:hidden">
           <div className="px-4 py-3">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 580 }}>
-                {FULL_DAYS[mobileDay]}, {weekDates[mobileDay]?.toLocaleString('default', { month: 'short' })} {weekDates[mobileDay]?.getDate()}
-              </h2>
-              <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
-                {getDayTotalHours(mobileDay)}h
-              </span>
-            </div>
+                <h2 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
+                  {FULL_DAYS[mobileDay]}, {weekDates[mobileDay]?.toLocaleString('default', { month: 'short' })} {weekDates[mobileDay]?.getDate()}
+                </h2>
+                <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                  {getDayTotalHours(mobileDay)}h
+                </span>
+              </div>
 
             {filteredRoles.map(role => {
               const roleEmps = employees.filter(e => e.role === role);
@@ -664,8 +727,8 @@ function SchedulerContent({
                 <div key={role} className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                    <span className="text-[11px] text-[#0A2540] uppercase tracking-[0.03em]" style={{ fontWeight: 580 }}>{role}</span>
-                    <span className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>{roleEmps.length}</span>
+                    <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{role}</span>
+                    <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{roleEmps.length}</span>
                   </div>
 
                   <div className="space-y-1.5">
@@ -674,12 +737,12 @@ function SchedulerContent({
                       const empWeekHours = getEmployeeWeekHours(emp.id);
 
                       return (
-                        <div key={emp.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-white border border-[#E5E7EB]">
+                        <div key={emp.id} className={`flex items-center gap-3 p-2.5 rounded-xl border ${theme.cardClass}`}>
                           <img src={emp.avatar} alt={emp.name}
-                            className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-[#E5E7EB]" />
+                            className={`w-8 h-8 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                           <div className="flex-1 min-w-0">
-                            <p className="text-[12px] text-[#0A2540] truncate" style={{ fontWeight: 500 }}>{emp.name}</p>
-                            <p className="text-[10px] text-[#8898AA]" style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
+                            <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>{emp.name}</p>
+                            <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
                           </div>
                           {cellShifts.length > 0 ? (
                             <div className="flex flex-col gap-1">
@@ -693,14 +756,14 @@ function SchedulerContent({
                                     style={{ background: `${shift.color}10` }}>
                                     <DescIcon size={10} style={{ color: shift.color }} />
                                     <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{desc.label}</span>
-                                    <span className="text-[9px] text-[#8898AA]" style={{ fontWeight: 400 }}>{dur}h</span>
+                                    <span className={`text-[9px] ${theme.textSecondary}`} style={{ fontWeight: 400 }}>{dur}h</span>
                                   </button>
                                 );
                               })}
                             </div>
                           ) : (
                             <button onClick={() => setCreatingAt({ employeeId: emp.id, day: mobileDay, role: emp.role })}
-                              className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors border border-dashed border-[#E5E7EB]">
+                              className={`p-1.5 rounded-lg transition-colors border border-dashed ${isDark ? 'border-white/[0.08] hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}>
                               <Plus size={14} className="text-[#C1CED8]" />
                             </button>
                           )}
@@ -718,6 +781,7 @@ function SchedulerContent({
         <AnimatePresence>
           {creatingAt && (
             <QuickCreateModal
+              dark={isDark}
               employeeName={employees.find(e => e.id === creatingAt.employeeId)?.name || ''}
               dayLabel={`${FULL_DAYS[creatingAt.day]}, ${weekDates[creatingAt.day]?.toLocaleString('default', { month: 'short' })} ${weekDates[creatingAt.day]?.getDate()}`}
               role={creatingAt.role}
@@ -738,6 +802,7 @@ function SchedulerContent({
         <AnimatePresence>
           {editingShift && (
             <EditShiftModal
+              dark={isDark}
               shift={editingShift}
               employeeName={employees.find(e => e.id === editingShift.employeeId)?.name || 'Unassigned'}
               onClose={() => setEditingShift(null)}
@@ -751,6 +816,7 @@ function SchedulerContent({
         <AnimatePresence>
           {showCopyModal && (
             <CopyScheduleModal
+              dark={isDark}
               currentWeek={weekLabel}
               shiftsCount={shifts.length}
               employeesCount={new Set(shifts.map(s => s.employeeId)).size}
@@ -764,6 +830,7 @@ function SchedulerContent({
         <AnimatePresence>
           {showPublishModal && (
             <PublishWeekModal
+              dark={isDark}
               weekLabel={weekLabel}
               shifts={shifts}
               employees={employees}
@@ -781,18 +848,18 @@ function SchedulerContent({
         <AnimatePresence>
           {showPublishToast && (
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
-              className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-[#0A2540] shadow-2xl border border-[#1A3A5C]">
+              className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl ${theme.toastClass}`}>
               <div className="w-7 h-7 rounded-full bg-[#00B893]/20 flex items-center justify-center">
                 <Check size={14} className="text-[#00B893]" />
               </div>
               <div>
                 <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>Schedule published!</p>
-                <p className="text-[10px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
+                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                   {shifts.length} shifts sent to {new Set(shifts.map(s => s.employeeId)).size} staff
                 </p>
               </div>
               <button onClick={() => setShowPublishToast(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
-                <X size={12} className="text-[#8898AA]" />
+                <X size={12} className={theme.textSecondary} />
               </button>
             </motion.div>
           )}
@@ -800,18 +867,18 @@ function SchedulerContent({
         <AnimatePresence>
           {showCopyToast && (
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
-              className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl bg-[#0A2540] shadow-2xl border border-[#1A3A5C]">
+              className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl ${theme.toastClass}`}>
               <div className="w-7 h-7 rounded-full bg-[#635BFF]/20 flex items-center justify-center">
                 <ClipboardCopy size={14} className="text-[#635BFF]" />
               </div>
               <div>
                 <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>Schedule copied!</p>
-                <p className="text-[10px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
+                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                   {shifts.length} shifts duplicated to next week
                 </p>
               </div>
               <button onClick={() => setShowCopyToast(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
-                <X size={12} className="text-[#8898AA]" />
+                <X size={12} className={theme.textSecondary} />
               </button>
             </motion.div>
           )}
@@ -835,14 +902,15 @@ export default function Scheduler(props: SchedulerProps) {
 }
 
 /* ─── Quick Create Modal ─── */
-function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
+function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dark = false }: {
   employeeName: string; dayLabel: string; role: string;
-  onClose: () => void; onCreate: (start: number, end: number) => void;
+  onClose: () => void; onCreate: (start: number, end: number) => void; dark?: boolean;
 }) {
   const [startHour, setStartHour] = useState(7);
   const [endHour, setEndHour] = useState(15);
   const roleColor = roleColors[role] || '#635BFF';
   const hourOptions = HOURS.map(h => ({ label: formatHour(h), value: String(h) }));
+  const theme = getSchedulerTheme(dark);
 
   return (
     <>
@@ -851,16 +919,16 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ duration: 0.2 }}
-        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[380px] bg-white rounded-2xl shadow-2xl border border-[#E5E7EB] overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#F0F0F5] flex items-center justify-between">
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[380px] rounded-2xl shadow-2xl overflow-hidden ${theme.modalClass}`}>
+        <div className={`px-5 py-4 border-b flex items-center justify-between ${theme.modalBorderClass}`}>
           <div>
-            <h3 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 600 }}>New Shift</h3>
-            <p className="text-[11px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
+            <h3 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>New Shift</h3>
+            <p className={`text-[11px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
               {employeeName} · {dayLabel}
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-            <X size={16} className="text-[#8898AA]" />
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+            <X size={16} className={theme.textSecondary} />
           </button>
         </div>
         <div className="px-5 pt-4 pb-1">
@@ -870,7 +938,7 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
           </div>
         </div>
         <div className="px-5 pt-3 pb-2">
-          <p className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em] mb-2" style={{ fontWeight: 500 }}>Quick Fill</p>
+          <p className={`text-[10px] uppercase tracking-[0.05em] mb-2 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Quick Fill</p>
           <div className="grid grid-cols-4 gap-2">
             {shiftTemplates.map(t => {
               const resolvedEnd = t.end > t.start ? t.end : 23;
@@ -879,10 +947,14 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
                 <button key={t.label}
                   onClick={() => { setStartHour(t.start); setEndHour(resolvedEnd); }}
                   className={`flex flex-col items-center gap-1 py-2 rounded-xl border transition-all ${
-                    isActive ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
+                    isActive
+                      ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08]'
+                      : dark
+                        ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04]'
+                        : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
                   }`}>
-                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : 'text-[#5E6D7A]'} />
-                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
+                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
                 </button>
               );
             })}
@@ -891,18 +963,18 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
         <div className="px-5 py-3">
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em] block mb-1.5" style={{ fontWeight: 500 }}>Start</label>
-              <InlineSelect value={formatHour(startHour)} onChange={v => setStartHour(Number(v))} options={hourOptions} />
+              <label className={`text-[10px] uppercase tracking-[0.05em] block mb-1.5 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Start</label>
+              <InlineSelect value={formatHour(startHour)} onChange={v => setStartHour(Number(v))} options={hourOptions} dark={dark} />
             </div>
             <div className="flex-1">
-              <label className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em] block mb-1.5" style={{ fontWeight: 500 }}>End</label>
-              <InlineSelect value={formatHour(endHour)} onChange={v => setEndHour(Number(v))} options={hourOptions} />
+              <label className={`text-[10px] uppercase tracking-[0.05em] block mb-1.5 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>End</label>
+              <InlineSelect value={formatHour(endHour)} onChange={v => setEndHour(Number(v))} options={hourOptions} dark={dark} />
             </div>
           </div>
         </div>
-        <div className="px-5 py-4 border-t border-[#F0F0F5] flex gap-2">
+        <div className={`px-5 py-4 border-t flex gap-2 ${theme.modalBorderClass}`}>
           <button onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-colors"
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
             style={{ fontWeight: 500 }}>Cancel</button>
           <motion.button whileTap={{ scale: 0.97 }}
             onClick={() => onCreate(startHour, endHour)}
@@ -917,14 +989,15 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate }: {
 }
 
 /* ─── Edit Shift Modal ─── */
-function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete }: {
-  shift: Shift; employeeName: string; onClose: () => void; onSave: (s: Shift) => void; onDelete: () => void;
+function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete, dark = false }: {
+  shift: Shift; employeeName: string; onClose: () => void; onSave: (s: Shift) => void; onDelete: () => void; dark?: boolean;
 }) {
   const [startHour, setStartHour] = useState(shift.startHour);
   const [endHour, setEndHour] = useState(shift.endHour);
   const roleColor = roleColors[shift.role] || shift.color;
   const descriptor = getShiftDescriptor(startHour, endHour);
   const hourOptions = HOURS.map(h => ({ label: formatHour(h), value: String(h) }));
+  const theme = getSchedulerTheme(dark);
 
   return (
     <>
@@ -933,25 +1006,25 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ duration: 0.2 }}
-        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[380px] bg-white rounded-2xl shadow-2xl border border-[#E5E7EB] overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#F0F0F5] flex items-center justify-between">
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[380px] rounded-2xl shadow-2xl overflow-hidden ${theme.modalClass}`}>
+        <div className={`px-5 py-4 border-b flex items-center justify-between ${theme.modalBorderClass}`}>
           <div>
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full" style={{ background: roleColor }} />
-              <h3 className="text-[15px] text-[#0A2540]" style={{ fontWeight: 600 }}>Edit Shift</h3>
+              <h3 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Edit Shift</h3>
             </div>
-            <p className="text-[11px] text-[#8898AA] mt-1 ml-5" style={{ fontWeight: 420 }}>
+            <p className={`text-[11px] mt-1 ml-5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
               {employeeName} · {shift.role}
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-            <X size={16} className="text-[#8898AA]" />
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+            <X size={16} className={theme.textSecondary} />
           </button>
         </div>
         <div className="px-5 pt-4 pb-1 flex items-center gap-2">
           <descriptor.icon size={14} style={{ color: roleColor }} />
           <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{descriptor.label} Shift</span>
-          <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+          <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
             · {endHour > startHour ? endHour - startHour : 24 - startHour + endHour}h
           </span>
         </div>
@@ -964,10 +1037,14 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete }: {
                 <button key={t.label}
                   onClick={() => { setStartHour(t.start); setEndHour(resolvedEnd); }}
                   className={`flex flex-col items-center gap-1 py-2 rounded-xl border transition-all ${
-                    isActive ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
+                    isActive
+                      ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08]'
+                      : dark
+                        ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04]'
+                        : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
                   }`}>
-                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : 'text-[#5E6D7A]'} />
-                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
+                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
                 </button>
               );
             })}
@@ -976,24 +1053,24 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete }: {
         <div className="px-5 py-3">
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em] block mb-1.5" style={{ fontWeight: 500 }}>Start</label>
-              <InlineSelect value={formatHour(startHour)} onChange={v => setStartHour(Number(v))} options={hourOptions} />
+              <label className={`text-[10px] uppercase tracking-[0.05em] block mb-1.5 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Start</label>
+              <InlineSelect value={formatHour(startHour)} onChange={v => setStartHour(Number(v))} options={hourOptions} dark={dark} />
             </div>
             <div className="flex-1">
-              <label className="text-[10px] text-[#8898AA] uppercase tracking-[0.05em] block mb-1.5" style={{ fontWeight: 500 }}>End</label>
-              <InlineSelect value={formatHour(endHour)} onChange={v => setEndHour(Number(v))} options={hourOptions} />
+              <label className={`text-[10px] uppercase tracking-[0.05em] block mb-1.5 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>End</label>
+              <InlineSelect value={formatHour(endHour)} onChange={v => setEndHour(Number(v))} options={hourOptions} dark={dark} />
             </div>
           </div>
         </div>
-        <div className="px-5 py-4 border-t border-[#F0F0F5] flex items-center justify-between">
+        <div className={`px-5 py-4 border-t flex items-center justify-between ${theme.modalBorderClass}`}>
           <button onClick={onDelete}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-red-200 text-[12px] text-red-500 hover:bg-red-50 transition-colors"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[12px] transition-colors ${dark ? 'border-red-400/25 text-red-300 hover:bg-red-500/10' : 'border-red-200 text-red-500 hover:bg-red-50'}`}
             style={{ fontWeight: 500 }}>
             <Trash2 size={12} /> Remove
           </button>
           <div className="flex gap-2">
             <button onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-colors"
+              className={`px-4 py-2 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
               style={{ fontWeight: 500 }}>Cancel</button>
             <motion.button whileTap={{ scale: 0.97 }}
               onClick={() => onSave({ ...shift, startHour, endHour })}
@@ -1009,11 +1086,12 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete }: {
 }
 
 /* ─── Copy Schedule Modal ─── */
-function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, onCopy, currentWeekOffset }: {
+function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, onCopy, currentWeekOffset, dark = false }: {
   currentWeek: string; shiftsCount: number; employeesCount: number;
-  onClose: () => void; onCopy: (targetWeek: number) => void; currentWeekOffset: number;
+  onClose: () => void; onCopy: (targetWeek: number) => void; currentWeekOffset: number; dark?: boolean;
 }) {
   const [selectedWeek, setSelectedWeek] = useState(currentWeekOffset + 1);
+  const theme = getSchedulerTheme(dark);
 
   const getWeekLabel = (offset: number) => {
     const dates = getWeekDates(offset);
@@ -1039,18 +1117,18 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
         transition={{ duration: 0.2 }}
-        className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] bg-white rounded-2xl shadow-2xl border border-[#E5E7EB] overflow-hidden">
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl overflow-hidden ${theme.modalClass}`}>
         
         {/* Header */}
-        <div className="px-6 py-5 border-b border-[#F0F0F5] flex items-center justify-between">
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${theme.modalBorderClass}`}>
           <div>
-            <h3 className="text-[17px] text-[#0A2540]" style={{ fontWeight: 600 }}>Copy Schedule</h3>
-            <p className="text-[11px] text-[#8898AA] mt-1" style={{ fontWeight: 440 }}>
+            <h3 className={`text-[17px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Copy Schedule</h3>
+            <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
               Duplicate {shiftsCount} shifts for {employeesCount} employees
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors">
-            <X size={18} className="text-[#8898AA]" />
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+            <X size={18} className={theme.textSecondary} />
           </button>
         </div>
 
@@ -1061,10 +1139,10 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
               <ClipboardCopy size={13} className="text-[#635BFF]" />
             </div>
             <div>
-              <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em]" style={{ fontWeight: 500 }}>
+              <p className={`text-[11px] uppercase tracking-[0.05em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
                 Copying from
               </p>
-              <p className="text-[13px] text-[#0A2540] mt-0.5" style={{ fontWeight: 520 }}>
+              <p className={`text-[13px] mt-0.5 ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
                 {currentWeek}
               </p>
             </div>
@@ -1073,7 +1151,7 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
 
         {/* Week Selection */}
         <div className="px-6 pb-4">
-          <p className="text-[11px] text-[#8898AA] uppercase tracking-[0.05em] mb-3" style={{ fontWeight: 500 }}>
+          <p className={`text-[11px] uppercase tracking-[0.05em] mb-3 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
             Copy to
           </p>
           <div className="space-y-2">
@@ -1083,17 +1161,19 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
                 onClick={() => setSelectedWeek(opt.offset)}
                 className={`w-full text-left px-4 py-3.5 rounded-xl border transition-all ${
                   selectedWeek === opt.offset
-                    ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.04] shadow-sm'
-                    : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#F7F8FA]'
+                    ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08] shadow-sm'
+                    : dark
+                      ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-white/[0.04]'
+                      : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#F7F8FA]'
                 }`}>
                 <div className="flex items-center justify-between">
                   <div>
                     <p className={`text-[13px] ${
-                      selectedWeek === opt.offset ? 'text-[#635BFF]' : 'text-[#0A2540]'
+                      selectedWeek === opt.offset ? 'text-[#635BFF]' : theme.textPrimary
                     }`} style={{ fontWeight: 540 }}>
                       {opt.label}
                     </p>
-                    <p className="text-[11px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
+                    <p className={`text-[11px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                       {opt.sublabel}
                     </p>
                   </div>
@@ -1109,9 +1189,9 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-[#F0F0F5] flex gap-2.5">
+        <div className={`px-6 py-4 border-t flex gap-2.5 ${theme.modalBorderClass}`}>
           <button onClick={onClose}
-            className="flex-1 py-2.5 rounded-xl border border-[#E5E7EB] text-[12px] text-[#5E6D7A] hover:bg-[#F7F8FA] transition-colors"
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
             style={{ fontWeight: 500 }}>
             Cancel
           </button>

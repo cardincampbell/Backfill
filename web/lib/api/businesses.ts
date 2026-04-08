@@ -52,6 +52,8 @@ export type LocationRoleAssignment = {
   location_id: string;
   role_id: string;
   is_active: boolean;
+  assigned_shift_count: number;
+  is_locked: boolean;
   min_headcount?: number | null;
   max_headcount?: number | null;
   premium_rules: Record<string, unknown>;

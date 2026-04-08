@@ -2,6 +2,7 @@
 
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 
+import { FloatingDropdown } from "@/components/floating-dropdown";
 import {
   autocompletePlaces,
   getPlaceDetails,
@@ -38,6 +39,7 @@ export function PlaceAutocomplete({
 }: PlaceAutocompleteProps) {
   const deferredQuery = useDeferredValue(value.trim());
   const blurTimeoutRef = useRef<number | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const [sessionToken, setSessionToken] = useState<string>(() => newSessionToken());
   const [open, setOpen] = useState(false);
@@ -124,6 +126,7 @@ export function PlaceAutocomplete({
 
   return (
     <div
+      ref={rootRef}
       className={`place-field${
         appearance === "light" ? " place-field-light" : ""
       }${compact ? " place-field-compact" : ""}`}
@@ -146,10 +149,17 @@ export function PlaceAutocomplete({
         spellCheck={false}
       />
       {open && (loading || suggestions.length > 0 || deferredQuery.length >= 2) ? (
-        <div
+        <FloatingDropdown
+          open
+          anchorRef={rootRef}
           className={`place-dropdown${
             appearance === "light" ? " place-dropdown-light" : ""
           }`}
+          matchAnchorWidth
+          maxHeight={320}
+          onClose={() => setOpen(false)}
+          sideOffset={8}
+          zIndex={10020}
         >
           {loading ? (
             <div className="place-dropdown-status">Searching places…</div>
@@ -189,7 +199,7 @@ export function PlaceAutocomplete({
               No matching places found yet. Try a fuller location name or street address.
             </div>
           )}
-        </div>
+        </FloatingDropdown>
       ) : null}
       {selectedPlace ? (
         <div

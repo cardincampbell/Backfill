@@ -439,6 +439,7 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
         ip_address="127.0.0.1",
         user_agent="pytest",
         trusted_device_id="device-1",
+        session_location={"city": "Pasadena", "region": "CA", "country": "US"},
     )
 
     audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
@@ -453,7 +454,15 @@ async def test_request_otp_challenge_skips_sms_for_known_device_with_active_sess
     assert result.session.id == existing_session.id
     assert result.trusted_device_id == "device-1"
     assert result.session.device_fingerprint == "device-1"
-    assert result.session.session_metadata == {"auth_flow": "trusted_reentry"}
+    assert result.session.session_metadata == {
+        "auth_flow": "trusted_reentry",
+        "session_start_location": {
+            "city": "Pasadena",
+            "region": "CA",
+            "country": "US",
+            "label": "Pasadena, CA",
+        },
+    }
     assert len(sessions) == 0
     assert {entry.event_name for entry in audits} == {
         "auth.challenge.skipped",
@@ -545,6 +554,7 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
         ),
         ip_address="127.0.0.1",
         user_agent="pytest",
+        session_location={"city": "Santa Monica", "region": "CA", "country": "US"},
     )
 
     users = [obj for obj in session.added if isinstance(obj, User)]
@@ -554,7 +564,15 @@ async def test_verify_otp_challenge_sign_in_creates_user_and_session_when_missin
     assert result.session is not None
     assert result.trusted_device_id is not None
     assert result.session.device_fingerprint == result.trusted_device_id
-    assert result.session.session_metadata == {}
+    assert result.session.session_metadata == {
+        "auth_flow": "otp_challenge",
+        "session_start_location": {
+            "city": "Santa Monica",
+            "region": "CA",
+            "country": "US",
+            "label": "Santa Monica, CA",
+        },
+    }
     assert challenge.status == ChallengeStatus.approved
     assert len(users) == 1
     assert users[0].primary_phone_e164 == "+15555550160"
@@ -730,6 +748,7 @@ async def test_restore_trusted_device_session_reuses_existing_session():
         trusted_device_id="device-1",
         ip_address="127.0.0.1",
         user_agent="pytest",
+        session_location={"city": "Los Angeles", "region": "CA", "country": "US"},
     )
 
     audits = [obj for obj in session.added if isinstance(obj, AuditLog)]
@@ -738,7 +757,15 @@ async def test_restore_trusted_device_session_reuses_existing_session():
     assert result.token is not None
     assert result.session.id == source_session.id
     assert result.session.device_fingerprint == "device-1"
-    assert result.session.session_metadata == {"auth_flow": "trusted_device_restore"}
+    assert result.session.session_metadata == {
+        "auth_flow": "trusted_device_restore",
+        "session_start_location": {
+            "city": "Los Angeles",
+            "region": "CA",
+            "country": "US",
+            "label": "Los Angeles, CA",
+        },
+    }
     assert duplicate_session.revoked_at is not None
     assert {entry.event_name for entry in audits} == {
         "auth.session.refreshed",

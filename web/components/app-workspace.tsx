@@ -6,9 +6,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { usePathname } from "next/navigation";
 
 import {
   getWorkspace,
@@ -31,15 +33,24 @@ export function AppWorkspaceProvider({
   children: ReactNode;
   initialWorkspace: Workspace | null;
 }) {
+  const pathname = usePathname();
   const [workspace, setWorkspace] = useState<Workspace | null>(initialWorkspace);
   const [workspaceReady, setWorkspaceReady] = useState(Boolean(initialWorkspace));
+  const refreshRequestRef = useRef(0);
+  const hasHandledInitialPathRef = useRef(false);
 
   const refreshWorkspace = useCallback(async () => {
+    const requestId = ++refreshRequestRef.current;
     try {
       const nextWorkspace = await getWorkspace();
-      setWorkspace(nextWorkspace);
+      if (requestId !== refreshRequestRef.current) {
+        return;
+      }
+      setWorkspace((current) => nextWorkspace ?? current);
     } finally {
-      setWorkspaceReady(true);
+      if (requestId === refreshRequestRef.current) {
+        setWorkspaceReady(true);
+      }
     }
   }, []);
 
@@ -51,6 +62,19 @@ export function AppWorkspaceProvider({
     }
     void refreshWorkspace();
   }, [initialWorkspace, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!pathname) {
+      return;
+    }
+    if (!hasHandledInitialPathRef.current) {
+      hasHandledInitialPathRef.current = true;
+      if (initialWorkspace) {
+        return;
+      }
+    }
+    void refreshWorkspace();
+  }, [initialWorkspace, pathname, refreshWorkspace]);
 
   const value = useMemo<AppWorkspaceContextValue>(
     () => ({

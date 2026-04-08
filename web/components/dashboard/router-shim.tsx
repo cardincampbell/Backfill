@@ -18,5 +18,6 @@ export function useNavigate() {
 
   return (href: string) => {
     router.push(href);
+    router.refresh();
   };
 }

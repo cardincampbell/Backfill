@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronRight, MapPin, Plus, Tag, X } from "lucide-react";
+import { AlertCircle, ChevronRight, Lock, MapPin, Plus, Tag, X } from "lucide-react";
 
 import { useAppWorkspace } from "@/components/app-workspace";
 import {
@@ -58,10 +58,14 @@ function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
 function RoleTag({
   dark,
   role,
+  locked = false,
+  lockedShiftCount = 0,
   onRemove,
 }: {
   dark: boolean;
   role: BusinessRole;
+  locked?: boolean;
+  lockedShiftCount?: number;
   onRemove(): void;
 }) {
   return (
@@ -71,22 +75,39 @@ function RoleTag({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
       className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${
-        dark
-          ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
-          : "bg-[#635BFF]/[0.06] border-[#635BFF]/15"
+        locked
+          ? dark
+            ? "bg-[#FFB800]/[0.1] border-[#FFB800]/25"
+            : "bg-[#FFB800]/[0.06] border-[#FFB800]/20"
+          : dark
+            ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
+            : "bg-[#635BFF]/[0.06] border-[#635BFF]/15"
       }`}
     >
-      <Tag size={11} className="text-[#635BFF]" />
+      <Tag size={11} className={locked ? "text-[#FFB800]" : "text-[#635BFF]"} />
       <span className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`} style={{ fontWeight: 480 }}>
         {role.name}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5"
-      >
-        <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-      </button>
+      {locked ? (
+        <div
+          className="ml-0.5 p-0.5"
+          title={
+            lockedShiftCount === 1
+              ? "This role has 1 active shift and cannot be removed."
+              : `This role has ${lockedShiftCount} active shifts and cannot be removed.`
+          }
+        >
+          <Lock size={12} className="text-[#FFB800]" />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5"
+        >
+          <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
+        </button>
+      )}
     </motion.div>
   );
 }
@@ -126,8 +147,15 @@ function LocationEditSlideOver({
     ...location,
     name: location.display_name ?? location.name,
   });
+  const assignmentsByRoleId = useMemo(
+    () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
+    [assignments],
+  );
   const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
   const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
+  const lockedRoles = selectedRoles.filter(
+    (role) => assignmentsByRoleId.get(role.id)?.is_locked,
+  );
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
   const textTertiary = dark ? "text-[#C1CED8]" : "text-[#3E4C59]";
@@ -142,6 +170,9 @@ function LocationEditSlideOver({
   };
 
   const removeRole = (roleId: string) => {
+    if (assignmentsByRoleId.get(roleId)?.is_locked) {
+      return;
+    }
     setSelectedRoleIds((current) => current.filter((item) => item !== roleId));
   };
 
@@ -220,16 +251,18 @@ function LocationEditSlideOver({
                 {location.display_name ?? location.name}
               </h2>
               <div className="flex items-center gap-2 mt-0.5">
-                <span
-                  className="text-[12px] px-2 py-0.5 rounded-full"
-                  style={{
-                    fontWeight: 500,
-                    color: locationReference.color,
-                    background: `${locationReference.color}10`,
-                  }}
-                >
-                  {locationReference.typeLabel}
-                </span>
+                {locationReference.typeLabel ? (
+                  <span
+                    className="text-[12px] px-2 py-0.5 rounded-full"
+                    style={{
+                      fontWeight: 500,
+                      color: locationReference.color,
+                      background: `${locationReference.color}10`,
+                    }}
+                  >
+                    {locationReference.typeLabel}
+                  </span>
+                ) : null}
                 <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                   {locationReference.staffLabel}
                 </span>
@@ -280,14 +313,19 @@ function LocationEditSlideOver({
             </div>
             <div className="flex flex-wrap gap-2 mb-4">
               <AnimatePresence>
-                {selectedRoles.map((role) => (
+                {selectedRoles.map((role) => {
+                  const assignment = assignmentsByRoleId.get(role.id);
+                  return (
                   <RoleTag
                     key={role.id}
                     dark={dark}
                     role={role}
+                    locked={assignment?.is_locked ?? false}
+                    lockedShiftCount={assignment?.assigned_shift_count ?? 0}
                     onRemove={() => removeRole(role.id)}
                   />
-                ))}
+                  );
+                })}
               </AnimatePresence>
               {!loading && selectedRoles.length === 0 ? (
                 <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
@@ -300,6 +338,36 @@ function LocationEditSlideOver({
                 </p>
               ) : null}
             </div>
+
+            {lockedRoles.length > 0 ? (
+              <div
+                className={`mb-4 rounded-lg border px-3 py-3 ${
+                  dark
+                    ? "border-[#FFB800]/20 bg-[#FFB800]/[0.08]"
+                    : "border-[#FFB800]/15 bg-[#FFB800]/[0.04]"
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle size={14} className="mt-0.5 shrink-0 text-[#FFB800]" />
+                  <div>
+                    <p
+                      className={`text-[11px] ${textPrimary}`}
+                      style={{ fontWeight: 520 }}
+                    >
+                      Protected roles
+                    </p>
+                    <p
+                      className={`mt-0.5 text-[10px] ${textSecondary}`}
+                      style={{ fontWeight: 420 }}
+                    >
+                      {lockedRoles.length === 1
+                        ? "1 role has active shifts and cannot be removed until those shifts are reassigned or deleted."
+                        : `${lockedRoles.length} roles have active shifts and cannot be removed until those shifts are reassigned or deleted.`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {availableRoles.length > 0 ? (
               <div>
@@ -750,7 +818,9 @@ export default function SettingsLocationsSection({
                   </p>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                      {locationReference.typeLabel} • {locationReference.staffLabel}
+                      {locationReference.typeLabel
+                        ? `${locationReference.typeLabel} • ${locationReference.staffLabel}`
+                        : locationReference.staffLabel}
                     </span>
                     {typeof assignedRoleCount === "number" ? (
                       <>

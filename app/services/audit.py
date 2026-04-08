@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import unquote
 from uuid import UUID
 
 from fastapi import Request
@@ -24,6 +25,31 @@ def request_client_ip(request: Request) -> Optional[str]:
 def request_user_agent(request: Request) -> Optional[str]:
     value = (request.headers.get("user-agent") or "").strip()
     return value or None
+
+
+def _request_header_text(request: Request, name: str) -> Optional[str]:
+    value = (request.headers.get(name) or "").strip()
+    if not value:
+        return None
+    decoded = unquote(value).strip()
+    return decoded or None
+
+
+def request_client_session_location(request: Request) -> Optional[dict[str, str]]:
+    city = _request_header_text(request, "x-vercel-ip-city")
+    region = _request_header_text(request, "x-vercel-ip-country-region")
+    country = _request_header_text(request, "x-vercel-ip-country")
+    if not any((city, region, country)):
+        return None
+
+    location: dict[str, str] = {}
+    if city:
+        location["city"] = city
+    if region:
+        location["region"] = region
+    if country:
+        location["country"] = country
+    return location
 
 
 async def append(

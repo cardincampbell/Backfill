@@ -52,12 +52,18 @@ function copyBackendHeaders(source: Response, target: NextResponse): void {
 }
 
 export async function POST(request: NextRequest) {
+  const vercelIpCity = request.headers.get("x-vercel-ip-city");
+  const vercelIpRegion = request.headers.get("x-vercel-ip-country-region");
+  const vercelIpCountry = request.headers.get("x-vercel-ip-country");
   const backendResponse = await fetch(`${API_BASE_URL}/api/auth/restore`, {
     method: "POST",
     headers: {
       cookie: request.headers.get("cookie") ?? "",
       "user-agent": request.headers.get("user-agent") ?? "",
       "x-forwarded-for": request.headers.get("x-forwarded-for") ?? "",
+      ...(vercelIpCity ? { "x-vercel-ip-city": vercelIpCity } : {}),
+      ...(vercelIpRegion ? { "x-vercel-ip-country-region": vercelIpRegion } : {}),
+      ...(vercelIpCountry ? { "x-vercel-ip-country": vercelIpCountry } : {}),
     },
     cache: "no-store",
   });

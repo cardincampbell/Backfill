@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   CheckCircle2,
@@ -18,6 +18,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+import { FloatingDropdown } from '@/components/floating-dropdown';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import DashboardShell from './DashboardShell';
 
@@ -70,6 +71,8 @@ export default function Activity({
   const [selectedCategory, setSelectedCategory] = useState('All categories');
   const [locationOpen, setLocationOpen] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
+  const locationButtonRef = useRef<HTMLButtonElement>(null);
+  const categoryButtonRef = useRef<HTMLButtonElement>(null);
 
   const filtered = allActivity.filter((activity) => {
     if (selectedLocation !== 'All locations' && activity.location !== selectedLocation) {
@@ -151,6 +154,7 @@ export default function Activity({
         <div className="flex flex-wrap gap-2">
           <div className="relative">
             <button
+              ref={locationButtonRef}
               onClick={() => {
                 setLocationOpen(!locationOpen);
                 setCategoryOpen(false);
@@ -165,11 +169,13 @@ export default function Activity({
               <ChevronDown size={12} className={`transition-transform ${locationOpen ? 'rotate-180' : ''}`} />
             </button>
             {locationOpen ? (
-              <motion.div
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.15 }}
-                className={`absolute left-0 top-full mt-1 w-64 rounded-xl border overflow-hidden z-30 ${dropdownClass}`}
+              <FloatingDropdown
+                open={locationOpen}
+                anchorRef={locationButtonRef}
+                className={`rounded-xl border overflow-hidden ${dropdownClass}`}
+                onClose={() => setLocationOpen(false)}
+                width={256}
+                zIndex={10010}
               >
                 {locations.map((location) => (
                   <button
@@ -189,12 +195,13 @@ export default function Activity({
                     {location}
                   </button>
                 ))}
-              </motion.div>
+              </FloatingDropdown>
             ) : null}
           </div>
 
           <div className="relative">
             <button
+              ref={categoryButtonRef}
               onClick={() => {
                 setCategoryOpen(!categoryOpen);
                 setLocationOpen(false);
@@ -209,11 +216,13 @@ export default function Activity({
               <ChevronDown size={12} className={`transition-transform ${categoryOpen ? 'rotate-180' : ''}`} />
             </button>
             {categoryOpen ? (
-              <motion.div
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.15 }}
-                className={`absolute left-0 top-full mt-1 w-48 rounded-xl border overflow-hidden z-30 ${dropdownClass}`}
+              <FloatingDropdown
+                open={categoryOpen}
+                anchorRef={categoryButtonRef}
+                className={`rounded-xl border overflow-hidden ${dropdownClass}`}
+                onClose={() => setCategoryOpen(false)}
+                width={192}
+                zIndex={10010}
               >
                 {categories.map((category) => (
                   <button
@@ -233,7 +242,7 @@ export default function Activity({
                     {category}
                   </button>
                 ))}
-              </motion.div>
+              </FloatingDropdown>
             ) : null}
           </div>
 

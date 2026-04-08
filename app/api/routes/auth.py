@@ -81,6 +81,7 @@ async def request_challenge(
             user_agent=audit_service.request_user_agent(request),
             auth_ctx=auth_ctx,
             trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
+            session_location=audit_service.request_client_session_location(request),
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -126,6 +127,7 @@ async def verify_challenge(
             user_agent=audit_service.request_user_agent(request),
             auth_ctx=auth_ctx,
             trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
+            session_location=audit_service.request_client_session_location(request),
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -177,6 +179,7 @@ async def restore_session(
         trusted_device_id=request.cookies.get(settings.trusted_device_cookie_name),
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
+        session_location=audit_service.request_client_session_location(request),
     )
     if result is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
