@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { usePathname } from 'next/navigation';
 import {
   Plus,
   Upload,
@@ -18,7 +19,6 @@ import {
   ArrowUpDown,
   Download,
   Eye,
-  Trash2,
   MapPin,
   Activity,
   Tag,
@@ -26,18 +26,29 @@ import {
   Info,
 } from 'lucide-react';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
+import { useAppWorkspace } from '@/components/app-workspace';
 import { FloatingDropdown } from '@/components/floating-dropdown';
+import {
+  listBusinessLocations,
+  listBusinessRoles,
+  type BusinessLocation,
+  type BusinessRole,
+} from '@/lib/api/businesses';
+import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import DashboardShell from './DashboardShell';
+import { formatLocationMeta, getLocationReference } from './location-role-reference';
 
 /* ─── Types ─── */
 interface EmployeeLocation {
+  id?: string;
   name: string;
   emoji: string;
+  meta?: string;
   primary: boolean;
 }
 
 interface Employee {
-  id: number;
+  id: string | number;
   name: string;
   email: string;
   phone: string;
@@ -48,19 +59,43 @@ interface Employee {
   avatar: string;
 }
 
-/* ─── Curated roles from onboarding ─── */
-const curatedRoles = [
-  'RN', 'LPN', 'CNA', 'NP', 'PA', 'Medical Assistant', 'Phlebotomist',
-  'Respiratory Therapist', 'Radiology Tech', 'Surgical Tech', 'EMT',
-  'Caregiver', 'Server Lead', 'Host', 'Bartender', 'Line Cook',
-];
+type EmployeeAssignmentState = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  selectedRoleIds: string[];
+  primaryRoleId: string;
+  selectedLocationIds: string[];
+  primaryLocationId: string;
+};
 
-/* ─── All business locations ─── */
-const allBusinessLocations = [
-  { name: 'Downtown Medical Center', emoji: '\u{1F3E5}' },
-  { name: 'Sunrise Senior Living', emoji: '\u{1F305}' },
-  { name: 'Bay Area Staffing Co.', emoji: '\u{1F3E2}' },
-  { name: 'Coastal Hospitality Group', emoji: '\u{1F3E8}' },
+type TeamLocationLike = Pick<
+  BusinessLocation,
+  | 'id'
+  | 'name'
+  | 'display_name'
+  | 'slug'
+  | 'address_line_1'
+  | 'locality'
+  | 'region'
+  | 'postal_code'
+  | 'timezone'
+>;
+
+const seededEmployeeNames = [
+  'Sarah Martinez',
+  'James Chen',
+  'Aisha Patel',
+  'Emily Ross',
+  'David Kim',
+  'Carlos Rivera',
+  'Mia Johnson',
+  'Marcus Thompson',
+  'Priya Sharma',
+  'Alex Morgan',
+  'Jordan Lee',
+  'Nina Patel',
 ];
 
 /* ─── Mock Data ─── */
@@ -91,6 +126,141 @@ const statusConfig = {
   'off-today': { label: 'Off today', color: '#F59E0B', bg: '#F59E0B', description: 'Not available today' },
   'on-leave': { label: 'On leave', color: '#8898AA', bg: '#8898AA', description: 'Extended unavailability' },
 };
+
+function employeeInitials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'BF';
+}
+
+function emailFromName(name: string) {
+  return `${name.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/(^\.|\.$)/g, '')}@backfill.io`;
+}
+
+function locationDisplayName(location: TeamLocationLike) {
+  return location.display_name || location.name;
+}
+
+function toEmployeeLocation(location: TeamLocationLike, primary = false): EmployeeLocation {
+  const reference = getLocationReference({
+    name: locationDisplayName(location),
+    slug: location.slug,
+  });
+  return {
+    id: location.id,
+    name: locationDisplayName(location),
+    emoji: reference.logo,
+    meta: formatLocationMeta(location) || location.timezone,
+    primary,
+  };
+}
+
+function buildReferenceEmployees(
+  roles: BusinessRole[],
+  locations: BusinessLocation[],
+): Employee[] {
+  if (!roles.length || !locations.length) {
+    return employees;
+  }
+
+  const statuses: Employee['status'][] = [
+    'available-now',
+    'on-shift',
+    'available-later',
+    'off-today',
+    'available-now',
+    'on-leave',
+  ];
+
+  return seededEmployeeNames.map((name, index) => {
+    const primaryRole = roles[index % roles.length];
+    const secondaryRole =
+      roles.length > 1 && index % 4 === 0 ? roles[(index + 1) % roles.length] : null;
+    const primaryLocation = locations[index % locations.length];
+    const secondaryLocation =
+      locations.length > 1 && index % 5 === 0
+        ? locations[(index + 1) % locations.length]
+        : null;
+
+    return {
+      id: `seed-${index + 1}`,
+      name,
+      email: emailFromName(name),
+      phone: `(415) 555-${String(1200 + index * 17).slice(-4)}`,
+      roles: [primaryRole.name, secondaryRole?.name].filter(Boolean) as string[],
+      locations: [
+        toEmployeeLocation(primaryLocation, true),
+        ...(secondaryLocation ? [toEmployeeLocation(secondaryLocation)] : []),
+      ],
+      status: statuses[index % statuses.length],
+      reliability: 88 + ((index * 3) % 12),
+      avatar: employeeInitials(name),
+    };
+  });
+}
+
+function emptyEmployeeAssignmentState(): EmployeeAssignmentState {
+  return {
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    selectedRoleIds: [],
+    primaryRoleId: '',
+    selectedLocationIds: [],
+    primaryLocationId: '',
+  };
+}
+
+function buildEmployeeAssignmentState(
+  employee: Employee,
+  roles: BusinessRole[],
+  locations: BusinessLocation[],
+): EmployeeAssignmentState {
+  const [firstName = '', ...rest] = employee.name.split(' ');
+  const lastName = rest.join(' ');
+  const selectedRoleIds = roles
+    .filter((role) => employee.roles.includes(role.name))
+    .map((role) => role.id);
+  const selectedLocationIds = locations
+    .filter((location) =>
+      employee.locations.some(
+        (item) =>
+          item.id === location.id ||
+          item.name === locationDisplayName(location) ||
+          item.name === location.name,
+      ),
+    )
+    .map((location) => location.id);
+
+  return {
+    firstName,
+    lastName,
+    email: employee.email,
+    phone: employee.phone,
+    selectedRoleIds,
+    primaryRoleId:
+      roles.find((role) => role.name === employee.roles[0])?.id ??
+      selectedRoleIds[0] ??
+      '',
+    selectedLocationIds,
+    primaryLocationId:
+      locations.find((location) =>
+        employee.locations.some(
+          (item) =>
+            item.primary &&
+            (item.id === location.id ||
+              item.name === locationDisplayName(location) ||
+              item.name === location.name),
+        ),
+      )?.id ??
+      selectedLocationIds[0] ??
+      '',
+  };
+}
 
 /* ─── Status Info Tooltip ─── */
 function StatusWithInfo({
@@ -124,7 +294,6 @@ function StatusWithInfo({
   );
 }
 
-const locationOptions = ['All Locations', 'Downtown Medical Center', 'Sunrise Senior Living', 'Bay Area Staffing Co.', 'Coastal Hospitality Group'];
 const statusOptions = ['All Status', 'Available now', 'Available later', 'On shift', 'Off today', 'On leave'];
 
 function getPrimaryLocation(emp: Employee) {
@@ -171,102 +340,510 @@ function getTeamTheme(dark: boolean) {
   };
 }
 
+function AssignmentPill({
+  dark,
+  label,
+  leading,
+  primary,
+  onSetPrimary,
+  onRemove,
+}: {
+  dark: boolean;
+  label: string;
+  leading: ReactNode;
+  primary: boolean;
+  onSetPrimary(): void;
+  onRemove(): void;
+}) {
+  return (
+    <motion.div
+      layout
+      animate={{ opacity: 1, scale: 1 }}
+      className={`flex items-center gap-1.5 rounded-lg border py-1.5 pl-2.5 pr-2 ${
+        dark
+          ? 'border-[#635BFF]/25 bg-[#635BFF]/[0.12]'
+          : 'border-[#635BFF]/15 bg-[#635BFF]/[0.06]'
+      }`}
+      exit={{ opacity: 0, scale: 0.9 }}
+      initial={{ opacity: 0, scale: 0.9 }}
+    >
+      <span className="shrink-0">{leading}</span>
+      <span className={`${dark ? 'text-white' : 'text-[#0A2540]'} text-[12px]`} style={{ fontWeight: 480 }}>
+        {label}
+      </span>
+      <button
+        className={`ml-1 rounded-full px-2 py-0.5 text-[10px] transition-colors ${
+          primary
+            ? 'bg-[#635BFF] text-white'
+            : dark
+              ? 'bg-white/[0.06] text-[#C1CED8] hover:bg-white/[0.1]'
+              : 'bg-white text-[#635BFF] hover:bg-[#635BFF]/10'
+        }`}
+        onClick={onSetPrimary}
+        style={{ fontWeight: primary ? 560 : 500 }}
+        type="button"
+      >
+        {primary ? 'Primary' : 'Set Primary'}
+      </button>
+      <button
+        className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
+        onClick={onRemove}
+        type="button"
+      >
+        <X className="text-[#8898AA] hover:text-[#E5484D]" size={12} />
+      </button>
+    </motion.div>
+  );
+}
+
+function AvailableAssignmentButton({
+  dark,
+  label,
+  leading,
+  onClick,
+}: {
+  dark: boolean;
+  label: string;
+  leading: ReactNode;
+  onClick(): void;
+}) {
+  return (
+    <button
+      className={`group flex items-center gap-1.5 rounded-lg border px-3 py-1.5 transition-all duration-200 ${
+        dark
+          ? 'border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]'
+          : 'border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]'
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      <Plus className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]" size={11} />
+      <span className="shrink-0">{leading}</span>
+      <span
+        className={`text-[12px] transition-colors ${
+          dark ? 'text-[#C1CED8] group-hover:text-white' : 'text-[#5E6D7A] group-hover:text-[#0A2540]'
+        }`}
+        style={{ fontWeight: 440 }}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function RoleAssignmentPicker({
+  dark,
+  loading,
+  roles,
+  selectedRoleIds,
+  primaryRoleId,
+  onToggleRole,
+  onSetPrimaryRole,
+}: {
+  dark: boolean;
+  loading: boolean;
+  roles: BusinessRole[];
+  selectedRoleIds: string[];
+  primaryRoleId: string;
+  onToggleRole(roleId: string): void;
+  onSetPrimaryRole(roleId: string): void;
+}) {
+  const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
+  const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+          Roles
+        </h3>
+        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+          {selectedRoles.length} selected
+        </span>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <AnimatePresence>
+          {selectedRoles.map((role) => (
+            <AssignmentPill
+              dark={dark}
+              key={role.id}
+              label={role.name}
+              leading={<Tag className="text-[#635BFF]" size={11} />}
+              onRemove={() => onToggleRole(role.id)}
+              onSetPrimary={() => onSetPrimaryRole(role.id)}
+              primary={primaryRoleId === role.id}
+            />
+          ))}
+        </AnimatePresence>
+        {!selectedRoles.length ? (
+          <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            {loading ? 'Loading business roles...' : 'No roles selected yet. Add from the business role catalog below.'}
+          </p>
+        ) : null}
+      </div>
+
+      {!loading && !roles.length ? (
+        <div className={`rounded-xl border px-4 py-3 text-[12px] ${dark ? 'border-white/[0.08] bg-white/[0.03] text-[#C1CED8]' : 'border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]'}`}>
+          Create business roles first. Employee role assignment should only use the business role catalog.
+        </div>
+      ) : null}
+
+      {availableRoles.length ? (
+        <div>
+          <div className="mb-2.5 flex items-center justify-between">
+            <h4 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+              Available Roles
+            </h4>
+            {availableRoles.length > 1 ? (
+              <button
+                className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                onClick={() => availableRoles.forEach((role) => onToggleRole(role.id))}
+                style={{ fontWeight: 520 }}
+                type="button"
+              >
+                + Add All
+              </button>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availableRoles.map((role) => (
+              <AvailableAssignmentButton
+                dark={dark}
+                key={role.id}
+                label={role.name}
+                leading={<Tag className="text-[#635BFF]" size={11} />}
+                onClick={() => onToggleRole(role.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LocationAssignmentPicker({
+  dark,
+  loading,
+  locations,
+  selectedLocationIds,
+  primaryLocationId,
+  onToggleLocation,
+  onSetPrimaryLocation,
+}: {
+  dark: boolean;
+  loading: boolean;
+  locations: BusinessLocation[];
+  selectedLocationIds: string[];
+  primaryLocationId: string;
+  onToggleLocation(locationId: string): void;
+  onSetPrimaryLocation(locationId: string): void;
+}) {
+  const selectedLocations = locations.filter((location) => selectedLocationIds.includes(location.id));
+  const availableLocations = locations.filter((location) => !selectedLocationIds.includes(location.id));
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+          Locations
+        </h3>
+        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+          {selectedLocations.length} selected
+        </span>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <AnimatePresence>
+          {selectedLocations.map((location) => {
+            const reference = getLocationReference({
+              name: locationDisplayName(location),
+              slug: location.slug,
+            });
+            return (
+              <AssignmentPill
+                dark={dark}
+                key={location.id}
+                label={locationDisplayName(location)}
+                leading={<span className="text-[13px]">{reference.logo}</span>}
+                onRemove={() => onToggleLocation(location.id)}
+                onSetPrimary={() => onSetPrimaryLocation(location.id)}
+                primary={primaryLocationId === location.id}
+              />
+            );
+          })}
+        </AnimatePresence>
+        {!selectedLocations.length ? (
+          <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            {loading ? 'Loading business locations...' : 'No locations selected yet. Add locations from this business below.'}
+          </p>
+        ) : null}
+      </div>
+
+      {!loading && !locations.length ? (
+        <div className={`rounded-xl border px-4 py-3 text-[12px] ${dark ? 'border-white/[0.08] bg-white/[0.03] text-[#C1CED8]' : 'border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]'}`}>
+          Add at least one business location first. Employee location assignment should only use locations from this business.
+        </div>
+      ) : null}
+
+      {availableLocations.length ? (
+        <div>
+          <div className="mb-2.5 flex items-center justify-between">
+            <h4 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+              Available Locations
+            </h4>
+            {availableLocations.length > 1 ? (
+              <button
+                className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                onClick={() => availableLocations.forEach((location) => onToggleLocation(location.id))}
+                style={{ fontWeight: 520 }}
+                type="button"
+              >
+                + Add All
+              </button>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availableLocations.map((location) => {
+              const reference = getLocationReference({
+                name: locationDisplayName(location),
+                slug: location.slug,
+              });
+              return (
+                <AvailableAssignmentButton
+                  dark={dark}
+                  key={location.id}
+                  label={locationDisplayName(location)}
+                  leading={<span className="text-[13px]">{reference.logo}</span>}
+                  onClick={() => onToggleLocation(location.id)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /* ─── Add Employee Modal ─── */
 function AddEmployeeModal({
   dark,
+  loadingCatalog,
+  locations,
   onClose,
+  onCreate,
+  roles,
 }: {
   dark: boolean;
+  loadingCatalog: boolean;
+  locations: BusinessLocation[];
   onClose: () => void;
+  onCreate(employee: Employee): void;
+  roles: BusinessRole[];
 }) {
   const theme = getTeamTheme(dark);
-  const [formData, setFormData] = useState({
-    firstName: '', lastName: '', email: '', phone: '', role: '', location: '',
-  });
+  const [formData, setFormData] = useState<EmployeeAssignmentState>(emptyEmployeeAssignmentState());
+
+  const toggleRole = (roleId: string) => {
+    setFormData((current) => {
+      const selectedRoleIds = current.selectedRoleIds.includes(roleId)
+        ? current.selectedRoleIds.filter((item) => item !== roleId)
+        : [...current.selectedRoleIds, roleId];
+      const primaryRoleId = selectedRoleIds.includes(current.primaryRoleId)
+        ? current.primaryRoleId
+        : selectedRoleIds[0] ?? '';
+      return { ...current, selectedRoleIds, primaryRoleId };
+    });
+  };
+
+  const toggleLocation = (locationId: string) => {
+    setFormData((current) => {
+      const selectedLocationIds = current.selectedLocationIds.includes(locationId)
+        ? current.selectedLocationIds.filter((item) => item !== locationId)
+        : [...current.selectedLocationIds, locationId];
+      const primaryLocationId = selectedLocationIds.includes(current.primaryLocationId)
+        ? current.primaryLocationId
+        : selectedLocationIds[0] ?? '';
+      return { ...current, selectedLocationIds, primaryLocationId };
+    });
+  };
+
+  const canSubmit =
+    Boolean(formData.firstName.trim()) &&
+    Boolean(formData.lastName.trim()) &&
+    Boolean(formData.primaryRoleId) &&
+    Boolean(formData.primaryLocationId);
+
+  const handleCreate = () => {
+    if (!canSubmit) {
+      return;
+    }
+
+    const fullName = `${formData.firstName.trim()} ${formData.lastName.trim()}`.trim();
+    const selectedRoles = roles.filter((role) => formData.selectedRoleIds.includes(role.id));
+    const selectedLocations = locations.filter((location) =>
+      formData.selectedLocationIds.includes(location.id),
+    );
+
+    onCreate({
+      id: `local-${Date.now()}`,
+      name: fullName,
+      email: formData.email.trim() || emailFromName(fullName),
+      phone: formData.phone.trim() || '(415) 555-0100',
+      roles: selectedRoles
+        .sort((left, right) => {
+          if (left.id === formData.primaryRoleId) return -1;
+          if (right.id === formData.primaryRoleId) return 1;
+          return left.name.localeCompare(right.name);
+        })
+        .map((role) => role.name),
+      locations: selectedLocations
+        .sort((left, right) => {
+          if (left.id === formData.primaryLocationId) return -1;
+          if (right.id === formData.primaryLocationId) return 1;
+          return locationDisplayName(left).localeCompare(locationDisplayName(right));
+        })
+        .map((location) => toEmployeeLocation(location, location.id === formData.primaryLocationId)),
+      status: 'available-now',
+      reliability: 96,
+      avatar: employeeInitials(fullName),
+    });
+    onClose();
+  };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+    <motion.div
+      animate={{ opacity: 1 }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      onClick={onClose}>
-      <motion.div initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
+      exit={{ opacity: 0 }}
+      initial={{ opacity: 0 }}
+      onClick={onClose}
+    >
+      <motion.div
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className={`mx-4 w-full max-w-3xl overflow-hidden rounded-2xl border ${theme.overlayPanelClass}`}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        onClick={(event) => event.stopPropagation()}
         transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className={`w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden mx-4 sm:mx-0 border ${theme.overlayPanelClass}`}
-        onClick={(e) => e.stopPropagation()}>
-        <div className={`flex items-center justify-between px-4 sm:px-6 py-5 border-b ${theme.borderClass}`}>
+      >
+        <div className={`flex items-center justify-between border-b px-4 py-5 sm:px-6 ${theme.borderClass}`}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#635BFF]/10 flex items-center justify-center">
-              <UserPlus size={18} className="text-[#635BFF]" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#635BFF]/10">
+              <UserPlus className="text-[#635BFF]" size={18} />
             </div>
             <div>
-              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h2>
-              <p className={`text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Add a new team member to your roster</p>
+              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
+                Add Employee
+              </h2>
+              <p className={`text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
+                Add a new team member using this business&apos;s live roles and locations.
+              </p>
             </div>
           </div>
-          <button onClick={onClose} className={`p-2 rounded-lg transition-colors ${theme.closeButtonClass}`}>
-            <X size={18} className="text-[#8898AA]" />
+          <button className={`rounded-lg p-2 transition-colors ${theme.closeButtonClass}`} onClick={onClose} type="button">
+            <X className="text-[#8898AA]" size={18} />
           </button>
         </div>
 
-        <div className="px-4 sm:px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>First Name</label>
-              <input type="text" value={formData.firstName} onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                style={{ fontWeight: 440 }} placeholder="Sarah" />
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                First Name
+              </label>
+              <input
+                className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                onChange={(event) => setFormData((current) => ({ ...current, firstName: event.target.value }))}
+                placeholder="Sarah"
+                style={{ fontWeight: 440 }}
+                type="text"
+                value={formData.firstName}
+              />
             </div>
             <div>
-              <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Last Name</label>
-              <input type="text" value={formData.lastName} onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                style={{ fontWeight: 440 }} placeholder="Martinez" />
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                Last Name
+              </label>
+              <input
+                className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                onChange={(event) => setFormData((current) => ({ ...current, lastName: event.target.value }))}
+                placeholder="Martinez"
+                style={{ fontWeight: 440 }}
+                type="text"
+                value={formData.lastName}
+              />
             </div>
           </div>
 
-          <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Email</label>
-            <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-              style={{ fontWeight: 440 }} placeholder="sarah.m@company.com" />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                Email
+              </label>
+              <input
+                className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                onChange={(event) => setFormData((current) => ({ ...current, email: event.target.value }))}
+                placeholder="sarah.m@company.com"
+                style={{ fontWeight: 440 }}
+                type="email"
+                value={formData.email}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                Phone
+              </label>
+              <input
+                className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                onChange={(event) => setFormData((current) => ({ ...current, phone: event.target.value }))}
+                placeholder="(415) 555-0142"
+                style={{ fontWeight: 440 }}
+                type="tel"
+                value={formData.phone}
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Phone</label>
-            <input type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-              style={{ fontWeight: 440 }} placeholder="(415) 555-0142" />
-          </div>
+          <RoleAssignmentPicker
+            dark={dark}
+            loading={loadingCatalog}
+            onSetPrimaryRole={(roleId) => setFormData((current) => ({ ...current, primaryRoleId: roleId }))}
+            onToggleRole={toggleRole}
+            primaryRoleId={formData.primaryRoleId}
+            roles={roles}
+            selectedRoleIds={formData.selectedRoleIds}
+          />
 
-          <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Role</label>
-            <select value={formData.role} onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${theme.inputClass}`}
-              style={{ fontWeight: 440 }}>
-              <option value="">Select role</option>
-              {curatedRoles.map((r) => <option key={r}>{r}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Location</label>
-            <select value={formData.location} onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              className={`w-full px-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all appearance-none ${theme.inputClass}`}
-              style={{ fontWeight: 440 }}>
-              <option value="">Select location</option>
-              {locationOptions.slice(1).map((l) => <option key={l}>{l}</option>)}
-            </select>
-          </div>
+          <LocationAssignmentPicker
+            dark={dark}
+            loading={loadingCatalog}
+            locations={locations}
+            onSetPrimaryLocation={(locationId) =>
+              setFormData((current) => ({ ...current, primaryLocationId: locationId }))
+            }
+            onToggleLocation={toggleLocation}
+            primaryLocationId={formData.primaryLocationId}
+            selectedLocationIds={formData.selectedLocationIds}
+          />
         </div>
 
-        <div className={`flex items-center justify-end gap-3 px-4 sm:px-6 py-4 border-t ${theme.borderClass} ${theme.softSurfaceClass}`}>
-          <button onClick={onClose}
-            className={`px-4 py-2.5 rounded-lg text-[13px] border transition-all ${theme.secondaryButtonClass}`}
-            style={{ fontWeight: 480 }}>
+        <div className={`flex items-center justify-end gap-3 border-t px-4 py-4 sm:px-6 ${theme.borderClass} ${theme.softSurfaceClass}`}>
+          <button
+            className={`rounded-lg border px-4 py-2.5 text-[13px] transition-all ${theme.secondaryButtonClass}`}
+            onClick={onClose}
+            style={{ fontWeight: 480 }}
+            type="button"
+          >
             Cancel
           </button>
           <button
-            className="px-5 py-2.5 rounded-lg text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_20px_rgba(99,91,255,0.25)]"
-            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
+            className="rounded-lg px-5 py-2.5 text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_20px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canSubmit}
+            onClick={handleCreate}
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}
+            type="button"
+          >
             Add Employee
           </button>
         </div>
@@ -448,11 +1025,19 @@ function BulkUploadModal({
 function EmployeeDetail({
   dark,
   employee,
+  loadingCatalog,
+  locations,
   onClose,
+  onSave,
+  roles,
 }: {
   dark: boolean;
   employee: Employee;
+  loadingCatalog: boolean;
+  locations: BusinessLocation[];
   onClose: () => void;
+  onSave(employee: Employee): void;
+  roles: BusinessRole[];
 }) {
   const theme = getTeamTheme(dark);
   const primaryRole = employee.roles[0] || 'Unassigned';
@@ -462,45 +1047,72 @@ function EmployeeDetail({
 
   const [email, setEmail] = useState(employee.email);
   const [phone, setPhone] = useState(employee.phone);
-  const [roles, setRoles] = useState<string[]>(employee.roles);
-  const [locations, setLocations] = useState<EmployeeLocation[]>(employee.locations);
-  const [customRole, setCustomRole] = useState('');
+  const [formData, setFormData] = useState<EmployeeAssignmentState>(() =>
+    buildEmployeeAssignmentState(employee, roles, locations),
+  );
 
-  const availableRoles = curatedRoles.filter((r) => !roles.includes(r));
-  const availableLocations = allBusinessLocations.filter((bl) => !locations.some((l) => l.name === bl.name));
+  useEffect(() => {
+    setEmail(employee.email);
+    setPhone(employee.phone);
+    setFormData(buildEmployeeAssignmentState(employee, roles, locations));
+  }, [employee, locations, roles]);
 
-  const addRole = (role: string) => setRoles((prev) => [...prev, role]);
-  const removeRole = (role: string) => setRoles((prev) => prev.filter((r) => r !== role));
-  const addAllRoles = () => setRoles((prev) => [...new Set([...prev, ...curatedRoles])]);
-  const addCustom = () => {
-    const trimmed = customRole.trim();
-    if (trimmed && !roles.includes(trimmed)) {
-      setRoles((prev) => [...prev, trimmed]);
-      setCustomRole('');
+  const toggleRole = (roleId: string) => {
+    setFormData((current) => {
+      const selectedRoleIds = current.selectedRoleIds.includes(roleId)
+        ? current.selectedRoleIds.filter((item) => item !== roleId)
+        : [...current.selectedRoleIds, roleId];
+      const primaryRoleId = selectedRoleIds.includes(current.primaryRoleId)
+        ? current.primaryRoleId
+        : selectedRoleIds[0] ?? '';
+      return { ...current, selectedRoleIds, primaryRoleId };
+    });
+  };
+
+  const toggleLocation = (locationId: string) => {
+    setFormData((current) => {
+      const selectedLocationIds = current.selectedLocationIds.includes(locationId)
+        ? current.selectedLocationIds.filter((item) => item !== locationId)
+        : [...current.selectedLocationIds, locationId];
+      const primaryLocationId = selectedLocationIds.includes(current.primaryLocationId)
+        ? current.primaryLocationId
+        : selectedLocationIds[0] ?? '';
+      return { ...current, selectedLocationIds, primaryLocationId };
+    });
+  };
+
+  const canSave = Boolean(formData.primaryRoleId) && Boolean(formData.primaryLocationId);
+
+  const handleSave = () => {
+    if (!canSave) {
+      return;
     }
-  };
 
-  const addLocation = (loc: { name: string; emoji: string }) => {
-    setLocations((prev) => [...prev, { ...loc, primary: prev.length === 0 }]);
-  };
-  const removeLocation = (name: string) => {
-    setLocations((prev) => {
-      const next = prev.filter((l) => l.name !== name);
-      if (next.length > 0 && !next.some((l) => l.primary)) {
-        next[0].primary = true;
-      }
-      return [...next];
+    const selectedRoles = roles
+      .filter((role) => formData.selectedRoleIds.includes(role.id))
+      .sort((left, right) => {
+        if (left.id === formData.primaryRoleId) return -1;
+        if (right.id === formData.primaryRoleId) return 1;
+        return left.name.localeCompare(right.name);
+      })
+      .map((role) => role.name);
+    const selectedLocations = locations
+      .filter((location) => formData.selectedLocationIds.includes(location.id))
+      .sort((left, right) => {
+        if (left.id === formData.primaryLocationId) return -1;
+        if (right.id === formData.primaryLocationId) return 1;
+        return locationDisplayName(left).localeCompare(locationDisplayName(right));
+      })
+      .map((location) => toEmployeeLocation(location, location.id === formData.primaryLocationId));
+
+    onSave({
+      ...employee,
+      email,
+      phone,
+      roles: selectedRoles,
+      locations: selectedLocations,
     });
-  };
-  const setPrimary = (name: string) => {
-    setLocations((prev) => prev.map((l) => ({ ...l, primary: l.name === name })));
-  };
-  const addAllLocations = () => {
-    setLocations((prev) => {
-      const existing = new Set(prev.map((l) => l.name));
-      const newLocs = allBusinessLocations.filter((bl) => !existing.has(bl.name)).map((bl) => ({ ...bl, primary: false }));
-      return [...prev, ...newLocs];
-    });
+    onClose();
   };
 
   return (
@@ -518,7 +1130,9 @@ function EmployeeDetail({
               <X size={18} className="text-[#8898AA]" />
             </button>
             <button
+              onClick={handleSave}
               className="px-4 py-2 rounded-full text-[12px] text-white transition-all duration-300 hover:shadow-[0_0_16px_rgba(99,91,255,0.25)]"
+              disabled={!canSave}
               style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
               Save Changes
             </button>
@@ -574,147 +1188,27 @@ function EmployeeDetail({
             </div>
           </div>
 
-          {/* Locations */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Locations</h3>
-              <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>{locations.length} assigned</span>
-            </div>
-            <div className="space-y-2 mb-4">
-              <AnimatePresence>
-                {locations.map((loc) => (
-                  <motion.div key={loc.name} layout initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-                    className={`flex items-center gap-3 p-2.5 rounded-lg border ${theme.subtleBorderClass} ${dark ? 'bg-white/[0.03]' : 'bg-white'}`}>
-                    <span className="text-[16px]">{loc.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 480 }}>{loc.name}</p>
-                    </div>
-                    <button onClick={() => setPrimary(loc.name)}
-                      className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
-                        loc.primary
-                          ? 'bg-[#635BFF]/10 text-[#635BFF] border border-[#635BFF]/20'
-                          : `${theme.subtleSurfaceClass} text-[#8898AA] border border-transparent hover:border-[#635BFF]/20 hover:text-[#635BFF]`
-                      }`}
-                      style={{ fontWeight: loc.primary ? 540 : 440 }}>
-                      {loc.primary ? 'Primary' : 'Set Primary'}
-                    </button>
-                    <button onClick={() => removeLocation(loc.name)} className={`p-0.5 rounded transition-colors ${theme.closeButtonClass}`}>
-                      <X size={13} className="text-[#8898AA] hover:text-[#E5484D]" />
-                    </button>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              {locations.length === 0 && (
-                <p className={`text-[12px] py-2 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>No locations assigned. Add from the list below.</p>
-              )}
-            </div>
+          <RoleAssignmentPicker
+            dark={dark}
+            loading={loadingCatalog}
+            onSetPrimaryRole={(roleId) => setFormData((current) => ({ ...current, primaryRoleId: roleId }))}
+            onToggleRole={toggleRole}
+            primaryRoleId={formData.primaryRoleId}
+            roles={roles}
+            selectedRoleIds={formData.selectedRoleIds}
+          />
 
-            {availableLocations.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Available Locations</h3>
-                  {availableLocations.length > 1 && (
-                    <button onClick={addAllLocations}
-                      className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 520 }}>
-                      + Add All
-                    </button>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {availableLocations.map((loc) => (
-                    <button key={loc.name} onClick={() => addLocation(loc)}
-                      className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
-                        dark
-                          ? 'bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]'
-                          : 'bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]'
-                      }`}>
-                      <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                      <span className="text-[14px] mr-0.5">{loc.emoji}</span>
-                      <span className={`text-[12px] transition-colors ${dark ? 'text-[#C1CED8] group-hover:text-white' : 'text-[#5E6D7A] group-hover:text-[#0A2540]'}`} style={{ fontWeight: 440 }}>{loc.name.split(' ')[0]}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Roles */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Roles</h3>
-              <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>{roles.length} roles</span>
-            </div>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <AnimatePresence>
-                {roles.map((role) => (
-                  <motion.div key={role} layout initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
-                    className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${
-                      dark
-                        ? 'bg-[#635BFF]/[0.12] border-[#635BFF]/25'
-                        : 'bg-[#635BFF]/[0.06] border-[#635BFF]/15'
-                    }`}>
-                    <Tag size={11} className="text-[#635BFF]" />
-                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>{role}</span>
-                    <button onClick={() => removeRole(role)} className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5">
-                      <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-                    </button>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              {roles.length === 0 && (
-                <p className={`text-[12px] py-2 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>No roles assigned yet. Add from the list below.</p>
-              )}
-            </div>
-
-            {availableRoles.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Available Roles</h3>
-                  <button onClick={addAllRoles}
-                    className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors" style={{ fontWeight: 520 }}>
-                    + Add All
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {availableRoles.map((role) => (
-                    <button key={role} onClick={() => addRole(role)}
-                      className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
-                        dark
-                          ? 'bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]'
-                          : 'bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]'
-                      }`}>
-                      <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                      <span className={`text-[12px] transition-colors ${dark ? 'text-[#C1CED8] group-hover:text-white' : 'text-[#5E6D7A] group-hover:text-[#0A2540]'}`} style={{ fontWeight: 440 }}>{role}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Add Custom Role */}
-            <div>
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-2" style={{ fontWeight: 500 }}>Custom Role</h3>
-              <div className="flex items-center gap-2">
-                <input type="text" value={customRole} onChange={(e) => setCustomRole(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addCustom()}
-                  placeholder="Type a new role name..."
-                  className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                  style={{ fontWeight: 440 }} />
-                <button onClick={addCustom} disabled={!customRole.trim()}
-                  className="px-3.5 py-2.5 rounded-lg text-[12px] text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-[0_0_12px_rgba(99,91,255,0.2)]"
-                  style={{ fontWeight: 520, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Danger Zone */}
-          <div className={`pt-4 border-t ${theme.borderClass}`}>
-            <button className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-[12px] text-[#E5484D] border border-[#E5484D]/20 hover:bg-[#E5484D]/[0.04] transition-all" style={{ fontWeight: 500 }}>
-              <Trash2 size={13} /> Remove Employee
-            </button>
-          </div>
+          <LocationAssignmentPicker
+            dark={dark}
+            loading={loadingCatalog}
+            locations={locations}
+            onSetPrimaryLocation={(locationId) =>
+              setFormData((current) => ({ ...current, primaryLocationId: locationId }))
+            }
+            onToggleLocation={toggleLocation}
+            primaryLocationId={formData.primaryLocationId}
+            selectedLocationIds={formData.selectedLocationIds}
+          />
         </div>
       </motion.div>
     </motion.div>
@@ -727,14 +1221,49 @@ export default function Team({
 }: {
   embeddedInShell?: boolean;
 }) {
+  const pathname = usePathname();
+  const workspace = useAppWorkspace();
   const isDark = useResolvedAppAppearance() === 'dark';
   const theme = getTeamTheme(isDark);
+  const activeBusiness = useMemo(
+    () => resolvePreferredWorkspaceBusiness(workspace, pathname),
+    [pathname, workspace],
+  );
+  const fallbackLocations = useMemo<BusinessLocation[]>(
+    () =>
+      (activeBusiness?.locations ?? []).map((location) => ({
+        id: location.location_id,
+        business_id: location.business_id,
+        name: location.location_name,
+        display_name: location.location_display_name,
+        slug: location.location_slug,
+        address_line_1: location.address_line_1,
+        locality: location.locality,
+        region: location.region,
+        postal_code: location.postal_code,
+        country_code: location.country_code,
+        timezone: location.timezone,
+        latitude: null,
+        longitude: null,
+        google_place_id: location.google_place_id ?? null,
+        google_place_metadata: {},
+        is_active: true,
+        settings: {},
+        created_at: '',
+        updated_at: '',
+      })),
+    [activeBusiness],
+  );
+  const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
+  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>(fallbackLocations);
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [locationFilter, setLocationFilter] = useState('All Locations');
   const [statusFilter, setStatusFilter] = useState('All Status');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [employeesData, setEmployeesData] = useState<Employee[]>(employees);
   const [sortField, setSortField] = useState<'name' | 'reliability'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
@@ -742,7 +1271,72 @@ export default function Team({
   const locationFilterRef = useRef<HTMLButtonElement>(null);
   const statusFilterRef = useRef<HTMLButtonElement>(null);
 
-  const filtered = employees
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCatalog() {
+      if (!activeBusiness?.business_id) {
+        setBusinessRoles([]);
+        setBusinessLocations([]);
+        setCatalogLoading(false);
+        return;
+      }
+
+      setCatalogLoading(true);
+      setBusinessLocations(fallbackLocations);
+
+      try {
+        const [nextLocations, nextRoles] = await Promise.all([
+          listBusinessLocations(activeBusiness.business_id),
+          listBusinessRoles(activeBusiness.business_id),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setBusinessLocations(nextLocations);
+        setBusinessRoles(nextRoles);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setBusinessLocations(fallbackLocations);
+        setBusinessRoles([]);
+      } finally {
+        if (!cancelled) {
+          setCatalogLoading(false);
+        }
+      }
+    }
+
+    void loadCatalog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeBusiness?.business_id, fallbackLocations]);
+
+  const effectiveLocations = businessLocations.length ? businessLocations : fallbackLocations;
+  const defaultEmployees = useMemo(
+    () => buildReferenceEmployees(businessRoles, effectiveLocations),
+    [businessRoles, effectiveLocations],
+  );
+  useEffect(() => {
+    setEmployeesData(defaultEmployees);
+    setSelectedEmployee(null);
+  }, [defaultEmployees]);
+
+  const availableLocationOptions = useMemo(
+    () => ['All Locations', ...Array.from(new Set(employeesData.flatMap((employee) => employee.locations.map((location) => location.name))))],
+    [employeesData],
+  );
+
+  useEffect(() => {
+    if (!availableLocationOptions.includes(locationFilter)) {
+      setLocationFilter('All Locations');
+    }
+  }, [availableLocationOptions, locationFilter]);
+
+  const filtered = employeesData
     .filter((e) => {
       const q = searchQuery.toLowerCase();
       const matchesSearch = !q || e.name.toLowerCase().includes(q) || e.roles.some((r) => r.toLowerCase().includes(q)) || e.email.toLowerCase().includes(q);
@@ -760,6 +1354,17 @@ export default function Team({
     if (sortField === field) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortDir('asc'); }
   };
+
+  const handleAddEmployee = useCallback((employee: Employee) => {
+    setEmployeesData((current) => [employee, ...current]);
+  }, []);
+
+  const handleSaveEmployee = useCallback((nextEmployee: Employee) => {
+    setEmployeesData((current) =>
+      current.map((employee) => (employee.id === nextEmployee.id ? nextEmployee : employee)),
+    );
+    setSelectedEmployee(nextEmployee);
+  }, []);
 
   const content = (
     <>
@@ -819,7 +1424,7 @@ export default function Team({
                     width={256}
                     zIndex={10010}
                   >
-                    {locationOptions.map((opt) => (
+                    {availableLocationOptions.map((opt) => (
                       <button key={opt} onClick={() => { setLocationFilter(opt); setShowLocationDropdown(false); }}
                         className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
                           locationFilter === opt
@@ -936,7 +1541,7 @@ export default function Team({
                   {primaryLoc && (
                     <>
                       <span className="text-[13px]">{primaryLoc.emoji}</span>
-                      <span className={`text-[12px] truncate ${theme.textTertiary}`} style={{ fontWeight: 440 }}>{primaryLoc.name.split(' ')[0]}</span>
+                      <span className={`text-[12px] truncate ${theme.textTertiary}`} style={{ fontWeight: 440 }}>{primaryLoc.name}</span>
                       {emp.locations.length > 1 && (
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${theme.pillClass}`} style={{ fontWeight: 440 }}>+{emp.locations.length - 1}</span>
                       )}
@@ -987,7 +1592,7 @@ export default function Team({
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{primaryRole}</span>
-                      {primaryLoc && <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{primaryLoc.emoji} {primaryLoc.name.split(' ')[0]}</span>}
+                      {primaryLoc && <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{primaryLoc.emoji} {primaryLoc.name}</span>}
                       <div className="flex items-center gap-1.5 ml-auto shrink-0">
                         <div className="w-1.5 h-1.5 rounded-full" style={{ background: statusConfig[emp.status].color }} />
                         <span className="text-[11px]" style={{ fontWeight: 460, color: statusConfig[emp.status].color }}>{statusConfig[emp.status].label}</span>
@@ -1011,9 +1616,28 @@ export default function Team({
 
       {/* Modals */}
       <AnimatePresence>
-        {showAddModal && <AddEmployeeModal dark={isDark} onClose={() => setShowAddModal(false)} />}
+        {showAddModal && (
+          <AddEmployeeModal
+            dark={isDark}
+            loadingCatalog={catalogLoading}
+            locations={effectiveLocations}
+            onClose={() => setShowAddModal(false)}
+            onCreate={handleAddEmployee}
+            roles={businessRoles}
+          />
+        )}
         {showBulkModal && <BulkUploadModal dark={isDark} onClose={() => setShowBulkModal(false)} />}
-        {selectedEmployee && <EmployeeDetail dark={isDark} employee={selectedEmployee} onClose={() => setSelectedEmployee(null)} />}
+        {selectedEmployee && (
+          <EmployeeDetail
+            dark={isDark}
+            employee={selectedEmployee}
+            loadingCatalog={catalogLoading}
+            locations={effectiveLocations}
+            onClose={() => setSelectedEmployee(null)}
+            onSave={handleSaveEmployee}
+            roles={businessRoles}
+          />
+        )}
       </AnimatePresence>
     </>
   );

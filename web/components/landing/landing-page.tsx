@@ -1,14 +1,62 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { motion, useScroll, useTransform } from "motion/react";
 import { ArrowRight, Check, Phone, Zap } from "lucide-react";
 
 import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
-import { LandingBackfillShiftsInterface } from "./landing-backfill-shifts-interface";
-import { LandingFaq } from "./landing-faq";
-import { LandingPhoneMockup } from "./landing-phone-mockup";
+
+const LandingPhoneMockup = dynamic(
+  () =>
+    import("./landing-phone-mockup").then((module) => ({
+      default: module.LandingPhoneMockup,
+    })),
+  {
+    loading: () => (
+      <div className="mx-auto w-full max-w-[280px] sm:max-w-[340px] lg:max-w-[380px]">
+        <div className="aspect-[393/852] rounded-[46px] border border-[#d8dee6] bg-[linear-gradient(180deg,#f7f8fa_0%,#eef2f6_100%)] shadow-[0_20px_60px_rgba(0,0,0,0.12)]" />
+      </div>
+    ),
+  },
+);
+
+const LandingBackfillShiftsInterface = dynamic(
+  () =>
+    import("./landing-backfill-shifts-interface").then((module) => ({
+      default: module.LandingBackfillShiftsInterface,
+    })),
+  {
+    loading: () => (
+      <div className="w-full overflow-hidden rounded-[24px] border border-[#d8dee6] bg-white shadow-[0_8px_40px_rgba(0,0,0,0.12)]">
+        <div className="grid min-h-[520px] md:min-h-[620px] md:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="hidden border-r border-[#e2e8f0] bg-[#0D1B2A] md:block" />
+          <div className="bg-[linear-gradient(180deg,#ffffff_0%,#f7f8fa_100%)]" />
+        </div>
+      </div>
+    ),
+  },
+);
+
+const LandingFaq = dynamic(
+  () =>
+    import("./landing-faq").then((module) => ({
+      default: module.LandingFaq,
+    })),
+  {
+    loading: () => (
+      <div className="space-y-2">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={index}
+            className="h-[74px] rounded-[20px] border border-[#e2e8f0] bg-white shadow-[0_2px_12px_rgba(0,0,0,0.03)]"
+          />
+        ))}
+      </div>
+    ),
+  },
+);
 
 function DotGrid({ className = '' }: { className?: string }) {
   return (

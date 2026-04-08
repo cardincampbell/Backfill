@@ -52,11 +52,11 @@ export default function AddLocationModal({
   }, [open]);
 
   const panelClass = isDark
-    ? "bg-[#0F2E4C] border border-white/[0.06]"
-    : "bg-white";
-  const borderClass = isDark ? "border-white/[0.06]" : "border-[#F0F0F5]";
+    ? "bg-[#0F2E4C] border border-white/[0.08]"
+    : "bg-white border border-[#E5E7EB]";
+  const borderClass = isDark ? "border-white/[0.08]" : "border-[#E5E7EB]";
   const textPrimaryClass = isDark ? "text-white" : "text-[#0A2540]";
-  const footerClass = isDark ? "bg-white/[0.02]" : "bg-[#FAFBFC]";
+  const footerClass = isDark ? "bg-white/[0.03]" : "bg-[#FAFBFC]";
   const closeButtonClass = isDark
     ? "p-2 rounded-lg hover:bg-white/[0.06] transition-colors"
     : "p-2 rounded-lg hover:bg-[#F7F8FA] transition-colors";
@@ -127,7 +127,7 @@ export default function AddLocationModal({
         >
           <motion.div
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`mx-4 w-full max-w-lg rounded-2xl shadow-2xl sm:mx-0 ${panelClass}`}
+            className={`mx-4 w-full max-w-lg overflow-hidden rounded-2xl shadow-2xl sm:mx-0 ${panelClass}`}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             initial={{ opacity: 0, y: 8, scale: 0.96 }}
             onClick={(event) => event.stopPropagation()}
