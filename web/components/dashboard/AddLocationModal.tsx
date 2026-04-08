@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Building2, MapPin, X } from "lucide-react";
+import { Building2, X } from "lucide-react";
 
 import {
   useAppWorkspaceRefresh,
@@ -56,7 +56,6 @@ export default function AddLocationModal({
     : "bg-white";
   const borderClass = isDark ? "border-white/[0.06]" : "border-[#F0F0F5]";
   const textPrimaryClass = isDark ? "text-white" : "text-[#0A2540]";
-  const textSecondaryClass = isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]";
   const footerClass = isDark ? "bg-white/[0.02]" : "bg-[#FAFBFC]";
   const closeButtonClass = isDark
     ? "p-2 rounded-lg hover:bg-white/[0.06] transition-colors"
@@ -67,9 +66,6 @@ export default function AddLocationModal({
   const disabledButtonClass = isDark
     ? "bg-white/[0.08] text-[#8898AA] cursor-not-allowed"
     : "bg-[#E5E7EB] text-[#8898AA] cursor-not-allowed";
-  const helperCardClass = isDark
-    ? "bg-white/[0.03] border border-white/[0.06]"
-    : "bg-[#F7F8FA] border border-[#E5E7EB]";
   const errorClass = isDark
     ? "text-[#FCA5A5] bg-[#7F1D1D]/20 border border-[#F87171]/20"
     : "text-[#B42318] bg-[#FEF3F2] border border-[#FECACA]";
@@ -155,7 +151,7 @@ export default function AddLocationModal({
                     className="text-[12px] text-[#8898AA]"
                     style={{ fontWeight: 420 }}
                   >
-                    Search Google Places to add a new location to {businessLabel}.
+                    Add a new location to {businessLabel}.
                   </p>
                 </div>
               </div>
@@ -169,28 +165,6 @@ export default function AddLocationModal({
             </div>
 
             <div className="space-y-4 px-4 py-5 sm:px-6">
-              <div className={`rounded-xl px-4 py-3 ${helperCardClass}`}>
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-[#635BFF]/10">
-                    <MapPin size={15} className="text-[#635BFF]" />
-                  </div>
-                  <div>
-                    <p
-                      className={`text-[13px] ${textPrimaryClass}`}
-                      style={{ fontWeight: 540 }}
-                    >
-                      Search by location name or address
-                    </p>
-                    <p
-                      className={`mt-1 text-[12px] ${textSecondaryClass}`}
-                      style={{ fontWeight: 420 }}
-                    >
-                      Select the verified place you want to add. We will reuse the same Google Places flow as onboarding.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               <div>
                 <label
                   className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
@@ -216,6 +190,7 @@ export default function AddLocationModal({
                   }}
                   placeholder="Search for a location or paste an address"
                   selectedPlace={selectedPlace}
+                  showFooter={false}
                   value={locationQuery}
                 />
               </div>

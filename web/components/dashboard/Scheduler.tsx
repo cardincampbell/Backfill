@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Plus,
   X,
-  Copy,
   Trash2,
   Check,
   ChevronDown,
@@ -230,8 +229,8 @@ function InlineSelect({
 }
 
 /* ─── Draggable Shift Chip ─── */
-function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dark = false }: {
-  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; onDuplicate: () => void; dark?: boolean;
+function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: {
+  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; dark?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
@@ -282,10 +281,6 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
             {hovered && !isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex flex-col gap-0.5 shrink-0">
-                <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Duplicate">
-                  <Copy size={9} className={theme.textMuted} />
-                </button>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
                   <Trash2 size={9} className={theme.textMuted} />
@@ -330,10 +325,6 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex gap-0.5">
-                  <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Duplicate">
-                    <Copy size={7} className={theme.textMuted} />
-                  </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
                     <Trash2 size={7} className={theme.textMuted} />
@@ -442,11 +433,6 @@ function SchedulerContent({
     shifts.filter(s => s.employeeId === empId && s.day === day), [shifts]);
 
   const deleteShift = (id: string) => setShifts(prev => prev.filter(s => s.id !== id));
-
-  const duplicateShift = (shift: Shift) => {
-    const nextDay = (shift.day + 1) % 7;
-    setShifts(prev => [...prev, { ...shift, id: uid(), day: nextDay }]);
-  };
 
   const updateShift = (updated: Shift) => {
     setShifts(prev => prev.map(s => s.id === updated.id ? updated : s));
@@ -690,8 +676,7 @@ function SchedulerContent({
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
                                       dark={isDark}
                                       onEdit={() => setEditingShift(shift)}
-                                      onDelete={() => deleteShift(shift.id)}
-                                      onDuplicate={() => duplicateShift(shift)} />
+                                      onDelete={() => deleteShift(shift.id)} />
                                   ))
                                 ) : null}
                               </DroppableCell>

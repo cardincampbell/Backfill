@@ -4267,9 +4267,9 @@ body:has(.lp-onboarding) .site-main {
   right: 0;
   z-index: 130;
   border-radius: calc(var(--radius-lg) - 4px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(19, 34, 63, 0.96);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(166, 187, 201, 0.16);
+  background: rgba(14, 31, 52, 0.985);
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.38);
   overflow: hidden;
   backdrop-filter: blur(18px);
 }
@@ -4283,7 +4283,7 @@ body:has(.lp-onboarding) .site-main {
 .place-dropdown-footer {
   padding: 12px 14px;
   font-size: 0.78rem;
-  color: var(--muted);
+  color: #A8BBC9;
 }
 
 .place-dropdown-status-error {
@@ -4292,8 +4292,8 @@ body:has(.lp-onboarding) .site-main {
 }
 
 .place-dropdown-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid rgba(166, 187, 201, 0.12);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .place-option {
@@ -4304,7 +4304,7 @@ body:has(.lp-onboarding) .site-main {
   gap: 2px;
   padding: 13px 14px;
   border: none;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(166, 187, 201, 0.1);
   background: transparent;
   text-align: left;
   font-family: inherit;
@@ -4317,18 +4317,18 @@ body:has(.lp-onboarding) .site-main {
 
 .place-option:hover,
 .place-option-selected {
-  background: var(--brand-soft);
+  background: rgba(99, 91, 255, 0.14);
 }
 
 .place-option-primary {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--text);
+  color: #F4F8FC;
 }
 
 .place-option-secondary {
   font-size: 0.78rem;
-  color: #8898AA;
+  color: #A8BBC9;
 }
 
 .place-selected-meta {

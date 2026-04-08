@@ -18,6 +18,7 @@ type PlaceAutocompleteProps = {
   autoFocus?: boolean;
   appearance?: "dark" | "light";
   compact?: boolean;
+  showFooter?: boolean;
 };
 
 function newSessionToken(): string {
@@ -36,6 +37,7 @@ export function PlaceAutocomplete({
   autoFocus = false,
   appearance = "dark",
   compact = false,
+  showFooter = true,
 }: PlaceAutocompleteProps) {
   const deferredQuery = useDeferredValue(value.trim());
   const blurTimeoutRef = useRef<number | null>(null);
@@ -190,9 +192,11 @@ export function PlaceAutocomplete({
                   </button>
                 ))}
               </div>
-              <div className="place-dropdown-footer">
-                {provider === "google" ? "Powered by Google" : "Suggested locations"}
-              </div>
+              {showFooter ? (
+                <div className="place-dropdown-footer">
+                  {provider === "google" ? "Powered by Google" : "Suggested locations"}
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="place-dropdown-status">

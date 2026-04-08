@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useTransition } from 'react';
 import { useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -9,18 +9,36 @@ import {
 } from '@/components/app-session-gate';
 import {
   useAppWorkspace,
+  useAppWorkspaceRefresh,
   useAppWorkspaceReady,
 } from '@/components/app-workspace';
+import { FloatingDropdown } from '@/components/floating-dropdown';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import {
+  createAndAssignLocationRole,
+  getLocationRoles,
+  listBusinessRoles,
+  replaceLocationRoles,
+  type BusinessLocation,
+  type BusinessRole,
+  type LocationRoleAssignment,
+} from '@/lib/api/businesses';
+import {
+  deleteLocation as deleteWorkspaceLocation,
+  type WorkspaceBusiness,
+} from '@/lib/api/workspace';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
+import {
+  LocationRoleEditor,
+  type LocationRoleEditorFeedback,
+} from './LocationRoleEditor';
 import {
   findSourceDashboardLocationBySlug,
   type SourceDashboardLocation,
 } from './mock-data';
 import { useSmartGreeting } from './use-smart-greeting';
-import type { WorkspaceBusiness } from '@/lib/api/workspace';
 import {
   Plus,
   MoreHorizontal,
@@ -48,13 +66,8 @@ import {
   Hourglass,
   CircleCheck,
   Loader,
-  ExternalLink,
   Edit3,
-  MapPin,
-  Star,
   Trash2,
-  Copy,
-  Archive,
 } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
@@ -68,6 +81,7 @@ interface ChatMessage { id: number; role: 'user' | 'assistant'; text: string; }
 
 type DashboardSurfaceLocation = Omit<SourceDashboardLocation, "id"> & {
   id: string | number;
+  business_id?: string;
   business_slug?: string;
   location_slug?: string;
   business_name?: string;
@@ -75,8 +89,51 @@ type DashboardSurfaceLocation = Omit<SourceDashboardLocation, "id"> & {
   location_name?: string;
   location_display_name?: string;
   location_id?: string;
+  address_line_1?: string | null;
+  locality?: string | null;
+  region?: string | null;
+  postal_code?: string | null;
+  country_code?: string;
+  timezone?: string;
+  google_place_id?: string | null;
   isWorkspaceBacked?: boolean;
 };
+
+function adaptDashboardLocation(location: DashboardSurfaceLocation): BusinessLocation | null {
+  if (
+    !location.business_id ||
+    !location.location_id ||
+    !location.location_name ||
+    !location.location_slug ||
+    !location.country_code ||
+    !location.timezone
+  ) {
+    return null;
+  }
+
+  return {
+    id: location.location_id,
+    business_id: location.business_id,
+    name: location.location_name,
+    display_name: location.location_display_name ?? location.location_name,
+    slug: location.location_slug,
+    address_line_1: location.address_line_1 ?? null,
+    address_line_2: null,
+    locality: location.locality ?? null,
+    region: location.region ?? null,
+    postal_code: location.postal_code ?? null,
+    country_code: location.country_code,
+    timezone: location.timezone,
+    latitude: null,
+    longitude: null,
+    google_place_id: location.google_place_id ?? null,
+    google_place_metadata: {},
+    is_active: true,
+    settings: {},
+    created_at: "",
+    updated_at: "",
+  };
+}
 
 type CoverageDateParts = {
   dayOfMonth: string;
@@ -193,7 +250,21 @@ function MiniBarChart({ data, color, height = 40 }: { data: number[]; color: str
   );
 }
 
-function LocationCard({ location, index, onClick }: { location: DashboardSurfaceLocation; index: number; onClick: () => void }) {
+function LocationCard({
+  location,
+  index,
+  onClick,
+  onEdit,
+  onDelete,
+  deleting = false,
+}: {
+  location: DashboardSurfaceLocation;
+  index: number;
+  onClick: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  deleting?: boolean;
+}) {
   const {
     isDark,
     headingClass,
@@ -206,24 +277,7 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
   const buttonRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
   const [hovered, setHovered] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showMenu) {
-      return;
-    }
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showMenu]);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
     <motion.div
@@ -265,8 +319,9 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
                 <span className={`text-[12px] tracking-[0.02em] uppercase ${mutedClass}`} style={{ fontWeight: 480 }}>{location.type}</span>
               </div>
             </div>
-            <div className="relative" ref={menuRef}>
+            <div className="relative">
               <button
+                ref={menuButtonRef}
                 className={`p-1.5 transition-colors opacity-0 group-hover:opacity-100 ${buttonRadiusClass} ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -277,111 +332,51 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
                 <MoreHorizontal size={16} className={mutedClass} />
               </button>
 
-              <AnimatePresence>
-                {showMenu ? (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                    transition={{ duration: 0.15 }}
-                    className={`absolute right-0 top-full mt-2 z-50 w-64 overflow-hidden border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'} ${cardRadiusClass}`}
-                    style={{
-                      boxShadow: isDark
-                        ? '0 20px 60px -12px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04)'
-                        : '0 20px 60px -12px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05)',
+              <FloatingDropdown
+                open={showMenu}
+                anchorRef={menuButtonRef}
+                align="right"
+                minWidth={220}
+                className={`overflow-hidden border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'} ${cardRadiusClass}`}
+                maxHeight={220}
+                onClose={() => setShowMenu(false)}
+                sideOffset={10}
+                zIndex={10050}
+              >
+                <div className="py-1.5">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onEdit();
                     }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
                   >
-                    <div className={`px-4 py-3 border-b ${borderClass} ${isDark ? 'bg-white/[0.03]' : 'bg-[#FAFBFF]'}`}>
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className={`w-8 h-8 flex items-center justify-center text-[16px] ${buttonRadiusClass}`}
-                          style={{ background: `${location.color}10` }}
-                        >
-                          {location.logo}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className={`truncate text-[12px] ${headingClass}`} style={{ fontWeight: 560 }}>
-                            {location.name}
-                          </p>
-                          <p className={`text-[10px] uppercase tracking-[0.02em] ${mutedClass}`} style={{ fontWeight: 460 }}>
-                            {location.type}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="py-1.5">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowMenu(false);
-                          onClick();
-                        }}
-                        className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
-                        type="button"
-                      >
-                        <ExternalLink size={15} className={mutedClass} />
-                        <div className="flex-1 text-left">
-                          <p className={`text-[12px] ${headingClass}`} style={{ fontWeight: 520 }}>View Details</p>
-                          <p className={`text-[10px] ${mutedClass}`} style={{ fontWeight: 420 }}>Open location dashboard</p>
-                        </div>
-                      </button>
-
-                      {[
-                        { icon: Edit3, title: 'Edit Location', subtitle: 'Update details & settings' },
-                        { icon: MapPin, title: 'View on Map', subtitle: 'See location & directions' },
-                        { divider: true },
-                        { icon: Copy, title: 'Duplicate Location', subtitle: 'Copy as template' },
-                        { icon: Star, title: 'Mark as Favorite', subtitle: 'Pin to top of list' },
-                        { divider: true },
-                        { icon: Archive, title: 'Archive Location', subtitle: 'Hide from active list' },
-                        { icon: Trash2, title: 'Delete Location', subtitle: 'Permanently remove', danger: true },
-                      ].map((item, itemIndex) =>
-                        'divider' in item ? (
-                          <div
-                            key={`divider-${itemIndex}`}
-                            className={`my-1.5 h-px ${isDark ? 'bg-white/[0.06]' : 'bg-[#F0F0F5]'}`}
-                          />
-                        ) : (
-                          <button
-                            key={item.title}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setShowMenu(false);
-                            }}
-                            className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${
-                              item.danger
-                                ? isDark
-                                  ? 'hover:bg-[#E5484D]/15'
-                                  : 'hover:bg-[#E5484D]/10'
-                                : isDark
-                                  ? 'hover:bg-white/[0.04]'
-                                  : 'hover:bg-[#F7F8FA]'
-                            }`}
-                            type="button"
-                          >
-                            <item.icon
-                              size={15}
-                              className={item.danger ? 'text-[#E5484D]' : mutedClass}
-                            />
-                            <div className="flex-1 text-left">
-                              <p
-                                className={`text-[12px] ${item.danger ? 'text-[#E5484D]' : headingClass}`}
-                                style={{ fontWeight: 520 }}
-                              >
-                                {item.title}
-                              </p>
-                              <p className={`text-[10px] ${mutedClass}`} style={{ fontWeight: 420 }}>
-                                {item.subtitle}
-                              </p>
-                            </div>
-                          </button>
-                        ),
-                      )}
-                    </div>
-                  </motion.div>
-                ) : null}
-              </AnimatePresence>
+                    <Edit3 size={15} className={mutedClass} />
+                    <span className={`text-[12px] ${headingClass}`} style={{ fontWeight: 520 }}>
+                      Edit Location
+                    </span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onDelete();
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${
+                      isDark ? 'hover:bg-[#E5484D]/15' : 'hover:bg-[#E5484D]/10'
+                    }`}
+                    disabled={deleting}
+                    type="button"
+                  >
+                    <Trash2 size={15} className="text-[#E5484D]" />
+                    <span className="text-[12px] text-[#E5484D]" style={{ fontWeight: 520 }}>
+                      {deleting ? 'Deleting...' : 'Delete Location'}
+                    </span>
+                  </button>
+                </div>
+              </FloatingDropdown>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4 mb-5">
@@ -760,9 +755,18 @@ function MultiLocationView({
   const actionIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
   const progressRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
   const navigate = useNavigate();
+  const refreshWorkspace = useAppWorkspaceRefresh();
   const { greeting, timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
   const [showAddLocation, setShowAddLocation] = useState(false);
+  const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
+  const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
+  const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
+  const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<LocationRoleEditorFeedback>(null);
+  const [isSavingEditor, startSaveTransition] = useTransition();
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate =
@@ -774,6 +778,168 @@ function MultiLocationView({
   const coverageRate =
     totalScheduled > 0 ? Math.round((totalActive / totalScheduled) * 100) : 0;
   const totalCost = `$${(totalActive * 20).toLocaleString()}`;
+
+  const editorAssignmentsByRoleId = useMemo(
+    () => new Map(editorAssignments.map((assignment) => [assignment.role_id, assignment])),
+    [editorAssignments],
+  );
+
+  const openLocationEditor = async (location: DashboardSurfaceLocation) => {
+    const editableLocation = adaptDashboardLocation(location);
+    if (!editableLocation) {
+      setActionFeedback({
+        tone: 'error',
+        message: 'This location is missing edit context. Refresh and try again.',
+      });
+      return;
+    }
+
+    setEditorLocation(editableLocation);
+    setEditorLoading(true);
+    setEditorFeedback(null);
+
+    try {
+      const [nextRoles, nextAssignments] = await Promise.all([
+        listBusinessRoles(editableLocation.business_id),
+        getLocationRoles(editableLocation.business_id, editableLocation.id),
+      ]);
+      setEditorRoles(nextRoles);
+      setEditorAssignments(nextAssignments);
+    } catch (error) {
+      setEditorFeedback({
+        tone: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not load location roles.',
+      });
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const handleSaveEditor = (roleIds: string[]) => {
+    if (!editorLocation) {
+      return;
+    }
+
+    const activeLocation = editorLocation;
+    startSaveTransition(async () => {
+      try {
+        const nextAssignments = await replaceLocationRoles(
+          activeLocation.business_id,
+          activeLocation.id,
+          roleIds.map((roleId) => {
+            const existing = editorAssignmentsByRoleId.get(roleId);
+            return existing
+              ? {
+                  role_id: roleId,
+                  min_headcount: existing.min_headcount,
+                  max_headcount: existing.max_headcount,
+                  premium_rules: existing.premium_rules,
+                  coverage_settings: existing.coverage_settings,
+                }
+              : { role_id: roleId };
+          }),
+        );
+        setEditorAssignments(nextAssignments);
+        setEditorFeedback({
+          tone: 'success',
+          message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,
+        });
+      } catch (error) {
+        setEditorFeedback({
+          tone: 'error',
+          message:
+            error instanceof Error ? error.message : 'Could not update location roles.',
+        });
+      }
+    });
+  };
+
+  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
+    if (!editorLocation) {
+      throw new Error('No location selected.');
+    }
+
+    const activeLocation = editorLocation;
+    const existing = editorRoles.find(
+      (role) => role.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
+
+    try {
+      setEditorFeedback(null);
+      const created = await createAndAssignLocationRole(
+        activeLocation.business_id,
+        activeLocation.id,
+        { name },
+      );
+      setEditorRoles((current) =>
+        current.some((role) => role.id === created.role.id)
+          ? current
+          : [...current, created.role],
+      );
+      setEditorAssignments((current) => {
+        const next = current.filter(
+          (assignment) => assignment.role_id !== created.location_role.role_id,
+        );
+        next.push(created.location_role);
+        return next;
+      });
+      setEditorFeedback({
+        tone: 'success',
+        message: existing
+          ? `${created.role.name} was assigned to ${activeLocation.display_name ?? activeLocation.name}.`
+          : `${created.role.name} was added to Roles and assigned to ${activeLocation.display_name ?? activeLocation.name}.`,
+      });
+      return created.role;
+    } catch (error) {
+      setEditorFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not create role.',
+      });
+      throw error;
+    }
+  };
+
+  const handleDeleteLocation = async (location: DashboardSurfaceLocation) => {
+    if (!location.business_id || !location.location_id) {
+      setActionFeedback({
+        tone: 'error',
+        message: 'This location cannot be deleted because its identifiers are missing.',
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${location.location_display_name ?? location.location_name ?? location.name}? This only works for locations that do not already have operational data.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingLocationId(location.location_id);
+    setActionFeedback(null);
+
+    try {
+      await deleteWorkspaceLocation(location.business_id, location.location_id);
+      if (editorLocation?.id === location.location_id) {
+        setEditorLocation(null);
+        setEditorFeedback(null);
+      }
+      await refreshWorkspace();
+      setActionFeedback({
+        tone: 'success',
+        message: `${location.location_display_name ?? location.location_name ?? location.name} was removed.`,
+      });
+    } catch (error) {
+      setActionFeedback({
+        tone: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not remove this location.',
+      });
+    } finally {
+      setDeletingLocationId(null);
+    }
+  };
 
   return (
     <div>
@@ -952,6 +1118,23 @@ function MultiLocationView({
         </button>
       </div>
 
+      {actionFeedback ? (
+        <div
+          className="mb-4 rounded-xl px-4 py-3 text-[13px]"
+          role="status"
+          style={{
+            background:
+              actionFeedback.tone === 'success'
+                ? 'rgba(0, 184, 147, 0.08)'
+                : 'rgba(229, 72, 77, 0.08)',
+            color: actionFeedback.tone === 'success' ? '#067A64' : '#C13535',
+            fontWeight: 500,
+          }}
+        >
+          {actionFeedback.message}
+        </div>
+      ) : null}
+
       {!locationsLoaded ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Array.from({ length: 2 }).map((_, index) => (
@@ -968,6 +1151,7 @@ function MultiLocationView({
           {locations.map((loc, i) => (
             <LocationCard
               key={String(loc.location_id ?? loc.id)}
+              deleting={deletingLocationId === loc.location_id}
               location={loc}
               index={i}
               onClick={() =>
@@ -977,6 +1161,12 @@ function MultiLocationView({
                     : '/onboarding',
                 )
               }
+              onDelete={() => {
+                void handleDeleteLocation(loc);
+              }}
+              onEdit={() => {
+                void openLocationEditor(loc);
+              }}
             />
           ))}
         </div>
@@ -1040,6 +1230,26 @@ function MultiLocationView({
           ))}
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {editorLocation ? (
+          <LocationRoleEditor
+            assignments={editorAssignments}
+            dark={isDark}
+            feedback={editorFeedback}
+            loading={editorLoading}
+            location={editorLocation}
+            onClose={() => {
+              setEditorLocation(null);
+              setEditorFeedback(null);
+            }}
+            onCreateRole={handleCreateRole}
+            onSave={handleSaveEditor}
+            roles={editorRoles}
+            saving={isSavingEditor}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1174,6 +1384,7 @@ export default function DashboardLight({
           weeklyShifts: referenceLocation?.weeklyShifts ?? [0, 0, 0, 0, 0, 0, 0],
           recentActivity: referenceLocation?.recentActivity ?? [],
           topStaff: referenceLocation?.topStaff ?? [],
+          business_id: location.business_id,
           business_slug: location.business_slug,
           location_slug: location.location_slug,
           business_name: location.business_name,
@@ -1181,6 +1392,13 @@ export default function DashboardLight({
           location_name: location.location_name,
           location_display_name: location.location_display_name,
           location_id: location.location_id,
+          address_line_1: location.address_line_1 ?? null,
+          locality: location.locality ?? null,
+          region: location.region ?? null,
+          postal_code: location.postal_code ?? null,
+          country_code: location.country_code,
+          timezone: location.timezone,
+          google_place_id: location.google_place_id ?? null,
           isWorkspaceBacked: true,
         };
       });
