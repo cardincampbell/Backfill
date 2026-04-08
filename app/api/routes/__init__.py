@@ -5,6 +5,7 @@ from app.api.routes.businesses import router as businesses_router
 from app.api.routes.coverage import router as coverage_router
 from app.api.routes.identity import router as identity_router
 from app.api.routes.internal import router as internal_router
+from app.api.routes.migrations import router as migrations_router
 from app.api.routes.invites import router as invites_router
 from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.places import places_router
@@ -25,6 +26,7 @@ __all__ = [
     "coverage_router",
     "identity_router",
     "internal_router",
+    "migrations_router",
     "invites_router",
     "onboarding_router",
     "places_router",
