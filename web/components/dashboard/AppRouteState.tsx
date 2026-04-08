@@ -1,7 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
-
+import { AppLoader } from "@/components/app-loader";
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 
 type AppRouteStateProps = {
@@ -16,6 +15,10 @@ export function AppRouteState({
   loading = false,
 }: AppRouteStateProps) {
   const isDark = useResolvedAppAppearance() === "dark";
+
+  if (loading) {
+    return <AppLoader />;
+  }
 
   return (
     <div className="px-5 py-8 sm:px-8 sm:py-10 lg:px-10">
@@ -32,19 +35,7 @@ export function AppRouteState({
               isDark ? "bg-white/[0.06]" : "bg-[#F7F8FA]"
             }`}
           >
-            {loading ? (
-              <Loader2
-                className={`h-5 w-5 animate-spin ${
-                  isDark ? "text-[#C1CED8]" : "text-[#8898AA]"
-                }`}
-              />
-            ) : (
-              <div
-                className={`h-2.5 w-2.5 rounded-full ${
-                  isDark ? "bg-[#635BFF]" : "bg-[#635BFF]"
-                }`}
-              />
-            )}
+            <div className="h-2.5 w-2.5 rounded-full bg-[#635BFF]" />
           </div>
         </div>
         <h1

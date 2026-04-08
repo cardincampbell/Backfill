@@ -17,6 +17,7 @@ import {
   installStoredSessionForApp,
   refreshAppSessionCookie,
 } from "@/lib/api/auth";
+import { AppLoader } from "@/components/app-loader";
 
 type AppSessionGateProps = {
   children: ReactNode;
@@ -256,12 +257,7 @@ export function AppSessionGate({
   }, [ready, resolvedAppearance]);
 
   if (!ready) {
-    return (
-      <main
-        className="min-h-screen bg-[#F7F8FA]"
-        style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
-      />
-    );
+    return <AppLoader fullscreen appearance={resolvedAppearance} />;
   }
 
   return (
