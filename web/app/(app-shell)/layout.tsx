@@ -12,7 +12,7 @@ export default async function LiveAppLayout({
 }: {
   children: React.ReactNode;
 }) {
-  await requireAppSession();
+  const initialSession = await requireAppSession();
   const initialWorkspace = await getWorkspace();
   const cookieStore = await cookies();
   const initialSidebarTab = normalizeAppShellSidebarTab(
@@ -22,6 +22,7 @@ export default async function LiveAppLayout({
   return (
     <AppShellLayout
       initialSidebarTab={initialSidebarTab}
+      initialSession={initialSession}
       initialWorkspace={initialWorkspace}
     >
       {children}

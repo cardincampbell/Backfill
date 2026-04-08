@@ -22,6 +22,7 @@ import { AppLoader } from "@/components/app-loader";
 type AppSessionGateProps = {
   children: ReactNode;
   enforceRedirects?: boolean;
+  initialSession?: AuthMeResponse | null;
 };
 
 type SessionUserDisplay = {
@@ -152,18 +153,48 @@ export function useSessionUserDisplay(): SessionUserDisplay {
 export function AppSessionGate({
   children,
   enforceRedirects = true,
+  initialSession = null,
 }: AppSessionGateProps) {
-  const [ready, setReady] = useState(false);
-  const [session, setSession] = useState<AuthMeResponse | null>(null);
+  const [ready, setReady] = useState(Boolean(initialSession));
+  const [session, setSession] = useState<AuthMeResponse | null>(initialSession);
   const [appearancePreference, setAppearancePreference] =
-    useState<AppearancePreference>(DEFAULT_APPEARANCE_PREFERENCE);
+    useState<AppearancePreference>(() =>
+      normalizeAppearancePreference(
+        initialSession?.user.profile_metadata?.appearance_preference,
+      ),
+    );
   const [resolvedAppearance, setResolvedAppearance] =
-    useState<ResolvedAppAppearance>("light");
+    useState<ResolvedAppAppearance>(() => {
+      const preference = normalizeAppearancePreference(
+        initialSession?.user.profile_metadata?.appearance_preference,
+      );
+      return preference === "system" ? "light" : preference;
+    });
 
   useEffect(() => {
     let cancelled = false;
 
     async function resolveSession() {
+      if (initialSession) {
+        const nextPreference = normalizeAppearancePreference(
+          initialSession.user.profile_metadata?.appearance_preference,
+        );
+        setAppearancePreference(nextPreference);
+        setResolvedAppearance(
+          nextPreference === "system"
+            ? resolveSystemAppearance()
+            : nextPreference,
+        );
+        setSession(initialSession);
+        if (hasStoredSessionHandoff()) {
+          void installStoredSessionForApp(initialSession).catch(() => undefined);
+        } else {
+          void refreshAppSessionCookie().catch(() => undefined);
+        }
+        setReady(true);
+        return;
+      }
+
       const session = await recoverAuthMe();
       if (cancelled) {
         return;
@@ -205,7 +236,7 @@ export function AppSessionGate({
     return () => {
       cancelled = true;
     };
-  }, [enforceRedirects]);
+  }, [enforceRedirects, initialSession]);
 
   useEffect(() => {
     const nextPreference = normalizeAppearancePreference(

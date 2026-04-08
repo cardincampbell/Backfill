@@ -6,11 +6,13 @@ import DashboardShell from "@/components/dashboard/DashboardShell";
 import { LocationEntryProvider } from "@/components/location-entry-provider";
 import type { AppShellSidebarTab } from "@/lib/app-shell-prefs";
 import type { Workspace } from "@/lib/api/workspace";
+import type { AuthMeResponse } from "@/lib/api/auth";
 import { usePathname } from "next/navigation";
 
 type AppShellLayoutProps = {
   children: React.ReactNode;
   initialSidebarTab: AppShellSidebarTab;
+  initialSession: AuthMeResponse | null;
   initialWorkspace: Workspace | null;
 };
 
@@ -33,13 +35,14 @@ function resolveActiveNav(pathname: string): string {
 export function AppShellLayout({
   children,
   initialSidebarTab,
+  initialSession,
   initialWorkspace,
 }: AppShellLayoutProps) {
   const pathname = usePathname();
   const activeNav = resolveActiveNav(pathname);
 
   return (
-    <AppSessionGate>
+    <AppSessionGate initialSession={initialSession}>
       <AppWorkspaceProvider initialWorkspace={initialWorkspace}>
         <LocationEntryProvider>
           <DashboardShell
