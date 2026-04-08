@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { motion, useScroll, useTransform } from "motion/react";
 import { ArrowRight, Check, Phone, Zap } from "lucide-react";
 
+import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
 import { LandingBackfillShiftsInterface } from "./landing-backfill-shifts-interface";
 import { LandingFaq } from "./landing-faq";
 import { LandingPhoneMockup } from "./landing-phone-mockup";
@@ -73,9 +74,9 @@ export default function LandingPage() {
               ))}
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
-              <Link href="/login" className="px-4 py-2 text-[#425466] hover:text-[#0A2540] transition-colors text-[15px]" style={{ fontWeight: 450 }}>
+              <a href={AUTH_ENTRY_PATH} className="px-4 py-2 text-[#425466] hover:text-[#0A2540] transition-colors text-[15px]" style={{ fontWeight: 450 }}>
                 Sign In
-              </Link>
+              </a>
             </div>
           </div>
         </div>

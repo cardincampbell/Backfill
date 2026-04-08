@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
 import { PlaceAutocomplete } from "@/components/place-autocomplete";
+import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
 import type { PlaceSuggestion } from "@/lib/api/places";
 import {
   bootstrapOwnerWorkspace,
@@ -343,7 +344,7 @@ function OnboardingBody() {
         />
         <div style={{ display: "flex", gap: 12, paddingTop: 20 }}>
           <Link href="/try" className="button">Start setup</Link>
-          <Link href="/login" className="button-secondary">Sign in</Link>
+          <a href={AUTH_ENTRY_PATH} className="button-secondary">Sign in</a>
         </div>
       </main>
     );

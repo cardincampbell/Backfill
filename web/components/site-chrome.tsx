@@ -2,6 +2,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
+
 type SiteChromeProps = {
   children: React.ReactNode;
 };
@@ -48,13 +50,13 @@ export function SiteChrome({ children }: SiteChromeProps) {
             <Link href="/#pricing">Pricing</Link>
             <Link href="/#faq">FAQ</Link>
           </nav>
-          <Link
-            href="/login"
+          <a
+            href={AUTH_ENTRY_PATH}
             className="text-[15px] text-[#425466] transition-colors hover:text-[#0A2540]"
             style={{ fontWeight: 450 }}
           >
             Sign In
-          </Link>
+          </a>
         </div>
       </header>
       <div className="site-main">
@@ -92,9 +94,9 @@ export function SiteChrome({ children }: SiteChromeProps) {
                 Company
               </div>
               <div className="space-y-3">
-                <Link className="block text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]" href="/login" style={{ fontWeight: 420 }}>
+                <a className="block text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]" href={AUTH_ENTRY_PATH} style={{ fontWeight: 420 }}>
                   Sign In
-                </Link>
+                </a>
                 <a className="block text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]" href="tel:18002225345" style={{ fontWeight: 420 }}>
                   1-800-BACKFILL
                 </a>

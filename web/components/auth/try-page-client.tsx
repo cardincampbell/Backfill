@@ -14,6 +14,7 @@ import {
   refreshAppSessionCookie,
   verifyChallenge,
 } from "@/lib/api/auth";
+import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
 import { useOtpCooldown } from "@/lib/auth/use-otp-cooldown";
 
 type Step = "phone" | "code";
@@ -182,7 +183,7 @@ export function TryPageClient() {
               </button>
             </form>
             <p className="lp-signup-footer-note">
-              Already have access? <Link href="/login" className="lp-signup-text-link">Sign in</Link>
+              Already have access? <a href={AUTH_ENTRY_PATH} className="lp-signup-text-link">Sign in</a>
             </p>
           </div>
         ) : (
