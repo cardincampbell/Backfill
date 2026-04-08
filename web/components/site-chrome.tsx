@@ -14,6 +14,7 @@ export function SiteChrome({ children }: SiteChromeProps) {
     pathname === "/team" ||
     pathname === "/activity" ||
     pathname.startsWith("/location/") ||
+    pathname.startsWith("/scheduler/") ||
     pathname === "/settings" ||
     pathname.startsWith("/settings/");
   const isReferenceAppSurface =
