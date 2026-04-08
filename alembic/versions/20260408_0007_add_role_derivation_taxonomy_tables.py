@@ -6,8 +6,6 @@ Create Date: 2026-04-08 15:00:00.000000
 """
 from __future__ import annotations
 
-import uuid
-
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -223,125 +221,6 @@ def _business_vertical_role_archetype_rows() -> list[dict[str, object]]:
     ]
 
 
-def _extract_place_types(metadata: dict | None) -> list[tuple[str, bool]]:
-    payload = metadata or {}
-    primary = str(payload.get("primary_type") or "").strip().lower()
-    seen: set[str] = set()
-    ordered: list[tuple[str, bool]] = []
-
-    if primary:
-        ordered.append((primary, True))
-        seen.add(primary)
-
-    for value in payload.get("types") or []:
-        if not isinstance(value, str):
-            continue
-        normalized = value.strip().lower()
-        if not normalized or normalized in seen:
-            continue
-        ordered.append((normalized, False))
-        seen.add(normalized)
-
-    return ordered
-
-
-def _backfill_business_place_types(bind) -> None:
-    rows = (
-        bind.execute(
-            sa.text(
-                """
-                SELECT id, place_metadata
-                FROM businesses
-                ORDER BY created_at, id
-                """
-            )
-        )
-        .mappings()
-        .all()
-    )
-
-    for row in rows:
-        metadata = row["place_metadata"] if isinstance(row["place_metadata"], dict) else {}
-        for place_type, is_primary in _extract_place_types(metadata):
-            bind.execute(
-                sa.text(
-                    """
-                    INSERT INTO business_place_types (
-                        id,
-                        business_id,
-                        location_id,
-                        source_provider,
-                        place_type,
-                        is_primary,
-                        metadata_json
-                    ) VALUES (
-                        :id,
-                        :business_id,
-                        NULL,
-                        'google_places',
-                        :place_type,
-                        :is_primary,
-                        '{}'::jsonb
-                    )
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "business_id": row["id"],
-                    "place_type": place_type,
-                    "is_primary": is_primary,
-                },
-            )
-
-    location_rows = (
-        bind.execute(
-            sa.text(
-                """
-                SELECT id, business_id, google_place_metadata
-                FROM locations
-                ORDER BY created_at, id
-                """
-            )
-        )
-        .mappings()
-        .all()
-    )
-
-    for row in location_rows:
-        metadata = row["google_place_metadata"] if isinstance(row["google_place_metadata"], dict) else {}
-        for place_type, is_primary in _extract_place_types(metadata):
-            bind.execute(
-                sa.text(
-                    """
-                    INSERT INTO business_place_types (
-                        id,
-                        business_id,
-                        location_id,
-                        source_provider,
-                        place_type,
-                        is_primary,
-                        metadata_json
-                    ) VALUES (
-                        :id,
-                        :business_id,
-                        :location_id,
-                        'google_places',
-                        :place_type,
-                        :is_primary,
-                        '{}'::jsonb
-                    )
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "business_id": row["business_id"],
-                    "location_id": row["id"],
-                    "place_type": place_type,
-                    "is_primary": is_primary,
-                },
-            )
-
-
 def upgrade() -> None:
     op.create_table(
         "business_verticals",
@@ -473,9 +352,6 @@ def upgrade() -> None:
         business_vertical_role_archetypes,
         _business_vertical_role_archetype_rows(),
     )
-
-    _backfill_business_place_types(op.get_bind())
-
 
 def downgrade() -> None:
     op.drop_index(
