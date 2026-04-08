@@ -112,8 +112,29 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         return [employee_role.role_id for employee_role in self._loaded_employee_roles()]
 
     @property
+    def role_names(self) -> list[str]:
+        return [
+            role_name
+            for role_name in (
+                employee_role.role_name for employee_role in self._loaded_employee_roles()
+            )
+            if role_name
+        ]
+
+    @property
     def location_ids(self) -> list[uuid.UUID]:
         return [employee_location.location_id for employee_location in self._loaded_employee_locations()]
+
+    @property
+    def location_names(self) -> list[str]:
+        return [
+            location_name
+            for location_name in (
+                employee_location.location_name
+                for employee_location in self._loaded_employee_locations()
+            )
+            if location_name
+        ]
 
 
 class EmployeeRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -59,6 +59,7 @@ from app.schemas.webhooks import (
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleCreate,
     EmployeeAvailabilityRuleRead,
+    EmployeeAvailabilityRuleReplace,
     EmployeeCreate,
     EmployeeLocationCreate,
     EmployeeLocationRead,
@@ -68,6 +69,7 @@ from app.schemas.workforce import (
     EmployeeRoleCreate,
     EmployeeRoleRead,
     EmployeeRoleUpsert,
+    SelfEmployeeAvailabilityRead,
     EmployeeUpdate,
 )
 from app.schemas.workspace_board import (
@@ -97,6 +99,7 @@ __all__ = [
     "CoverageOfferResponseRead",
     "EmployeeAvailabilityRuleCreate",
     "EmployeeAvailabilityRuleRead",
+    "EmployeeAvailabilityRuleReplace",
     "EmployeeCreate",
     "EmployeeLocationCreate",
     "EmployeeLocationRead",
@@ -106,6 +109,7 @@ __all__ = [
     "EmployeeRoleCreate",
     "EmployeeRoleRead",
     "EmployeeRoleUpsert",
+    "SelfEmployeeAvailabilityRead",
     "EmployeeUpdate",
     "LocationCreate",
     "LocationDeleteResponse",

@@ -67,6 +67,7 @@ import { BrandedSelect } from "./BrandedSelect";
 import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
 import DashboardShell from "./DashboardShell";
 import SegmentedControl from "./SegmentedControl";
+import SettingsAvailabilitySection from "./SettingsAvailabilitySection";
 import SettingsLocationsSection from "./SettingsLocationsSection";
 
 type Feedback = {
@@ -472,6 +473,7 @@ const WEEK_START_DAY_OPTIONS = [
 
 const personalSections = [
   { key: "profile", label: "My Profile", icon: User, saveTarget: "personal" as const },
+  { key: "availability", label: "Availability", icon: CalendarDays, saveTarget: null },
   { key: "security", label: "Security", icon: Shield, saveTarget: null },
   { key: "personal-notifications", label: "Notifications", icon: Bell, saveTarget: null },
   { key: "appearance", label: "Appearance", icon: Palette, saveTarget: "personal" as const },
@@ -1260,6 +1262,16 @@ export default function Settings({
             <SettingsInput dark={isDark} disabled readOnly type="tel" value={phone ?? "Not set"} />
           </SettingsField>
         </div>
+      );
+    }
+
+    if (scope === "personal" && activeSection === "availability") {
+      return (
+        <SettingsAvailabilitySection
+          businessId={primaryBusinessId}
+          businessTimezone={business?.timezone ?? null}
+          dark={isDark}
+        />
       );
     }
 

@@ -7547,3 +7547,45 @@ body:has(.lp-onboarding) .site-main {
     align-items: stretch;
   }
 }
+
+.availability-range {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+  pointer-events: none;
+}
+
+.availability-range::-webkit-slider-runnable-track {
+  height: 36px;
+  background: transparent;
+}
+
+.availability-range::-moz-range-track {
+  height: 36px;
+  background: transparent;
+}
+
+.availability-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 9px;
+  border-radius: 9999px;
+  border: 2px solid #635bff;
+  background: #ffffff;
+  box-shadow: 0 2px 10px rgba(10, 37, 64, 0.18);
+  cursor: pointer;
+}
+
+.availability-range::-moz-range-thumb {
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  border: 2px solid #635bff;
+  background: #ffffff;
+  box-shadow: 0 2px 10px rgba(10, 37, 64, 0.18);
+  cursor: pointer;
+}

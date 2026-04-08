@@ -1,4 +1,4 @@
-import Team from "@/components/dashboard/Team";
+import Team from "@/components/dashboard/TeamDataBacked";
 
 export const dynamic = "force-dynamic";
 

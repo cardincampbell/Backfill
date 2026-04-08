@@ -7,6 +7,7 @@ export type SettingsSectionKey =
   | "business-notifications"
   | "integrations"
   | "profile"
+  | "availability"
   | "security"
   | "personal-notifications"
   | "appearance";
@@ -26,6 +27,7 @@ export const SECTION_KEYS_BY_SCOPE: Record<SettingsScope, SettingsSectionKey[]> 
   ],
   personal: [
     "profile",
+    "availability",
     "security",
     "personal-notifications",
     "appearance",

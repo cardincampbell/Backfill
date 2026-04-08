@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import csv
+import re
+from datetime import date, datetime
+from io import BytesIO, StringIO
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,15 +22,61 @@ from app.models.workforce import (
 )
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleCreate,
+    EmployeeAvailabilityRuleReplace,
+    EmployeeBulkImportRead,
     EmployeeCreate,
     EmployeeEnrollAtLocationCreate,
     EmployeeEnrollmentRead,
+    EmployeeImportErrorRead,
     EmployeeLocationCreate,
     EmployeeLocationUpsert,
     EmployeeRoleCreate,
     EmployeeRoleUpsert,
     EmployeeUpdate,
 )
+
+EMPLOYEE_IMPORT_HEADERS = (
+    "full_name",
+    "preferred_name",
+    "email",
+    "phone_e164",
+    "employee_number",
+    "external_ref",
+    "employment_type",
+    "hire_date",
+    "notes",
+)
+
+EMPLOYEE_IMPORT_REQUIRED_FIELDS = (
+    "full_name",
+    "email",
+    "phone_e164",
+)
+
+EMPLOYEE_IMPORT_HEADER_ALIASES = {
+    "full_name": "full_name",
+    "employee_name": "full_name",
+    "name": "full_name",
+    "preferred_name": "preferred_name",
+    "email": "email",
+    "email_address": "email",
+    "phone": "phone_e164",
+    "phone_number": "phone_e164",
+    "phone_e164": "phone_e164",
+    "mobile": "phone_e164",
+    "mobile_phone": "phone_e164",
+    "employee_number": "employee_number",
+    "employee_id": "employee_number",
+    "external_ref": "external_ref",
+    "external_id": "external_ref",
+    "employment_type": "employment_type",
+    "employment_status": "employment_type",
+    "hire_date": "hire_date",
+    "start_date": "hire_date",
+    "notes": "notes",
+    "first_name": "first_name",
+    "last_name": "last_name",
+}
 
 
 async def _require_business(session: AsyncSession, business_id: UUID) -> Business:
@@ -64,6 +116,278 @@ def _employee_query():
         selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
         selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
     )
+
+
+async def _list_employee_availability_rules(
+    session: AsyncSession,
+    employee_id: UUID,
+) -> list[EmployeeAvailabilityRule]:
+    result = await session.execute(
+        select(EmployeeAvailabilityRule)
+        .where(EmployeeAvailabilityRule.employee_id == employee_id)
+        .order_by(
+            EmployeeAvailabilityRule.day_of_week.asc(),
+            EmployeeAvailabilityRule.start_local_time.asc(),
+            EmployeeAvailabilityRule.priority.asc(),
+            EmployeeAvailabilityRule.created_at.asc(),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def _resolve_self_service_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    email: str | None,
+    phone_e164: str | None,
+    full_name: str | None,
+) -> Employee:
+    normalized_phone = phone_e164.strip() if phone_e164 else ""
+    if normalized_phone:
+        phone_match = await session.scalar(
+            _employee_query().where(
+                Employee.business_id == business_id,
+                Employee.phone_e164 == normalized_phone,
+            )
+        )
+        if phone_match is not None:
+            return phone_match
+
+    normalized_email = email.strip().lower() if email else ""
+    if normalized_email:
+        email_match = await session.scalar(
+            _employee_query().where(
+                Employee.business_id == business_id,
+                func.lower(Employee.email) == normalized_email,
+            )
+        )
+        if email_match is not None:
+            return email_match
+
+    normalized_name = full_name.strip() if full_name else ""
+    if normalized_name:
+        result = await session.execute(
+            _employee_query().where(
+                Employee.business_id == business_id,
+                Employee.full_name == normalized_name,
+            )
+        )
+        matches = list(result.scalars().all())
+        if len(matches) == 1:
+            return matches[0]
+
+    raise LookupError("employee_self_not_found")
+
+
+def _normalize_import_header(value: object) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return normalized.strip("_")
+
+
+def _normalize_import_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def _parse_hire_date(raw: object) -> date | None:
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+
+    normalized = str(raw).strip()
+    if not normalized:
+        return None
+
+    for candidate in (normalized, normalized.replace("/", "-")):
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            pass
+
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y"):
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except ValueError:
+            continue
+
+    raise ValueError("invalid_hire_date")
+
+
+def _canonicalize_import_row(raw_row: dict[object, object]) -> dict[str, object]:
+    canonical: dict[str, object] = {}
+    first_name = ""
+    last_name = ""
+
+    for header, value in raw_row.items():
+        normalized_header = _normalize_import_header(header)
+        if not normalized_header:
+            continue
+        target = EMPLOYEE_IMPORT_HEADER_ALIASES.get(normalized_header)
+        if target is None:
+            continue
+        if target == "first_name":
+            first_name = _normalize_import_value(value)
+            continue
+        if target == "last_name":
+            last_name = _normalize_import_value(value)
+            continue
+        canonical[target] = _normalize_import_value(value)
+
+    if not canonical.get("full_name"):
+        full_name = " ".join(part for part in (first_name, last_name) if part)
+        if full_name:
+            canonical["full_name"] = full_name
+
+    return canonical
+
+
+def parse_employee_import_file(
+    filename: str,
+    content: bytes,
+    *,
+    default_location_id: UUID | None = None,
+) -> tuple[list[EmployeeCreate], list[EmployeeImportErrorRead]]:
+    normalized_name = filename.lower().strip()
+    if normalized_name.endswith(".csv"):
+        text = content.decode("utf-8-sig")
+        reader = csv.DictReader(StringIO(text))
+        rows = [(index, row) for index, row in enumerate(reader, start=2)]
+    elif normalized_name.endswith(".xlsx"):
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        sheet = workbook.active
+        iterator = sheet.iter_rows(values_only=True)
+        headers = next(iterator, None)
+        if headers is None:
+            return [], []
+        rows = []
+        for index, values in enumerate(iterator, start=2):
+            row = {
+                headers[column_index]: values[column_index]
+                for column_index in range(len(headers))
+            }
+            rows.append((index, row))
+    else:
+        raise ValueError("employee_import_file_type_unsupported")
+
+    employees: list[EmployeeCreate] = []
+    errors: list[EmployeeImportErrorRead] = []
+
+    for row_number, raw_row in rows:
+        canonical = _canonicalize_import_row(raw_row)
+        if not any(str(value).strip() for value in canonical.values() if value is not None):
+            continue
+
+        missing_fields = [
+            field_name
+            for field_name in EMPLOYEE_IMPORT_REQUIRED_FIELDS
+            if not str(canonical.get(field_name) or "").strip()
+        ]
+        if missing_fields:
+            errors.append(
+                EmployeeImportErrorRead(
+                    row_number=row_number,
+                    message=f"missing_required_fields:{','.join(missing_fields)}",
+                )
+            )
+            continue
+
+        try:
+            employee = EmployeeCreate(
+                full_name=str(canonical.get("full_name") or "").strip(),
+                preferred_name=str(canonical.get("preferred_name") or "").strip() or None,
+                email=str(canonical.get("email") or "").strip() or None,
+                phone_e164=str(canonical.get("phone_e164") or "").strip() or None,
+                employee_number=str(canonical.get("employee_number") or "").strip() or None,
+                external_ref=str(canonical.get("external_ref") or "").strip() or None,
+                employment_type=str(canonical.get("employment_type") or "").strip() or None,
+                primary_location_id=default_location_id,
+                hire_date=_parse_hire_date(canonical.get("hire_date")),
+                notes=str(canonical.get("notes") or "").strip() or None,
+                employee_metadata={"source": "bulk_import"},
+            )
+        except ValueError as exc:
+            errors.append(
+                EmployeeImportErrorRead(
+                    row_number=row_number,
+                    message=str(exc),
+                )
+            )
+            continue
+
+        employees.append(employee)
+
+    if not employees and not errors:
+        raise ValueError("employee_import_no_rows")
+
+    return employees, errors
+
+
+def build_employee_import_template() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Employees"
+    sheet.append(list(EMPLOYEE_IMPORT_HEADERS))
+    sheet.append(
+        [
+            "Taylor Smith",
+            "Taylor",
+            "taylor@example.com",
+            "+15555550123",
+            "EMP-001",
+            "source-123",
+            "part_time",
+            "2026-04-08",
+            "Weekend closer",
+        ]
+    )
+
+    header_fill = PatternFill("solid", fgColor="EEF2FF")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+
+    column_widths = {
+        "A": 24,
+        "B": 18,
+        "C": 28,
+        "D": 18,
+        "E": 16,
+        "F": 18,
+        "G": 18,
+        "H": 14,
+        "I": 28,
+    }
+    for column, width in column_widths.items():
+        sheet.column_dimensions[column].width = width
+
+    instructions = workbook.create_sheet("Instructions")
+    instructions.append(["Backfill Employee Import"])
+    instructions.append(
+        [
+            "Import only general employee details here. Assign roles and locations later from the Team UI.",
+        ]
+    )
+    instructions.append(
+        [
+            "Required columns: full_name, email, phone_e164. Optional columns: preferred_name, employee_number, external_ref, employment_type, hire_date, notes",
+        ]
+    )
+    instructions["A1"].font = Font(bold=True)
+    instructions["A1"].fill = header_fill
+    instructions.column_dimensions["A"].width = 120
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
 
 
 async def list_employees(session: AsyncSession, business_id: UUID) -> list[Employee]:
@@ -297,6 +621,46 @@ async def create_employee(session: AsyncSession, business_id: UUID, payload: Emp
     await session.refresh(employee)
     employee.employee_locations = employee_locations
     return employee
+
+
+async def bulk_import_employees(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    filename: str,
+    content: bytes,
+) -> EmployeeBulkImportRead:
+    await _require_business(session, business_id)
+
+    if not content:
+        raise ValueError("employee_import_file_empty")
+
+    location_result = await session.execute(
+        select(Location)
+        .where(Location.business_id == business_id, Location.is_active.is_(True))
+        .order_by(Location.created_at.asc())
+    )
+    active_locations = list(location_result.scalars().all())
+    default_location = active_locations[0] if len(active_locations) == 1 else None
+
+    parsed_rows, errors = parse_employee_import_file(
+        filename,
+        content,
+        default_location_id=default_location.id if default_location is not None else None,
+    )
+
+    created_employees: list[Employee] = []
+    for row in parsed_rows:
+        created_employees.append(await create_employee(session, business_id, row))
+
+    return EmployeeBulkImportRead(
+        created_count=len(created_employees),
+        skipped_count=len(errors),
+        employees=created_employees,
+        errors=errors,
+        default_location_id=default_location.id if default_location is not None else None,
+        default_location_name=default_location.location_display_name if default_location is not None else None,
+    )
 
 
 async def enroll_employee_at_location(
@@ -546,3 +910,83 @@ async def add_employee_availability_rule(
     await session.flush()
     await session.refresh(record)
     return record
+
+
+async def replace_employee_availability_rules(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+    payload: EmployeeAvailabilityRuleReplace,
+) -> list[EmployeeAvailabilityRule]:
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.business_id != business_id:
+        raise LookupError("employee_not_found")
+
+    await session.execute(
+        delete(EmployeeAvailabilityRule).where(
+            EmployeeAvailabilityRule.employee_id == employee_id,
+        )
+    )
+
+    for rule in payload.rules:
+        session.add(
+            EmployeeAvailabilityRule(
+                employee_id=employee_id,
+                day_of_week=rule.day_of_week,
+                start_local_time=rule.start_local_time,
+                end_local_time=rule.end_local_time,
+                timezone=rule.timezone,
+                availability_type=rule.availability_type,
+                valid_from=rule.valid_from,
+                valid_until=rule.valid_until,
+                priority=rule.priority,
+                availability_metadata=rule.availability_metadata,
+            )
+        )
+
+    await session.flush()
+    return await _list_employee_availability_rules(session, employee_id)
+
+
+async def get_self_employee_availability_rules(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    email: str | None,
+    phone_e164: str | None,
+    full_name: str | None,
+) -> tuple[Employee, list[EmployeeAvailabilityRule]]:
+    employee = await _resolve_self_service_employee(
+        session,
+        business_id,
+        email=email,
+        phone_e164=phone_e164,
+        full_name=full_name,
+    )
+    rules = await _list_employee_availability_rules(session, employee.id)
+    return employee, rules
+
+
+async def replace_self_employee_availability_rules(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    email: str | None,
+    phone_e164: str | None,
+    full_name: str | None,
+    payload: EmployeeAvailabilityRuleReplace,
+) -> tuple[Employee, list[EmployeeAvailabilityRule]]:
+    employee = await _resolve_self_service_employee(
+        session,
+        business_id,
+        email=email,
+        phone_e164=phone_e164,
+        full_name=full_name,
+    )
+    rules = await replace_employee_availability_rules(
+        session,
+        business_id,
+        employee.id,
+        payload,
+    )
+    return employee, rules

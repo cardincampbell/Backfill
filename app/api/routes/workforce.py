@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleCreate,
     EmployeeAvailabilityRuleRead,
+    EmployeeAvailabilityRuleReplace,
+    EmployeeBulkImportRead,
     EmployeeCreate,
     EmployeeEnrollAtLocationCreate,
     EmployeeEnrollmentRead,
@@ -18,6 +20,7 @@ from app.schemas.workforce import (
     EmployeeRead,
     EmployeeRoleCreate,
     EmployeeRoleRead,
+    SelfEmployeeAvailabilityRead,
     EmployeeUpdate,
 )
 from app.services import audit as audit_service
@@ -58,8 +61,87 @@ async def create_employee(business_id: UUID, payload: EmployeeCreate, session: S
         employee = await workforce.create_employee(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    await audit_service.append(
+        session,
+        event_name="employee.created",
+        target_type="employee",
+        target_id=employee.id,
+        business_id=business_id,
+        location_id=employee.primary_location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        payload={
+            "primary_location_id": str(employee.primary_location_id)
+            if employee.primary_location_id is not None
+            else None,
+        },
+    )
     await session.commit()
     return employee
+
+
+@router.get("/import/template")
+async def download_employee_import_template(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+
+    return Response(
+        content=workforce.build_employee_import_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="backfill-employee-roster-template.xlsx"',
+        },
+    )
+
+
+@router.post("/import", response_model=EmployeeBulkImportRead)
+async def bulk_import_employees(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    file: UploadFile = File(...),
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        result = await workforce.bulk_import_employees(
+            session,
+            business_id,
+            filename=file.filename or "",
+            content=await file.read(),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    await audit_service.append(
+        session,
+        event_name="employee.bulk_imported",
+        target_type="business",
+        target_id=business_id,
+        business_id=business_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        payload={
+            "file_name": file.filename,
+            "created_count": result.created_count,
+            "skipped_count": result.skipped_count,
+            "default_location_id": str(result.default_location_id)
+            if result.default_location_id is not None
+            else None,
+        },
+    )
+    await session.commit()
+    return result
 
 
 @router.patch("/{employee_id}", response_model=EmployeeProfileRead)
@@ -201,3 +283,66 @@ async def add_employee_availability_rule(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await session.commit()
     return rule
+
+
+@router.get(
+    "/availability-rules/self",
+    response_model=SelfEmployeeAvailabilityRead,
+)
+async def get_self_employee_availability_rules(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        employee, rules = await workforce.get_self_employee_availability_rules(
+            session,
+            business_id,
+            email=auth_ctx.user.email,
+            phone_e164=auth_ctx.user.primary_phone_e164,
+            full_name=auth_ctx.user.full_name,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    timezone = rules[0].timezone if rules else "UTC"
+    return SelfEmployeeAvailabilityRead(
+        employee_id=employee.id,
+        employee_name=employee.preferred_name or employee.full_name,
+        timezone=timezone,
+        rules=rules,
+    )
+
+
+@router.put(
+    "/availability-rules/self",
+    response_model=SelfEmployeeAvailabilityRead,
+)
+async def replace_self_employee_availability_rules(
+    business_id: UUID,
+    payload: EmployeeAvailabilityRuleReplace,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        employee, rules = await workforce.replace_self_employee_availability_rules(
+            session,
+            business_id,
+            email=auth_ctx.user.email,
+            phone_e164=auth_ctx.user.primary_phone_e164,
+            full_name=auth_ctx.user.full_name,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    timezone = rules[0].timezone if rules else "UTC"
+    return SelfEmployeeAvailabilityRead(
+        employee_id=employee.id,
+        employee_name=employee.preferred_name or employee.full_name,
+        timezone=timezone,
+        rules=rules,
+    )

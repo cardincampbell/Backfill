@@ -44,7 +44,9 @@ class EmployeeRead(BaseSchema):
     notes: Optional[str]
     employee_metadata: dict
     role_ids: list[UUID] = Field(default_factory=list)
+    role_names: list[str] = Field(default_factory=list)
     location_ids: list[UUID] = Field(default_factory=list)
+    location_names: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -67,6 +69,20 @@ class EmployeeEnrollAtLocationCreate(BaseSchema):
 class EmployeeEnrollmentRead(BaseSchema):
     employee: EmployeeRead
     roles: list["EmployeeRoleRead"]
+
+
+class EmployeeImportErrorRead(BaseSchema):
+    row_number: Optional[int] = None
+    message: str
+
+
+class EmployeeBulkImportRead(BaseSchema):
+    created_count: int
+    skipped_count: int
+    employees: list[EmployeeRead] = Field(default_factory=list)
+    errors: list[EmployeeImportErrorRead] = Field(default_factory=list)
+    default_location_id: Optional[UUID] = None
+    default_location_name: Optional[str] = None
 
 
 class EmployeeRoleCreate(BaseSchema):
@@ -184,3 +200,14 @@ class EmployeeAvailabilityRuleRead(BaseSchema):
     availability_metadata: dict
     created_at: datetime
     updated_at: datetime
+
+
+class EmployeeAvailabilityRuleReplace(BaseSchema):
+    rules: list[EmployeeAvailabilityRuleCreate] = Field(default_factory=list)
+
+
+class SelfEmployeeAvailabilityRead(BaseSchema):
+    employee_id: UUID
+    employee_name: str
+    timezone: str
+    rules: list[EmployeeAvailabilityRuleRead] = Field(default_factory=list)

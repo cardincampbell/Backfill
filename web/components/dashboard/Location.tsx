@@ -19,7 +19,6 @@ import {
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
-import { enrollEmployeeAtLocation } from "@/lib/api/workspace";
 import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import {
   createAndAssignLocationRole,
@@ -465,22 +464,53 @@ export default function Location({
     setEditingEmployee(nextEmployee);
   };
 
-  const handleEmployeeCreated = async (
-    result: Awaited<ReturnType<typeof enrollEmployeeAtLocation>>,
-  ) => {
-    const nextEmployees = await listEmployees(location.business_id);
-    setEmployees(nextEmployees);
+  const handleEmployeeCreated = async (nextEmployee: EmployeeSummary) => {
+    setEmployees((current) => {
+      const existing = current.some((employee) => employee.id === nextEmployee.id);
+      if (existing) {
+        return current.map((employee) =>
+          employee.id === nextEmployee.id ? nextEmployee : employee,
+        );
+      }
+      return [nextEmployee, ...current];
+    });
     setSelectedEmployeeIds((current) =>
-      current.includes(result.employee.id)
+      current.includes(nextEmployee.id)
         ? current
-        : [...current, result.employee.id],
+        : [...current, nextEmployee.id],
     );
     setSelectedRoleIds((current) =>
-      Array.from(new Set([...current, ...result.roles.map((role) => role.role_id)])),
+      Array.from(new Set([...current, ...nextEmployee.role_ids])),
     );
     setFeedback({
       tone: "success",
-      message: `${result.employee.full_name} was added to ${locationDisplayName}.`,
+      message: `${nextEmployee.full_name} was added to ${locationDisplayName}.`,
+    });
+  };
+
+  const handleEmployeesImported = async (
+    importedEmployees: EmployeeSummary[],
+    createdCount: number,
+    skippedCount: number,
+  ) => {
+    const importedById = new Map(
+      importedEmployees.map((employee) => [employee.id, employee]),
+    );
+    setEmployees((current) => {
+      const next = current.map(
+        (employee) => importedById.get(employee.id) ?? employee,
+      );
+      const missing = importedEmployees.filter(
+        (employee) => !current.some((existing) => existing.id === employee.id),
+      );
+      return [...missing, ...next];
+    });
+    setSelectedEmployeeIds((current) =>
+      Array.from(new Set([...current, ...importedEmployees.map((employee) => employee.id)])),
+    );
+    setFeedback({
+      tone: "success",
+      message: `Imported ${createdCount} employee${createdCount === 1 ? "" : "s"} into ${locationDisplayName}${skippedCount ? `, skipped ${skippedCount}` : ""}.`,
     });
   };
 
@@ -1124,6 +1154,7 @@ export default function Location({
       <AnimatePresence>
         {showAddEmployeeModal ? (
           <LocationEmployeeEnrollmentModal
+            businessLocations={effectiveBusinessLocations}
             businessId={location.business_id}
             dark={isDark}
             locationId={location.location_id}
@@ -1137,8 +1168,12 @@ export default function Location({
       <AnimatePresence>
         {showBulkUploadModal ? (
           <LocationEmployeeBulkUploadModal
+            businessId={location.business_id}
             dark={isDark}
+            locationId={location.location_id}
+            locationName={locationDisplayName}
             onClose={() => setShowBulkUploadModal(false)}
+            onImported={handleEmployeesImported}
           />
         ) : null}
       </AnimatePresence>

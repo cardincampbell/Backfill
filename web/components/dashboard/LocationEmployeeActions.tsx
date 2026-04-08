@@ -1,28 +1,43 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Download, Plus, Tag, Upload, UserPlus, X } from "lucide-react";
 
-import type { BusinessRole } from "@/lib/api/businesses";
-import { enrollEmployeeAtLocation } from "@/lib/api/workspace";
+import type { BusinessLocation, BusinessRole } from "@/lib/api/businesses";
+import {
+  createEmployee,
+  downloadEmployeeImportTemplate,
+  importEmployees,
+  updateEmployee,
+  type EmployeeBulkImportResponse,
+  type EmployeeSummary,
+} from "@/lib/api/workforce";
 
 type Feedback = {
   tone: "success" | "error";
   message: string;
 } | null;
 
-const rosterTemplateHref = "/backfill-employee-roster-template.xlsx";
-
 function normalizeOptional(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
 
-type EnrollmentResponse = Awaited<ReturnType<typeof enrollEmployeeAtLocation>>;
+function buildLocationAssignments(
+  selectedLocationIds: string[],
+  primaryLocationId: string,
+) {
+  const nextLocationIds = Array.from(new Set(selectedLocationIds));
+  return nextLocationIds.map((locationId) => ({
+    location_id: locationId,
+    is_primary: locationId === primaryLocationId,
+  }));
+}
 
 export function LocationEmployeeEnrollmentModal({
   businessId,
+  businessLocations,
   dark,
   locationId,
   locationName,
@@ -31,17 +46,19 @@ export function LocationEmployeeEnrollmentModal({
   roles,
 }: {
   businessId: string;
+  businessLocations: BusinessLocation[];
   dark: boolean;
   locationId: string;
   locationName: string;
   onClose(): void;
-  onCreated(result: EnrollmentResponse): Promise<void> | void;
+  onCreated(employee: EmployeeSummary): Promise<void> | void;
   roles: BusinessRole[];
 }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([locationId]);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -53,6 +70,16 @@ export function LocationEmployeeEnrollmentModal({
     () => roles.filter((role) => !selectedRoleIds.includes(role.id)),
     [roles, selectedRoleIds],
   );
+  const selectedLocations = useMemo(
+    () =>
+      businessLocations.filter((location) => selectedLocationIds.includes(location.id)),
+    [businessLocations, selectedLocationIds],
+  );
+  const availableLocations = useMemo(
+    () =>
+      businessLocations.filter((location) => !selectedLocationIds.includes(location.id)),
+    [businessLocations, selectedLocationIds],
+  );
 
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#5E6D7A]";
@@ -61,13 +88,28 @@ export function LocationEmployeeEnrollmentModal({
     ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8898AA]"
     : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#8898AA]";
 
-  const canSubmit = Boolean(fullName.trim()) && selectedRoleIds.length > 0;
+  const hasRequiredLocation = selectedLocationIds.includes(locationId);
+  const canSubmit =
+    Boolean(fullName.trim()) &&
+    Boolean(email.trim()) &&
+    Boolean(phone.trim()) &&
+    selectedRoleIds.length > 0 &&
+    selectedLocationIds.length > 0 &&
+    hasRequiredLocation;
 
   const toggleRole = (roleId: string) => {
     setSelectedRoleIds((current) =>
       current.includes(roleId)
         ? current.filter((item) => item !== roleId)
         : [...current, roleId],
+    );
+  };
+
+  const toggleLocation = (locationIdToToggle: string) => {
+    setSelectedLocationIds((current) =>
+      current.includes(locationIdToToggle)
+        ? current.filter((item) => item !== locationIdToToggle)
+        : [...current, locationIdToToggle],
     );
   };
 
@@ -79,14 +121,29 @@ export function LocationEmployeeEnrollmentModal({
     startTransition(async () => {
       try {
         setFeedback(null);
-        const result = await enrollEmployeeAtLocation(businessId, {
+        const createdEmployee = await createEmployee(businessId, {
           full_name: fullName.trim(),
           email: normalizeOptional(email),
           phone_e164: normalizeOptional(phone),
-          location_id: locationId,
-          role_ids: selectedRoleIds,
+          primary_location_id: locationId,
+          employee_metadata: {
+            source: "location_ui",
+            source_location_id: locationId,
+          },
         });
-        await onCreated(result);
+
+        let nextEmployee: EmployeeSummary = createdEmployee;
+        if (selectedRoleIds.length || selectedLocationIds.length) {
+          nextEmployee = await updateEmployee(businessId, createdEmployee.id, {
+            roles: selectedRoleIds.map((roleId) => ({
+              role_id: roleId,
+              is_primary: roleId === selectedRoleIds[0],
+            })),
+            locations: buildLocationAssignments(selectedLocationIds, locationId),
+          });
+        }
+
+        await onCreated(nextEmployee);
         onClose();
       } catch (error) {
         setFeedback({
@@ -127,7 +184,7 @@ export function LocationEmployeeEnrollmentModal({
                   Add Employee
                 </h2>
                 <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  Create the employee and add them to {locationName}.
+                  This employee will be added to {locationName} automatically.
                 </p>
               </div>
             </div>
@@ -153,6 +210,18 @@ export function LocationEmployeeEnrollmentModal({
               }}
             >
               {feedback.message}
+            </div>
+          ) : null}
+          {!canSubmit ? (
+            <div
+              className={`mb-4 rounded-2xl border px-4 py-3 text-[12px] ${
+                dark
+                  ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8]"
+                  : "border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]"
+              }`}
+            >
+              Name, phone, email, at least one role, and at least one location are required to add
+              an employee from this form.
             </div>
           ) : null}
 
@@ -213,16 +282,93 @@ export function LocationEmployeeEnrollmentModal({
                 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
                 style={{ fontWeight: 500 }}
               >
-                Assigned Location
+                Assigned Locations
               </h3>
             </div>
-            <div
-              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 ${dark ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]" : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"}`}
-            >
-              <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                {locationName}
-              </span>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <AnimatePresence>
+                {selectedLocations.map((location) => (
+                  <motion.div
+                    key={location.id}
+                    layout
+                    animate={{ opacity: 1, scale: 1 }}
+                    className={`flex items-center gap-1.5 rounded-lg border py-1.5 pl-2.5 pr-2 ${dark ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]" : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"}`}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                  >
+                    <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                      {location.name}
+                    </span>
+                    {location.id === locationId ? (
+                      <span
+                        className="text-[10px] text-[#635BFF]"
+                        style={{ fontWeight: 520 }}
+                      >
+                        Primary
+                      </span>
+                    ) : null}
+                    <button
+                      className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
+                      onClick={() => toggleLocation(location.id)}
+                      type="button"
+                    >
+                      <X className="text-[#8898AA] hover:text-[#E5484D]" size={12} />
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              {!selectedLocations.length ? (
+                <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                  Select at least one location. This location must be included to continue.
+                </p>
+              ) : null}
             </div>
+
+            {!hasRequiredLocation ? (
+              <p className="mb-3 text-[12px] text-[#E5484D]" style={{ fontWeight: 460 }}>
+                This location must stay selected to add an employee from this page.
+              </p>
+            ) : null}
+
+            {availableLocations.length ? (
+              <div className="flex flex-wrap gap-2">
+                {availableLocations.map((location) => (
+                  <button
+                    className={`group flex items-center gap-1.5 rounded-lg border px-3 py-1.5 transition-all duration-200 ${
+                      dark
+                        ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
+                        : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
+                    }`}
+                    key={location.id}
+                    onClick={() => toggleLocation(location.id)}
+                    type="button"
+                  >
+                    <Plus
+                      className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                      size={11}
+                    />
+                    <span
+                      className={`text-[12px] transition-colors ${
+                        dark
+                          ? "text-[#C1CED8] group-hover:text-white"
+                          : "text-[#5E6D7A] group-hover:text-[#0A2540]"
+                      }`}
+                      style={{ fontWeight: 440 }}
+                    >
+                      {location.name}
+                    </span>
+                    {location.id === locationId ? (
+                      <span
+                        className="text-[10px] text-[#635BFF]"
+                        style={{ fontWeight: 520 }}
+                      >
+                        Current
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-5">
@@ -264,12 +410,12 @@ export function LocationEmployeeEnrollmentModal({
               </AnimatePresence>
               {!selectedRoles.length ? (
                 <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
-                  Assign at least one role before this employee can be scheduled.
+                  Assign at least one role before you can add this employee from this screen.
                 </p>
               ) : null}
             </div>
 
-            {availableRoles.length > 0 ? (
+            {availableRoles.length ? (
               <div className="flex flex-wrap gap-2">
                 {availableRoles.map((role) => (
                   <button
@@ -330,15 +476,86 @@ export function LocationEmployeeEnrollmentModal({
 }
 
 export function LocationEmployeeBulkUploadModal({
+  businessId,
   dark,
+  locationId,
+  locationName,
   onClose,
+  onImported,
 }: {
+  businessId: string;
   dark: boolean;
+  locationId: string;
+  locationName: string;
   onClose(): void;
+  onImported(
+    employees: EmployeeSummary[],
+    createdCount: number,
+    skippedCount: number,
+  ): Promise<void> | void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+  const [importResult, setImportResult] = useState<EmployeeBulkImportResponse | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#5E6D7A]";
   const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
+
+  const handleTemplateDownload = async () => {
+    try {
+      setFeedback(null);
+      setIsDownloadingTemplate(true);
+      await downloadEmployeeImportTemplate(businessId);
+    } catch (error) {
+      setFeedback({
+        tone: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Could not download the template.",
+      });
+    } finally {
+      setIsDownloadingTemplate(false);
+    }
+  };
+
+  const handleImport = () => {
+    if (!selectedFile || isPending) {
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        setFeedback(null);
+        const result = await importEmployees(businessId, selectedFile);
+        const updatedEmployees = await Promise.all(
+          result.employees.map((employee) =>
+            updateEmployee(businessId, employee.id, {
+              locations: buildLocationAssignments([locationId], locationId),
+            }),
+          ),
+        );
+        setImportResult(result);
+        await onImported(updatedEmployees, result.created_count, result.skipped_count);
+        if (!result.errors.length) {
+          onClose();
+        }
+      } catch (error) {
+        setFeedback({
+          tone: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not import these employees.",
+        });
+      }
+    });
+  };
 
   return (
     <motion.div
@@ -350,7 +567,7 @@ export function LocationEmployeeBulkUploadModal({
     >
       <motion.div
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className={`mx-4 w-full max-w-lg overflow-hidden rounded-[28px] border ${dark ? "border-white/[0.08] bg-[#0F2E4C]" : "border-[#E5E7EB] bg-white"}`}
+        className={`mx-4 w-full max-w-2xl overflow-hidden rounded-[28px] border ${dark ? "border-white/[0.08] bg-[#0F2E4C]" : "border-[#E5E7EB] bg-white"}`}
         exit={{ opacity: 0, scale: 0.96, y: 16 }}
         initial={{ opacity: 0, scale: 0.96, y: 16 }}
         onClick={(event) => event.stopPropagation()}
@@ -367,7 +584,7 @@ export function LocationEmployeeBulkUploadModal({
                   Bulk Upload
                 </h2>
                 <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  Prep roster data while the import contract is finalized.
+                  Imported employees will automatically be added to {locationName}.
                 </p>
               </div>
             </div>
@@ -381,37 +598,169 @@ export function LocationEmployeeBulkUploadModal({
           </div>
         </div>
 
-        <div className="px-6 py-6">
+        <div className="space-y-5 px-6 py-5">
+          {feedback ? (
+            <div
+              className="rounded-2xl px-4 py-3 text-[13px]"
+              role="status"
+              style={{
+                background: "rgba(229, 72, 77, 0.08)",
+                color: "#C13535",
+                fontWeight: 500,
+              }}
+            >
+              {feedback.message}
+            </div>
+          ) : null}
+
           <div
-            className={`flex items-start gap-3 rounded-2xl border px-4 py-4 ${dark ? "border-white/[0.08] bg-white/[0.04]" : "border-[#E5E7EB] bg-[#F7F8FA]"}`}
+            className={`rounded-2xl border px-4 py-4 ${
+              dark
+                ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8]"
+                : "border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]"
+            }`}
           >
-            <Upload className="mt-0.5 text-[#635BFF]" size={16} />
-            <div>
+            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+              What gets imported
+            </p>
+            <p className="mt-1 text-[12px]" style={{ fontWeight: 420 }}>
+              Required in the file: full_name, email, phone_e164. Roles still stay managed in the
+              UI after import.
+            </p>
+            <p className="mt-3 text-[12px]" style={{ fontWeight: 420 }}>
+              Everyone imported from this screen is assigned to{" "}
+              <span style={{ fontWeight: 520 }}>{locationName}</span>.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-[13px] ${
+                dark
+                  ? "border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]"
+                  : "border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]"
+              }`}
+              disabled={isDownloadingTemplate}
+              onClick={handleTemplateDownload}
+              type="button"
+            >
+              <Download size={14} />
+              {isDownloadingTemplate ? "Downloading..." : "Download Template"}
+            </button>
+            <button
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-[13px] ${
+                dark
+                  ? "border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]"
+                  : "border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]"
+              }`}
+              onClick={() => inputRef.current?.click()}
+              type="button"
+            >
+              <Upload size={14} />
+              Choose File
+            </button>
+            {selectedFile ? (
+              <span className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                {selectedFile.name}
+              </span>
+            ) : null}
+          </div>
+
+          <input
+            accept=".csv,.xlsx"
+            className="hidden"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            ref={inputRef}
+            type="file"
+          />
+
+          <button
+            className={`w-full rounded-[24px] border border-dashed px-6 py-8 text-center transition-all ${
+              isDragging
+                ? "border-[#635BFF] bg-[#635BFF]/[0.06]"
+                : dark
+                  ? "border-white/[0.1] bg-white/[0.03] hover:bg-white/[0.05]"
+                  : "border-[#D7DBE3] bg-[#FAFBFC] hover:bg-[#F7F8FA]"
+            }`}
+            onClick={() => inputRef.current?.click()}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsDragging(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setIsDragging(false);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragging(false);
+              const file = event.dataTransfer.files?.[0];
+              if (file) {
+                setSelectedFile(file);
+              }
+            }}
+            type="button"
+          >
+            <Upload className="mx-auto mb-3 text-[#635BFF]" size={24} />
+            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+              Drag a CSV or XLSX file here
+            </p>
+            <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+              The import creates employee profiles, then assigns them to this location.
+            </p>
+          </button>
+
+          {importResult?.errors.length ? (
+            <div
+              className={`rounded-2xl border px-4 py-4 ${
+                dark
+                  ? "border-white/[0.08] bg-white/[0.04]"
+                  : "border-[#E5E7EB] bg-[#FAFBFC]"
+              }`}
+            >
               <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                Bulk import is not wired yet on this screen.
+                Import completed with row issues
               </p>
               <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Download the employee roster template now, then return here once the import flow lands.
+                {importResult.created_count} created, {importResult.skipped_count} skipped.
               </p>
+              <div className="mt-3 space-y-2">
+                {importResult.errors.map((error, index) => (
+                  <div
+                    key={`${error.row_number ?? "general"}-${index}`}
+                    className={`rounded-xl px-3 py-2 text-[12px] ${
+                      dark ? "bg-white/[0.04] text-[#C1CED8]" : "bg-white text-[#5E6D7A]"
+                    }`}
+                    style={{ fontWeight: 420 }}
+                  >
+                    Row {error.row_number ?? "?"}: {error.message}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
 
         <div className={`flex items-center justify-end gap-3 border-t px-6 py-4 ${borderClass}`}>
-          <a
-            className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-[13px] text-[#635BFF] ${dark ? "border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.06]" : "border-[#E5E7EB] bg-white hover:bg-[#F7F8FA]"}`}
-            download
-            href={rosterTemplateHref}
-            style={{ fontWeight: 520 }}
-          >
-            <Download size={13} /> Download Template
-          </a>
           <button
             className={`rounded-full border px-4 py-2.5 text-[13px] ${dark ? "border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.06]" : "border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]"}`}
             onClick={onClose}
             type="button"
           >
             Close
+          </button>
+          <button
+            className="rounded-full px-4 py-2.5 text-[13px] text-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!selectedFile || isPending}
+            onClick={handleImport}
+            style={{
+              fontWeight: 540,
+              background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
+            }}
+            type="button"
+          >
+            {isPending ? "Uploading..." : "Import Employees"}
           </button>
         </div>
       </motion.div>

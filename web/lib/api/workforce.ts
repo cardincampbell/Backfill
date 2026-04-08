@@ -29,7 +29,9 @@ export type EmployeeSummary = {
   notes?: string | null;
   employee_metadata: Record<string, unknown>;
   role_ids: string[];
+  role_names: string[];
   location_ids: string[];
+  location_names: string[];
   created_at: string;
   updated_at: string;
 };
@@ -70,6 +72,41 @@ export type EmployeeProfile = EmployeeSummary & {
   locations: EmployeeLocationAssignment[];
 };
 
+export type EmployeeAvailabilityRule = {
+  id: string;
+  employee_id: string;
+  day_of_week: number;
+  start_local_time: string;
+  end_local_time: string;
+  timezone: string;
+  availability_type: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  priority: number;
+  availability_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SelfEmployeeAvailability = {
+  employee_id: string;
+  employee_name: string;
+  timezone: string;
+  rules: EmployeeAvailabilityRule[];
+};
+
+export type EmployeeAvailabilityRulePayload = {
+  day_of_week: number;
+  start_local_time: string;
+  end_local_time: string;
+  timezone: string;
+  availability_type?: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  priority?: number;
+  availability_metadata?: Record<string, unknown>;
+};
+
 export type EmployeeRoleUpsertPayload = {
   role_id: string;
   proficiency_level?: number;
@@ -105,6 +142,34 @@ export type EmployeeUpdatePayload = {
   locations?: EmployeeLocationUpsertPayload[];
 };
 
+export type EmployeeCreatePayload = {
+  full_name: string;
+  preferred_name?: string | null;
+  phone_e164?: string | null;
+  email?: string | null;
+  external_ref?: string | null;
+  employee_number?: string | null;
+  employment_type?: string | null;
+  primary_location_id?: string | null;
+  hire_date?: string | null;
+  notes?: string | null;
+  employee_metadata?: Record<string, unknown>;
+};
+
+export type EmployeeImportError = {
+  row_number?: number | null;
+  message: string;
+};
+
+export type EmployeeBulkImportResponse = {
+  created_count: number;
+  skipped_count: number;
+  employees: EmployeeSummary[];
+  errors: EmployeeImportError[];
+  default_location_id?: string | null;
+  default_location_name?: string | null;
+};
+
 export async function listEmployees(
   businessId: string,
 ): Promise<EmployeeSummary[]> {
@@ -113,6 +178,21 @@ export async function listEmployees(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as EmployeeSummary[];
+}
+
+export async function createEmployee(
+  businessId: string,
+  payload: EmployeeCreatePayload,
+): Promise<EmployeeSummary> {
+  const response = await apiFetchApp(`${API_PREFIX}/businesses/${businessId}/employees`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as EmployeeSummary;
 }
 
 export async function getEmployeeProfile(
@@ -145,4 +225,75 @@ export async function updateEmployee(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as EmployeeProfile;
+}
+
+export async function getSelfEmployeeAvailability(
+  businessId: string,
+): Promise<SelfEmployeeAvailability> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/availability-rules/self`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as SelfEmployeeAvailability;
+}
+
+export async function replaceSelfEmployeeAvailability(
+  businessId: string,
+  payload: { rules: EmployeeAvailabilityRulePayload[] },
+): Promise<SelfEmployeeAvailability> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/availability-rules/self`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as SelfEmployeeAvailability;
+}
+
+export async function importEmployees(
+  businessId: string,
+  file: File,
+): Promise<EmployeeBulkImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/import`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as EmployeeBulkImportResponse;
+}
+
+export async function downloadEmployeeImportTemplate(
+  businessId: string,
+): Promise<void> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/import/template`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "backfill-employee-roster-template.xlsx";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
