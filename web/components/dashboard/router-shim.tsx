@@ -16,8 +16,10 @@ export function Link({ to, ...props }: LinkProps) {
 export function useNavigate() {
   const router = useRouter();
 
-  return (href: string) => {
+  return (href: string, options?: { refresh?: boolean }) => {
     router.push(href);
-    router.refresh();
+    if (options?.refresh) {
+      router.refresh();
+    }
   };
 }
