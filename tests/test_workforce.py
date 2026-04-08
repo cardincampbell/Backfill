@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
@@ -22,7 +23,7 @@ from app.schemas.workforce import (
     SelfEmployeeAvailabilityRead,
 )
 from app.services.auth import AuthContext
-from app.services.workforce import parse_employee_import_file
+from app.services.workforce import build_employee_import_template, parse_employee_import_file
 
 
 class DummyWorkforceSession:
@@ -650,6 +651,43 @@ def test_parse_employee_import_file_skips_rows_missing_required_fields():
             message="missing_required_fields:phone_e164",
         ),
     ]
+
+
+def test_parse_employee_import_file_csv_does_not_require_openpyxl(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("openpyxl"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    employees, errors = parse_employee_import_file(
+        "employees.csv",
+        b"full_name,email,phone_e164\nJamie Rivera,jamie@example.com,+15555550123\n",
+    )
+
+    assert len(employees) == 1
+    assert errors == []
+
+
+def test_build_employee_import_template_raises_clear_error_when_openpyxl_missing(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("openpyxl"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="employee_import_xlsx_dependency_missing"):
+        build_employee_import_template()
 
 
 def test_patch_employee_route_records_audit(monkeypatch):

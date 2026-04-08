@@ -90,9 +90,18 @@ async def download_employee_import_template(
 ):
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        content = workforce.build_employee_import_template()
+    except RuntimeError as exc:
+        if str(exc) == "employee_import_xlsx_dependency_missing":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        raise
 
     return Response(
-        content=workforce.build_employee_import_template(),
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": 'attachment; filename="backfill-employee-roster-template.xlsx"',
@@ -120,6 +129,13 @@ async def bulk_import_employees(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        if str(exc) == "employee_import_xlsx_dependency_missing":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        raise
 
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
     await audit_service.append(

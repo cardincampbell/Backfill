@@ -7,8 +7,6 @@ from io import BytesIO, StringIO
 from typing import Optional
 from uuid import UUID
 
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -77,6 +75,15 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "first_name": "first_name",
     "last_name": "last_name",
 }
+
+
+def _require_openpyxl():
+    try:
+        from openpyxl import Workbook, load_workbook
+        from openpyxl.styles import Font, PatternFill
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("employee_import_xlsx_dependency_missing") from exc
+    return Workbook, load_workbook, Font, PatternFill
 
 
 async def _require_business(session: AsyncSession, business_id: UUID) -> Business:
@@ -262,6 +269,7 @@ def parse_employee_import_file(
         reader = csv.DictReader(StringIO(text))
         rows = [(index, row) for index, row in enumerate(reader, start=2)]
     elif normalized_name.endswith(".xlsx"):
+        _, load_workbook, _, _ = _require_openpyxl()
         workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
         sheet = workbook.active
         iterator = sheet.iter_rows(values_only=True)
@@ -332,6 +340,7 @@ def parse_employee_import_file(
 
 
 def build_employee_import_template() -> bytes:
+    Workbook, _, Font, PatternFill = _require_openpyxl()
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Employees"
