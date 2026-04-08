@@ -38,7 +38,7 @@ class BusinessVerticalTypeMapping(TimestampMixin, Base):
     __tablename__ = "business_vertical_type_mappings"
     __table_args__ = (
         Index(
-            "ix_business_vertical_type_mappings_business_vertical_code_is_active",
+            "ix_bvtm_vertical_active",
             "business_vertical_code",
             "is_active",
         ),

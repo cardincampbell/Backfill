@@ -253,7 +253,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     op.create_index(
-        "ix_business_vertical_type_mappings_business_vertical_code_is_active",
+        "ix_bvtm_vertical_active",
         "business_vertical_type_mappings",
         ["business_vertical_code", "is_active"],
     )
@@ -370,7 +370,7 @@ def downgrade() -> None:
     )
     op.drop_table("business_place_types")
     op.drop_index(
-        "ix_business_vertical_type_mappings_business_vertical_code_is_active",
+        "ix_bvtm_vertical_active",
         table_name="business_vertical_type_mappings",
     )
     op.drop_table("business_vertical_type_mappings")
