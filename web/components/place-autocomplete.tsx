@@ -15,6 +15,8 @@ type PlaceAutocompleteProps = {
   onSelect: (place: PlaceSuggestion) => void;
   placeholder: string;
   autoFocus?: boolean;
+  appearance?: "dark" | "light";
+  compact?: boolean;
 };
 
 function newSessionToken(): string {
@@ -31,6 +33,8 @@ export function PlaceAutocomplete({
   onSelect,
   placeholder,
   autoFocus = false,
+  appearance = "dark",
+  compact = false,
 }: PlaceAutocompleteProps) {
   const deferredQuery = useDeferredValue(value.trim());
   const blurTimeoutRef = useRef<number | null>(null);
@@ -119,9 +123,15 @@ export function PlaceAutocomplete({
   }
 
   return (
-    <div className="place-field">
+    <div
+      className={`place-field${
+        appearance === "light" ? " place-field-light" : ""
+      }${compact ? " place-field-compact" : ""}`}
+    >
       <input
-        className="ob-input"
+        className={`ob-input${compact ? " place-input-compact" : ""}${
+          appearance === "light" ? " place-input-light" : ""
+        }`}
         type="text"
         value={value}
         autoFocus={autoFocus}
@@ -136,7 +146,11 @@ export function PlaceAutocomplete({
         spellCheck={false}
       />
       {open && (loading || suggestions.length > 0 || deferredQuery.length >= 2) ? (
-        <div className="place-dropdown">
+        <div
+          className={`place-dropdown${
+            appearance === "light" ? " place-dropdown-light" : ""
+          }`}
+        >
           {loading ? (
             <div className="place-dropdown-status">Searching places…</div>
           ) : errorMessage ? (
@@ -178,12 +192,26 @@ export function PlaceAutocomplete({
         </div>
       ) : null}
       {selectedPlace ? (
-        <div className="place-selected-meta">
-          <span className="place-selected-badge">
+        <div
+          className={`place-selected-meta${
+            appearance === "light" ? " place-selected-meta-light" : ""
+          }`}
+        >
+          <span
+            className={`place-selected-badge${
+              appearance === "light" ? " place-selected-badge-light" : ""
+            }`}
+          >
             {selectedPlace.provider === "google" ? "Verified place" : "Saved suggestion"}
           </span>
           {selectedPlace.formatted_address ? (
-            <span className="place-selected-address">{selectedPlace.formatted_address}</span>
+            <span
+              className={`place-selected-address${
+                appearance === "light" ? " place-selected-address-light" : ""
+              }`}
+            >
+              {selectedPlace.formatted_address}
+            </span>
           ) : null}
         </div>
       ) : null}

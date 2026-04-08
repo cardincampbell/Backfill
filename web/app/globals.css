@@ -4357,6 +4357,72 @@ body:has(.lp-onboarding) .site-main {
   color: #8898AA;
 }
 
+.place-input-compact {
+  min-height: 46px;
+  padding: 12px 14px;
+  font-size: 0.875rem;
+  border-radius: 12px;
+}
+
+.place-input-light {
+  border: 1px solid #E5E7EB;
+  background: #fff;
+  color: #0A2540;
+}
+
+.place-input-light::placeholder {
+  color: rgba(136, 152, 170, 0.75);
+}
+
+.place-input-light:focus {
+  border-color: rgba(99, 91, 255, 0.4);
+  box-shadow: 0 0 0 3px rgba(99, 91, 255, 0.08);
+  background: #fff;
+}
+
+.place-dropdown-light {
+  border: 1px solid #E5E7EB;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.place-dropdown-light .place-dropdown-status,
+.place-dropdown-light .place-dropdown-footer {
+  color: #8898AA;
+}
+
+.place-dropdown-light .place-dropdown-footer {
+  border-top: 1px solid #F0F0F5;
+  background: #FAFBFC;
+}
+
+.place-dropdown-light .place-option {
+  border-bottom: 1px solid #F0F0F5;
+}
+
+.place-dropdown-light .place-option:hover,
+.place-dropdown-light .place-option-selected {
+  background: rgba(99, 91, 255, 0.08);
+}
+
+.place-dropdown-light .place-option-primary {
+  color: #0A2540;
+}
+
+.place-dropdown-light .place-option-secondary {
+  color: #8898AA;
+}
+
+.place-selected-badge-light {
+  background: rgba(99, 91, 255, 0.08);
+  color: #635BFF;
+}
+
+.place-selected-address-light {
+  color: #5E6D7A;
+}
+
 .ob-location-remove {
   width: 42px;
   height: 42px;

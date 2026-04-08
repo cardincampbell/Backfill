@@ -12,12 +12,15 @@ import {
   useAppWorkspaceReady,
 } from '@/components/app-workspace';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
+import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
 import {
   findSourceDashboardLocationBySlug,
   type SourceDashboardLocation,
 } from './mock-data';
 import { useSmartGreeting } from './use-smart-greeting';
+import type { WorkspaceBusiness } from '@/lib/api/workspace';
 import {
   Plus,
   MoreHorizontal,
@@ -45,10 +48,8 @@ import {
   Hourglass,
   CircleCheck,
   Loader,
-  Menu,
-  X,
-  Moon,
 } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 
 const copilotSuggestions = [
   'Show me open shifts this week',
@@ -284,7 +285,13 @@ function LocationCard({ location, index, onClick }: { location: DashboardSurface
 }
 
 /* ─── Single Location Detail ─── */
-function SingleLocationView({ location }: { location: SourceDashboardLocation }) {
+function SingleLocationView({
+  location,
+  business,
+}: {
+  location: SourceDashboardLocation;
+  business: WorkspaceBusiness | null;
+}) {
   const {
     isDark,
     headingClass,
@@ -306,6 +313,7 @@ function SingleLocationView({ location }: { location: SourceDashboardLocation })
   const navigate = useNavigate();
   const { timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
+  const [showAddLocation, setShowAddLocation] = useState(false);
   return (
     <div>
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="mb-8">
@@ -323,7 +331,7 @@ function SingleLocationView({ location }: { location: SourceDashboardLocation })
               </p>
             </div>
           </div>
-          <button onClick={() => navigate('/onboarding')}
+          <button onClick={() => setShowAddLocation(true)}
             className={`hidden sm:flex items-center gap-2 px-5 py-2.5 text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] ${ctaRadiusClass}`}
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             <Plus size={15} />Add Location
@@ -554,6 +562,26 @@ function SingleLocationView({ location }: { location: SourceDashboardLocation })
           </motion.div>
         </div>
       </div>
+      <AddLocationModal
+        business={business}
+        isDark={isDark}
+        onClose={() => setShowAddLocation(false)}
+        onCreated={(createdLocation, targetBusiness) => {
+          setShowAddLocation(false);
+          navigate(
+            buildDashboardLocationBasePathFromAny({
+              business_slug: targetBusiness.business_slug,
+              location_slug: createdLocation.slug,
+              business_name: targetBusiness.business_name,
+              business_display_name: targetBusiness.business_display_name,
+              location_name: createdLocation.name,
+              location_display_name: createdLocation.display_name,
+              location_id: createdLocation.id,
+            }),
+          );
+        }}
+        open={showAddLocation}
+      />
     </div>
   );
 }
@@ -562,9 +590,11 @@ function SingleLocationView({ location }: { location: SourceDashboardLocation })
 function MultiLocationView({
   locations,
   locationsLoaded,
+  business,
 }: {
   locations: DashboardSurfaceLocation[];
   locationsLoaded: boolean;
+  business: WorkspaceBusiness | null;
 }) {
   const {
     isDark,
@@ -590,6 +620,7 @@ function MultiLocationView({
   const navigate = useNavigate();
   const { greeting, timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
+  const [showAddLocation, setShowAddLocation] = useState(false);
   const totalStaff = locations.reduce((a, b) => a + b.totalStaff, 0);
   const totalActive = locations.reduce((a, b) => a + b.activeShifts, 0);
   const avgFillRate =
@@ -614,7 +645,7 @@ function MultiLocationView({
               Here's what's happening across your business today.
             </p>
           </div>
-          <button onClick={() => navigate('/onboarding')}
+          <button onClick={() => setShowAddLocation(true)}
             className={`hidden sm:flex items-center gap-2 px-5 py-2.5 text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] ${ctaRadiusClass}`}
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             <Plus size={15} />Add Location
@@ -810,7 +841,7 @@ function MultiLocationView({
       )}
 
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }}
-        onClick={() => navigate('/onboarding')} className="mt-4 group cursor-pointer">
+        onClick={() => setShowAddLocation(true)} className="mt-4 group cursor-pointer">
         <div className={`${emptyCardRadiusClass} border border-dashed transition-all duration-500 p-8 flex items-center justify-center gap-3 ${dashedCardClass}`}>
           <div className={`w-10 h-10 border flex items-center justify-center transition-all duration-300 group-hover:border-[#635BFF]/30 group-hover:bg-[#635BFF]/[0.06] ${emptyIconRadiusClass} ${isDark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
             <Plus size={18} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
@@ -821,6 +852,27 @@ function MultiLocationView({
           </div>
         </div>
       </motion.div>
+
+      <AddLocationModal
+        business={business}
+        isDark={isDark}
+        onClose={() => setShowAddLocation(false)}
+        onCreated={(createdLocation, targetBusiness) => {
+          setShowAddLocation(false);
+          navigate(
+            buildDashboardLocationBasePathFromAny({
+              business_slug: targetBusiness.business_slug,
+              location_slug: createdLocation.slug,
+              business_name: targetBusiness.business_name,
+              business_display_name: targetBusiness.business_display_name,
+              location_name: createdLocation.name,
+              location_display_name: createdLocation.display_name,
+              location_id: createdLocation.id,
+            }),
+          );
+        }}
+        open={showAddLocation}
+      />
 
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.5 }} className="mt-10">
         <h2 className={`text-[16px] mb-4 tracking-[-0.01em] ${mutedClass}`} style={{ fontWeight: 500 }}>Quick Actions</h2>
@@ -949,9 +1001,14 @@ export default function DashboardLight({
 }: {
   embeddedInShell?: boolean;
 }) {
+  const pathname = usePathname();
   const workspace = useAppWorkspace();
   const workspaceLocationsLoaded = useAppWorkspaceReady();
   const workspaceLocations = workspace?.locations ?? [];
+  const preferredBusiness = useMemo(
+    () => resolvePreferredWorkspaceBusiness(workspace, pathname),
+    [pathname, workspace],
+  );
 
   const locations = useMemo<DashboardSurfaceLocation[]>(() => {
     if (workspaceLocationsLoaded && workspaceLocations.length > 0) {
@@ -992,6 +1049,7 @@ export default function DashboardLight({
 
   const content = (
     <MultiLocationView
+      business={preferredBusiness}
       locations={locations}
       locationsLoaded={workspaceLocationsLoaded}
     />

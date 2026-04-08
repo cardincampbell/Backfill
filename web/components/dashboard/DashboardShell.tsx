@@ -12,12 +12,16 @@ import {
   useAppWorkspaceReady,
 } from '@/components/app-workspace';
 import { signOutClientSession } from '@/lib/auth/client-signout';
-import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import {
+  buildDashboardLocationBasePathFromAny,
+  buildSchedulerBasePathFromAny,
+} from '@/lib/dashboard-paths';
 import {
   persistAppShellSidebarTabPreference,
   type AppShellSidebarTab,
 } from '@/lib/app-shell-prefs';
 import { buildSettingsPath } from '@/lib/settings-routing';
+import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import { usePathname } from 'next/navigation';
 import {
   Users,
@@ -34,6 +38,7 @@ import {
   Sparkles,
   Menu,
   X,
+  Plus,
   LogOut,
   ChevronDown,
 } from 'lucide-react';
@@ -41,6 +46,7 @@ import {
   findSourceDashboardLocationBySlug,
   sourceDashboardNotifications,
 } from './mock-data';
+import AddLocationModal from './AddLocationModal';
 import SegmentedControl from './SegmentedControl';
 
 const navItems = [
@@ -232,6 +238,7 @@ type DashboardShellLocationShortcut = {
   logo: string;
   openShifts?: number | null;
   path: string;
+  schedulerPath: string;
   isWorkspaceBacked: boolean;
 };
 
@@ -241,6 +248,7 @@ export default function DashboardShell({
   initialSidebarTab = 'nav',
 }: DashboardShellProps) {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showAddLocation, setShowAddLocation] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<AppShellSidebarTab>(initialSidebarTab);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -301,6 +309,14 @@ export default function DashboardShell({
           location_display_name: location.location_display_name,
           location_id: location.location_id,
         });
+        const schedulerPath = buildSchedulerBasePathFromAny({
+          business_slug: location.business_slug,
+          location_slug: location.location_slug,
+          business_name: location.business_display_name,
+          location_name: location.location_name,
+          location_display_name: location.location_display_name,
+          location_id: location.location_id,
+        });
         return {
           id: location.location_id,
           businessSlug: location.business_slug,
@@ -309,6 +325,7 @@ export default function DashboardShell({
           logo: referenceLocation?.logo ?? '📍',
           openShifts: referenceLocation?.openShifts ?? null,
           path,
+          schedulerPath,
           isWorkspaceBacked: true,
         };
       });
@@ -316,6 +333,11 @@ export default function DashboardShell({
 
     return [];
   }, [workspaceLocations, workspaceLocationsLoaded]);
+
+  const preferredBusiness = useMemo(
+    () => resolvePreferredWorkspaceBusiness(workspace, pathname),
+    [pathname, workspace],
+  );
 
   const handleNav = (path: string) => {
     navigate(path);
@@ -413,9 +435,22 @@ export default function DashboardShell({
                   ))}
 
                   <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
-                    <span className={`text-[10px] uppercase tracking-[0.06em] px-3 mb-2 block ${mutedTextClass}`} style={{ fontWeight: 500 }}>
-                      Locations
-                    </span>
+                    <div className="mb-2 flex items-center justify-between px-3">
+                      <span className={`text-[10px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
+                        Locations
+                      </span>
+                      <button
+                        onClick={() => setShowAddLocation(true)}
+                        className={`rounded p-0.5 transition-colors ${hoverSurfaceClass}`}
+                        title="Add location"
+                        type="button"
+                      >
+                        <Plus
+                          size={13}
+                          className="text-[#8898AA] transition-colors hover:text-[#635BFF]"
+                        />
+                      </button>
+                    </div>
                     {!workspaceLocationsLoaded ? (
                       <div className="space-y-2 px-3 py-1">
                         {Array.from({ length: 3 }).map((_, index) => (
@@ -427,7 +462,8 @@ export default function DashboardShell({
                       </div>
                     ) : locationShortcuts.length > 0 ? (
                       locationShortcuts.map((location) => {
-                        const isActiveLocation = pathname === location.path;
+                        const isActiveLocation =
+                          pathname === location.path || pathname === location.schedulerPath;
                         return (
                           <button
                             key={location.id}
@@ -662,6 +698,26 @@ export default function DashboardShell({
           {children}
         </div>
       </div>
+      <AddLocationModal
+        business={preferredBusiness}
+        isDark={isDark}
+        onClose={() => setShowAddLocation(false)}
+        onCreated={(createdLocation, business) => {
+          setShowAddLocation(false);
+          handleNav(
+            buildDashboardLocationBasePathFromAny({
+              business_slug: business.business_slug,
+              location_slug: createdLocation.slug,
+              business_name: business.business_name,
+              business_display_name: business.business_display_name,
+              location_name: createdLocation.name,
+              location_display_name: createdLocation.display_name,
+              location_id: createdLocation.id,
+            }),
+          );
+        }}
+        open={showAddLocation}
+      />
     </div>
   );
 }

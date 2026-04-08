@@ -7,6 +7,7 @@ import { ArrowRight, CalendarDays, Check, ChevronLeft, Plus, Tag, X } from "luci
 
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
+import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import {
   createAndAssignLocationRole,
   getLocationRoles,
@@ -68,7 +69,6 @@ export default function Location({
   const [customRole, setCustomRole] = useState("");
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback>(null);
-  const [scheduleStarted, setScheduleStarted] = useState(false);
   const [isCreatingRole, setIsCreatingRole] = useState(false);
   const [isPending, startTransition] = useTransition();
 
@@ -257,7 +257,7 @@ export default function Location({
         );
         setAssignments(nextAssignments);
         setSelectedRoleIds(nextAssignments.map((assignment) => assignment.role_id));
-        setScheduleStarted(true);
+        router.push(buildSchedulerBasePathFromAny(location));
       } catch (error) {
         setFeedback({
           tone: "error",
@@ -597,42 +597,13 @@ export default function Location({
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
             >
-              Continue to Schedule
+              Continue to Scheduler
               <ArrowRight size={15} />
             </motion.button>
           </div>
         </div>
       </motion.div>
 
-      <AnimatePresence>
-        {scheduleStarted ? (
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 30 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-4 rounded-2xl bg-[#0A2540] shadow-2xl border border-[#1A3A5C]"
-          >
-            <div className="w-8 h-8 rounded-full bg-[#00B893]/20 flex items-center justify-center">
-              <Check size={16} className="text-[#00B893]" />
-            </div>
-            <div>
-              <p className="text-[13px] text-white" style={{ fontWeight: 520 }}>
-                {selectedRoles.length} roles confirmed for {locationDisplayName}
-              </p>
-              <p className="text-[11px] text-[#8898AA] mt-0.5" style={{ fontWeight: 420 }}>
-                Scheduler coming soon — we'll notify you when it's ready.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setScheduleStarted(false)}
-              className="p-1.5 rounded-lg hover:bg-white/10 transition-colors ml-2"
-            >
-              <X size={14} className="text-[#8898AA]" />
-            </button>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
     </motion.div>
   );
 

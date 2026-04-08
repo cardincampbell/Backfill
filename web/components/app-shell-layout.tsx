@@ -23,7 +23,7 @@ function resolveActiveNav(pathname: string): string {
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "Settings";
   }
-  if (pathname.startsWith("/location/")) {
+  if (pathname.startsWith("/location/") || pathname.startsWith("/scheduler/")) {
     return "";
   }
   return "Overview";

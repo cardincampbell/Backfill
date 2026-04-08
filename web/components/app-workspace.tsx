@@ -76,6 +76,15 @@ export function useAppWorkspaceReady() {
   return useContext(AppWorkspaceContext)?.workspaceReady ?? false;
 }
 
+export function useAppWorkspaceRefresh() {
+  return (
+    useContext(AppWorkspaceContext)?.refreshWorkspace ??
+    (async () => {
+      return;
+    })
+  );
+}
+
 export function useAppWorkspaceLocations(): WorkspaceLocation[] {
   return useAppWorkspace()?.locations ?? [];
 }

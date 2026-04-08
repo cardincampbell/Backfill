@@ -71,6 +71,21 @@ export function buildDashboardLocationBasePathFromAny(
   return `/location/${businessSlug}/${locationSlug}`;
 }
 
+export function buildSchedulerBasePathFromAny(
+  location: DashboardLocationLike,
+): string {
+  const businessSlug =
+    location.business_slug ??
+    slugifySegment(getDashboardOrganizationName(location), "independent-business");
+  const locationSlug =
+    location.location_slug ??
+    slugifySegment(
+      getDashboardLocationName(location),
+      `location-${getDashboardLocationId(location)}`,
+    );
+  return `/scheduler/${businessSlug}/${locationSlug}`;
+}
+
 export function buildDashboardLocationPath(
   location: DashboardLocationRef,
   params?: Record<string, string | number | undefined | null>,
