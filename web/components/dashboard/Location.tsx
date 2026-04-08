@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   Plus,
   Tag,
+  Upload,
   User,
   X,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
+import { enrollEmployeeAtLocation } from "@/lib/api/workspace";
 import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import {
   createAndAssignLocationRole,
@@ -37,6 +39,10 @@ import {
 } from "@/lib/api/workforce";
 import DashboardShell from "./DashboardShell";
 import { EmployeeAssignmentDrawer } from "./EmployeeAssignmentDrawer";
+import {
+  LocationEmployeeBulkUploadModal,
+  LocationEmployeeEnrollmentModal,
+} from "./LocationEmployeeActions";
 import {
   formatDisplayLabel,
   getLocationReference,
@@ -182,6 +188,8 @@ export default function Location({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isCreatingRole, setIsCreatingRole] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<EmployeeSummary | null>(null);
+  const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
+  const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -455,6 +463,25 @@ export default function Location({
       );
     }
     setEditingEmployee(nextEmployee);
+  };
+
+  const handleEmployeeCreated = async (
+    result: Awaited<ReturnType<typeof enrollEmployeeAtLocation>>,
+  ) => {
+    const nextEmployees = await listEmployees(location.business_id);
+    setEmployees(nextEmployees);
+    setSelectedEmployeeIds((current) =>
+      current.includes(result.employee.id)
+        ? current
+        : [...current, result.employee.id],
+    );
+    setSelectedRoleIds((current) =>
+      Array.from(new Set([...current, ...result.roles.map((role) => role.role_id)])),
+    );
+    setFeedback({
+      tone: "success",
+      message: `${result.employee.full_name} was added to ${locationDisplayName}.`,
+    });
   };
 
   const handleContinue = () => {
@@ -748,6 +775,21 @@ export default function Location({
             </div>
           ) : null}
 
+          {availableRoles.length === 0 && roles.length > 0 ? (
+            <div
+              className={`flex items-center gap-3 rounded-xl border p-4 ${
+                isDark
+                  ? "border-[#00B893]/20 bg-[#00B893]/[0.08]"
+                  : "border-[#00B893]/10 bg-[#00B893]/[0.04]"
+              }`}
+            >
+              <Check size={16} className="shrink-0 text-[#00B893]" />
+              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                All available roles have been selected for this location.
+              </p>
+            </div>
+          ) : null}
+
           <div>
             <h3
               className={`mb-2 text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
@@ -839,17 +881,54 @@ export default function Location({
                   </motion.div>
                 ))}
               </AnimatePresence>
-              {!loading && selectedEmployees.length === 0 ? (
-                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  No schedule-ready employees selected yet. Add at least one employee with a role.
-                </p>
-              ) : null}
               {loading ? (
                 <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                   Loading business employees...
                 </p>
               ) : null}
             </div>
+
+            {!loading && selectedEmployees.length === 0 ? (
+              <div
+                className={`flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${subtleSurfaceClass} ${subtleBorderClass}`}
+              >
+                <div className="flex items-start gap-3">
+                  <User size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
+                  <p
+                    className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
+                    style={{ fontWeight: 440 }}
+                  >
+                    No schedule-ready employees are assigned to this location yet. Add at least one employee with a role before opening the scheduler.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkUploadModal(true)}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] transition-all ${
+                      isDark
+                        ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8] hover:bg-white/[0.06]"
+                        : "border-[#E5E7EB] bg-white text-[#5E6D7A] hover:bg-[#F7F8FA]"
+                    }`}
+                    style={{ fontWeight: 500 }}
+                  >
+                    <Upload size={13} /> Bulk Upload
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddEmployeeModal(true)}
+                    disabled={roles.length === 0}
+                    className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{
+                      fontWeight: 520,
+                      background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
+                    }}
+                  >
+                    <Plus size={13} /> Add Employee
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {availableEmployees.length > 0 ? (
               <div>
@@ -955,33 +1034,7 @@ export default function Location({
               </div>
             ) : null}
 
-            {!loading && employees.length === 0 ? (
-              <div
-                className={`flex items-center gap-3 rounded-xl border p-4 ${subtleSurfaceClass} ${subtleBorderClass}`}
-              >
-                <User size={16} className="shrink-0 text-[#8898AA]" />
-                <p
-                  className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
-                  style={{ fontWeight: 440 }}
-                >
-                  This business does not have any employees yet. Add team members before opening the scheduler for this location.
-                </p>
-              </div>
-            ) : null}
           </div>
-
-          {availableRoles.length === 0 && roles.length > 0 ? (
-            <div className={`flex items-center gap-3 p-4 rounded-xl border ${
-              isDark
-                ? "bg-[#00B893]/[0.08] border-[#00B893]/20"
-                : "bg-[#00B893]/[0.04] border-[#00B893]/10"
-            }`}>
-              <Check size={16} className="text-[#00B893] shrink-0" />
-              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                All available roles have been selected for this location.
-              </p>
-            </div>
-          ) : null}
         </div>
 
         <div className={`px-5 sm:px-8 py-5 border-t ${borderClass} ${footerSurfaceClass}`}>
@@ -1065,6 +1118,27 @@ export default function Location({
             onClose={() => setEditingEmployee(null)}
             onSaved={handleEmployeeSaved}
             roles={roles}
+          />
+        ) : null}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAddEmployeeModal ? (
+          <LocationEmployeeEnrollmentModal
+            businessId={location.business_id}
+            dark={isDark}
+            locationId={location.location_id}
+            locationName={locationDisplayName}
+            onClose={() => setShowAddEmployeeModal(false)}
+            onCreated={handleEmployeeCreated}
+            roles={roles}
+          />
+        ) : null}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showBulkUploadModal ? (
+          <LocationEmployeeBulkUploadModal
+            dark={isDark}
+            onClose={() => setShowBulkUploadModal(false)}
           />
         ) : null}
       </AnimatePresence>
