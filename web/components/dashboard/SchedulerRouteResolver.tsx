@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 
 import { useAppWorkspace, useAppWorkspaceReady } from "@/components/app-workspace";
+import { useLocationEntryMode } from "@/components/location-entry-provider";
 import { buildDashboardLocationBasePathFromAny } from "@/lib/dashboard-paths";
 import { AppRouteState } from "./AppRouteState";
 import Scheduler from "./Scheduler";
@@ -16,6 +18,7 @@ export default function SchedulerRouteResolver({
   businessSlug,
   locationSlug,
 }: SchedulerRouteResolverProps) {
+  const router = useRouter();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
   const location = useMemo(
@@ -26,6 +29,14 @@ export default function SchedulerRouteResolver({
       ) ?? null,
     [businessSlug, locationSlug, workspace],
   );
+  const entryMode = useLocationEntryMode(location?.location_id);
+
+  useEffect(() => {
+    if (!workspaceReady || !location || entryMode !== "setup") {
+      return;
+    }
+    router.replace(buildDashboardLocationBasePathFromAny(location));
+  }, [entryMode, location, router, workspaceReady]);
 
   if (!workspaceReady) {
     return (
@@ -44,6 +55,10 @@ export default function SchedulerRouteResolver({
         description="This scheduler could not be resolved from your current workspace."
       />
     );
+  }
+
+  if (entryMode === "setup") {
+    return null;
   }
 
   return (

@@ -12,6 +12,7 @@ import {
   useAppWorkspaceRefresh,
   useAppWorkspaceReady,
 } from '@/components/app-workspace';
+import { useLocationEntryRouting, useSetLocationEntryMode } from '@/components/location-entry-provider';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import {
@@ -756,6 +757,8 @@ function MultiLocationView({
   const progressRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
   const navigate = useNavigate();
   const refreshWorkspace = useAppWorkspaceRefresh();
+  const { getLocationEntryHref } = useLocationEntryRouting();
+  const setLocationEntryMode = useSetLocationEntryMode();
   const { greeting, timeZone } = useSmartGreeting();
   const coverageDate = useCoverageDateParts(timeZone);
   const [showAddLocation, setShowAddLocation] = useState(false);
@@ -841,6 +844,7 @@ function MultiLocationView({
           }),
         );
         setEditorAssignments(nextAssignments);
+        setLocationEntryMode(activeLocation.id, roleIds.length > 0 ? 'scheduler' : 'setup');
         setEditorFeedback({
           tone: 'success',
           message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,
@@ -1148,19 +1152,13 @@ function MultiLocationView({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {locations.map((loc, i) => (
+                  {locations.map((loc, i) => (
             <LocationCard
               key={String(loc.location_id ?? loc.id)}
               deleting={deletingLocationId === loc.location_id}
               location={loc}
               index={i}
-              onClick={() =>
-                navigate(
-                  loc.isWorkspaceBacked
-                    ? buildDashboardLocationBasePathFromAny(loc)
-                    : '/onboarding',
-                )
-              }
+              onClick={() => navigate(loc.isWorkspaceBacked ? getLocationEntryHref(loc) : '/onboarding')}
               onDelete={() => {
                 void handleDeleteLocation(loc);
               }}

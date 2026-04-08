@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, MapPin } from "lucide-react";
 
 import { useAppWorkspace } from "@/components/app-workspace";
+import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import {
   createAndAssignLocationRole,
   getLocationRoles,
@@ -61,6 +62,7 @@ export default function SettingsLocationsSection({
   dark: boolean;
 }) {
   const workspace = useAppWorkspace();
+  const setLocationEntryMode = useSetLocationEntryMode();
   const workspaceLocations = useMemo(
     () =>
       (workspace?.locations ?? [])
@@ -255,6 +257,10 @@ export default function SettingsLocationsSection({
           ...current,
           [activeLocation.id]: nextAssignments.length,
         }));
+        setLocationEntryMode(
+          activeLocation.id,
+          nextAssignments.length > 0 ? "scheduler" : "setup",
+        );
         setEditorFeedback({
           tone: "success",
           message: `${roleIds.length} role${roleIds.length === 1 ? "" : "s"} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,

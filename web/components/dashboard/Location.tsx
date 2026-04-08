@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarDays, Check, ChevronLeft, Plus, Tag, X } from "lucide-react";
 
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
+import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
 import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import {
@@ -74,6 +75,7 @@ export default function Location({
 }: LocationProps) {
   const router = useRouter();
   const isDark = useResolvedAppAppearance() === "dark";
+  const setLocationEntryMode = useSetLocationEntryMode();
   const locationDisplayName = location.location_display_name ?? location.location_name;
   const [roles, setRoles] = useState<BusinessRole[]>([]);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
@@ -270,6 +272,10 @@ export default function Location({
         );
         setAssignments(nextAssignments);
         setSelectedRoleIds(nextAssignments.map((assignment) => assignment.role_id));
+        setLocationEntryMode(
+          location.location_id,
+          nextAssignments.length > 0 ? "scheduler" : "setup",
+        );
         router.push(buildSchedulerBasePathFromAny(location));
       } catch (error) {
         setFeedback({

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 
 import { useAppWorkspace, useAppWorkspaceReady } from "@/components/app-workspace";
-import { getLocationBoard } from "@/lib/api/workspace";
+import { useLocationEntryMode } from "@/components/location-entry-provider";
 import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
 import Location from "./Location";
 import { AppRouteState } from "./AppRouteState";
@@ -14,8 +14,6 @@ type LocationRouteResolverProps = {
   locationSlug: string;
 };
 
-type RouteMode = "loading" | "setup" | "redirecting";
-
 export default function LocationRouteResolver({
   businessSlug,
   locationSlug,
@@ -23,7 +21,6 @@ export default function LocationRouteResolver({
   const router = useRouter();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
-  const [mode, setMode] = useState<RouteMode>("loading");
   const location = useMemo(
     () =>
       workspace?.locations.find(
@@ -32,38 +29,15 @@ export default function LocationRouteResolver({
       ) ?? null,
     [businessSlug, locationSlug, workspace],
   );
+  const entryMode = useLocationEntryMode(location?.location_id);
 
   useEffect(() => {
-    if (!workspaceReady || !location) {
+    if (!workspaceReady || !location || entryMode !== "scheduler") {
       return;
     }
 
-    let cancelled = false;
-    setMode("loading");
-
-    void (async () => {
-      const board = await getLocationBoard(location.business_id, location.location_id);
-      if (cancelled) {
-        return;
-      }
-
-      if (board && !board.location_role_setup_required) {
-        setMode("redirecting");
-        router.replace(buildSchedulerBasePathFromAny(location));
-        return;
-      }
-
-      setMode("setup");
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    location,
-    router,
-    workspaceReady,
-  ]);
+    router.replace(buildSchedulerBasePathFromAny(location));
+  }, [entryMode, location, router, workspaceReady]);
 
   if (!workspaceReady) {
     return (
@@ -84,7 +58,7 @@ export default function LocationRouteResolver({
     );
   }
 
-  if (mode === "setup") {
+  if (entryMode === "setup") {
     return (
       <Location
         embeddedInShell
@@ -93,15 +67,15 @@ export default function LocationRouteResolver({
     );
   }
 
-  return (
-    <AppRouteState
-      loading
-      title={mode === "redirecting" ? "Opening scheduler" : "Loading location"}
-      description={
-        mode === "redirecting"
-          ? "This location is already configured. Opening the scheduler now."
-          : "Checking the location configuration."
-      }
-    />
-  );
+  if (entryMode === "pending") {
+    return (
+      <AppRouteState
+        loading
+        title="Loading location"
+        description="Checking the location configuration."
+      />
+    );
+  }
+
+  return null;
 }

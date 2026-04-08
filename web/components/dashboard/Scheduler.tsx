@@ -103,7 +103,7 @@ const shiftTemplates = [
 
 function getSchedulerTheme(isDark: boolean) {
   return {
-    pageClass: isDark ? 'bg-[#081A2C]' : 'bg-white',
+    pageClass: isDark ? 'bg-[#081A2C]' : 'bg-[#F7F8FA]',
     topBarClass: isDark
       ? 'border-white/[0.08] bg-[#0B2239]/88 backdrop-blur-xl'
       : 'border-[#F0F0F5] bg-white/80 backdrop-blur-sm',

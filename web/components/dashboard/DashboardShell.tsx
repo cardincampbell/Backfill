@@ -11,6 +11,7 @@ import {
   useAppWorkspace,
   useAppWorkspaceReady,
 } from '@/components/app-workspace';
+import { useLocationEntryRouting } from '@/components/location-entry-provider';
 import { signOutClientSession } from '@/lib/auth/client-signout';
 import {
   buildDashboardLocationBasePathFromAny,
@@ -237,7 +238,8 @@ type DashboardShellLocationShortcut = {
   name: string;
   logo: string;
   openShifts?: number | null;
-  path: string;
+  entryPath: string;
+  setupPath: string;
   schedulerPath: string;
   isWorkspaceBacked: boolean;
 };
@@ -257,6 +259,7 @@ export default function DashboardShell({
   const workspace = useAppWorkspace();
   const workspaceLocationsLoaded = useAppWorkspaceReady();
   const workspaceLocations = workspace?.locations ?? [];
+  const { getLocationEntryHref } = useLocationEntryRouting();
   const resolvedAppearance = useResolvedAppAppearance();
   const isDark = resolvedAppearance === 'dark';
   const { fullName, email, phone, initials } = useSessionUserDisplay();
@@ -324,7 +327,8 @@ export default function DashboardShell({
           name: location.location_display_name ?? location.location_name,
           logo: referenceLocation?.logo ?? '📍',
           openShifts: referenceLocation?.openShifts ?? null,
-          path,
+          entryPath: getLocationEntryHref(location),
+          setupPath: path,
           schedulerPath,
           isWorkspaceBacked: true,
         };
@@ -332,7 +336,7 @@ export default function DashboardShell({
     }
 
     return [];
-  }, [workspaceLocations, workspaceLocationsLoaded]);
+  }, [getLocationEntryHref, workspaceLocations, workspaceLocationsLoaded]);
 
   const preferredBusiness = useMemo(
     () => resolvePreferredWorkspaceBusiness(workspace, pathname),
@@ -463,11 +467,11 @@ export default function DashboardShell({
                     ) : locationShortcuts.length > 0 ? (
                       locationShortcuts.map((location) => {
                         const isActiveLocation =
-                          pathname === location.path || pathname === location.schedulerPath;
+                          pathname === location.setupPath || pathname === location.schedulerPath;
                         return (
                           <button
                             key={location.id}
-                            onClick={() => handleNav(location.path)}
+                            onClick={() => handleNav(location.entryPath)}
                             className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
                               isActiveLocation
                                 ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'

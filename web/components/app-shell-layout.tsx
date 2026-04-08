@@ -3,6 +3,7 @@
 import { AppSessionGate } from "@/components/app-session-gate";
 import { AppWorkspaceProvider } from "@/components/app-workspace";
 import DashboardShell from "@/components/dashboard/DashboardShell";
+import { LocationEntryProvider } from "@/components/location-entry-provider";
 import type { AppShellSidebarTab } from "@/lib/app-shell-prefs";
 import type { Workspace } from "@/lib/api/workspace";
 import { usePathname } from "next/navigation";
@@ -40,12 +41,14 @@ export function AppShellLayout({
   return (
     <AppSessionGate>
       <AppWorkspaceProvider initialWorkspace={initialWorkspace}>
-        <DashboardShell
-          activeNav={activeNav}
-          initialSidebarTab={initialSidebarTab}
-        >
-          {children}
-        </DashboardShell>
+        <LocationEntryProvider>
+          <DashboardShell
+            activeNav={activeNav}
+            initialSidebarTab={initialSidebarTab}
+          >
+            {children}
+          </DashboardShell>
+        </LocationEntryProvider>
       </AppWorkspaceProvider>
     </AppSessionGate>
   );
