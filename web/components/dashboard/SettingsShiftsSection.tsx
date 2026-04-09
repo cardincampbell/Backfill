@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays } from "lucide-react";
 
 import {
   getBusinessShiftDefaults,
@@ -114,57 +113,26 @@ export default function SettingsShiftsSection({
 
   return (
     <div className="space-y-5">
-      <div
-        className={`rounded-2xl border p-5 ${
-          dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-white"
-        }`}
-      >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#635BFF]/10">
-                <CalendarDays size={18} className="text-[#635BFF]" />
-              </div>
-              <div>
-                <h3
-                  className={`text-[16px] tracking-[-0.01em] ${textPrimary}`}
-                  style={{ fontWeight: 600 }}
-                >
-                  Shift Defaults
-                </h3>
-                <p
-                  className={`mt-0.5 text-[12px] ${textSecondary}`}
-                  style={{ fontWeight: 420 }}
-                >
-                  These names and time windows become the default starting point when creating shifts in the scheduler.
-                </p>
-              </div>
-            </div>
-            {!isPersisted ? (
-              <p
-                className={`mt-4 text-[12px] ${textSecondary}`}
-                style={{ fontWeight: 440 }}
-              >
-                Derived from your first location&apos;s operating hours. Save to make them the business default.
-              </p>
-            ) : null}
-          </div>
-
-          <button
-            className="rounded-full px-4 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!isDirty || saving}
-            onClick={() => {
-              void handleSave();
-            }}
-            style={{
-              fontWeight: 540,
-              background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-            }}
-            type="button"
-          >
-            {saving ? "Saving..." : "Save Changes"}
-          </button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+            These names and time windows become the default starting point when creating shifts in the scheduler.
+          </p>
+          {!isPersisted ? (
+            <p className={`mt-1.5 text-[12px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+              Derived from your first location&apos;s operating hours. Save to make them the business default.
+            </p>
+          ) : null}
         </div>
+        <button
+          className="shrink-0 rounded-full px-4 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!isDirty || saving}
+          onClick={() => { void handleSave(); }}
+          style={{ fontWeight: 540, background: "linear-gradient(135deg, #635BFF, #8B5CF6)" }}
+          type="button"
+        >
+          {saving ? "Saving..." : "Save Changes"}
+        </button>
       </div>
 
       {feedback ? (
