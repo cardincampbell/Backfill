@@ -33,6 +33,71 @@ export type LocationDeleteState = {
   reason?: string | null;
 };
 
+export type LocationRoleEditorSaveSummary = {
+  roleChangeCount: number;
+  shiftChangeCount: number;
+  totalChangeCount: number;
+};
+
+export function formatLocationSaveSummary(
+  summary: LocationRoleEditorSaveSummary,
+  locationName: string,
+) {
+  const parts: string[] = [];
+  if (summary.roleChangeCount > 0) {
+    parts.push(`${summary.roleChangeCount} role change${summary.roleChangeCount === 1 ? "" : "s"}`);
+  }
+  if (summary.shiftChangeCount > 0) {
+    parts.push(`${summary.shiftChangeCount} shift change${summary.shiftChangeCount === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) {
+    return `No changes to save for ${locationName}.`;
+  }
+  return `Saved ${parts.join(" and ")} for ${locationName}.`;
+}
+
+function countRoleChanges(initialRoleIds: string[], nextRoleIds: string[]) {
+  const initial = new Set(initialRoleIds);
+  const next = new Set(nextRoleIds);
+  let count = 0;
+
+  initial.forEach((roleId) => {
+    if (!next.has(roleId)) {
+      count += 1;
+    }
+  });
+  next.forEach((roleId) => {
+    if (!initial.has(roleId)) {
+      count += 1;
+    }
+  });
+
+  return count;
+}
+
+function countShiftPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
+  const normalizedLeft = normalizeShiftDefaults(left);
+  const normalizedRight = normalizeShiftDefaults(right);
+  let count = 0;
+
+  normalizedLeft.forEach((preset, index) => {
+    const baselinePreset = normalizedRight[index];
+    if (!baselinePreset) {
+      count += 1;
+      return;
+    }
+    if (
+      preset.label !== baselinePreset.label ||
+      preset.start_hour !== baselinePreset.start_hour ||
+      preset.end_hour !== baselinePreset.end_hour
+    ) {
+      count += 1;
+    }
+  });
+
+  return count;
+}
+
 function RoleTag({
   dark,
   role,
@@ -119,7 +184,11 @@ export function LocationRoleEditor({
   deleteState?: LocationDeleteState;
   onClose(): void;
   onDelete?(): void;
-  onSave(roleIds: string[], locationShiftPresets: ShiftDefault[] | null): void;
+  onSave(
+    roleIds: string[],
+    locationShiftPresets: ShiftDefault[] | null,
+    summary: LocationRoleEditorSaveSummary,
+  ): void;
   onCreateRole(name: string): Promise<BusinessRole>;
 }) {
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -129,6 +198,7 @@ export function LocationRoleEditor({
   const [draftShiftDefaults, setDraftShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(null),
   );
+  const [visibleFeedback, setVisibleFeedback] = useState<LocationRoleEditorFeedback>(feedback);
 
   useEffect(() => {
     setSelectedRoleIds(assignments.map((assignment) => assignment.role_id));
@@ -147,6 +217,18 @@ export function LocationRoleEditor({
       ),
     );
   }, [location.id, shiftDefaults]);
+
+  useEffect(() => {
+    setVisibleFeedback(feedback);
+  }, [feedback]);
+
+  useEffect(() => {
+    if (!visibleFeedback) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setVisibleFeedback(null), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [visibleFeedback]);
 
   const locationReference = getLocationReference({
     ...location,
@@ -170,6 +252,43 @@ export function LocationRoleEditor({
   const deleteTooltip = deleteState?.canDelete
     ? null
     : deleteState?.reason ?? "This location cannot be removed right now.";
+  const baselineRoleIds = useMemo(
+    () => assignments.map((assignment) => assignment.role_id),
+    [assignments],
+  );
+  const baselineShiftPresets = useMemo(
+    () =>
+      normalizeShiftDefaults(
+        shiftDefaults?.has_overrides
+          ? shiftDefaults.override_presets ?? shiftDefaults.business_presets
+          : shiftDefaults?.business_presets ?? null,
+      ),
+    [shiftDefaults],
+  );
+  const effectiveShiftPresets = useMemo(
+    () =>
+      normalizeShiftDefaults(
+        useBusinessDefaults
+          ? shiftDefaults?.business_presets ?? baselineShiftPresets
+          : draftShiftDefaults,
+      ),
+    [baselineShiftPresets, draftShiftDefaults, shiftDefaults, useBusinessDefaults],
+  );
+  const roleChangeCount = useMemo(
+    () => countRoleChanges(baselineRoleIds, selectedRoleIds),
+    [baselineRoleIds, selectedRoleIds],
+  );
+  const shiftChangeCount = useMemo(
+    () => countShiftPresetChanges(effectiveShiftPresets, baselineShiftPresets),
+    [baselineShiftPresets, effectiveShiftPresets],
+  );
+  const totalChangeCount = roleChangeCount + shiftChangeCount;
+
+  useEffect(() => {
+    if (totalChangeCount > 0 && visibleFeedback) {
+      setVisibleFeedback(null);
+    }
+  }, [totalChangeCount, visibleFeedback]);
 
   const handleShiftDefaultsChange = (nextPresets: ShiftDefault[]) => {
     setUseBusinessDefaults(false);
@@ -244,16 +363,25 @@ export function LocationRoleEditor({
                 onSave(
                   selectedRoleIds,
                   useBusinessDefaults ? null : normalizeShiftDefaults(draftShiftDefaults),
+                  {
+                    roleChangeCount,
+                    shiftChangeCount,
+                    totalChangeCount,
+                  },
                 )
               }
-              disabled={loading || saving}
+              disabled={loading || saving || totalChangeCount === 0}
               className="px-4 py-2 rounded-full text-[12px] text-white transition-all duration-300 hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 fontWeight: 540,
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
             >
-              {saving ? "Saving..." : "Save Changes"}
+              {saving
+                ? "Saving..."
+                : totalChangeCount > 0
+                  ? `Save ${totalChangeCount} Change${totalChangeCount === 1 ? "" : "s"}`
+                  : "Save Changes"}
             </button>
           </div>
           <div className="flex items-center gap-4">
@@ -302,20 +430,20 @@ export function LocationRoleEditor({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-          {feedback ? (
+          {visibleFeedback ? (
             <div
               className="rounded-xl px-4 py-3 text-[13px]"
               role="status"
               style={{
                 background:
-                  feedback.tone === "success"
+                  visibleFeedback.tone === "success"
                     ? "rgba(0, 184, 147, 0.08)"
                     : "rgba(229, 72, 77, 0.08)",
-                color: feedback.tone === "success" ? "#067A64" : "#C13535",
+                color: visibleFeedback.tone === "success" ? "#067A64" : "#C13535",
                 fontWeight: 500,
               }}
             >
-              {feedback.message}
+              {visibleFeedback.message}
             </div>
           ) : null}
 

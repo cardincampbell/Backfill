@@ -28,9 +28,11 @@ import {
   type WorkspaceLocation,
 } from "@/lib/api/workspace";
 import {
+  formatLocationSaveSummary,
   type LocationDeleteState,
   LocationRoleEditor,
   type LocationRoleEditorFeedback as Feedback,
+  type LocationRoleEditorSaveSummary,
 } from "./LocationRoleEditor";
 import {
   getLocationReference,
@@ -265,6 +267,7 @@ export default function SettingsLocationsSection({
   const handleSave = (
     roleIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!selectedLocation) {
       return;
@@ -310,7 +313,10 @@ export default function SettingsLocationsSection({
         );
         setEditorFeedback({
           tone: "success",
-          message: `${roleIds.length} role${roleIds.length === 1 ? "" : "s"} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,
+          message: formatLocationSaveSummary(
+            saveSummary,
+            activeLocation.display_name ?? activeLocation.name,
+          ),
         });
       } catch (error) {
         setEditorFeedback({

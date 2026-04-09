@@ -8,8 +8,6 @@ import {
   Upload,
   Search,
   Filter,
-  Mail,
-  Phone,
   ChevronDown,
   X,
   CheckCircle2,
@@ -30,7 +28,6 @@ import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { useAppWorkspace, useAppWorkspaceReady } from '@/components/app-workspace';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
-  createBusinessRole,
   listBusinessLocations,
   listBusinessRoles,
   type BusinessLocation,
@@ -38,10 +35,7 @@ import {
 } from '@/lib/api/businesses';
 import {
   createEmployee,
-  deleteEmployee,
   downloadEmployeeImportTemplate,
-  getEmployeeDeleteReadiness,
-  getEmployeeProfile,
   importEmployees,
   listEmployees,
   updateEmployee,
@@ -51,6 +45,7 @@ import {
 } from '@/lib/api/workforce';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import DashboardShell from './DashboardShell';
+import { EmployeeEditorDrawer, type EmployeeEditorSeed } from './EmployeeEditorDrawer';
 import { formatLocationMeta, getLocationReference } from './location-role-reference';
 
 /* ─── Types ─── */
@@ -74,17 +69,6 @@ interface Employee {
   reliability: number;
   avatar: string;
 }
-
-type EmployeeAssignmentState = {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  selectedRoleIds: string[];
-  primaryRoleId: string;
-  selectedLocationIds: string[];
-  primaryLocationId: string;
-};
 
 type AddEmployeeFormState = {
   firstName: string;
@@ -231,66 +215,6 @@ function buildReferenceEmployees(
   });
 }
 
-function emptyEmployeeAssignmentState(): EmployeeAssignmentState {
-  return {
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    selectedRoleIds: [],
-    primaryRoleId: '',
-    selectedLocationIds: [],
-    primaryLocationId: '',
-  };
-}
-
-function buildEmployeeAssignmentState(
-  employee: Employee,
-  roles: BusinessRole[],
-  locations: BusinessLocation[],
-): EmployeeAssignmentState {
-  const [firstName = '', ...rest] = employee.name.split(' ');
-  const lastName = rest.join(' ');
-  const selectedRoleIds = roles
-    .filter((role) => employee.roles.includes(role.name))
-    .map((role) => role.id);
-  const selectedLocationIds = locations
-    .filter((location) =>
-      employee.locations.some(
-        (item) =>
-          item.id === location.id ||
-          item.name === locationDisplayName(location) ||
-          item.name === location.name,
-      ),
-    )
-    .map((location) => location.id);
-
-  return {
-    firstName,
-    lastName,
-    email: employee.email,
-    phone: employee.phone,
-    selectedRoleIds,
-    primaryRoleId:
-      roles.find((role) => role.name === employee.roles[0])?.id ??
-      selectedRoleIds[0] ??
-      '',
-    selectedLocationIds,
-    primaryLocationId:
-      locations.find((location) =>
-        employee.locations.some(
-          (item) =>
-            item.primary &&
-            (item.id === location.id ||
-              item.name === locationDisplayName(location) ||
-              item.name === location.name),
-        ),
-      )?.id ??
-    selectedLocationIds[0] ??
-      '',
-  };
-}
-
 function buildAddEmployeeFormState(): AddEmployeeFormState {
   return {
     firstName: '',
@@ -382,24 +306,48 @@ function buildLiveEmployee(
   };
 }
 
-function buildEmployeeAssignmentStateFromProfile(
-  employee: EmployeeProfile,
-): EmployeeAssignmentState {
+function buildEmployeeEditorSeed(
+  employee: Employee,
+  roles: BusinessRole[],
+  locations: BusinessLocation[],
+): EmployeeEditorSeed {
+  const primaryRole = roles.find((role) => role.name === employee.roles[0]) ?? null;
+  const primaryLocation =
+    locations.find((location) =>
+      employee.locations.some(
+        (item) =>
+          item.primary &&
+          (item.id === location.id ||
+            item.name === locationDisplayName(location) ||
+            item.name === location.name),
+      ),
+    ) ?? null;
+
   return {
-    firstName: employee.full_name.split(' ').slice(0, 1).join(' '),
-    lastName: employee.full_name.split(' ').slice(1).join(' '),
-    email: employee.email ?? '',
-    phone: employee.phone_e164 ?? '',
-    selectedRoleIds: employee.roles.map((role) => role.role_id),
-    primaryRoleId:
-      employee.roles.find((role) => role.is_primary)?.role_id ??
-      employee.roles[0]?.role_id ??
-      '',
-    selectedLocationIds: employee.locations.map((location) => location.location_id),
-    primaryLocationId:
-      employee.locations.find((location) => location.is_primary)?.location_id ??
-      employee.locations[0]?.location_id ??
-      '',
+    id: employee.id,
+    full_name: employee.name,
+    preferred_name: null,
+    email: employee.email,
+    phone_e164: employee.phone,
+    primary_location_id: primaryLocation?.id ?? employee.locations.find((item) => item.primary)?.id ?? null,
+    primary_role_id: primaryRole?.id ?? null,
+    role_ids: roles
+      .filter((role) => employee.roles.includes(role.name))
+      .map((role) => role.id),
+    role_names: employee.roles,
+    location_ids: locations
+      .filter((location) =>
+        employee.locations.some(
+          (item) =>
+            item.id === location.id ||
+            item.name === locationDisplayName(location) ||
+            item.name === location.name,
+        ),
+      )
+      .map((location) => location.id),
+    location_names: employee.locations.map((location) => location.name),
+    reliability_score: employee.reliability / 100,
+    status: employee.status,
   };
 }
 
@@ -1383,500 +1331,23 @@ function EmployeeDetail({
   onRoleCreated(role: BusinessRole): void;
   roles: BusinessRole[];
 }) {
-  const theme = getTeamTheme(dark);
-  const primaryRole = employee.roles[0] || 'Unassigned';
-  const color = roleColors[primaryRole] || '#635BFF';
-  const empStatus = statusConfig[employee.status];
-  const reliabilityColor = getReliabilityColor(employee.reliability);
-
-  const [email, setEmail] = useState(employee.email);
-  const [phone, setPhone] = useState(employee.phone);
-  const [formData, setFormData] = useState<EmployeeAssignmentState>(() =>
-    buildEmployeeAssignmentState(employee, roles, locations),
+  const seed = useMemo(
+    () => buildEmployeeEditorSeed(employee, roles, locations),
+    [employee, locations, roles],
   );
-  const [roleCatalog, setRoleCatalog] = useState<BusinessRole[]>(roles);
-  const [customRole, setCustomRole] = useState('');
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [deleteState, setDeleteState] = useState<{
-    canDelete: boolean;
-    checking?: boolean;
-    deleting?: boolean;
-    reason?: string | null;
-  }>({ canDelete: false, checking: true });
-
-  useEffect(() => {
-    setRoleCatalog(roles);
-  }, [roles]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    setEmail(employee.email);
-    setPhone(employee.phone);
-    setFormData(buildEmployeeAssignmentState(employee, roles, locations));
-    setDeleteState({ canDelete: false, checking: true, reason: null });
-
-    async function loadProfile() {
-      try {
-        const [profile, readiness] = await Promise.all([
-          getEmployeeProfile(businessId, employee.id).catch(() => null),
-          getEmployeeDeleteReadiness(businessId, employee.id).catch(() => null),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        if (profile) {
-          setEmail(profile.email ?? '');
-          setPhone(profile.phone_e164 ?? '');
-          setFormData(buildEmployeeAssignmentStateFromProfile(profile));
-        }
-        if (readiness) {
-          setDeleteState({
-            canDelete: readiness.can_delete,
-            reason: readiness.reason,
-          });
-        } else {
-          setDeleteState({
-            canDelete: false,
-            reason: 'Could not determine whether this employee can be removed.',
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setDeleteState({
-            canDelete: false,
-            reason: 'Could not determine whether this employee can be removed.',
-          });
-        }
-      }
-    }
-
-    void loadProfile();
-    return () => {
-      cancelled = true;
-    };
-  }, [businessId, employee, locations, roles]);
-
-  const selectedRoles = roleCatalog.filter((role) => formData.selectedRoleIds.includes(role.id));
-  const selectedLocations = useMemo(
-    () =>
-      locations
-        .filter((location) => formData.selectedLocationIds.includes(location.id))
-        .sort((left, right) => {
-          const leftPrimary = left.id === formData.primaryLocationId ? 1 : 0;
-          const rightPrimary = right.id === formData.primaryLocationId ? 1 : 0;
-          if (leftPrimary !== rightPrimary) {
-            return rightPrimary - leftPrimary;
-          }
-          return locationDisplayName(left).localeCompare(locationDisplayName(right));
-        }),
-    [formData.primaryLocationId, formData.selectedLocationIds, locations],
-  );
-  const availableRoles = roleCatalog.filter((role) => !formData.selectedRoleIds.includes(role.id));
-  const availableLocations = locations.filter((location) => !formData.selectedLocationIds.includes(location.id));
-
-  const toggleRole = (roleId: string) => {
-    setFormData((current) => {
-      const selectedRoleIds = current.selectedRoleIds.includes(roleId)
-        ? current.selectedRoleIds.filter((item) => item !== roleId)
-        : [...current.selectedRoleIds, roleId];
-      const primaryRoleId = selectedRoleIds.includes(current.primaryRoleId)
-        ? current.primaryRoleId
-        : selectedRoleIds[0] ?? '';
-      return { ...current, selectedRoleIds, primaryRoleId };
-    });
-  };
-
-  const toggleLocation = (locationId: string) => {
-    setFormData((current) => {
-      const selectedLocationIds = current.selectedLocationIds.includes(locationId)
-        ? current.selectedLocationIds.filter((item) => item !== locationId)
-        : [...current.selectedLocationIds, locationId];
-      const primaryLocationId = selectedLocationIds.includes(current.primaryLocationId)
-        ? current.primaryLocationId
-        : selectedLocationIds[0] ?? '';
-      return { ...current, selectedLocationIds, primaryLocationId };
-    });
-  };
-
-  const canSave = Boolean(formData.primaryRoleId) && Boolean(formData.primaryLocationId);
-
-  const handleAddCustomRole = async () => {
-    const trimmed = customRole.trim();
-    if (!trimmed) {
-      return;
-    }
-    const existing = roleCatalog.find(
-      (role) => role.name.toLowerCase() === trimmed.toLowerCase(),
-    );
-    if (existing) {
-      setFormData((current) => ({
-        ...current,
-        selectedRoleIds: current.selectedRoleIds.includes(existing.id)
-          ? current.selectedRoleIds
-          : [...current.selectedRoleIds, existing.id],
-        primaryRoleId: current.primaryRoleId || existing.id,
-      }));
-      setCustomRole('');
-      return;
-    }
-    try {
-      setFeedback(null);
-      const createdRole = await createBusinessRole(businessId, { name: trimmed });
-      setRoleCatalog((current) => [...current, createdRole]);
-      onRoleCreated(createdRole);
-      setFormData((current) => ({
-        ...current,
-        selectedRoleIds: [...current.selectedRoleIds, createdRole.id],
-        primaryRoleId: current.primaryRoleId || createdRole.id,
-      }));
-      setCustomRole('');
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : 'Could not create this role.');
-    }
-  };
-
-  const handleSave = async () => {
-    if (!canSave || isSaving) {
-      return;
-    }
-    try {
-      setIsSaving(true);
-      setFeedback(null);
-      const updated = await updateEmployee(businessId, employee.id, {
-        email: normalizeOptional(email),
-        phone_e164: normalizeOptional(phone),
-        roles: formData.selectedRoleIds.map((roleId) => ({
-          role_id: roleId,
-          is_primary: roleId === formData.primaryRoleId,
-        })),
-        locations: formData.selectedLocationIds.map((locationId) => ({
-          location_id: locationId,
-          is_primary: locationId === formData.primaryLocationId,
-        })),
-      });
-      await onSave(updated);
-      setFeedback('Employee updated.');
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : 'Could not update this employee.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleteState.canDelete || deleteState.deleting) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Remove ${employee.name}? This only works when they are not tied to scheduled shifts.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    try {
-      setDeleteState((current) => ({ ...current, deleting: true }));
-      setFeedback(null);
-      await deleteEmployee(businessId, employee.id);
-      await onDelete(employee.id);
-    } catch (error) {
-      setFeedback(
-        error instanceof Error ? error.message : 'Could not remove this employee.',
-      );
-      setDeleteState((current) => ({
-        ...current,
-        deleting: false,
-      }));
-    }
-  };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-sm"
-      onClick={onClose}>
-      <motion.div initial={{ x: 460 }} animate={{ x: 0 }} exit={{ x: 460 }}
-        transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
-        className={`w-full sm:w-[460px] h-full shadow-2xl flex flex-col overflow-hidden ${theme.overlayPanelClass}`}
-        onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className={`px-6 py-5 border-b shrink-0 ${theme.borderClass}`}>
-          <div className="flex items-center justify-between mb-4">
-            <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${theme.closeButtonClass}`}>
-              <X size={18} className="text-[#8898AA]" />
-            </button>
-            <button
-              onClick={() => {
-                void handleSave();
-              }}
-              className="px-4 py-2 rounded-full text-[12px] text-white transition-all duration-300 hover:shadow-[0_0_16px_rgba(99,91,255,0.25)]"
-              disabled={!canSave || isSaving}
-              style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-[16px] text-white shrink-0"
-              style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
-              {employee.avatar}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2.5">
-                <h2 className={`text-[18px] tracking-[-0.01em] truncate ${theme.textPrimary}`} style={{ fontWeight: 600 }}>{employee.name}</h2>
-                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full shrink-0" style={{ background: `${reliabilityColor}12` }}>
-                  <ShieldCheck size={12} style={{ color: reliabilityColor }} />
-                  <span className="text-[12px] tabular-nums" style={{ fontWeight: 580, color: reliabilityColor }}>{employee.reliability}%</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 480, color: empStatus.color, background: `${empStatus.bg}15` }}>{empStatus.label}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-          {feedback ? (
-            <div
-              className="rounded-xl px-4 py-3 text-[13px]"
-              role="status"
-              style={{
-                background: feedback === 'Employee updated.' ? 'rgba(0, 184, 147, 0.08)' : 'rgba(229, 72, 77, 0.08)',
-                color: feedback === 'Employee updated.' ? '#067A64' : '#C13535',
-                fontWeight: 500,
-              }}
-            >
-              {feedback}
-            </div>
-          ) : null}
-          {/* Editable Contact */}
-          <div>
-            <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Contact</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Email</label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md flex items-center justify-center ${theme.subtleSurfaceClass}`}>
-                    <Mail size={13} className="text-[#8898AA]" />
-                  </div>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                    className={`w-full pl-12 pr-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                    style={{ fontWeight: 440 }} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-1.5" style={{ fontWeight: 500 }}>Phone</label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md flex items-center justify-center ${theme.subtleSurfaceClass}`}>
-                    <Phone size={13} className="text-[#8898AA]" />
-                  </div>
-                  <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
-                    className={`w-full pl-12 pr-3.5 py-2.5 rounded-lg border text-[13px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                    style={{ fontWeight: 440 }} />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Locations</h3>
-              <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>{selectedLocations.length} assigned</span>
-            </div>
-            <div className="space-y-2 mb-4">
-              <AnimatePresence>
-                {selectedLocations.map((location) => {
-                  const reference = getLocationReference({
-                    name: locationDisplayName(location),
-                    slug: location.slug,
-                  });
-                  const isPrimary = formData.primaryLocationId === location.id;
-                  return (
-                    <motion.div key={location.id} layout initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-                      className={`flex items-center gap-3 p-2.5 rounded-lg border ${theme.subtleBorderClass} ${dark ? 'bg-white/[0.02]' : 'bg-white'}`}>
-                      <span className="text-[16px]">{reference.logo}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 480 }}>{locationDisplayName(location)}</p>
-                      </div>
-                      <button onClick={() => setFormData((current) => ({ ...current, primaryLocationId: location.id }))}
-                        className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all ${
-                          isPrimary
-                            ? 'bg-[#635BFF]/10 text-[#635BFF] border border-[#635BFF]/20'
-                            : `${theme.subtleSurfaceClass} ${theme.textSecondary} border border-transparent hover:border-[#635BFF]/20 hover:text-[#635BFF]`
-                        }`}
-                        style={{ fontWeight: isPrimary ? 540 : 440 }}
-                        type="button">
-                        {isPrimary ? 'Primary' : 'Set Primary'}
-                      </button>
-                      <button onClick={() => toggleLocation(location.id)} className={`p-0.5 rounded transition-colors ${theme.closeButtonClass}`} type="button">
-                        <X size={13} className="text-[#8898AA] hover:text-[#E5484D]" />
-                      </button>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
-              {!selectedLocations.length ? (
-                <p className={`py-2 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                  No locations assigned yet. Add from the list below.
-                </p>
-              ) : null}
-            </div>
-
-            {availableLocations.length ? (
-              <div>
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Available Locations</h3>
-                  {availableLocations.length > 1 ? (
-                    <button onClick={() => availableLocations.forEach((location) => toggleLocation(location.id))}
-                      className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors"
-                      style={{ fontWeight: 520 }}
-                      type="button">
-                      + Add All
-                    </button>
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {availableLocations.map((location) => {
-                    const reference = getLocationReference({
-                      name: locationDisplayName(location),
-                      slug: location.slug,
-                    });
-                    return (
-                      <button key={location.id} onClick={() => toggleLocation(location.id)}
-                        className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}
-                        type="button">
-                        <span className="text-[14px] mr-0.5">{reference.logo}</span>
-                        <span className={`text-[12px] transition-colors ${theme.textTertiary} group-hover:text-[#0A2540]`} style={{ fontWeight: 440 }}>{locationDisplayName(location)}</span>
-                        <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Roles</h3>
-              <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>{selectedRoles.length} roles</span>
-            </div>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <AnimatePresence>
-                {selectedRoles.map((role) => (
-                  <motion.div key={role.id} layout initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
-                    className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg bg-[#635BFF]/[0.06] border border-[#635BFF]/15">
-                    <Tag size={11} className="text-[#635BFF]" />
-                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>{role.name}</span>
-                    <button onClick={() => toggleRole(role.id)} className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5" type="button">
-                      <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-                    </button>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              {!selectedRoles.length ? (
-                <p className={`py-2 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                  No roles assigned yet. Add from the list below.
-                </p>
-              ) : null}
-            </div>
-
-            {availableRoles.length ? (
-              <div>
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em]" style={{ fontWeight: 500 }}>Available Roles</h3>
-                  {availableRoles.length > 1 ? (
-                    <button onClick={() => availableRoles.forEach((role) => toggleRole(role.id))}
-                      className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors"
-                      style={{ fontWeight: 520 }}
-                      type="button">
-                      + Add All
-                    </button>
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {availableRoles.map((role) => (
-                    <button key={role.id} onClick={() => toggleRole(role.id)}
-                      className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}
-                      type="button">
-                      <Tag size={11} className="text-[#635BFF]" />
-                      <span className={`text-[12px] transition-colors ${theme.textTertiary} group-hover:text-[#0A2540]`} style={{ fontWeight: 440 }}>{role.name}</span>
-                      <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div>
-              <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-2" style={{ fontWeight: 500 }}>Custom Role</h3>
-              <div className="flex items-center gap-2">
-                <input type="text" value={customRole} onChange={(event) => setCustomRole(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void handleAddCustomRole();
-                    }
-                  }}
-                  placeholder="Type a new role name..."
-                  className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
-                  style={{ fontWeight: 440 }} />
-                <button onClick={() => {
-                  void handleAddCustomRole();
-                }}
-                  disabled={!customRole.trim()}
-                  className="px-3.5 py-2.5 rounded-lg text-[12px] text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-[0_0_12px_rgba(99,91,255,0.2)]"
-                  style={{ fontWeight: 520, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}
-                  type="button">
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className={`pt-4 border-t ${theme.borderClass}`}>
-            <div className="relative inline-flex group">
-              <button
-                className={`flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-[12px] transition-all ${
-                  deleteState.canDelete
-                    ? dark
-                      ? 'border-[#E5484D]/30 text-[#FF8A8A] hover:bg-[#E5484D]/[0.08]'
-                      : 'border-[#E5484D]/20 text-[#E5484D] hover:bg-[#E5484D]/[0.04]'
-                    : dark
-                      ? 'border-white/[0.08] text-[#8898AA]'
-                      : 'border-[#E5E7EB] text-[#8898AA]'
-                } disabled:cursor-not-allowed`}
-                disabled={!deleteState.canDelete || deleteState.checking || deleteState.deleting}
-                onClick={() => {
-                  void handleDelete();
-                }}
-                style={{ fontWeight: 500 }}
-                type="button"
-              >
-                {deleteState.deleting
-                  ? 'Removing...'
-                  : deleteState.checking
-                    ? 'Checking...'
-                    : 'Remove Employee'}
-              </button>
-              {!deleteState.canDelete && deleteState.reason ? (
-                <div
-                  className={`pointer-events-none absolute bottom-full left-0 mb-2 w-64 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
-                    dark
-                      ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
-                      : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
-                  }`}
-                  style={{ fontWeight: 440 }}
-                >
-                  {deleteState.reason}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </motion.div>
-    </motion.div>
+    <EmployeeEditorDrawer
+      businessId={businessId}
+      dark={dark}
+      employee={seed}
+      locations={locations}
+      onClose={onClose}
+      onDeleted={onDelete}
+      onRoleCreated={onRoleCreated}
+      onSaved={onSave}
+      roles={roles}
+    />
   );
 }
 

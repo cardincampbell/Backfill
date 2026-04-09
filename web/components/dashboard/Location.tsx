@@ -4,15 +4,14 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import {
-  AlertCircle,
   ArrowRight,
   CalendarDays,
   Check,
   ChevronLeft,
+  Info,
   Plus,
   Tag,
   Upload,
-  User,
   X,
 } from "lucide-react";
 
@@ -37,7 +36,7 @@ import {
   type EmployeeSummary,
 } from "@/lib/api/workforce";
 import DashboardShell from "./DashboardShell";
-import { EmployeeAssignmentDrawer } from "./EmployeeAssignmentDrawer";
+import { EmployeeEditorDrawer } from "./EmployeeEditorDrawer";
 import {
   LocationEmployeeBulkUploadModal,
   LocationEmployeeEnrollmentModal,
@@ -136,6 +135,22 @@ function employeeHasAssignedRoles(employee: EmployeeSummary) {
   return employee.role_ids.length > 0;
 }
 
+function employeeEligibilityReason(employee: EmployeeSummary) {
+  const missingRole = employee.role_ids.length === 0;
+  const missingLocation = employee.location_ids.length === 0;
+
+  if (missingRole && missingLocation) {
+    return "Missing role and location assignment";
+  }
+  if (missingRole) {
+    return "Missing role assignment";
+  }
+  if (missingLocation) {
+    return "Missing location assignment";
+  }
+  return "Missing scheduling requirements";
+}
+
 function employeeAssignedHere(employee: EmployeeSummary, locationId: string) {
   return employee.location_ids.includes(locationId);
 }
@@ -190,6 +205,14 @@ export default function Location({
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (!feedback) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setFeedback(null), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [feedback]);
 
   useEffect(() => {
     let cancelled = false;
@@ -325,11 +348,6 @@ export default function Location({
     () => sortedEmployees.filter((employee) => !employeeHasAssignedRoles(employee)),
     [sortedEmployees],
   );
-  const ineligibleSelectedEmployeeCount = useMemo(
-    () =>
-      ineligibleEmployees.filter((employee) => selectedEmployeeSet.has(employee.id)).length,
-    [ineligibleEmployees, selectedEmployeeSet],
-  );
   const locationReference = getLocationReference({
     name: locationDisplayName,
     slug: location.location_slug,
@@ -462,6 +480,22 @@ export default function Location({
       );
     }
     setEditingEmployee(nextEmployee);
+  };
+
+  const handleEmployeeDeleted = async (employeeId: string) => {
+    setEmployees((current) => current.filter((employee) => employee.id !== employeeId));
+    setSelectedEmployeeIds((current) => current.filter((item) => item !== employeeId));
+    setEditingEmployee(null);
+    setFeedback({
+      tone: "success",
+      message: "Employee removed from the roster.",
+    });
+  };
+
+  const handleBusinessRoleCreated = (role: BusinessRole) => {
+    setRoles((current) =>
+      current.some((item) => item.id === role.id) ? current : [...current, role],
+    );
   };
 
   const handleEmployeeCreated = async (nextEmployee: EmployeeSummary) => {
@@ -871,7 +905,7 @@ export default function Location({
                 Selected Employees
               </h3>
               <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                {selectedEmployees.length} ready
+                {selectedEmployees.length} of {employees.length}
               </span>
             </div>
 
@@ -916,50 +950,12 @@ export default function Location({
                 <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                   Loading business employees...
                 </p>
+              ) : selectedEmployees.length === 0 ? (
+                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  No employees selected yet. Add from the list below.
+                </p>
               ) : null}
             </div>
-
-            {!loading && selectedEmployees.length === 0 ? (
-              <div
-                className={`flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between ${subtleSurfaceClass} ${subtleBorderClass}`}
-              >
-                <div className="flex items-start gap-3">
-                  <User size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
-                  <p
-                    className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
-                    style={{ fontWeight: 440 }}
-                  >
-                    No schedule-ready employees are assigned to this location yet. Add at least one employee with a role before opening the scheduler.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkUploadModal(true)}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] transition-all ${
-                      isDark
-                        ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8] hover:bg-white/[0.06]"
-                        : "border-[#E5E7EB] bg-white text-[#5E6D7A] hover:bg-[#F7F8FA]"
-                    }`}
-                    style={{ fontWeight: 500 }}
-                  >
-                    <Upload size={13} /> Bulk Upload
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddEmployeeModal(true)}
-                    disabled={roles.length === 0}
-                    className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
-                    style={{
-                      fontWeight: 520,
-                      background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-                    }}
-                  >
-                    <Plus size={13} /> Add Employee
-                  </button>
-                </div>
-              </div>
-            ) : null}
 
             {availableEmployees.length > 0 ? (
               <div>
@@ -968,7 +964,7 @@ export default function Location({
                     className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
                     style={{ fontWeight: 500 }}
                   >
-                    Eligible Employees
+                    Available Employees
                   </h4>
                   {availableEmployees.length > 1 ? (
                     <button
@@ -1020,32 +1016,30 @@ export default function Location({
 
             {ineligibleEmployees.length > 0 ? (
               <div>
-                <div className="mb-2.5 flex items-center justify-between">
+                <div className="mb-2.5">
                   <h4
                     className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
                     style={{ fontWeight: 500 }}
                   >
-                    Needs Role Assignment
+                    Unavailable Employees
                   </h4>
-                  <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                    Click any employee to edit their profile
-                  </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {ineligibleEmployees.map((employee) => {
-                    const assignedToThisLocation = selectedEmployeeSet.has(employee.id);
                     return (
-                      <button
+                      <div
                         key={employee.id}
-                        type="button"
-                        onClick={() => setEditingEmployee(employee)}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 ${
+                        className={`group relative flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 ${
                           isDark
                             ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]"
                             : "border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]"
                         }`}
                       >
-                        <AlertCircle size={12} className="text-[#FFB800]" />
+                        <button
+                          type="button"
+                          onClick={() => setEditingEmployee(employee)}
+                          className="flex min-w-0 items-center gap-2 text-left"
+                        >
                         <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
                           {employeeInitials(employeeDisplayName(employee))}
                         </span>
@@ -1055,16 +1049,64 @@ export default function Location({
                         >
                           {employeeDisplayName(employee)}
                         </span>
-                        <span className="text-[10px] text-[#FFB800]" style={{ fontWeight: 520 }}>
-                          {assignedToThisLocation ? "Role needed" : "Add role first"}
-                        </span>
-                      </button>
+                        </button>
+                        <div className="relative ml-0.5">
+                          <Info size={12} className="cursor-help text-[#FFB800]" />
+                          <div
+                            className={`pointer-events-none absolute bottom-full right-0 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                              isDark
+                                ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
+                                : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"
+                            }`}
+                            style={{ fontWeight: 440 }}
+                          >
+                            {employeeEligibilityReason(employee)}
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
+                <p className={`mt-3 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  Click any employee to edit their profile.
+                </p>
               </div>
             ) : null}
 
+            {!loading && employees.length === 0 ? (
+              <div className={`rounded-xl border px-4 py-3 ${subtleSurfaceClass} ${subtleBorderClass}`}>
+                <p className={`text-[12px] ${textTertiary}`} style={{ fontWeight: 440 }}>
+                  This business does not have any employees yet. Add at least one employee with a role before opening the scheduler for this location.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowBulkUploadModal(true)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] transition-all ${
+                  isDark
+                    ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8] hover:bg-white/[0.06]"
+                    : "border-[#E5E7EB] bg-white text-[#5E6D7A] hover:bg-[#F7F8FA]"
+                }`}
+                style={{ fontWeight: 500 }}
+              >
+                <Upload size={13} /> Bulk Upload
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddEmployeeModal(true)}
+                disabled={roles.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                style={{
+                  fontWeight: 520,
+                  background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
+                }}
+              >
+                <Plus size={13} /> Add Employee
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1072,29 +1114,16 @@ export default function Location({
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex-1">
               <AnimatePresence mode="wait">
-                {selectedRoles.length === 0 ? (
+                {selectedRoles.length === 0 || selectedEmployees.length === 0 ? (
                   <motion.p
-                    key="empty"
+                    key="requirements"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     className={`text-[12px] ${textSecondary}`}
                     style={{ fontWeight: 420 }}
                   >
-                    Select at least one role to continue
-                  </motion.p>
-                ) : selectedEmployees.length === 0 ? (
-                  <motion.p
-                    key="employees"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className={`text-[12px] ${textSecondary}`}
-                    style={{ fontWeight: 420 }}
-                  >
-                    {ineligibleSelectedEmployeeCount > 0
-                      ? `${ineligibleSelectedEmployeeCount} assigned teammate${ineligibleSelectedEmployeeCount === 1 ? "" : "s"} still need a role before you can continue`
-                      : "Add at least one employee with a role to continue"}
+                    Select at least one role and one employee to continue.
                   </motion.p>
                 ) : (
                   <motion.p
@@ -1141,12 +1170,14 @@ export default function Location({
 
       <AnimatePresence>
         {editingEmployee ? (
-          <EmployeeAssignmentDrawer
+          <EmployeeEditorDrawer
             businessId={location.business_id}
             dark={isDark}
             employee={editingEmployee}
             locations={effectiveBusinessLocations}
             onClose={() => setEditingEmployee(null)}
+            onDeleted={handleEmployeeDeleted}
+            onRoleCreated={handleBusinessRoleCreated}
             onSaved={handleEmployeeSaved}
             roles={roles}
           />

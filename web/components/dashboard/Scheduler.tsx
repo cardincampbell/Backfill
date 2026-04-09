@@ -20,7 +20,7 @@ import {
   Sunset,
   ClipboardCopy,
   Edit3,
-  Settings2,
+  Settings,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -49,9 +49,11 @@ import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import { useSetLocationEntryMode } from '@/components/location-entry-provider';
 import DashboardShell from './DashboardShell';
 import {
+  formatLocationSaveSummary,
   LocationRoleEditor,
   type LocationDeleteState,
   type LocationRoleEditorFeedback,
+  type LocationRoleEditorSaveSummary,
 } from './LocationRoleEditor';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
@@ -661,6 +663,7 @@ function SchedulerContent({
   const handleSaveEditor = (
     roleIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!editorLocation || isSavingEditor) {
       return;
@@ -707,7 +710,10 @@ function SchedulerContent({
         }
         setEditorFeedback({
           tone: 'success',
-          message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${editorLocation.display_name ?? editorLocation.name}.`,
+          message: formatLocationSaveSummary(
+            saveSummary,
+            editorLocation.display_name ?? editorLocation.name,
+          ),
         });
       } catch (error) {
         setEditorFeedback({
@@ -841,7 +847,7 @@ function SchedulerContent({
                 className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${theme.cardClass} ${theme.ghostButtonClass}`}
                 type="button"
               >
-                <Settings2 size={15} className={theme.textMuted} />
+                <Settings size={15} className={theme.textMuted} />
               </button>
               <FloatingDropdown
                 open={showLocationMenu}

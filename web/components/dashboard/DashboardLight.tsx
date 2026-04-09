@@ -38,9 +38,11 @@ import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
 import {
+  formatLocationSaveSummary,
   type LocationDeleteState,
   LocationRoleEditor,
   type LocationRoleEditorFeedback,
+  type LocationRoleEditorSaveSummary,
 } from './LocationRoleEditor';
 import {
   findSourceDashboardLocationBySlug,
@@ -844,6 +846,7 @@ function MultiLocationView({
   const handleSaveEditor = (
     roleIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!editorLocation) {
       return;
@@ -884,7 +887,10 @@ function MultiLocationView({
         );
         setEditorFeedback({
           tone: 'success',
-          message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${activeLocation.display_name ?? activeLocation.name}.`,
+          message: formatLocationSaveSummary(
+            saveSummary,
+            activeLocation.display_name ?? activeLocation.name,
+          ),
         });
       } catch (error) {
         setEditorFeedback({

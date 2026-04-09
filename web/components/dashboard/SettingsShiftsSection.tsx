@@ -28,6 +28,29 @@ function presetsMatch(left: ShiftDefault[], right: ShiftDefault[]): boolean {
   return JSON.stringify(normalizeShiftDefaults(left)) === JSON.stringify(normalizeShiftDefaults(right));
 }
 
+function countPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
+  const normalizedLeft = normalizeShiftDefaults(left);
+  const normalizedRight = normalizeShiftDefaults(right);
+  let count = 0;
+
+  normalizedLeft.forEach((preset, index) => {
+    const baselinePreset = normalizedRight[index];
+    if (!baselinePreset) {
+      count += 1;
+      return;
+    }
+    if (
+      preset.label !== baselinePreset.label ||
+      preset.start_hour !== baselinePreset.start_hour ||
+      preset.end_hour !== baselinePreset.end_hour
+    ) {
+      count += 1;
+    }
+  });
+
+  return count;
+}
+
 export default function SettingsShiftsSection({
   businessId,
   dark,
@@ -83,12 +106,28 @@ export default function SettingsShiftsSection({
   }, [businessId]);
 
   const isDirty = useMemo(() => !presetsMatch(presets, baseline), [baseline, presets]);
+  const changeCount = useMemo(() => countPresetChanges(presets, baseline), [baseline, presets]);
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+
+  useEffect(() => {
+    if (!feedback) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setFeedback(null), 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [feedback]);
+
+  useEffect(() => {
+    if (isDirty && feedback) {
+      setFeedback(null);
+    }
+  }, [feedback, isDirty, presets]);
 
   const handleSave = useCallback(async () => {
     if (!isDirty || saving) {
       return;
     }
+    const pendingChangeCount = changeCount;
     try {
       setSaving(true);
       setFeedback(null);
@@ -99,7 +138,7 @@ export default function SettingsShiftsSection({
       setIsPersisted(true);
       setFeedback({
         tone: "success",
-        message: "Business shift defaults updated.",
+        message: `Saved ${pendingChangeCount} shift change${pendingChangeCount === 1 ? "" : "s"}.`,
       });
     } catch (error) {
       setFeedback({
@@ -112,7 +151,7 @@ export default function SettingsShiftsSection({
     } finally {
       setSaving(false);
     }
-  }, [businessId, isDirty, presets, saving]);
+  }, [businessId, changeCount, isDirty, presets, saving]);
 
   useEffect(() => {
     if (!onHeaderActionChange) {
@@ -124,7 +163,11 @@ export default function SettingsShiftsSection({
     }
     onHeaderActionChange({
       disabled: !isDirty || saving,
-      label: saving ? "Saving..." : "Save Changes",
+      label: saving
+        ? "Saving..."
+        : changeCount > 0
+          ? `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`
+          : "Save Changes",
       onClick: () => {
         void handleSave();
       },
@@ -132,7 +175,7 @@ export default function SettingsShiftsSection({
     return () => {
       onHeaderActionChange(null);
     };
-  }, [handleSave, isDirty, loading, onHeaderActionChange, saving]);
+  }, [changeCount, handleSave, isDirty, loading, onHeaderActionChange, saving]);
 
   if (loading) {
     return <div className={`py-10 text-[13px] ${textSecondary}`}>Loading shift defaults...</div>;
