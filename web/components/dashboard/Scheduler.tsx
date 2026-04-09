@@ -33,6 +33,7 @@ import DashboardShell from './DashboardShell';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import {
+  getShiftDefaultColor,
   getShiftDefaultIcon,
   normalizeShiftDefaults,
   resolveShiftLabel,
@@ -995,6 +996,7 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
           <div className="grid grid-cols-4 gap-2">
             {normalizedDefaults.map((preset) => {
               const Icon = getShiftDefaultIcon(preset.key);
+              const accent = getShiftDefaultColor(preset.key);
               const isActive = selectedPresetKey === preset.key;
               return (
                 <button key={preset.key}
@@ -1010,7 +1012,7 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
                         ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04]'
                         : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
                   }`}>
-                  <Icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <Icon size={13} style={{ color: isActive ? '#635BFF' : accent }} />
                   <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{preset.label}</span>
                 </button>
               );

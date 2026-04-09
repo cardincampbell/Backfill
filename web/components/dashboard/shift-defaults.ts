@@ -33,7 +33,7 @@ const SHIFT_COLOR_BY_KEY: Record<ShiftDefaultKey, string> = {
   morning: "#635BFF",
   afternoon: "#3B82F6",
   evening: "#8B5CF6",
-  night: "#0A2540",
+  night: "#818CF8",
 };
 
 export function getShiftDefaultIcon(key: ShiftDefaultKey): LucideIcon {

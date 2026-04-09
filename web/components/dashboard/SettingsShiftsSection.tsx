@@ -113,17 +113,12 @@ export default function SettingsShiftsSection({
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <p className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-            These names and time windows become the default starting point when creating shifts in the scheduler.
+      <div className="flex items-center justify-between gap-4">
+        {!isPersisted ? (
+          <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+            Derived from your first location&apos;s operating hours. Save to make them the business default.
           </p>
-          {!isPersisted ? (
-            <p className={`mt-1.5 text-[12px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-              Derived from your first location&apos;s operating hours. Save to make them the business default.
-            </p>
-          ) : null}
-        </div>
+        ) : <span />}
         <button
           className="shrink-0 rounded-full px-4 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
           disabled={!isDirty || saving}

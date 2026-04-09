@@ -439,7 +439,7 @@ function Toggle({
 const businessSections = [
   { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
-  { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null },
+  { key: "shifts", label: "Shift Defaults", icon: CalendarDays, saveTarget: null, description: "These names and time windows become the default starting point when creating shifts in the scheduler." },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
   { key: "integrations", label: "Integrations", icon: Link2, saveTarget: null },
@@ -1594,7 +1594,7 @@ export default function Settings({
                         {currentSection.label}
                       </h2>
                       <p className={`text-[11px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
-                        {scope === "business" ? businessDescription : personalDescription}
+                        {(currentSection as { description?: string }).description ?? (scope === "business" ? businessDescription : personalDescription)}
                       </p>
                     </div>
                   </>
