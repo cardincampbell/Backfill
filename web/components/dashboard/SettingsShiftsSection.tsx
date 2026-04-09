@@ -185,7 +185,6 @@ export default function SettingsShiftsSection({
       ) : null}
 
       <ShiftDefaultsEditor
-        columnCount={2}
         dark={dark}
         onChange={setPresets}
         presets={presets}

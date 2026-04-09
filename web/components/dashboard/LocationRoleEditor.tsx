@@ -527,7 +527,6 @@ export function LocationRoleEditor({
             </div>
 
             <ShiftDefaultsEditor
-              columnCount={1}
               dark={dark}
               onChange={handleShiftDefaultsChange}
               presets={useBusinessDefaults ? shiftDefaults?.business_presets ?? draftShiftDefaults : draftShiftDefaults}
