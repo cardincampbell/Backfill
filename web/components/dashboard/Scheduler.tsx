@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -22,15 +22,36 @@ import {
 } from 'lucide-react';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
-import type { WorkspaceLocation } from '@/lib/api/workspace';
+import {
+  getLocationShiftDefaults,
+  type ShiftDefault,
+  type ShiftDefaultKey,
+  type WorkspaceLocation,
+} from '@/lib/api/workspace';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import DashboardShell from './DashboardShell';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
+import {
+  getShiftDefaultIcon,
+  normalizeShiftDefaults,
+  resolveShiftLabel,
+  SHIFT_DEFAULT_FALLBACKS,
+} from './shift-defaults';
 
 /* ─── Types ─── */
 interface Employee { id: string; name: string; avatar: string; role: string; }
-interface Shift { id: string; employeeId: string; day: number; startHour: number; endHour: number; role: string; color: string; }
+interface Shift {
+  id: string;
+  employeeId: string;
+  day: number;
+  startHour: number;
+  endHour: number;
+  role: string;
+  color: string;
+  presetKey?: ShiftDefaultKey | null;
+  presetLabel?: string | null;
+}
 
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
@@ -92,14 +113,6 @@ function isToday(date: Date) {
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-
-/* ─── Quick Shift Templates ─── */
-const shiftTemplates = [
-  { label: 'Morning', icon: Sunrise, start: 7, end: 15 },
-  { label: 'Afternoon', icon: Sun, start: 11, end: 19 },
-  { label: 'Evening', icon: Sunset, start: 15, end: 23 },
-  { label: 'Night', icon: Moon, start: 23, end: 7 },
-];
 
 function getSchedulerTheme(isDark: boolean) {
   return {
@@ -234,7 +247,8 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
 }) {
   const [hovered, setHovered] = useState(false);
   const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
-  const DescIcon = descriptor.icon;
+  const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : descriptor.icon;
+  const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
 
@@ -266,7 +280,7 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
             <div className="flex items-center gap-1">
               <DescIcon size={11} style={{ color: shift.color }} className="shrink-0" />
               <span className="text-[10px] truncate" style={{ fontWeight: 560, color: shift.color }}>
-                {descriptor.label}
+                {shiftLabel}
               </span>
             </div>
             <p className={`text-[9px] mt-0.5 ${theme.textMuted}`} style={{ fontWeight: 420 }}>
@@ -314,7 +328,7 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
           <div className="flex items-center gap-1 min-w-0">
             <DescIcon size={9} style={{ color: shift.color }} className="shrink-0" />
             <span className="text-[9px] truncate" style={{ fontWeight: 540, color: shift.color }}>
-              {descriptor.label}
+              {shiftLabel}
             </span>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
@@ -415,6 +429,35 @@ function SchedulerContent({
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
+  const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
+    normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadShiftDefaults() {
+      try {
+        const payload = await getLocationShiftDefaults(
+          location.business_id,
+          location.location_id,
+        );
+        if (cancelled) {
+          return;
+        }
+        setShiftDefaults(normalizeShiftDefaults(payload?.presets ?? SHIFT_DEFAULT_FALLBACKS));
+      } catch (_error) {
+        if (!cancelled) {
+          setShiftDefaults(normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS));
+        }
+      }
+    }
+
+    void loadShiftDefaults();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.business_id, location.location_id]);
 
   const weekDates = useMemo(() => getWeekDates(weekOffset), [weekOffset]);
 
@@ -733,14 +776,15 @@ function SchedulerContent({
                             <div className="flex flex-col gap-1">
                               {cellShifts.map(shift => {
                                 const desc = getShiftDescriptor(shift.startHour, shift.endHour);
-                                const DescIcon = desc.icon;
+                                const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
+                                const shiftLabel = shift.presetLabel?.trim() || desc.label;
                                 const dur = shiftDuration(shift);
                                 return (
                                   <button key={shift.id} onClick={() => setEditingShift(shift)}
                                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all"
                                     style={{ background: `${shift.color}10` }}>
                                     <DescIcon size={10} style={{ color: shift.color }} />
-                                    <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{desc.label}</span>
+                                    <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
                                     <span className={`text-[9px] ${theme.textSecondary}`} style={{ fontWeight: 400 }}>{dur}h</span>
                                   </button>
                                 );
@@ -769,13 +813,16 @@ function SchedulerContent({
               dark={isDark}
               employeeName={employees.find(e => e.id === creatingAt.employeeId)?.name || ''}
               dayLabel={`${FULL_DAYS[creatingAt.day]}, ${weekDates[creatingAt.day]?.toLocaleString('default', { month: 'short' })} ${weekDates[creatingAt.day]?.getDate()}`}
+              shiftDefaults={shiftDefaults}
               role={creatingAt.role}
               onClose={() => setCreatingAt(null)}
-              onCreate={(start, end) => {
+              onCreate={(start, end, presetKey, presetLabel) => {
                 setShifts(prev => [...prev, {
                   id: uid(), employeeId: creatingAt.employeeId, day: creatingAt.day,
                   startHour: start, endHour: end, role: creatingAt.role,
                   color: roleColors[creatingAt.role] || '#635BFF',
+                  presetKey,
+                  presetLabel,
                 }]);
                 setCreatingAt(null);
               }}
@@ -788,6 +835,7 @@ function SchedulerContent({
           {editingShift && (
             <EditShiftModal
               dark={isDark}
+              shiftDefaults={shiftDefaults}
               shift={editingShift}
               employeeName={employees.find(e => e.id === editingShift.employeeId)?.name || 'Unassigned'}
               onClose={() => setEditingShift(null)}
@@ -887,15 +935,35 @@ export default function Scheduler(props: SchedulerProps) {
 }
 
 /* ─── Quick Create Modal ─── */
-function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dark = false }: {
-  employeeName: string; dayLabel: string; role: string;
-  onClose: () => void; onCreate: (start: number, end: number) => void; dark?: boolean;
+function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose, onCreate, dark = false }: {
+  employeeName: string; dayLabel: string; role: string; shiftDefaults: ShiftDefault[];
+  onClose: () => void;
+  onCreate: (start: number, end: number, presetKey: ShiftDefaultKey, presetLabel: string) => void;
+  dark?: boolean;
 }) {
-  const [startHour, setStartHour] = useState(7);
-  const [endHour, setEndHour] = useState(15);
+  const normalizedDefaults = useMemo(
+    () => normalizeShiftDefaults(shiftDefaults),
+    [shiftDefaults],
+  );
+  const initialPreset = normalizedDefaults[0] ?? SHIFT_DEFAULT_FALLBACKS[0];
+  const [selectedPresetKey, setSelectedPresetKey] = useState<ShiftDefaultKey>(initialPreset.key);
+  const [startHour, setStartHour] = useState(initialPreset.start_hour);
+  const [endHour, setEndHour] = useState(initialPreset.end_hour);
   const roleColor = roleColors[role] || '#635BFF';
   const hourOptions = HOURS.map(h => ({ label: formatHour(h), value: String(h) }));
   const theme = getSchedulerTheme(dark);
+
+  useEffect(() => {
+    const selectedPreset =
+      normalizedDefaults.find((preset) => preset.key === selectedPresetKey) ??
+      normalizedDefaults[0];
+    if (!selectedPreset) {
+      return;
+    }
+    setSelectedPresetKey(selectedPreset.key);
+    setStartHour(selectedPreset.start_hour);
+    setEndHour(selectedPreset.end_hour);
+  }, [normalizedDefaults, selectedPresetKey]);
 
   return (
     <>
@@ -925,12 +993,16 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dar
         <div className="px-5 pt-3 pb-2">
           <p className={`text-[10px] uppercase tracking-[0.05em] mb-2 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Quick Fill</p>
           <div className="grid grid-cols-4 gap-2">
-            {shiftTemplates.map(t => {
-              const resolvedEnd = t.end > t.start ? t.end : 23;
-              const isActive = startHour === t.start && endHour === resolvedEnd;
+            {normalizedDefaults.map((preset) => {
+              const Icon = getShiftDefaultIcon(preset.key);
+              const isActive = selectedPresetKey === preset.key;
               return (
-                <button key={t.label}
-                  onClick={() => { setStartHour(t.start); setEndHour(resolvedEnd); }}
+                <button key={preset.key}
+                  onClick={() => {
+                    setSelectedPresetKey(preset.key);
+                    setStartHour(preset.start_hour);
+                    setEndHour(preset.end_hour);
+                  }}
                   className={`flex flex-col items-center gap-1 py-2 rounded-xl border transition-all ${
                     isActive
                       ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08]'
@@ -938,8 +1010,8 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dar
                         ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04]'
                         : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
                   }`}>
-                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
-                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
+                  <Icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{preset.label}</span>
                 </button>
               );
             })}
@@ -962,7 +1034,14 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dar
             className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
             style={{ fontWeight: 500 }}>Cancel</button>
           <motion.button whileTap={{ scale: 0.97 }}
-            onClick={() => onCreate(startHour, endHour)}
+            onClick={() =>
+              onCreate(
+                startHour,
+                endHour,
+                selectedPresetKey,
+                resolveShiftLabel(normalizedDefaults, selectedPresetKey, startHour, endHour),
+              )
+            }
             className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.3)]"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             Create Shift
@@ -974,9 +1053,21 @@ function QuickCreateModal({ employeeName, dayLabel, role, onClose, onCreate, dar
 }
 
 /* ─── Edit Shift Modal ─── */
-function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete, dark = false }: {
-  shift: Shift; employeeName: string; onClose: () => void; onSave: (s: Shift) => void; onDelete: () => void; dark?: boolean;
+function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, onDelete, dark = false }: {
+  shift: Shift; employeeName: string; shiftDefaults: ShiftDefault[]; onClose: () => void; onSave: (s: Shift) => void; onDelete: () => void; dark?: boolean;
 }) {
+  const normalizedDefaults = useMemo(
+    () => normalizeShiftDefaults(shiftDefaults),
+    [shiftDefaults],
+  );
+  const matchedPreset = normalizedDefaults.find(
+    (preset) =>
+      preset.key === shift.presetKey ||
+      (preset.start_hour === shift.startHour && preset.end_hour === shift.endHour),
+  );
+  const [selectedPresetKey, setSelectedPresetKey] = useState<ShiftDefaultKey | null>(
+    matchedPreset?.key ?? shift.presetKey ?? null,
+  );
   const [startHour, setStartHour] = useState(shift.startHour);
   const [endHour, setEndHour] = useState(shift.endHour);
   const roleColor = roleColors[shift.role] || shift.color;
@@ -1007,20 +1098,43 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete, dark =
           </button>
         </div>
         <div className="px-5 pt-4 pb-1 flex items-center gap-2">
-          <descriptor.icon size={14} style={{ color: roleColor }} />
-          <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{descriptor.label} Shift</span>
+          {selectedPresetKey ? (
+            (() => {
+              const Icon = getShiftDefaultIcon(selectedPresetKey);
+              const shiftLabel = resolveShiftLabel(normalizedDefaults, selectedPresetKey, startHour, endHour) || descriptor.label;
+              return (
+                <>
+                  <Icon size={14} style={{ color: roleColor }} />
+                  <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{shiftLabel} Shift</span>
+                </>
+              );
+            })()
+          ) : (
+            <>
+              <descriptor.icon size={14} style={{ color: roleColor }} />
+              <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{descriptor.label} Shift</span>
+            </>
+          )}
           <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
             · {endHour > startHour ? endHour - startHour : 24 - startHour + endHour}h
           </span>
         </div>
         <div className="px-5 pt-3 pb-2">
           <div className="grid grid-cols-4 gap-2">
-            {shiftTemplates.map(t => {
-              const resolvedEnd = t.end > t.start ? t.end : 23;
-              const isActive = startHour === t.start && endHour === resolvedEnd;
+            {normalizedDefaults.map((preset) => {
+              const Icon = getShiftDefaultIcon(preset.key);
+              const isActive =
+                selectedPresetKey === preset.key ||
+                (selectedPresetKey === null &&
+                  startHour === preset.start_hour &&
+                  endHour === preset.end_hour);
               return (
-                <button key={t.label}
-                  onClick={() => { setStartHour(t.start); setEndHour(resolvedEnd); }}
+                <button key={preset.key}
+                  onClick={() => {
+                    setSelectedPresetKey(preset.key);
+                    setStartHour(preset.start_hour);
+                    setEndHour(preset.end_hour);
+                  }}
                   className={`flex flex-col items-center gap-1 py-2 rounded-xl border transition-all ${
                     isActive
                       ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08]'
@@ -1028,8 +1142,8 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete, dark =
                         ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.04]'
                         : 'border-[#E5E7EB] hover:border-[#635BFF]/20 hover:bg-[#635BFF]/[0.02]'
                   }`}>
-                  <t.icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
-                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{t.label}</span>
+                  <Icon size={13} className={isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} />
+                  <span className={`text-[10px] ${isActive ? 'text-[#635BFF]' : dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: isActive ? 540 : 480 }}>{preset.label}</span>
                 </button>
               );
             })}
@@ -1058,7 +1172,21 @@ function EditShiftModal({ shift, employeeName, onClose, onSave, onDelete, dark =
               className={`px-4 py-2 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
               style={{ fontWeight: 500 }}>Cancel</button>
             <motion.button whileTap={{ scale: 0.97 }}
-              onClick={() => onSave({ ...shift, startHour, endHour })}
+              onClick={() =>
+                onSave({
+                  ...shift,
+                  startHour,
+                  endHour,
+                  presetKey: selectedPresetKey,
+                  presetLabel:
+                    resolveShiftLabel(
+                      normalizedDefaults,
+                      selectedPresetKey,
+                      startHour,
+                      endHour,
+                    ) || shift.presetLabel || descriptor.label,
+                })
+              }
               className="px-4 py-2 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.3)]"
               style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
               Save

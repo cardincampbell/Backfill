@@ -7,11 +7,12 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
-from app.models.business import Location
+from app.models.business import Business, Location
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
 from app.schemas.business import LocationRoleRead, RoleRead
+from app.services import shift_defaults
 from app.services.auth import AuthContext
 
 
@@ -34,6 +35,9 @@ class FakeSettingsSession:
 
     async def get(self, model, object_id):
         return self.get_map.get((model, object_id))
+
+    async def scalar(self, _stmt):
+        return None
 
     async def flush(self):
         return None
@@ -106,6 +110,22 @@ def _make_location(*, business_id, location_id) -> Location:
     )
 
 
+def _make_business(*, business_id, settings=None) -> Business:
+    now = datetime.now(timezone.utc)
+    return Business(
+        id=business_id,
+        name="Backfill",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        settings=settings or {},
+        place_metadata={},
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+
+
 def test_get_location_settings_returns_defaults():
     fake_session = FakeSettingsSession()
     business_id = uuid4()
@@ -144,6 +164,210 @@ def test_get_location_settings_returns_defaults():
         }
     finally:
         app.dependency_overrides.clear()
+
+
+def test_get_business_shift_defaults_returns_saved_defaults():
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(
+        business_id=business_id,
+        settings={
+            "shift_defaults": [
+                {"key": "morning", "label": "Open", "start_hour": 8, "end_hour": 12},
+                {"key": "afternoon", "label": "Mid", "start_hour": 12, "end_hour": 16},
+                {"key": "evening", "label": "Close Prep", "start_hour": 16, "end_hour": 20},
+                {"key": "night", "label": "Night", "start_hour": 20, "end_hour": 0},
+            ]
+        },
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, role=MembershipRole.owner)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+      response = client.get(f"/api/businesses/{business_id}/shift-defaults")
+      assert response.status_code == 200
+      payload = response.json()
+      assert payload["business_id"] == str(business_id)
+      assert payload["is_persisted"] is True
+      assert payload["presets"][0]["label"] == "Open"
+      assert payload["presets"][3]["end_hour"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_patch_business_shift_defaults_updates_business_and_audits():
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    business = _make_business(business_id=business_id)
+    fake_session.get_map[(Business, business_id)] = business
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, role=MembershipRole.owner)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/shift-defaults",
+            json={
+                "presets": [
+                    {"key": "morning", "label": "Open", "start_hour": 8, "end_hour": 12},
+                    {"key": "afternoon", "label": "Mid", "start_hour": 12, "end_hour": 16},
+                    {"key": "evening", "label": "Close Prep", "start_hour": 16, "end_hour": 20},
+                    {"key": "night", "label": "Night", "start_hour": 20, "end_hour": 0},
+                ]
+            },
+        )
+        assert response.status_code == 200
+        assert business.settings["shift_defaults"][0]["label"] == "Open"
+        assert business.settings["shift_defaults_source"] == "manual"
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "business.shift_defaults.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_location_shift_defaults_returns_business_defaults_when_unset():
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(
+        business_id=business_id,
+        settings={
+            "shift_defaults": [
+                {"key": "morning", "label": "Open", "start_hour": 8, "end_hour": 12},
+                {"key": "afternoon", "label": "Mid", "start_hour": 12, "end_hour": 16},
+                {"key": "evening", "label": "Close Prep", "start_hour": 16, "end_hour": 20},
+                {"key": "night", "label": "Night", "start_hour": 20, "end_hour": 0},
+            ]
+        },
+    )
+    fake_session.get_map[(Location, location_id)] = _make_location(
+        business_id=business_id,
+        location_id=location_id,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/shift-defaults"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["has_overrides"] is False
+        assert payload["presets"][0]["label"] == "Open"
+        assert payload["business_presets"][2]["label"] == "Close Prep"
+        assert payload["override_presets"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_patch_location_shift_defaults_updates_location_and_audits():
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(
+        business_id=business_id,
+        settings={
+            "shift_defaults": [
+                {"key": "morning", "label": "Morning", "start_hour": 7, "end_hour": 11},
+                {"key": "afternoon", "label": "Afternoon", "start_hour": 11, "end_hour": 15},
+                {"key": "evening", "label": "Evening", "start_hour": 15, "end_hour": 19},
+                {"key": "night", "label": "Night", "start_hour": 19, "end_hour": 23},
+            ]
+        },
+    )
+    location = _make_location(business_id=business_id, location_id=location_id)
+    fake_session.get_map[(Location, location_id)] = location
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/locations/{location_id}/shift-defaults",
+            json={
+                "presets": [
+                    {"key": "morning", "label": "Open", "start_hour": 8, "end_hour": 12},
+                    {"key": "afternoon", "label": "Mid", "start_hour": 12, "end_hour": 16},
+                    {"key": "evening", "label": "Close Prep", "start_hour": 16, "end_hour": 20},
+                    {"key": "night", "label": "Night", "start_hour": 20, "end_hour": 0},
+                ]
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["has_overrides"] is True
+        assert payload["override_presets"][0]["label"] == "Open"
+        assert location.settings["shift_defaults_override"][2]["label"] == "Close Prep"
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "location.shift_defaults.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_shift_defaults_seed_from_location_hours():
+    location = _make_location(business_id=uuid4(), location_id=uuid4())
+    location.google_place_metadata = {
+        "regular_opening_hours": {
+            "periods": [
+                {
+                    "open": {"day": 1, "time": "0900"},
+                    "close": {"day": 1, "time": "2200"},
+                }
+            ]
+        }
+    }
+
+    presets = shift_defaults.derive_shift_presets_from_location(location)
+
+    assert presets == [
+        {"key": "morning", "label": "Morning", "start_hour": 9, "end_hour": 12},
+        {"key": "afternoon", "label": "Afternoon", "start_hour": 12, "end_hour": 15},
+        {"key": "evening", "label": "Evening", "start_hour": 15, "end_hour": 18},
+        {"key": "night", "label": "Night", "start_hour": 18, "end_hour": 22},
+    ]
 
 
 def test_patch_location_settings_updates_location_and_audits():

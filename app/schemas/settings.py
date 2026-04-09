@@ -5,6 +5,46 @@ from uuid import UUID
 
 from app.schemas.common import BaseSchema
 
+ShiftPresetKey = Literal["morning", "afternoon", "evening", "night"]
+
+
+class ShiftPresetRead(BaseSchema):
+    key: ShiftPresetKey
+    label: str
+    start_hour: int
+    end_hour: int
+
+
+class ShiftPresetUpdate(BaseSchema):
+    key: ShiftPresetKey
+    label: str
+    start_hour: int
+    end_hour: int
+
+
+class BusinessShiftDefaultsRead(BaseSchema):
+    business_id: UUID
+    presets: list[ShiftPresetRead]
+    derived_from_location_id: Optional[UUID] = None
+    is_persisted: bool = True
+
+
+class BusinessShiftDefaultsUpdate(BaseSchema):
+    presets: list[ShiftPresetUpdate]
+
+
+class LocationShiftDefaultsRead(BaseSchema):
+    business_id: UUID
+    location_id: UUID
+    has_overrides: bool
+    presets: list[ShiftPresetRead]
+    business_presets: list[ShiftPresetRead]
+    override_presets: Optional[list[ShiftPresetRead]] = None
+
+
+class LocationShiftDefaultsUpdate(BaseSchema):
+    presets: Optional[list[ShiftPresetUpdate]] = None
+
 
 class LocationSettingsRead(BaseSchema):
     location_id: UUID

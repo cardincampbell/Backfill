@@ -16,8 +16,14 @@ import {
   type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
-import { getLocationBoard } from "@/lib/api/workspace";
-import type { WorkspaceLocation } from "@/lib/api/workspace";
+import {
+  getLocationBoard,
+  getLocationShiftDefaults,
+  updateLocationShiftDefaults,
+  type LocationShiftDefaults,
+  type ShiftDefault,
+  type WorkspaceLocation,
+} from "@/lib/api/workspace";
 import {
   LocationRoleEditor,
   type LocationRoleEditorFeedback as Feedback,
@@ -86,6 +92,8 @@ export default function SettingsLocationsSection({
     () => (locationsCache.get(businessId) ?? workspaceLocations).length === 0,
   );
   const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [shiftDefaults, setShiftDefaults] = useState<LocationShiftDefaults | null>(null);
+  const [shiftDefaultsLoading, setShiftDefaultsLoading] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [editorFeedback, setEditorFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
@@ -105,6 +113,7 @@ export default function SettingsLocationsSection({
     setLoading((cachedLocations ?? workspaceLocations).length === 0);
     setSelectedLocation(null);
     setAssignments([]);
+    setShiftDefaults(null);
     setEditorFeedback(null);
   }, [businessId, workspaceLocations]);
 
@@ -179,6 +188,7 @@ export default function SettingsLocationsSection({
   useEffect(() => {
     if (!selectedLocation) {
       setAssignments([]);
+      setShiftDefaults(null);
       setEditorFeedback(null);
       return;
     }
@@ -189,12 +199,17 @@ export default function SettingsLocationsSection({
     async function loadAssignments() {
       try {
         setAssignmentLoading(true);
+        setShiftDefaultsLoading(true);
         setEditorFeedback(null);
-        const nextAssignments = await getLocationRoles(businessId, activeLocation.id);
+        const [nextAssignments, nextShiftDefaults] = await Promise.all([
+          getLocationRoles(businessId, activeLocation.id),
+          getLocationShiftDefaults(businessId, activeLocation.id),
+        ]);
         if (cancelled) {
           return;
         }
         setAssignments(nextAssignments);
+        setShiftDefaults(nextShiftDefaults);
         setRoleCounts((current) => ({
           ...current,
           [activeLocation.id]: nextAssignments.length,
@@ -212,6 +227,7 @@ export default function SettingsLocationsSection({
       } finally {
         if (!cancelled) {
           setAssignmentLoading(false);
+          setShiftDefaultsLoading(false);
         }
       }
     }
@@ -228,7 +244,10 @@ export default function SettingsLocationsSection({
     [assignments],
   );
 
-  const handleSave = (roleIds: string[]) => {
+  const handleSave = (
+    roleIds: string[],
+    locationShiftPresets: ShiftDefault[] | null,
+  ) => {
     if (!selectedLocation) {
       return;
     }
@@ -237,23 +256,31 @@ export default function SettingsLocationsSection({
 
     startTransition(async () => {
       try {
-        const nextAssignments = await replaceLocationRoles(
-          businessId,
-          activeLocation.id,
-          roleIds.map((roleId) => {
-            const existing = assignmentsByRoleId.get(roleId);
-            return existing
-              ? {
-                  role_id: roleId,
-                  min_headcount: existing.min_headcount,
-                  max_headcount: existing.max_headcount,
-                  premium_rules: existing.premium_rules,
-                  coverage_settings: existing.coverage_settings,
-                }
-              : { role_id: roleId };
-          }),
-        );
+        const [nextAssignments, nextShiftDefaults] = await Promise.all([
+          replaceLocationRoles(
+            businessId,
+            activeLocation.id,
+            roleIds.map((roleId) => {
+              const existing = assignmentsByRoleId.get(roleId);
+              return existing
+                ? {
+                    role_id: roleId,
+                    min_headcount: existing.min_headcount,
+                    max_headcount: existing.max_headcount,
+                    premium_rules: existing.premium_rules,
+                    coverage_settings: existing.coverage_settings,
+                  }
+                : { role_id: roleId };
+            }),
+          ),
+          updateLocationShiftDefaults(
+            businessId,
+            activeLocation.id,
+            locationShiftPresets,
+          ),
+        ]);
         setAssignments(nextAssignments);
+        setShiftDefaults(nextShiftDefaults);
         setRoleCounts((current) => ({
           ...current,
           [activeLocation.id]: nextAssignments.length,
@@ -270,10 +297,10 @@ export default function SettingsLocationsSection({
       } catch (error) {
         setEditorFeedback({
           tone: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Could not update location roles.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not update location configuration.",
         });
       }
     });
@@ -439,11 +466,12 @@ export default function SettingsLocationsSection({
             assignments={assignments}
             dark={dark}
             feedback={editorFeedback}
-            loading={assignmentLoading}
+            loading={assignmentLoading || shiftDefaultsLoading}
             location={selectedLocation}
             onClose={() => setSelectedLocation(null)}
             onCreateRole={handleCreateRole}
             onSave={handleSave}
+            shiftDefaults={shiftDefaults}
             roles={roles}
             saving={isPending}
           />

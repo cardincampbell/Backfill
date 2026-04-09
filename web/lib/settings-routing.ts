@@ -2,6 +2,7 @@ export type SettingsScope = "business" | "personal";
 
 export type SettingsSectionKey =
   | "company"
+  | "shifts"
   | "locations"
   | "billing"
   | "business-notifications"
@@ -20,6 +21,7 @@ export const DEFAULT_SECTION_BY_SCOPE: Record<SettingsScope, SettingsSectionKey>
 export const SECTION_KEYS_BY_SCOPE: Record<SettingsScope, SettingsSectionKey[]> = {
   business: [
     "company",
+    "shifts",
     "locations",
     "billing",
     "business-notifications",

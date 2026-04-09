@@ -26,6 +26,12 @@ from app.schemas.business import (
     RoleRead,
 )
 from app.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
+from app.schemas.settings import (
+    BusinessShiftDefaultsRead,
+    BusinessShiftDefaultsUpdate,
+    LocationShiftDefaultsRead,
+    LocationShiftDefaultsUpdate,
+)
 from app.services import audit as audit_service
 from app.services import auth as auth_service, businesses, settings as settings_service
 
@@ -125,6 +131,67 @@ async def update_business(
         await session.commit()
         await session.refresh(business)
     return business
+
+
+@router.get(
+    "/{business_id}/shift-defaults",
+    response_model=BusinessShiftDefaultsRead,
+)
+async def get_business_shift_defaults(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        return await settings_service.get_business_shift_defaults(
+            session,
+            business_id=business_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/{business_id}/shift-defaults",
+    response_model=BusinessShiftDefaultsRead,
+)
+async def update_business_shift_defaults(
+    business_id: UUID,
+    payload: BusinessShiftDefaultsUpdate,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        defaults = await settings_service.update_business_shift_defaults(
+            session,
+            business_id=business_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    await audit_service.append(
+        session,
+        event_name="business.shift_defaults.updated",
+        target_type="business",
+        target_id=business_id,
+        business_id=business_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload=payload.model_dump(),
+    )
+    await session.commit()
+    return defaults
 
 
 @router.get("/{business_id}/locations", response_model=list[LocationRead])
@@ -303,6 +370,82 @@ async def update_location_settings(
     )
     await session.commit()
     return settings_state
+
+
+@router.get(
+    "/{business_id}/locations/{location_id}/shift-defaults",
+    response_model=LocationShiftDefaultsRead,
+)
+async def get_location_shift_defaults(
+    business_id: UUID,
+    location_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    try:
+        return await settings_service.get_location_shift_defaults(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/{business_id}/locations/{location_id}/shift-defaults",
+    response_model=LocationShiftDefaultsRead,
+)
+async def update_location_shift_defaults(
+    business_id: UUID,
+    location_id: UUID,
+    payload: LocationShiftDefaultsUpdate,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    try:
+        defaults = await settings_service.update_location_shift_defaults(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
+    await audit_service.append(
+        session,
+        event_name="location.shift_defaults.updated",
+        target_type="location",
+        target_id=location_id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload=payload.model_dump(exclude_unset=True),
+    )
+    await session.commit()
+    return defaults
 
 
 @router.get("/{business_id}/roles", response_model=list[RoleRead])

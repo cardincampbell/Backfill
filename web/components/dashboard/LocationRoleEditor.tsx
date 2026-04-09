@@ -9,11 +9,17 @@ import type {
   BusinessRole,
   LocationRoleAssignment,
 } from "@/lib/api/businesses";
+import type {
+  LocationShiftDefaults,
+  ShiftDefault,
+} from "@/lib/api/workspace";
 
 import {
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
+import { ShiftDefaultsEditor } from "./ShiftDefaultsEditor";
+import { normalizeShiftDefaults } from "./shift-defaults";
 
 export type LocationRoleEditorFeedback = {
   tone: "success" | "error";
@@ -85,6 +91,7 @@ export function LocationRoleEditor({
   location,
   roles,
   assignments,
+  shiftDefaults,
   loading,
   saving,
   feedback,
@@ -96,20 +103,39 @@ export function LocationRoleEditor({
   location: BusinessLocation;
   roles: BusinessRole[];
   assignments: LocationRoleAssignment[];
+  shiftDefaults: LocationShiftDefaults | null;
   loading: boolean;
   saving: boolean;
   feedback: LocationRoleEditorFeedback;
   onClose(): void;
-  onSave(roleIds: string[]): void;
+  onSave(roleIds: string[], locationShiftPresets: ShiftDefault[] | null): void;
   onCreateRole(name: string): Promise<BusinessRole>;
 }) {
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [customRole, setCustomRole] = useState("");
   const [isCreatingRole, setIsCreatingRole] = useState(false);
+  const [useBusinessDefaults, setUseBusinessDefaults] = useState(true);
+  const [draftShiftDefaults, setDraftShiftDefaults] = useState<ShiftDefault[]>(() =>
+    normalizeShiftDefaults(null),
+  );
 
   useEffect(() => {
     setSelectedRoleIds(assignments.map((assignment) => assignment.role_id));
   }, [assignments, location.id]);
+
+  useEffect(() => {
+    if (!shiftDefaults) {
+      setUseBusinessDefaults(true);
+      setDraftShiftDefaults(normalizeShiftDefaults(null));
+      return;
+    }
+    setUseBusinessDefaults(!shiftDefaults.has_overrides);
+    setDraftShiftDefaults(
+      normalizeShiftDefaults(
+        shiftDefaults.override_presets ?? shiftDefaults.business_presets,
+      ),
+    );
+  }, [location.id, shiftDefaults]);
 
   const locationReference = getLocationReference({
     ...location,
@@ -130,6 +156,11 @@ export function LocationRoleEditor({
   const borderClass = dark ? "border-white/[0.06]" : "border-[#F0F0F5]";
   const subtleBorderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
   const subtleSurfaceClass = dark ? "bg-white/[0.04]" : "bg-[#F7F8FA]";
+
+  const handleShiftDefaultsChange = (nextPresets: ShiftDefault[]) => {
+    setUseBusinessDefaults(false);
+    setDraftShiftDefaults(normalizeShiftDefaults(nextPresets));
+  };
 
   const addRole = (roleId: string) => {
     setSelectedRoleIds((current) =>
@@ -195,7 +226,12 @@ export function LocationRoleEditor({
             </button>
             <button
               type="button"
-              onClick={() => onSave(selectedRoleIds)}
+              onClick={() =>
+                onSave(
+                  selectedRoleIds,
+                  useBusinessDefaults ? null : normalizeShiftDefaults(draftShiftDefaults),
+                )
+              }
               disabled={loading || saving}
               className="px-4 py-2 rounded-full text-[12px] text-white transition-all duration-300 hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
@@ -434,6 +470,68 @@ export function LocationRoleEditor({
                 </button>
               </div>
             </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3
+                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                  style={{ fontWeight: 500 }}
+                >
+                  Shift Overrides
+                </h3>
+                <p
+                  className={`mt-1 text-[12px] ${textSecondary}`}
+                  style={{ fontWeight: 420 }}
+                >
+                  This location uses the business defaults unless you customize them here.
+                </p>
+              </div>
+            </div>
+
+            <div
+              className={`mb-4 rounded-xl border px-4 py-3 ${
+                dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#F7F8FA]"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+                    {useBusinessDefaults
+                      ? "Using business defaults"
+                      : "Location-specific overrides"}
+                  </p>
+                  <p className={`mt-0.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    {useBusinessDefaults
+                      ? "Edit any shift below to create a location-specific override."
+                      : "These overrides only affect future shifts created for this location."}
+                  </p>
+                </div>
+                {!useBusinessDefaults ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUseBusinessDefaults(true);
+                      setDraftShiftDefaults(
+                        normalizeShiftDefaults(shiftDefaults?.business_presets ?? null),
+                      );
+                    }}
+                    className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                    style={{ fontWeight: 520 }}
+                  >
+                    Reset to business defaults
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <ShiftDefaultsEditor
+              columnCount={1}
+              dark={dark}
+              onChange={handleShiftDefaultsChange}
+              presets={useBusinessDefaults ? shiftDefaults?.business_presets ?? draftShiftDefaults : draftShiftDefaults}
+            />
           </div>
         </div>
       </motion.div>

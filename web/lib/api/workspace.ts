@@ -81,6 +81,31 @@ export type BusinessProfileUpdatePayload = {
   week_start_day?: string | null;
 };
 
+export type ShiftDefaultKey = "morning" | "afternoon" | "evening" | "night";
+
+export type ShiftDefault = {
+  key: ShiftDefaultKey;
+  label: string;
+  start_hour: number;
+  end_hour: number;
+};
+
+export type BusinessShiftDefaults = {
+  business_id: string;
+  presets: ShiftDefault[];
+  derived_from_location_id?: string | null;
+  is_persisted: boolean;
+};
+
+export type LocationShiftDefaults = {
+  business_id: string;
+  location_id: string;
+  has_overrides: boolean;
+  presets: ShiftDefault[];
+  business_presets: ShiftDefault[];
+  override_presets?: ShiftDefault[] | null;
+};
+
 export type Workspace = {
   user: WorkspaceUser;
   onboarding_required: boolean;
@@ -353,6 +378,30 @@ export async function updateBusinessProfile(
   return (await response.json()) as BusinessProfile;
 }
 
+export async function getBusinessShiftDefaults(businessId: string) {
+  return fetchAppJson<BusinessShiftDefaults>(
+    `${API_PREFIX}/businesses/${businessId}/shift-defaults`,
+  );
+}
+
+export async function updateBusinessShiftDefaults(
+  businessId: string,
+  presets: ShiftDefault[],
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shift-defaults`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presets }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as BusinessShiftDefaults;
+}
+
 export async function deriveBusinessRoles(businessId: string) {
   const response = await apiFetchApp(
     `${API_PREFIX}/businesses/${businessId}/roles/derive`,
@@ -532,6 +581,34 @@ export async function updateLocationSettings(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as LocationSettings;
+}
+
+export async function getLocationShiftDefaults(
+  businessId: string,
+  locationId: string,
+) {
+  return fetchAppJson<LocationShiftDefaults>(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/shift-defaults`,
+  );
+}
+
+export async function updateLocationShiftDefaults(
+  businessId: string,
+  locationId: string,
+  presets: ShiftDefault[] | null,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/shift-defaults`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presets }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as LocationShiftDefaults;
 }
 
 export async function attachRoleToLocation(

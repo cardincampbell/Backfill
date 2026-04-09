@@ -19,7 +19,7 @@ from app.schemas.business import (
     LocationRoleReplace,
     RoleCreate,
 )
-from app.services import business_identity_derivation, role_derivation
+from app.services import business_identity_derivation, role_derivation, shift_defaults
 from app.services.utils import role_code_from_name, slugify
 
 LOCKED_SHIFT_STATUSES = (
@@ -336,6 +336,11 @@ async def create_location_record(
     )
     session.add(location)
     await session.flush()
+    await shift_defaults.seed_business_shift_defaults_from_location(
+        session,
+        business=business,
+        location=location,
+    )
     _add_business_place_type_rows(
         session,
         business_id=business_id,

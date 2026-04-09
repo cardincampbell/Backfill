@@ -69,6 +69,7 @@ import DashboardShell from "./DashboardShell";
 import SegmentedControl from "./SegmentedControl";
 import SettingsAvailabilitySection from "./SettingsAvailabilitySection";
 import SettingsLocationsSection from "./SettingsLocationsSection";
+import SettingsShiftsSection from "./SettingsShiftsSection";
 
 type Feedback = {
   tone: "success" | "error";
@@ -437,6 +438,7 @@ function Toggle({
 
 const businessSections = [
   { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
+  { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
@@ -1073,6 +1075,18 @@ export default function Settings({
       }
 
       return <SettingsLocationsSection businessId={primaryBusinessId} dark={isDark} />;
+    }
+
+    if (scope === "business" && activeSection === "shifts") {
+      if (!primaryBusinessId) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Create a business first, then you can set shift defaults here.
+          </div>
+        );
+      }
+
+      return <SettingsShiftsSection businessId={primaryBusinessId} dark={isDark} />;
     }
 
     if (scope === "business" && activeSection === "billing") {
