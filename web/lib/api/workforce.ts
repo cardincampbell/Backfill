@@ -22,6 +22,7 @@ export type EmployeeSummary = {
   preferred_name?: string | null;
   phone_e164?: string | null;
   email?: string | null;
+  reliability_score?: number | null;
   status: string;
   employment_type?: string | null;
   hire_date?: string | null;

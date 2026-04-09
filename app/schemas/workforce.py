@@ -37,6 +37,7 @@ class EmployeeRead(BaseSchema):
     preferred_name: Optional[str]
     phone_e164: Optional[str]
     email: Optional[str]
+    reliability_score: Optional[float] = 0.7
     status: str
     employment_type: Optional[str]
     hire_date: Optional[date]
