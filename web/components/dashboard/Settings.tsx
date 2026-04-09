@@ -438,8 +438,8 @@ function Toggle({
 
 const businessSections = [
   { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
-  { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
+  { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
   { key: "integrations", label: "Integrations", icon: Link2, saveTarget: null },

@@ -1,5 +1,5 @@
 import {
-  Moon,
+  CloudMoon,
   Sun,
   Sunrise,
   Sunset,
@@ -26,7 +26,7 @@ const SHIFT_ICON_BY_KEY: Record<ShiftDefaultKey, LucideIcon> = {
   morning: Sunrise,
   afternoon: Sun,
   evening: Sunset,
-  night: Moon,
+  night: CloudMoon,
 };
 
 const SHIFT_COLOR_BY_KEY: Record<ShiftDefaultKey, string> = {

@@ -15,7 +15,7 @@ import {
   ChevronDown,
   Zap,
   Sun,
-  Moon,
+  CloudMoon,
   Sunrise,
   Sunset,
   ClipboardCopy,
@@ -97,7 +97,7 @@ function getShiftDescriptor(start: number, end: number): { label: string; icon: 
   if (mid < 12) return { label: 'Morning', icon: Sunrise };
   if (mid < 16) return { label: 'Afternoon', icon: Sun };
   if (mid < 20) return { label: 'Evening', icon: Sunset };
-  return { label: 'Night', icon: Moon };
+  return { label: 'Night', icon: CloudMoon };
 }
 
 function getWeekDates(offset: number) {
