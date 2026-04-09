@@ -1,26 +1,9 @@
-"use client";
-
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { motion, useScroll, useTransform } from "motion/react";
 import { ArrowRight, Check, Phone, Zap } from "lucide-react";
 
-import { AUTH_ENTRY_PATH } from "@/lib/auth/constants";
-
-const LandingPhoneMockup = dynamic(
-  () =>
-    import("./landing-phone-mockup").then((module) => ({
-      default: module.LandingPhoneMockup,
-    })),
-  {
-    loading: () => (
-      <div className="mx-auto w-full max-w-[280px] sm:max-w-[340px] lg:max-w-[380px]">
-        <div className="aspect-[393/852] rounded-[46px] border border-[#d8dee6] bg-[linear-gradient(180deg,#f7f8fa_0%,#eef2f6_100%)] shadow-[0_20px_60px_rgba(0,0,0,0.12)]" />
-      </div>
-    ),
-  },
-);
+import { LandingHero } from "@/components/landing/landing-hero";
+import { LandingNav } from "@/components/landing/landing-nav";
 
 const LandingBackfillShiftsInterface = dynamic(
   () =>
@@ -58,700 +41,623 @@ const LandingFaq = dynamic(
   },
 );
 
-function DotGrid({ className = '' }: { className?: string }) {
+const INDUSTRIES = [
+  "Restaurants",
+  "Retail",
+  "Healthcare",
+  "Hospitality",
+  "Warehouses",
+];
+
+const PROBLEM_TIMELINE = [
+  {
+    time: "5:47 AM",
+    text: "Voicemail. Your opener isn't coming in. Service starts in two hours.",
+  },
+  {
+    time: "5:49 AM",
+    text: "You open the group chat. You start texting names. Most are asleep.",
+  },
+  {
+    time: "5:58 AM",
+    text: "Three replies. Two can't do it. One wants to negotiate hours.",
+  },
+  {
+    time: "6:15 AM",
+    text: "You call someone else. Rings out. You leave a voicemail and wait.",
+  },
+  {
+    time: "6:34 AM",
+    text: "Finally. Someone says yes. You've been at this for 47 minutes before your day even started.",
+  },
+];
+
+const HOW_IT_WORKS = [
+  {
+    step: "01",
+    title: "Callout Detected",
+    subtitle: "A shift opens",
+    description:
+      "When an employee calls out, a shift goes unclaimed, or a schedule changes — Backfill knows instantly, via your scheduler integration or directly through its own built-in calling line.",
+    badge: "Automatic detection",
+    icon: <Zap className="h-5 w-5" />,
+    color: "#635BFF",
+    gradient: "from-[#635BFF]/10 to-[#635BFF]/[0.02]",
+  },
+  {
+    step: "02",
+    title: "Backfill Calls",
+    subtitle: "Your list gets worked",
+    description:
+      "Backfill's AI agent calls available employees in priority order — by role, availability, and standing. It explains the shift, fields questions, and waits for a clear yes.",
+    badge: "Voice AI · Calls in seconds",
+    icon: <Phone className="h-5 w-5" />,
+    color: "#0070F3",
+    gradient: "from-[#0070F3]/10 to-[#0070F3]/[0.02]",
+  },
+  {
+    step: "03",
+    title: "Shift Filled",
+    subtitle: "First yes wins",
+    description:
+      "The moment someone confirms, the shift is locked. They get a confirmation. You get a notification. Everyone else automatically gets a clear — no awkward follow-up needed.",
+    badge: "Confirmed · Standby queue active",
+    icon: <Check className="h-5 w-5" />,
+    color: "#00C7B7",
+    gradient: "from-[#00C7B7]/10 to-[#00C7B7]/[0.02]",
+  },
+];
+
+const SHIFT_FEATURES = [
+  {
+    title: "AI schedule generation",
+    description:
+      "Describe your week, your roles, your team. Backfill Shifts drafts the schedule. You approve, adjust, or just say what's wrong.",
+  },
+  {
+    title: "Natural language edits",
+    description:
+      "No forms, no dropdowns. Type or say the change, and the schedule updates. It's as fast as sending a text.",
+  },
+  {
+    title: "Pattern learning",
+    description:
+      "The more you use it, the better it knows your operation. Recurring roles, preferred staff, shift windows — it stops asking what you always do.",
+  },
+  {
+    title: "Real-time coverage board",
+    description:
+      "Every open shift, every in-progress fill attempt, every confirmation — across all locations — at a glance.",
+  },
+  {
+    title: "Standby queue management",
+    description:
+      "Primary fill falls through? Your pre-ranked standby queue activates automatically. No second round of calls from you.",
+  },
+  {
+    title: "Upgrade anytime",
+    description:
+      "Grow into a dedicated platform later? Everything ports over. No rebuilding from scratch.",
+  },
+];
+
+const INTEGRATIONS = ["7shifts", "Deputy", "When I Work", "Homebase"];
+
+const FOOTER_PRODUCT_LINKS = [
+  { label: "How It Works", href: "#product" },
+  { label: "Backfill Shifts", href: "#backfill-shifts" },
+  { label: "Integrations", href: "#integrations" },
+  { label: "Pricing", href: "#pricing" },
+];
+
+const FOOTER_COMPANY_LINKS = ["About", "Blog", "Careers", "Contact"];
+const FOOTER_LEGAL_LINKS = ["Privacy", "Terms", "Security"];
+const FOOTER_SOCIAL_LINKS = ["Twitter", "LinkedIn"];
+
+function DotGrid({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`absolute inset-0 pointer-events-none ${className}`}
+      className={`pointer-events-none absolute inset-0 ${className}`}
       style={{
-        backgroundImage: 'radial-gradient(circle, rgba(99,91,255,0.07) 1px, transparent 1px)',
-        backgroundSize: '24px 24px',
+        backgroundImage:
+          "radial-gradient(circle, rgba(99,91,255,0.07) 1px, transparent 1px)",
+        backgroundSize: "24px 24px",
       }}
     />
   );
 }
 
 export default function LandingPage() {
-  const [isScrolled, setIsScrolled] = useState(false);
-  const { scrollY } = useScroll();
-  const heroY = useTransform(scrollY, [0, 800], [0, 80]);
-  const heroOpacity = useTransform(scrollY, [0, 500], [1, 0]);
   const currentYear = new Date().getFullYear();
 
-  useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 20);
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
   return (
-    <div className="bg-white min-h-screen overflow-x-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Navigation */}
-      <motion.nav
-        initial={{ y: -100 }}
-        animate={{ y: 0 }}
-        transition={{ duration: 0.6 }}
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 px-5 sm:px-6 lg:px-8 ${
-          isScrolled
-            ? 'bg-white/80 backdrop-blur-2xl border-b border-neutral-200/60 shadow-[0_1px_3px_rgba(0,0,0,0.04)]'
-            : 'bg-transparent'
-        }`}
-      >
-        <div className="max-w-[1200px] mx-auto">
-          <div className="flex items-center justify-between h-[64px] sm:h-[72px]">
-            <Link href="/">
-              <motion.div
-                className="text-[20px] sm:text-[22px] tracking-[-0.02em] text-[#0A2540] cursor-pointer"
-                style={{ fontWeight: 620 }}
-                whileHover={{ scale: 1.02 }}
-              >
-                Backfill
-              </motion.div>
-            </Link>
-            <div className="hidden md:flex items-center gap-8 mr-auto ml-12">
-              {['Product', 'Pricing', 'FAQ'].map((item) => (
-                <a
-                  key={item}
-                  href={`#${item.toLowerCase()}`}
-                  className="text-[15px] text-[#425466] hover:text-[#0A2540] transition-colors"
-                  style={{ fontWeight: 450 }}
-                >
-                  {item}
-                </a>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 sm:gap-4">
-              <a href={AUTH_ENTRY_PATH} className="px-4 py-2 text-[#425466] hover:text-[#0A2540] transition-colors text-[15px]" style={{ fontWeight: 450 }}>
-                Sign In
-              </a>
-            </div>
-          </div>
-        </div>
-      </motion.nav>
+    <div
+      className="landing-page min-h-screen overflow-x-hidden bg-white"
+      style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+    >
+      <LandingNav />
+      <LandingHero />
 
-      {/* Hero Section */}
-      <section className="relative pt-28 sm:pt-36 pb-20 sm:pb-32 px-5 sm:px-6 lg:px-8 overflow-hidden">
-        {/* Background layers */}
-        <div className="absolute inset-0 bg-[#fafbfd]" />
-        <div className="absolute top-[-400px] right-[-300px] w-[1000px] h-[1000px] bg-gradient-to-bl from-[#635BFF]/[0.13] via-[#80b3ff]/[0.11] to-transparent rounded-full blur-[100px]" />
-        <div className="absolute bottom-[-200px] left-[-200px] w-[700px] h-[700px] bg-gradient-to-tr from-[#635BFF]/[0.10] via-transparent to-transparent rounded-full blur-[80px]" />
-        <DotGrid className="opacity-50" />
-        {/* Bottom edge fade */}
-        <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-white to-transparent" />
-
-        <div className="max-w-[1200px] mx-auto relative">
-          <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-center">
-            {/* Left Column */}
-            <motion.div
-              style={{ y: heroY, opacity: heroOpacity }}
-              className="max-w-xl lg:translate-x-[50px] lg:-translate-y-[20px] min-h-[calc(100svh-140px)] lg:min-h-0 flex flex-col text-left mx-auto lg:mx-0"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-            >
-              <div className="flex-1 flex flex-col justify-center">
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6 }}
-                  className="inline-flex items-center gap-2.5 px-4 py-1.5 bg-white/80 backdrop-blur-sm border border-[#e2e8f0] backfill-ui-radius mb-6 sm:mb-8 shadow-[0_1px_3px_rgba(0,0,0,0.04)] self-start"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#635BFF] animate-pulse" />
-                  <span className="text-[13px] text-[#425466]" style={{ fontWeight: 500 }}>Always on autonomous shift coverage</span>
-                </motion.div>
-
-                <motion.h1
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, delay: 0.1 }}
-                  className="text-[64px] sm:text-[48px] md:text-[56px] lg:text-[68px] leading-[1.06] tracking-[-0.035em] mb-5 sm:mb-7"
-                  style={{ fontWeight: 780 }}
-                >
-                  <span className="text-[#0A2540]">From Callout</span>{' '}
-                  <br className="hidden lg:block" />
-                  <span className="bg-gradient-to-r from-[#0A2540] via-[#635BFF] to-[#00C7B7] bg-clip-text text-transparent">to Covered.</span>
-                </motion.h1>
-
-                <motion.p
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, delay: 0.2 }}
-                  className="text-[21px] sm:text-[18px] text-[#425466] mb-8 sm:mb-10 leading-[1.75] max-w-md lg:mx-0"
-                >
-                  Callouts happen. Scrambling doesn't have to. Backfill handles callouts and last-minute shift changes automatically — so you never have to.
-                </motion.p>
-
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, delay: 0.3 }}
-                  className="mb-4 sm:mb-12"
-                >
-                  <Link
-                    href="/try"
-                    className="group w-full sm:w-auto px-8 py-4 sm:px-7 sm:py-3.5 bg-[#0A2540] text-white backfill-ui-radius transition-all duration-300 text-[17px] sm:text-[16px] inline-flex items-center justify-center sm:inline-flex gap-2.5 shadow-[0_4px_14px_rgba(10,37,64,0.35)] hover:shadow-[0_6px_24px_rgba(10,37,64,0.45)] hover:translate-y-[-1px]"
-                    style={{ fontWeight: 500 }}
-                  >
-                    Try Backfill Free
-                    <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-                  </Link>
-                </motion.div>
-
-                {/* Stats */}
-                <motion.div
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.6, delay: 0.4 }}
-                  className="flex justify-start gap-6 sm:gap-10 pt-8 border-t border-[#e2e8f0]/80 pb-4 lg:pb-0"
-                >
-                  {[
-                    { value: '< 4 min', label: 'Avg. fill time' },
-                    { value: '93%', label: 'Shifts covered' },
-                    { value: '1,200', label: 'Businesses' },
-                    { value: '0', label: 'Scrambling' },
-                  ].map((stat, i) => (
-                    <div key={i}>
-                      <div className="text-[20px] sm:text-[26px] tracking-[-0.03em] text-[#0A2540]" style={{ fontWeight: 650 }}>{stat.value}</div>
-                      <div className="text-[11px] sm:text-[13px] text-[#8898AA] mt-1" style={{ fontWeight: 470 }}>{stat.label}</div>
-                    </div>
-                  ))}
-                </motion.div>
-              </div>
-            </motion.div>
-
-            {/* Right Column */}
-            <motion.div
-              initial={{ opacity: 0, y: 30, x: -5 }}
-              animate={{ opacity: 1, y: 0, x: -5 }}
-              transition={{ duration: 0.8, delay: 0.3 }}
-              className="relative order-last hidden lg:block"
-            >
-              <LandingPhoneMockup />
-            </motion.div>
-          </div>
-        </div>
-      </section>
-
-      {/* Social proof strip */}
-      <section className="py-8 sm:py-10 px-5 sm:px-6 lg:px-8 bg-white border-y border-[#f0f0f5]">
-        <div className="max-w-[1200px] mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-            className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 md:gap-12"
+      <section className="border-y border-[#f0f0f5] bg-white px-5 py-8 sm:px-6 sm:py-10 lg:px-8">
+        <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-center gap-4 sm:gap-6 md:gap-12">
+          <span
+            className="w-full text-center text-[13px] uppercase tracking-[0.1em] text-[#8898AA] md:w-auto"
+            style={{ fontWeight: 500 }}
           >
-            <span className="text-[13px] text-[#8898AA] uppercase tracking-[0.1em] w-full md:w-auto text-center" style={{ fontWeight: 500 }}>Built for</span>
-            {['Restaurants', 'Retail', 'Healthcare', 'Hospitality', 'Warehouses'].map((industry) => (
-              <span key={industry} className="text-[14px] sm:text-[15px] text-[#425466]/70" style={{ fontWeight: 450 }}>{industry}</span>
-            ))}
-          </motion.div>
+            Built for
+          </span>
+          {INDUSTRIES.map((industry) => (
+            <span
+              key={industry}
+              className="text-[14px] text-[#425466]/70 sm:text-[15px]"
+              style={{ fontWeight: 450 }}
+            >
+              {industry}
+            </span>
+          ))}
         </div>
       </section>
 
-      {/* The Problem Section */}
-      <section className="relative bg-[#0A2540] text-white py-20 sm:py-32 px-5 sm:px-6 lg:px-8 overflow-hidden">
+      <section className="relative overflow-hidden bg-[#0A2540] px-5 py-20 text-white sm:px-6 sm:py-32 lg:px-8">
         <div
-          className="absolute inset-0 pointer-events-none opacity-[0.03]"
+          className="pointer-events-none absolute inset-0 opacity-[0.03]"
           style={{
-            backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)',
-            backgroundSize: '32px 32px',
+            backgroundImage:
+              "radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)",
+            backgroundSize: "32px 32px",
           }}
         />
-        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-gradient-to-bl from-[#635BFF]/15 via-transparent to-transparent rounded-full blur-[120px]" />
-        <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-gradient-to-tr from-[#00C7B7]/8 via-transparent to-transparent rounded-full blur-[100px]" />
+        <div className="absolute right-0 top-0 h-[600px] w-[600px] rounded-full bg-gradient-to-bl from-[#635BFF]/15 via-transparent to-transparent blur-[120px]" />
+        <div className="absolute bottom-0 left-0 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-[#00C7B7]/8 via-transparent to-transparent blur-[100px]" />
 
-        <div className="max-w-[900px] mx-auto relative z-10">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-          >
-            <div className="text-[12px] tracking-[0.2em] text-[#635BFF] uppercase mb-5" style={{ fontWeight: 600 }}>
+        <div className="relative z-10 mx-auto max-w-[900px]">
+          <div className="mb-14 sm:mb-20">
+            <div
+              className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
+              style={{ fontWeight: 600 }}
+            >
               The problem
             </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.1] tracking-[-0.03em] mb-6" style={{ fontWeight: 600 }}>
-              It's 5:47 AM. Your opener just called out.
+            <h2
+              className="mb-6 text-[30px] leading-[1.1] tracking-[-0.03em] sm:text-[44px] lg:text-[52px]"
+              style={{ fontWeight: 600 }}
+            >
+              It&apos;s 5:47 AM. Your opener just called out.
             </h2>
-            <p className="text-[16px] sm:text-[19px] text-[#8898AA] mb-14 sm:mb-20 leading-[1.65]">
-              Here's what that morning looks like without Backfill.
+            <p className="text-[16px] leading-[1.65] text-[#8898AA] sm:text-[19px]">
+              Here&apos;s what that morning looks like without Backfill.
             </p>
-          </motion.div>
+          </div>
 
-          {/* Timeline */}
-          <div className="space-y-0 relative">
-            <div className="absolute left-[14px] sm:left-[108px] top-0 bottom-0 w-px bg-gradient-to-b from-[#635BFF]/30 via-white/[0.06] to-[#635BFF]/30" />
-            {[
-              { time: '5:47 AM', text: "Voicemail. Your opener isn't coming in. Service starts in two hours." },
-              { time: '5:49 AM', text: 'You open the group chat. You start texting names. Most are asleep.' },
-              { time: '5:58 AM', text: "Three replies. Two can't do it. One wants to negotiate hours." },
-              { time: '6:15 AM', text: 'You call someone else. Rings out. You leave a voicemail and wait.' },
-              { time: '6:34 AM', text: "Finally. Someone says yes. You've been at this for 47 minutes before your day even started." },
-            ].map((item, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, x: -20 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.08, duration: 0.5 }}
-                viewport={{ once: true }}
-                className="flex flex-col sm:flex-row gap-1 sm:gap-8 items-start group py-4 sm:py-5 pl-8 sm:pl-0"
+          <div className="relative space-y-0">
+            <div className="absolute bottom-0 left-[14px] top-0 w-px bg-gradient-to-b from-[#635BFF]/30 via-white/[0.06] to-[#635BFF]/30 sm:left-[108px]" />
+            {PROBLEM_TIMELINE.map((item) => (
+              <div
+                key={item.time}
+                className="group flex flex-col items-start gap-1 py-4 pl-8 sm:flex-row sm:gap-8 sm:py-5 sm:pl-0"
               >
-                <div className="text-[#8898AA] font-mono text-[13px] sm:text-[14px] sm:min-w-[88px] pt-0.5 group-hover:text-white/60 transition-colors" style={{ fontWeight: 450 }}>
+                <div
+                  className="pt-0.5 font-mono text-[13px] text-[#8898AA] transition-colors group-hover:text-white/60 sm:min-w-[88px] sm:text-[14px]"
+                  style={{ fontWeight: 450 }}
+                >
                   {item.time}
                 </div>
                 <div className="relative">
-                  <div className="absolute -left-[22px] sm:-left-[34px] top-[7px] w-2 h-2 rounded-full bg-[#1A3A5C] group-hover:bg-[#635BFF] transition-all border-2 border-[#0A2540] ring-[3px] ring-[#1A3A5C]/50 group-hover:ring-[#635BFF]/20" />
-                  <div className="text-white/75 text-[15px] sm:text-[17px] leading-[1.65] group-hover:text-white/95 transition-colors">
+                  <div className="absolute -left-[22px] top-[7px] h-2 w-2 rounded-full border-2 border-[#0A2540] bg-[#1A3A5C] ring-[3px] ring-[#1A3A5C]/50 transition-all group-hover:bg-[#635BFF] group-hover:ring-[#635BFF]/20 sm:-left-[34px]" />
+                  <div className="text-[15px] leading-[1.65] text-white/75 transition-colors group-hover:text-white/95 sm:text-[17px]">
                     {item.text}
                   </div>
                 </div>
-              </motion.div>
+              </div>
             ))}
           </div>
 
-          {/* Callout Box */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ delay: 0.3 }}
-            className="mt-12 sm:mt-16 p-6 sm:p-8 backfill-ui-radius border border-white/[0.06] bg-white/[0.02]"
-          >
-            <p className="text-[15px] sm:text-[17px] text-[#8898AA] italic leading-[1.8]">
-              "For a 30-location group, this is happening multiple times a week — across every location, every manager, every shift window. That's not a staffing problem. That's a systems problem."
+          <div className="mt-12 rounded-[24px] border border-white/[0.06] bg-white/[0.02] p-6 sm:mt-16 sm:p-8">
+            <p className="text-[15px] italic leading-[1.8] text-[#8898AA] sm:text-[17px]">
+              &quot;For a 30-location group, this is happening multiple times a
+              week — across every location, every manager, every shift window.
+              That&apos;s not a staffing problem. That&apos;s a systems problem.&quot;
             </p>
-          </motion.div>
+          </div>
         </div>
       </section>
 
-      {/* How It Works Section */}
-      <section id="product" className="py-20 sm:py-32 px-5 sm:px-6 lg:px-8 bg-white relative overflow-hidden">
+      <section
+        id="product"
+        className="relative overflow-hidden bg-white px-5 py-20 sm:px-6 sm:py-32 lg:px-8"
+      >
         <DotGrid className="opacity-30" />
-        <div className="max-w-[1200px] mx-auto relative">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="max-w-2xl mb-14 sm:mb-20"
-          >
-            <div className="text-[12px] tracking-[0.2em] text-[#635BFF] uppercase mb-5" style={{ fontWeight: 600 }}>
+        <div className="relative mx-auto max-w-[1200px]">
+          <div className="mb-14 max-w-2xl sm:mb-20">
+            <div
+              className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
+              style={{ fontWeight: 600 }}
+            >
               How it works
             </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.1] tracking-[-0.03em] mb-6 text-[#0A2540]" style={{ fontWeight: 600 }}>
+            <h2
+              className="mb-6 text-[30px] leading-[1.1] tracking-[-0.03em] text-[#0A2540] sm:text-[44px] lg:text-[52px]"
+              style={{ fontWeight: 600 }}
+            >
               Three steps. Zero manual work.
             </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#425466] leading-[1.65]">
-              No scrambling. No group chat. Our coverage engine takes over and notifies you when it&apos;s done.
+            <p className="text-[16px] leading-[1.65] text-[#425466] sm:text-[18px]">
+              No scrambling. No group chat. Our coverage engine takes over and
+              notifies you when it&apos;s done.
             </p>
-          </motion.div>
+          </div>
 
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-5">
-            {[
-              {
-                step: '01',
-                title: 'Callout Detected',
-                subtitle: 'A shift opens',
-                description: "When an employee calls out, a shift goes unclaimed, or a schedule changes — Backfill knows instantly, via your scheduler integration or directly through its own built-in calling line.",
-                badge: 'Automatic detection',
-                icon: <Zap className="h-5 w-5" />,
-                color: '#635BFF',
-                gradient: 'from-[#635BFF]/10 to-[#635BFF]/[0.02]',
-              },
-              {
-                step: '02',
-                title: 'Backfill Calls',
-                subtitle: 'Your list gets worked',
-                description: "Backfill's AI agent calls available employees in priority order — by role, availability, and standing. It explains the shift, fields questions, and waits for a clear yes.",
-                badge: 'Voice AI · Calls in seconds',
-                icon: <Phone className="h-5 w-5" />,
-                color: '#0070F3',
-                gradient: 'from-[#0070F3]/10 to-[#0070F3]/[0.02]',
-              },
-              {
-                step: '03',
-                title: 'Shift Filled',
-                subtitle: 'First yes wins',
-                description: "The moment someone confirms, the shift is locked. They get a confirmation. You get a notification. Everyone else automatically gets a clear — no awkward follow-up needed.",
-                badge: 'Confirmed · Standby queue active',
-                icon: <Check className="h-5 w-5" />,
-                color: '#00C7B7',
-                gradient: 'from-[#00C7B7]/10 to-[#00C7B7]/[0.02]',
-              },
-            ].map((item, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 30 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.1, duration: 0.6 }}
-                viewport={{ once: true }}
-                className={`group relative bg-gradient-to-b ${item.gradient} p-8 backfill-ui-radius border border-[#e2e8f0] hover:border-[#c4d1e0] transition-all hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)] hover:translate-y-[-2px] duration-300`}
+          <div className="grid gap-5 sm:grid-cols-2 md:grid-cols-3">
+            {HOW_IT_WORKS.map((item) => (
+              <div
+                key={item.step}
+                className={`group relative border border-[#e2e8f0] bg-gradient-to-b ${item.gradient} p-8 transition-all duration-300 hover:-translate-y-[2px] hover:border-[#c4d1e0] hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)]`}
               >
-                {/* Step number watermark */}
-                <div className="absolute top-6 right-6 text-[72px] leading-none tracking-[-0.04em] text-[#0A2540]/[0.04]" style={{ fontWeight: 700 }}>
+                <div
+                  className="absolute right-6 top-6 text-[72px] leading-none tracking-[-0.04em] text-[#0A2540]/[0.04]"
+                  style={{ fontWeight: 700 }}
+                >
                   {item.step}
                 </div>
 
-                <div className="flex items-center gap-3 mb-8">
+                <div className="mb-8 flex items-center gap-3">
                   <div
-                    className="h-10 w-10 backfill-ui-radius flex items-center justify-center text-white"
+                    className="flex h-10 w-10 items-center justify-center rounded-[14px] text-white"
                     style={{ backgroundColor: item.color }}
                   >
                     {item.icon}
                   </div>
                 </div>
-                <h3 className="text-[22px] tracking-[-0.02em] mb-1.5 text-[#0A2540]" style={{ fontWeight: 600 }}>{item.title}</h3>
-                <div className="text-[14px] text-[#8898AA] mb-4" style={{ fontWeight: 450 }}>{item.subtitle}</div>
-                <p className="text-[15px] text-[#425466] leading-[1.7] mb-6">{item.description}</p>
-                <div className="inline-block px-3 py-1.5 bg-white/80 border border-[#e2e8f0] backfill-ui-radius text-[12px] text-[#425466]" style={{ fontWeight: 500 }}>
-                  {item.badge}
+                <h3
+                  className="mb-1.5 text-[22px] tracking-[-0.02em] text-[#0A2540]"
+                  style={{ fontWeight: 600 }}
+                >
+                  {item.title}
+                </h3>
+                <div
+                  className="mb-4 text-[14px] text-[#8898AA]"
+                  style={{ fontWeight: 450 }}
+                >
+                  {item.subtitle}
                 </div>
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Section quote */}
-          <motion.blockquote
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="mt-16 border-l-4 border-[#635BFF] pl-7 py-1 max-w-2xl"
-          >
-            <p className="text-[18px] sm:text-[20px] text-[#0A2540] leading-[1.65] italic mb-4" style={{ fontWeight: 450 }}>
-              &ldquo;I used to spend the first hour of every morning chasing coverage. Now I check the app and it&apos;s already done.&rdquo;
-            </p>
-            <cite className="not-italic text-[13px] text-[#8898AA] tracking-[0.01em]" style={{ fontWeight: 500 }}>
-              — Operations Manager, 3-location casual dining group, Los Angeles
-            </cite>
-          </motion.blockquote>
-        </div>
-      </section>
-
-      {/* Backfill Shifts Section */}
-      <section id="backfill-shifts" className="relative bg-[#0A2540] text-white py-20 sm:py-32 px-5 sm:px-6 lg:px-8 overflow-hidden">
-        <div
-          className="absolute inset-0 pointer-events-none opacity-[0.025]"
-          style={{
-            backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)',
-            backgroundSize: '32px 32px',
-          }}
-        />
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-gradient-to-b from-[#635BFF]/12 via-transparent to-transparent rounded-full blur-[120px]" />
-
-        <div className="max-w-[1200px] mx-auto relative z-10">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="mb-16"
-          >
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-[#635BFF]/15 border border-[#635BFF]/25 text-[#a5a0ff] backfill-ui-radius text-[12px] tracking-[0.08em] uppercase mb-8" style={{ fontWeight: 600 }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-[#635BFF]" />
-              Backfill Shifts
-            </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.08] tracking-[-0.03em] mb-6 max-w-3xl" style={{ fontWeight: 600 }}>
-              Don't have scheduling software? Ours thinks for you.
-            </h2>
-            <div className="text-[16px] sm:text-[18px] text-[#8898AA] leading-[1.8] max-w-2xl space-y-5">
-              <p>
-                Backfill Shifts isn&apos;t asking you to change how you run your restaurant. It&apos;s asking you to stop doing one thing: the schedule in your head. Tell the AI what your week looks like. It drafts it, you approve it, and the coverage engine takes over from there.
-              </p>
-              <ul className="text-[#b0b8c8] space-y-2 list-none pl-0">
-                <li>&ldquo;Add a closing shift Friday, same crew as last week.&rdquo; Done.</li>
-                <li>&ldquo;Daniela can&apos;t do Tuesday — move her to Thursday.&rdquo; Done.</li>
-              </ul>
-              <p>
-                You&apos;re not learning software. You&apos;re having a conversation.
-              </p>
-            </div>
-          </motion.div>
-
-          {/* Product Screenshot */}
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.7, delay: 0.2 }}
-            className="mb-16"
-          >
-            <LandingBackfillShiftsInterface />
-          </motion.div>
-
-          {/* Features Grid */}
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[
-              {
-                title: 'AI schedule generation',
-                description: "Describe your week, your roles, your team. Backfill Shifts drafts the schedule. You approve, adjust, or just say what's wrong.",
-              },
-              {
-                title: 'Natural language edits',
-                description: "No forms, no dropdowns. Type or say the change, and the schedule updates. It's as fast as sending a text.",
-              },
-              {
-                title: 'Pattern learning',
-                description: 'The more you use it, the better it knows your operation. Recurring roles, preferred staff, shift windows — it stops asking what you always do.',
-              },
-              {
-                title: 'Real-time coverage board',
-                description: 'Every open shift, every in-progress fill attempt, every confirmation — across all locations — at a glance.',
-              },
-              {
-                title: 'Standby queue management',
-                description: 'Primary fill falls through? Your pre-ranked standby queue activates automatically. No second round of calls from you.',
-              },
-              {
-                title: 'Upgrade anytime',
-                description: 'Grow into a dedicated platform later? Everything ports over. No rebuilding from scratch.',
-              },
-            ].map((feature, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.06, duration: 0.5 }}
-                viewport={{ once: true }}
-                className="group p-6 backfill-ui-radius border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04] hover:border-[#635BFF]/30 transition-all duration-300"
-              >
-                <h3 className="text-[17px] tracking-[-0.01em] mb-2 text-white/90 group-hover:text-white transition-colors" style={{ fontWeight: 550 }}>{feature.title}</h3>
-                <p className="text-[14px] text-[#8898AA]/80 leading-[1.65] group-hover:text-[#8898AA] transition-colors">{feature.description}</p>
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Bottom note */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            transition={{ delay: 0.5 }}
-            className="mt-12 text-center"
-          >
-            <p className="text-white/30 text-[14px]">
-              Included for all Backfill customers. No additional cost.
-            </p>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* Integrations Section */}
-      <section id="integrations" className="py-20 sm:py-28 px-5 sm:px-6 lg:px-8 bg-[#fafbfd] relative overflow-hidden">
-        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
-        <div className="max-w-[900px] mx-auto text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-          >
-            <div className="text-[12px] tracking-[0.2em] text-[#635BFF] uppercase mb-5" style={{ fontWeight: 600 }}>
-              Integrations
-            </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.1] tracking-[-0.03em] mb-6 text-[#0A2540]" style={{ fontWeight: 600 }}>
-              Plug in. Go live in 24 hours.
-            </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#425466] mb-10 sm:mb-14 leading-[1.65]">
-              Already using scheduling software? Backfill connects directly so your shifts, roles, and employee data are always in sync.
-            </p>
-
-            <div className="grid grid-cols-2 sm:flex sm:flex-wrap justify-center gap-3 mb-10 sm:mb-14">
-              {['7shifts', 'Deputy', 'When I Work', 'Homebase'].map((integration) => (
-                <motion.div
-                  key={integration}
-                  whileHover={{ scale: 1.02, y: -1 }}
-                  className="px-6 py-4 bg-white border border-[#e2e8f0] backfill-ui-radius text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)] transition-all duration-300"
+                <p className="mb-6 text-[15px] leading-[1.7] text-[#425466]">
+                  {item.description}
+                </p>
+                <div
+                  className="inline-block rounded-[14px] border border-[#e2e8f0] bg-white/80 px-3 py-1.5 text-[12px] text-[#425466]"
                   style={{ fontWeight: 500 }}
                 >
-                  {integration}
-                </motion.div>
-              ))}
-            </div>
+                  {item.badge}
+                </div>
+              </div>
+            ))}
+          </div>
 
-            <p className="text-[15px] text-[#8898AA] max-w-lg mx-auto leading-[1.7]">
-              No manual data entry. No duplicate setup. Your employees, roles, and availability sync automatically.
+          <blockquote className="mt-16 max-w-2xl border-l-4 border-[#635BFF] pl-7 py-1">
+            <p
+              className="mb-4 text-[18px] italic leading-[1.65] text-[#0A2540] sm:text-[20px]"
+              style={{ fontWeight: 450 }}
+            >
+              &ldquo;I used to spend the first hour of every morning chasing
+              coverage. Now I check the app and it&apos;s already done.&rdquo;
             </p>
-          </motion.div>
+            <cite
+              className="text-[13px] tracking-[0.01em] text-[#8898AA] not-italic"
+              style={{ fontWeight: 500 }}
+            >
+              — Operations Manager, 3-location casual dining group, Los Angeles
+            </cite>
+          </blockquote>
         </div>
       </section>
 
-      {/* Pricing Section */}
-      <section id="pricing" className="relative bg-gradient-to-b from-[#060F1F] via-[#0B1A33] to-[#060F1F] text-white py-20 sm:py-32 px-5 sm:px-6 lg:px-8 overflow-hidden">
-        {/* Unique mesh gradient overlay for pricing */}
-        <div className="absolute inset-0 pointer-events-none" style={{
-          background: 'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,91,255,0.18) 0%, transparent 60%), radial-gradient(ellipse 60% 50% at 80% 100%, rgba(0,199,183,0.1) 0%, transparent 50%), radial-gradient(ellipse 40% 40% at 20% 50%, rgba(99,91,255,0.08) 0%, transparent 50%)',
-        }} />
+      <section
+        id="backfill-shifts"
+        className="relative overflow-hidden bg-[#0A2540] px-5 py-20 text-white sm:px-6 sm:py-32 lg:px-8"
+      >
         <div
-          className="absolute inset-0 pointer-events-none opacity-[0.04]"
+          className="pointer-events-none absolute inset-0 opacity-[0.025]"
           style={{
-            backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)',
-            backgroundSize: '24px 24px',
+            backgroundImage:
+              "radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)",
+            backgroundSize: "32px 32px",
           }}
         />
-        {/* Animated border glow at top */}
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#635BFF]/40 to-transparent" />
-        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#635BFF]/20 to-transparent" />
-        <div className="max-w-[900px] mx-auto relative z-10">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="text-center mb-16"
-          >
-            <div className="text-[12px] tracking-[0.2em] text-[#635BFF] uppercase mb-5" style={{ fontWeight: 600 }}>
-              Pricing
+        <div className="absolute left-1/2 top-0 h-[500px] w-[900px] -translate-x-1/2 rounded-full bg-gradient-to-b from-[#635BFF]/12 via-transparent to-transparent blur-[120px]" />
+
+        <div className="relative z-10 mx-auto max-w-[1200px]">
+          <div className="mb-16">
+            <div
+              className="mb-8 inline-flex items-center gap-2 rounded-[14px] border border-[#635BFF]/25 bg-[#635BFF]/15 px-3.5 py-1.5 text-[12px] uppercase tracking-[0.08em] text-[#a5a0ff]"
+              style={{ fontWeight: 600 }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[#635BFF]" />
+              Backfill Shifts
             </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.1] tracking-[-0.03em] mb-6" style={{ fontWeight: 600 }}>
-              You pay when we deliver.
+            <h2
+              className="mb-6 max-w-3xl text-[30px] leading-[1.08] tracking-[-0.03em] sm:text-[44px] lg:text-[52px]"
+              style={{ fontWeight: 600 }}
+            >
+              Don&apos;t have scheduling software? Ours thinks for you.
             </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#8898AA] leading-[1.65] max-w-lg mx-auto">
-              No monthly seat fees. No per-user subscriptions. Backfill charges like labor — when the work gets done.
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="bg-white/[0.04] p-7 sm:p-10 lg:p-12 rounded-3xl border border-white/[0.08] backdrop-blur-sm relative overflow-hidden"
-          >
-            {/* Subtle inner glow */}
-            <div className="absolute inset-0 pointer-events-none bg-gradient-to-br from-[#635BFF]/[0.06] via-transparent to-[#00C7B7]/[0.04] rounded-3xl" />
-            <div className="relative z-10">
-            <div className="text-center mb-10">
-              <div className="text-[56px] sm:text-[72px] tracking-[-0.04em] mb-1" style={{ fontWeight: 600 }}>$20</div>
-              <div className="text-[16px] text-[#8898AA]" style={{ fontWeight: 450 }}>per successfully filled shift</div>
+            <div className="max-w-2xl space-y-5 text-[16px] leading-[1.8] text-[#8898AA] sm:text-[18px]">
+              <p>
+                Backfill Shifts isn&apos;t asking you to change how you run your
+                restaurant. It&apos;s asking you to stop doing one thing: the
+                schedule in your head. Tell the AI what your week looks like.
+                It drafts it, you approve it, and the coverage engine takes
+                over from there.
+              </p>
+              <ul className="list-none space-y-2 pl-0 text-[#b0b8c8]">
+                <li>
+                  &ldquo;Add a closing shift Friday, same crew as last
+                  week.&rdquo; Done.
+                </li>
+                <li>
+                  &ldquo;Daniela can&apos;t do Tuesday — move her to Thursday.&rdquo;
+                  Done.
+                </li>
+              </ul>
+              <p>
+                You&apos;re not learning software. You&apos;re having a
+                conversation.
+              </p>
             </div>
+          </div>
 
-            <div className="mt-10 text-center">
-              <Link
-                href="/try"
-                className="group px-7 py-3.5 bg-[#635BFF] text-white backfill-ui-radius transition-all duration-300 text-[15px] inline-flex items-center gap-2 shadow-[0_4px_20px_rgba(99,91,255,0.4)] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)] hover:translate-y-[-1px]"
-                style={{ fontWeight: 500 }}
+          <div className="mb-16">
+            <LandingBackfillShiftsInterface />
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {SHIFT_FEATURES.map((feature) => (
+              <div
+                key={feature.title}
+                className="group rounded-[24px] border border-white/[0.06] bg-white/[0.02] p-6 transition-all duration-300 hover:border-[#635BFF]/30 hover:bg-white/[0.04]"
               >
-                Get Started Free
-                <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-              </Link>
-            </div>
-            </div>
-          </motion.div>
+                <h3
+                  className="mb-2 text-[17px] tracking-[-0.01em] text-white/90 transition-colors group-hover:text-white"
+                  style={{ fontWeight: 550 }}
+                >
+                  {feature.title}
+                </h3>
+                <p className="text-[14px] leading-[1.65] text-[#8898AA]/80 transition-colors group-hover:text-[#8898AA]">
+                  {feature.description}
+                </p>
+              </div>
+            ))}
+          </div>
 
-          {/* Pricing quote */}
-          <motion.blockquote
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="mt-10 border-l-4 border-[#635BFF]/60 pl-7 py-1 max-w-3xl mx-auto"
-          >
-            <p className="text-[17px] sm:text-[19px] text-white/80 leading-[1.65] italic mb-4" style={{ fontWeight: 400 }}>
-              &ldquo;The first month I used Backfill I filled 11 shifts I would have had to handle manually. At 45 minutes each, that&apos;s over 8 hours back. The math wasn&apos;t hard.&rdquo;
+          <div className="mt-12 text-center">
+            <p className="text-[14px] text-white/30">
+              Included for all Backfill customers. No additional cost.
             </p>
-            <cite className="not-italic text-[13px] text-[#8898AA] tracking-[0.01em]" style={{ fontWeight: 500 }}>
-              — GM, fast casual restaurants, 4 locations
-            </cite>
-          </motion.blockquote>
+          </div>
         </div>
       </section>
 
-      {/* FAQ Section */}
-      <section id="faq" className="py-20 sm:py-32 px-5 sm:px-6 lg:px-8 bg-[#fafbfd] relative">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
-        <div className="max-w-[900px] mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="mb-16"
+      <section
+        id="integrations"
+        className="relative overflow-hidden bg-[#fafbfd] px-5 py-20 sm:px-6 sm:py-28 lg:px-8"
+      >
+        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
+        <div className="mx-auto max-w-[900px] text-center">
+          <div
+            className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
+            style={{ fontWeight: 600 }}
           >
-            <div className="text-[12px] tracking-[0.2em] text-[#635BFF] uppercase mb-5" style={{ fontWeight: 600 }}>
+            Integrations
+          </div>
+          <h2
+            className="mb-6 text-[30px] leading-[1.1] tracking-[-0.03em] text-[#0A2540] sm:text-[44px] lg:text-[52px]"
+            style={{ fontWeight: 600 }}
+          >
+            Plug in. Go live in 24 hours.
+          </h2>
+          <p className="mb-10 text-[16px] leading-[1.65] text-[#425466] sm:mb-14 sm:text-[18px]">
+            Already using scheduling software? Backfill connects directly so
+            your shifts, roles, and employee data are always in sync.
+          </p>
+
+          <div className="mb-10 grid grid-cols-2 justify-center gap-3 sm:mb-14 sm:flex sm:flex-wrap">
+            {INTEGRATIONS.map((integration) => (
+              <div
+                key={integration}
+                className="rounded-[14px] border border-[#e2e8f0] bg-white px-6 py-4 text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)]"
+                style={{ fontWeight: 500 }}
+              >
+                {integration}
+              </div>
+            ))}
+          </div>
+
+          <p className="mx-auto max-w-lg text-[15px] leading-[1.7] text-[#8898AA]">
+            No manual data entry. No duplicate setup. Your employees, roles,
+            and availability sync automatically.
+          </p>
+        </div>
+      </section>
+
+      <section
+        id="pricing"
+        className="relative overflow-hidden bg-gradient-to-b from-[#060F1F] via-[#0B1A33] to-[#060F1F] px-5 py-20 text-white sm:px-6 sm:py-32 lg:px-8"
+      >
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,91,255,0.18) 0%, transparent 60%), radial-gradient(ellipse 60% 50% at 80% 100%, rgba(0,199,183,0.1) 0%, transparent 50%), radial-gradient(ellipse 40% 40% at 20% 50%, rgba(99,91,255,0.08) 0%, transparent 50%)",
+          }}
+        />
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)",
+            backgroundSize: "24px 24px",
+          }}
+        />
+        <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-[#635BFF]/40 to-transparent" />
+        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#635BFF]/20 to-transparent" />
+
+        <div className="relative z-10 mx-auto max-w-[900px]">
+          <div className="mb-16 text-center">
+            <div
+              className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
+              style={{ fontWeight: 600 }}
+            >
+              Pricing
+            </div>
+            <h2
+              className="mb-6 text-[30px] leading-[1.1] tracking-[-0.03em] sm:text-[44px] lg:text-[52px]"
+              style={{ fontWeight: 600 }}
+            >
+              You pay when we deliver.
+            </h2>
+            <p className="mx-auto max-w-lg text-[16px] leading-[1.65] text-[#8898AA] sm:text-[18px]">
+              No monthly seat fees. No per-user subscriptions. Backfill charges
+              like labor — when the work gets done.
+            </p>
+          </div>
+
+          <div className="relative overflow-hidden rounded-[32px] border border-white/[0.08] bg-white/[0.04] p-7 backdrop-blur-sm sm:p-10 lg:p-12">
+            <div className="absolute inset-0 rounded-[32px] bg-gradient-to-br from-[#635BFF]/[0.06] via-transparent to-[#00C7B7]/[0.04]" />
+            <div className="relative z-10">
+              <div className="mb-10 text-center">
+                <div
+                  className="mb-1 text-[56px] tracking-[-0.04em] sm:text-[72px]"
+                  style={{ fontWeight: 600 }}
+                >
+                  $20
+                </div>
+                <div
+                  className="text-[16px] text-[#8898AA]"
+                  style={{ fontWeight: 450 }}
+                >
+                  per successfully filled shift
+                </div>
+              </div>
+
+              <div className="mt-10 text-center">
+                <Link
+                  href="/try"
+                  className="group inline-flex items-center gap-2 rounded-[14px] bg-[#635BFF] px-7 py-3.5 text-[15px] text-white shadow-[0_4px_20px_rgba(99,91,255,0.4)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)]"
+                  style={{ fontWeight: 500 }}
+                >
+                  Get Started Free
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </Link>
+              </div>
+            </div>
+          </div>
+
+          <blockquote className="mx-auto mt-10 max-w-3xl border-l-4 border-[#635BFF]/60 pl-7 py-1">
+            <p
+              className="mb-4 text-[17px] italic leading-[1.65] text-white/80 sm:text-[19px]"
+              style={{ fontWeight: 400 }}
+            >
+              &ldquo;The first month I used Backfill I filled 11 shifts I would
+              have had to handle manually. At 45 minutes each, that&apos;s over
+              8 hours back. The math wasn&apos;t hard.&rdquo;
+            </p>
+            <cite
+              className="text-[13px] tracking-[0.01em] text-[#8898AA] not-italic"
+              style={{ fontWeight: 500 }}
+            >
+              — GM, fast casual restaurants, 4 locations
+            </cite>
+          </blockquote>
+        </div>
+      </section>
+
+      <section className="relative bg-[#fafbfd] px-5 py-20 sm:px-6 sm:py-32 lg:px-8">
+        <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
+        <div className="mx-auto max-w-[900px]">
+          <div className="mb-16">
+            <div
+              className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
+              style={{ fontWeight: 600 }}
+            >
               FAQ
             </div>
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[52px] leading-[1.1] tracking-[-0.03em] mb-5 text-[#0A2540]" style={{ fontWeight: 600 }}>
+            <h2
+              className="mb-5 text-[30px] leading-[1.1] tracking-[-0.03em] text-[#0A2540] sm:text-[44px] lg:text-[52px]"
+              style={{ fontWeight: 600 }}
+            >
               Questions operators actually ask.
             </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#425466]">
+            <p className="text-[16px] text-[#425466] sm:text-[18px]">
               Straight answers. No runaround.
             </p>
-          </motion.div>
+          </div>
 
           <LandingFaq />
         </div>
       </section>
 
-      {/* Final CTA */}
-      <section className="relative bg-[#0A2540] text-white py-24 sm:py-36 px-5 sm:px-6 lg:px-8 overflow-hidden">
+      <section className="relative overflow-hidden bg-[#0A2540] px-5 py-24 text-white sm:px-6 sm:py-36 lg:px-8">
         <div
-          className="absolute inset-0 pointer-events-none opacity-[0.02]"
+          className="pointer-events-none absolute inset-0 opacity-[0.02]"
           style={{
-            backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)',
-            backgroundSize: '32px 32px',
+            backgroundImage:
+              "radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)",
+            backgroundSize: "32px 32px",
           }}
         />
         <div className="absolute inset-0">
-          <div className="absolute top-[-200px] left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-gradient-to-b from-[#635BFF]/20 via-[#0070F3]/10 to-transparent rounded-full blur-[120px]" />
+          <div className="absolute left-1/2 top-[-200px] h-[500px] w-[1000px] -translate-x-1/2 rounded-full bg-gradient-to-b from-[#635BFF]/20 via-[#0070F3]/10 to-transparent blur-[120px]" />
         </div>
 
-        <div className="max-w-[700px] mx-auto text-center relative z-10">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
+        <div className="relative z-10 mx-auto max-w-[700px] text-center">
+          <h2
+            className="mb-6 text-[30px] leading-[1.08] tracking-[-0.03em] sm:text-[44px] lg:text-[56px]"
+            style={{ fontWeight: 600 }}
           >
-            <h2 className="text-[30px] sm:text-[44px] lg:text-[56px] leading-[1.08] tracking-[-0.03em] mb-6" style={{ fontWeight: 600 }}>
-              Ready to stop making those 6 AM calls?
-            </h2>
-            <p className="text-[16px] sm:text-[18px] text-[#8898AA] mb-10 leading-[1.65]">
-              Join the operators who let Backfill handle the scramble.
-            </p>
-            <Link
-              href="/try"
-              className="group px-8 py-4 bg-white text-[#0A2540] backfill-ui-radius hover:bg-white/95 transition-all text-[16px] inline-flex items-center gap-2.5 shadow-[0_4px_20px_rgba(255,255,255,0.15)] hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)] hover:translate-y-[-1px]"
-              style={{ fontWeight: 550 }}
-            >
-              Start filling callouts autonomously
-              <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-          </motion.div>
+            Ready to stop making those 6 AM calls?
+          </h2>
+          <p className="mb-10 text-[16px] leading-[1.65] text-[#8898AA] sm:text-[18px]">
+            Join the operators who let Backfill handle the scramble.
+          </p>
+          <Link
+            href="/try"
+            className="group inline-flex items-center gap-2.5 rounded-[14px] bg-white px-8 py-4 text-[16px] text-[#0A2540] shadow-[0_4px_20px_rgba(255,255,255,0.15)] transition-all hover:-translate-y-[1px] hover:bg-white/95 hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)]"
+            style={{ fontWeight: 550 }}
+          >
+            Start filling callouts autonomously
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          </Link>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="bg-white py-12 sm:py-16 px-5 sm:px-6 lg:px-8 border-t border-[#f0f0f5]">
-        <div className="max-w-[1200px] mx-auto">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-10 mb-14">
+      <footer className="border-t border-[#f0f0f5] bg-white px-5 py-12 sm:px-6 sm:py-16 lg:px-8">
+        <div className="mx-auto max-w-[1200px]">
+          <div className="mb-14 grid grid-cols-2 gap-10 md:grid-cols-4">
             <div className="col-span-2 md:col-span-1">
-              <div className="text-[20px] tracking-[-0.02em] text-[#0A2540] mb-3" style={{ fontWeight: 620 }}>Backfill</div>
-              <p className="text-[14px] text-[#8898AA] leading-[1.65] max-w-[200px]">
-                AI-powered shift coverage for teams that can't afford service interruptions.
+              <div
+                className="mb-3 text-[20px] tracking-[-0.02em] text-[#0A2540]"
+                style={{ fontWeight: 620 }}
+              >
+                Backfill
+              </div>
+              <p className="max-w-[200px] text-[14px] leading-[1.65] text-[#8898AA]">
+                AI-powered shift coverage for teams that can&apos;t afford
+                service interruptions.
               </p>
             </div>
             <div>
-              <div className="text-[13px] text-[#8898AA] uppercase tracking-[0.1em] mb-4" style={{ fontWeight: 550 }}>Product</div>
+              <div
+                className="mb-4 text-[13px] uppercase tracking-[0.1em] text-[#8898AA]"
+                style={{ fontWeight: 550 }}
+              >
+                Product
+              </div>
               <div className="space-y-3">
-                {[
-                  { label: 'How It Works', href: '#product' },
-                  { label: 'Backfill Shifts', href: '#backfill-shifts' },
-                  { label: 'Integrations', href: '#integrations' },
-                  { label: 'Pricing', href: '#pricing' },
-                ].map((link) => (
+                {FOOTER_PRODUCT_LINKS.map((link) => (
                   <div key={link.label}>
-                    <a 
-                      href={link.href} 
-                      className="text-[14px] text-[#425466] hover:text-[#0A2540] transition-colors" 
+                    <a
+                      href={link.href}
+                      className="text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]"
                       style={{ fontWeight: 420 }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        const element = document.querySelector(link.href);
-                        if (element) {
-                          element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }
-                      }}
                     >
                       {link.label}
                     </a>
@@ -760,33 +666,62 @@ export default function LandingPage() {
               </div>
             </div>
             <div>
-              <div className="text-[13px] text-[#8898AA] uppercase tracking-[0.1em] mb-4" style={{ fontWeight: 550 }}>Company</div>
+              <div
+                className="mb-4 text-[13px] uppercase tracking-[0.1em] text-[#8898AA]"
+                style={{ fontWeight: 550 }}
+              >
+                Company
+              </div>
               <div className="space-y-3">
-                {['About', 'Blog', 'Careers', 'Contact'].map((link) => (
+                {FOOTER_COMPANY_LINKS.map((link) => (
                   <div key={link}>
-                    <a href="#" className="text-[14px] text-[#425466] hover:text-[#0A2540] transition-colors" style={{ fontWeight: 420 }}>{link}</a>
+                    <a
+                      href="#"
+                      className="text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]"
+                      style={{ fontWeight: 420 }}
+                    >
+                      {link}
+                    </a>
                   </div>
                 ))}
               </div>
             </div>
             <div>
-              <div className="text-[13px] text-[#8898AA] uppercase tracking-[0.1em] mb-4" style={{ fontWeight: 550 }}>Legal</div>
+              <div
+                className="mb-4 text-[13px] uppercase tracking-[0.1em] text-[#8898AA]"
+                style={{ fontWeight: 550 }}
+              >
+                Legal
+              </div>
               <div className="space-y-3">
-                {['Privacy', 'Terms', 'Security'].map((link) => (
+                {FOOTER_LEGAL_LINKS.map((link) => (
                   <div key={link}>
-                    <a href="#" className="text-[14px] text-[#425466] hover:text-[#0A2540] transition-colors" style={{ fontWeight: 420 }}>{link}</a>
+                    <a
+                      href="#"
+                      className="text-[14px] text-[#425466] transition-colors hover:text-[#0A2540]"
+                      style={{ fontWeight: 420 }}
+                    >
+                      {link}
+                    </a>
                   </div>
                 ))}
               </div>
             </div>
           </div>
-          <div className="pt-8 border-t border-[#f0f0f5] flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex flex-col items-center justify-between gap-4 border-t border-[#f0f0f5] pt-8 md:flex-row">
             <div className="text-[13px] text-[#8898AA]" style={{ fontWeight: 400 }}>
-              © <span suppressHydrationWarning>{currentYear}</span> Backfill Works, Inc. All rights reserved.
+              © {currentYear} Backfill Works, Inc. All rights reserved.
             </div>
             <div className="flex items-center gap-6">
-              {['Twitter', 'LinkedIn'].map((social) => (
-                <a key={social} href="#" className="text-[13px] text-[#8898AA] hover:text-[#425466] transition-colors" style={{ fontWeight: 420 }}>{social}</a>
+              {FOOTER_SOCIAL_LINKS.map((social) => (
+                <a
+                  key={social}
+                  href="#"
+                  className="text-[13px] text-[#8898AA] transition-colors hover:text-[#425466]"
+                  style={{ fontWeight: 420 }}
+                >
+                  {social}
+                </a>
               ))}
             </div>
           </div>

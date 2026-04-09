@@ -316,13 +316,14 @@ export default function SettingsAvailabilitySection({
   businessTimezone: string | null;
   dark: boolean;
 }) {
-  const [status, setStatus] = useState<"loading" | "ready" | "unlinked" | "error">(
+  const [status, setStatus] = useState<"loading" | "ready" | "error">(
     businessId ? "loading" : "error",
   );
   const [employeeName, setEmployeeName] = useState<string | null>(null);
   const [timezone, setTimezone] = useState<string>(businessTimezone ?? "UTC");
   const [dayStates, setDayStates] = useState<Record<number, DayState>>(createDefaultDayMap);
   const [baseline, setBaseline] = useState<Record<number, DayState>>(createDefaultDayMap);
+  const [showProvisioningHint, setShowProvisioningHint] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -349,6 +350,7 @@ export default function SettingsAvailabilitySection({
         }
         const nextState = buildStateFromRules(availability);
         setEmployeeName(availability.employee_name);
+        setShowProvisioningHint(false);
         setTimezone(
           availability.rules.length > 0
             ? availability.timezone || businessTimezone || "UTC"
@@ -366,10 +368,12 @@ export default function SettingsAvailabilitySection({
             ? error.message
             : "Could not load your availability right now.";
         if (message === "employee_self_not_found") {
-          setStatus("unlinked");
+          setEmployeeName(null);
+          setShowProvisioningHint(true);
           setFeedback(null);
           setDayStates(createDefaultDayMap());
           setBaseline(createDefaultDayMap());
+          setStatus("ready");
           return;
         }
         setStatus("error");
@@ -427,6 +431,7 @@ export default function SettingsAvailabilitySection({
         const response = await replaceSelfEmployeeAvailability(resolvedBusinessId, payload);
         const nextState = buildStateFromRules(response);
         setEmployeeName(response.employee_name);
+        setShowProvisioningHint(false);
         setTimezone(
           response.rules.length > 0 ? response.timezone || timezone : timezone,
         );
@@ -450,28 +455,6 @@ export default function SettingsAvailabilitySection({
       <div className={`flex items-center gap-2 py-6 text-[13px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}>
         <Loader2 size={15} className="animate-spin" />
         Loading availability…
-      </div>
-    );
-  }
-
-  if (status === "unlinked") {
-    return (
-      <div
-        className={`rounded-[24px] border p-5 ${
-          dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#FAFBFC]"
-        }`}
-      >
-        <div className="flex items-start gap-3">
-          <Info size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
-          <div>
-            <p className={`text-[13px] ${dark ? "text-white" : "text-[#0A2540]"}`} style={{ fontWeight: 560 }}>
-              No linked employee profile yet
-            </p>
-            <p className={`mt-1 text-[12px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 420 }}>
-              We could not match this account to an employee in the current business. Add the employee to the roster with the same phone or email, then return here to set general availability.
-            </p>
-          </div>
-        </div>
       </div>
     );
   }
@@ -533,6 +516,27 @@ export default function SettingsAvailabilitySection({
           }}
         >
           {feedback.message}
+        </div>
+      ) : null}
+
+      {showProvisioningHint ? (
+        <div
+          className={`rounded-[20px] border px-4 py-3 ${
+            dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#FAFBFC]"
+          }`}
+          role="status"
+        >
+          <div className="flex items-start gap-3">
+            <Info size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
+            <div>
+              <p className={`text-[13px] ${dark ? "text-white" : "text-[#0A2540]"}`} style={{ fontWeight: 560 }}>
+                Availability is ready to set up
+              </p>
+              <p className={`mt-1 text-[12px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 420 }}>
+                We&apos;ll create your employee profile automatically the first time you save availability for this business.
+              </p>
+            </div>
+          </div>
         </div>
       ) : null}
 

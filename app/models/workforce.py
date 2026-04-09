@@ -16,10 +16,12 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "employees"
     __table_args__ = (
         UniqueConstraint("business_id", "external_ref", name="uq_employees_business_id_external_ref"),
+        UniqueConstraint("business_id", "user_id", name="uq_employees_business_id_user_id"),
         Index("ix_employees_business_id_status", "business_id", "status"),
     )
 
     business_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     external_ref: Mapped[Optional[str]] = mapped_column(String(255))
     employee_number: Mapped[Optional[str]] = mapped_column(String(80))
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)

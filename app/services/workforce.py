@@ -143,32 +143,88 @@ async def _list_employee_availability_rules(
     return list(result.scalars().all())
 
 
-async def _resolve_self_service_employee(
+def _self_service_employee_name(
+    *,
+    full_name: str | None,
+    email: str | None,
+    phone_e164: str | None,
+) -> str:
+    normalized_name = full_name.strip() if full_name else ""
+    if normalized_name:
+        return normalized_name
+
+    normalized_email = email.strip() if email else ""
+    if normalized_email:
+        return normalized_email
+
+    normalized_phone = phone_e164.strip() if phone_e164 else ""
+    if normalized_phone:
+        return normalized_phone
+
+    return "Backfill User"
+
+
+def _pick_linkable_employee_match(
+    matches: list[Employee],
+    *,
+    user_id: UUID | None,
+) -> Employee | None:
+    if user_id is None:
+        return matches[0] if len(matches) == 1 else None
+
+    eligible = [
+        employee
+        for employee in matches
+        if employee.user_id is None or employee.user_id == user_id
+    ]
+    return eligible[0] if len(eligible) == 1 else None
+
+
+async def _find_self_service_employee(
     session: AsyncSession,
     business_id: UUID,
     *,
+    user_id: UUID | None,
     email: str | None,
     phone_e164: str | None,
     full_name: str | None,
-) -> Employee:
+) -> Employee | None:
+    if user_id is not None:
+        linked_employee = await session.scalar(
+            _employee_query().where(
+                Employee.business_id == business_id,
+                Employee.user_id == user_id,
+            )
+        )
+        if linked_employee is not None:
+            return linked_employee
+
     normalized_phone = phone_e164.strip() if phone_e164 else ""
     if normalized_phone:
-        phone_match = await session.scalar(
+        phone_result = await session.execute(
             _employee_query().where(
                 Employee.business_id == business_id,
                 Employee.phone_e164 == normalized_phone,
             )
+        )
+        phone_match = _pick_linkable_employee_match(
+            list(phone_result.scalars().all()),
+            user_id=user_id,
         )
         if phone_match is not None:
             return phone_match
 
     normalized_email = email.strip().lower() if email else ""
     if normalized_email:
-        email_match = await session.scalar(
+        email_result = await session.execute(
             _employee_query().where(
                 Employee.business_id == business_id,
                 func.lower(Employee.email) == normalized_email,
             )
+        )
+        email_match = _pick_linkable_employee_match(
+            list(email_result.scalars().all()),
+            user_id=user_id,
         )
         if email_match is not None:
             return email_match
@@ -181,11 +237,93 @@ async def _resolve_self_service_employee(
                 Employee.full_name == normalized_name,
             )
         )
-        matches = list(result.scalars().all())
-        if len(matches) == 1:
-            return matches[0]
+        name_match = _pick_linkable_employee_match(
+            list(result.scalars().all()),
+            user_id=user_id,
+        )
+        if name_match is not None:
+            return name_match
+
+    return None
+
+
+async def _resolve_self_service_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    user_id: UUID | None,
+    email: str | None,
+    phone_e164: str | None,
+    full_name: str | None,
+) -> Employee:
+    employee = await _find_self_service_employee(
+        session,
+        business_id,
+        user_id=user_id,
+        email=email,
+        phone_e164=phone_e164,
+        full_name=full_name,
+    )
+    if employee is not None:
+        return employee
 
     raise LookupError("employee_self_not_found")
+
+
+async def _link_employee_to_user(
+    session: AsyncSession,
+    employee: Employee,
+    *,
+    user_id: UUID | None,
+) -> Employee:
+    if user_id is None or employee.user_id == user_id:
+        return employee
+    if employee.user_id is not None:
+        raise LookupError("employee_self_link_conflict")
+    employee.user_id = user_id
+    await session.flush()
+    return employee
+
+
+async def _get_or_create_self_service_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    user_id: UUID | None,
+    email: str | None,
+    phone_e164: str | None,
+    full_name: str | None,
+) -> Employee:
+    employee = await _find_self_service_employee(
+        session,
+        business_id,
+        user_id=user_id,
+        email=email,
+        phone_e164=phone_e164,
+        full_name=full_name,
+    )
+    if employee is not None:
+        return await _link_employee_to_user(session, employee, user_id=user_id)
+
+    employee = await create_employee(
+        session,
+        business_id,
+        EmployeeCreate(
+            full_name=_self_service_employee_name(
+                full_name=full_name,
+                email=email,
+                phone_e164=phone_e164,
+            ),
+            phone_e164=phone_e164.strip() if phone_e164 else None,
+            email=email.strip().lower() if email else None,
+            employee_metadata={
+                "source": "self_service_availability",
+                "auto_created_from_user": True,
+            },
+        ),
+        linked_user_id=user_id,
+    )
+    return employee
 
 
 def _normalize_import_header(value: object) -> str:
@@ -589,7 +727,13 @@ async def _replace_employee_locations(
             existing.location_metadata = item.location_metadata or {}
 
 
-async def create_employee(session: AsyncSession, business_id: UUID, payload: EmployeeCreate) -> Employee:
+async def create_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    payload: EmployeeCreate,
+    *,
+    linked_user_id: UUID | None = None,
+) -> Employee:
     await _require_business(session, business_id)
     primary_business_location: Location | None = None
     if payload.primary_location_id is not None:
@@ -599,6 +743,7 @@ async def create_employee(session: AsyncSession, business_id: UUID, payload: Emp
 
     employee = Employee(
         business_id=business_id,
+        user_id=linked_user_id,
         external_ref=payload.external_ref,
         employee_number=payload.employee_number,
         full_name=payload.full_name,
@@ -969,6 +1114,7 @@ async def get_self_employee_availability_rules(
     session: AsyncSession,
     business_id: UUID,
     *,
+    user_id: UUID | None,
     email: str | None,
     phone_e164: str | None,
     full_name: str | None,
@@ -976,6 +1122,7 @@ async def get_self_employee_availability_rules(
     employee = await _resolve_self_service_employee(
         session,
         business_id,
+        user_id=user_id,
         email=email,
         phone_e164=phone_e164,
         full_name=full_name,
@@ -988,14 +1135,16 @@ async def replace_self_employee_availability_rules(
     session: AsyncSession,
     business_id: UUID,
     *,
+    user_id: UUID | None,
     email: str | None,
     phone_e164: str | None,
     full_name: str | None,
     payload: EmployeeAvailabilityRuleReplace,
 ) -> tuple[Employee, list[EmployeeAvailabilityRule]]:
-    employee = await _resolve_self_service_employee(
+    employee = await _get_or_create_self_service_employee(
         session,
         business_id,
+        user_id=user_id,
         email=email,
         phone_e164=phone_e164,
         full_name=full_name,

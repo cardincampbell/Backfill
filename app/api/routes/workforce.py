@@ -316,6 +316,7 @@ async def get_self_employee_availability_rules(
         employee, rules = await workforce.get_self_employee_availability_rules(
             session,
             business_id,
+            user_id=auth_ctx.user.id,
             email=auth_ctx.user.email,
             phone_e164=auth_ctx.user.primary_phone_e164,
             full_name=auth_ctx.user.full_name,
@@ -347,6 +348,7 @@ async def replace_self_employee_availability_rules(
         employee, rules = await workforce.replace_self_employee_availability_rules(
             session,
             business_id,
+            user_id=auth_ctx.user.id,
             email=auth_ctx.user.email,
             phone_e164=auth_ctx.user.primary_phone_e164,
             full_name=auth_ctx.user.full_name,

@@ -12,6 +12,7 @@ from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
 from app.schemas.workforce import (
+    EmployeeAvailabilityRuleReplace,
     EmployeeAvailabilityRuleRead,
     EmployeeBulkImportRead,
     EmployeeEnrollmentRead,
@@ -23,6 +24,7 @@ from app.schemas.workforce import (
     SelfEmployeeAvailabilityRead,
 )
 from app.services.auth import AuthContext
+from app.services import workforce
 from app.services.workforce import build_employee_import_template, parse_employee_import_file
 
 
@@ -273,11 +275,13 @@ def test_get_self_employee_availability_route_returns_rules(monkeypatch):
         _session,
         incoming_business_id,
         *,
+        user_id,
         email,
         phone_e164,
         full_name,
     ):
         assert incoming_business_id == business_id
+        assert user_id is not None
         assert email == "owner@example.com"
         assert phone_e164 == "+15555550100"
         assert full_name == "Owner User"
@@ -358,12 +362,14 @@ def test_replace_self_employee_availability_route_returns_rules(monkeypatch):
         _session,
         incoming_business_id,
         *,
+        user_id,
         email,
         phone_e164,
         full_name,
         payload,
     ):
         assert incoming_business_id == business_id
+        assert user_id is not None
         assert email == "owner@example.com"
         assert phone_e164 == "+15555550100"
         assert full_name == "Owner User"
@@ -458,6 +464,98 @@ def test_replace_self_employee_availability_route_returns_rules(monkeypatch):
         assert fake_session.commits == 1
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_replace_self_employee_availability_rules_creates_employee_when_unlinked(monkeypatch):
+    business_id = uuid4()
+    user_id = uuid4()
+    employee_id = uuid4()
+    captured: dict[str, object] = {}
+
+    async def fake_find_self_employee(
+        _session,
+        incoming_business_id,
+        *,
+        user_id: object,
+        email: object,
+        phone_e164: object,
+        full_name: object,
+    ):
+        assert incoming_business_id == business_id
+        assert user_id is not None
+        assert email == "owner@example.com"
+        assert phone_e164 == "+15555550100"
+        assert full_name == "Owner User"
+        return None
+
+    async def fake_create_employee(
+        _session,
+        incoming_business_id,
+        payload,
+        *,
+        linked_user_id=None,
+    ):
+        assert incoming_business_id == business_id
+        captured["payload"] = payload
+        captured["linked_user_id"] = linked_user_id
+        return EmployeeRead(
+            id=employee_id,
+            business_id=business_id,
+            primary_location_id=None,
+            external_ref=None,
+            employee_number=None,
+            full_name=payload.full_name,
+            preferred_name=None,
+            phone_e164=payload.phone_e164,
+            email=payload.email,
+            status="active",
+            employment_type=None,
+            hire_date=None,
+            termination_date=None,
+            notes=None,
+            employee_metadata=payload.employee_metadata,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    async def fake_replace_rules(_session, incoming_business_id, incoming_employee_id, payload):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return []
+
+    monkeypatch.setattr(
+        "app.services.workforce._find_self_service_employee",
+        fake_find_self_employee,
+    )
+    monkeypatch.setattr(
+        "app.services.workforce.create_employee",
+        fake_create_employee,
+    )
+    monkeypatch.setattr(
+        "app.services.workforce.replace_employee_availability_rules",
+        fake_replace_rules,
+    )
+
+    employee, rules = await workforce.replace_self_employee_availability_rules(
+        object(),
+        business_id,
+        user_id=user_id,
+        email="owner@example.com",
+        phone_e164="+15555550100",
+        full_name="Owner User",
+        payload=EmployeeAvailabilityRuleReplace(rules=[]),
+    )
+
+    assert employee.id == employee_id
+    assert rules == []
+    payload = captured["payload"]
+    assert payload.full_name == "Owner User"
+    assert payload.email == "owner@example.com"
+    assert payload.phone_e164 == "+15555550100"
+    assert payload.employee_metadata["source"] == "self_service_availability"
+    assert payload.employee_metadata["auto_created_from_user"] is True
+    assert captured["linked_user_id"] == user_id
 
 
 def test_create_employee_route_records_audit(monkeypatch):
