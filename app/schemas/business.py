@@ -103,6 +103,13 @@ class LocationDeleteResponse(BaseSchema):
     location_id: UUID
 
 
+class LocationDeleteReadinessRead(BaseSchema):
+    business_id: UUID
+    location_id: UUID
+    can_delete: bool
+    reason: Optional[str] = None
+
+
 class RoleCreate(BaseSchema):
     code: Optional[str] = None
     name: str

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, Lock, MapPin, Plus, Tag, X } from "lucide-react";
+import { AlertCircle, Lock, MapPin, Plus, Tag, Trash2, X } from "lucide-react";
 
 import type {
   BusinessLocation,
@@ -25,6 +25,13 @@ export type LocationRoleEditorFeedback = {
   tone: "success" | "error";
   message: string;
 } | null;
+
+export type LocationDeleteState = {
+  canDelete: boolean;
+  checking?: boolean;
+  deleting?: boolean;
+  reason?: string | null;
+};
 
 function RoleTag({
   dark,
@@ -95,7 +102,9 @@ export function LocationRoleEditor({
   loading,
   saving,
   feedback,
+  deleteState,
   onClose,
+  onDelete,
   onSave,
   onCreateRole,
 }: {
@@ -107,7 +116,9 @@ export function LocationRoleEditor({
   loading: boolean;
   saving: boolean;
   feedback: LocationRoleEditorFeedback;
+  deleteState?: LocationDeleteState;
   onClose(): void;
+  onDelete?(): void;
   onSave(roleIds: string[], locationShiftPresets: ShiftDefault[] | null): void;
   onCreateRole(name: string): Promise<BusinessRole>;
 }) {
@@ -156,6 +167,9 @@ export function LocationRoleEditor({
   const borderClass = dark ? "border-white/[0.06]" : "border-[#F0F0F5]";
   const subtleBorderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
   const subtleSurfaceClass = dark ? "bg-white/[0.04]" : "bg-[#F7F8FA]";
+  const deleteTooltip = deleteState?.canDelete
+    ? null
+    : deleteState?.reason ?? "This location cannot be removed right now.";
 
   const handleShiftDefaultsChange = (nextPresets: ShiftDefault[]) => {
     setUseBusinessDefaults(false);
@@ -473,7 +487,7 @@ export function LocationRoleEditor({
           </div>
 
           <div>
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex items-start justify-between gap-4">
               <div>
                 <h3
                   className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
@@ -485,52 +499,92 @@ export function LocationRoleEditor({
                   className={`mt-1 text-[12px] ${textSecondary}`}
                   style={{ fontWeight: 420 }}
                 >
-                  This location uses the business defaults unless you customize them here.
+                  This location uses the business defaults unless you customize them here. Changes only affect future shifts created for this location.
                 </p>
               </div>
+              {!useBusinessDefaults ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseBusinessDefaults(true);
+                    setDraftShiftDefaults(
+                      normalizeShiftDefaults(shiftDefaults?.business_presets ?? null),
+                    );
+                  }}
+                  className="shrink-0 text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                  style={{ fontWeight: 520 }}
+                >
+                  Reset to business defaults
+                </button>
+              ) : null}
             </div>
 
             <div
-              className={`mb-4 rounded-xl border px-4 py-3 ${
+              className={`rounded-xl border p-3 ${
                 dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#F7F8FA]"
               }`}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                    {useBusinessDefaults
-                      ? "Using business defaults"
-                      : "Location-specific overrides"}
-                  </p>
-                  <p className={`mt-0.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                    {useBusinessDefaults
-                      ? "Edit any shift below to create a location-specific override."
-                      : "These overrides only affect future shifts created for this location."}
-                  </p>
-                </div>
-                {!useBusinessDefaults ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUseBusinessDefaults(true);
-                      setDraftShiftDefaults(
-                        normalizeShiftDefaults(shiftDefaults?.business_presets ?? null),
-                      );
-                    }}
-                    className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
-                    style={{ fontWeight: 520 }}
-                  >
-                    Reset to business defaults
-                  </button>
-                ) : null}
+              <div className="mb-3 flex items-center justify-between gap-4">
+                <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+                  {useBusinessDefaults
+                    ? "Using business defaults"
+                    : "Location-specific overrides"}
+                </p>
+                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  {useBusinessDefaults ? "Inheriting" : "Override enabled"}
+                </span>
               </div>
-            </div>
 
-            <ShiftDefaultsEditor
-              dark={dark}
-              onChange={handleShiftDefaultsChange}
-              presets={useBusinessDefaults ? shiftDefaults?.business_presets ?? draftShiftDefaults : draftShiftDefaults}
-            />
+              <ShiftDefaultsEditor
+                dark={dark}
+                onChange={handleShiftDefaultsChange}
+                presets={
+                  useBusinessDefaults
+                    ? shiftDefaults?.business_presets ?? draftShiftDefaults
+                    : draftShiftDefaults
+                }
+              />
+            </div>
+          </div>
+
+          <div className={`border-t pt-4 ${borderClass}`}>
+            <div className="relative inline-flex group">
+              <button
+                type="button"
+                disabled={!deleteState?.canDelete || deleteState?.checking || deleteState?.deleting}
+                onClick={onDelete}
+                className={`flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-[12px] transition-all ${
+                  deleteState?.canDelete
+                    ? dark
+                      ? "border-[#E5484D]/30 text-[#FF8A8A] hover:bg-[#E5484D]/[0.08]"
+                      : "border-[#E5484D]/20 text-[#E5484D] hover:bg-[#E5484D]/[0.04]"
+                    : dark
+                      ? "border-white/[0.08] text-[#8898AA]"
+                      : "border-[#E5E7EB] text-[#8898AA]"
+                } disabled:cursor-not-allowed`}
+                style={{ fontWeight: 500 }}
+              >
+                <Trash2 size={13} />
+                {deleteState?.deleting
+                  ? "Removing..."
+                  : deleteState?.checking
+                    ? "Checking..."
+                    : "Remove Location"}
+              </button>
+
+              {!deleteState?.canDelete && deleteTooltip ? (
+                <div
+                  className={`pointer-events-none absolute bottom-full left-0 mb-2 w-64 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                    dark
+                      ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
+                      : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"
+                  }`}
+                  style={{ fontWeight: 440 }}
+                >
+                  {deleteTooltip}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
       </motion.div>

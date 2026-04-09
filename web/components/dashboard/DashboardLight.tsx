@@ -17,6 +17,7 @@ import { FloatingDropdown } from '@/components/floating-dropdown';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
 import {
   createAndAssignLocationRole,
+  getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessRoles,
   replaceLocationRoles,
@@ -37,6 +38,7 @@ import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
 import {
+  type LocationDeleteState,
   LocationRoleEditor,
   type LocationRoleEditorFeedback,
 } from './LocationRoleEditor';
@@ -771,6 +773,7 @@ function MultiLocationView({
   const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
+  const [editorDeleteState, setEditorDeleteState] = useState<LocationDeleteState | undefined>();
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
   const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
@@ -805,23 +808,33 @@ function MultiLocationView({
 
     setEditorLocation(editableLocation);
     setEditorShiftDefaults(null);
+    setEditorDeleteState({ canDelete: false, checking: true });
     setEditorLoading(true);
     setEditorFeedback(null);
 
     try {
-      const [nextRoles, nextAssignments, nextShiftDefaults] = await Promise.all([
+      const [nextRoles, nextAssignments, nextShiftDefaults, nextDeleteReadiness] = await Promise.all([
         listBusinessRoles(editableLocation.business_id),
         getLocationRoles(editableLocation.business_id, editableLocation.id),
         getLocationShiftDefaults(editableLocation.business_id, editableLocation.id),
+        getLocationDeleteReadiness(editableLocation.business_id, editableLocation.id),
       ]);
       setEditorRoles(nextRoles);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
+      setEditorDeleteState({
+        canDelete: nextDeleteReadiness.can_delete,
+        reason: nextDeleteReadiness.reason,
+      });
     } catch (error) {
       setEditorFeedback({
         tone: 'error',
         message:
           error instanceof Error ? error.message : 'Could not load location roles.',
+      });
+      setEditorDeleteState({
+        canDelete: false,
+        reason: 'Could not determine whether this location can be removed.',
       });
     } finally {
       setEditorLoading(false);
@@ -960,6 +973,41 @@ function MultiLocationView({
       });
     } catch (error) {
       setActionFeedback({
+        tone: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not remove this location.',
+      });
+    } finally {
+      setDeletingLocationId(null);
+    }
+  };
+
+  const handleDeleteEditorLocation = async () => {
+    if (!editorLocation || isSavingEditor || deletingLocationId === editorLocation.id) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${editorLocation.display_name ?? editorLocation.name}? This only works for locations that do not already have operational data.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingLocationId(editorLocation.id);
+    setEditorFeedback(null);
+    try {
+      await deleteWorkspaceLocation(editorLocation.business_id, editorLocation.id);
+      setEditorLocation(null);
+      setEditorShiftDefaults(null);
+      setEditorDeleteState(undefined);
+      await refreshWorkspace();
+      setActionFeedback({
+        tone: 'success',
+        message: `${editorLocation.display_name ?? editorLocation.name} was removed.`,
+      });
+    } catch (error) {
+      setEditorFeedback({
         tone: 'error',
         message:
           error instanceof Error ? error.message : 'Could not remove this location.',
@@ -1258,6 +1306,14 @@ function MultiLocationView({
           <LocationRoleEditor
             assignments={editorAssignments}
             dark={isDark}
+            deleteState={
+              editorDeleteState
+                ? {
+                    ...editorDeleteState,
+                    deleting: deletingLocationId === editorLocation.id,
+                  }
+                : undefined
+            }
             feedback={editorFeedback}
             loading={editorLoading}
             location={editorLocation}
@@ -1265,8 +1321,12 @@ function MultiLocationView({
               setEditorLocation(null);
               setEditorFeedback(null);
               setEditorShiftDefaults(null);
+              setEditorDeleteState(undefined);
             }}
             onCreateRole={handleCreateRole}
+            onDelete={() => {
+              void handleDeleteEditorLocation();
+            }}
             onSave={handleSaveEditor}
             roles={editorRoles}
             saving={isSavingEditor}

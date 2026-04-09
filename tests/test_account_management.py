@@ -197,6 +197,71 @@ def test_delete_location_with_operational_data_returns_conflict():
         app.dependency_overrides.clear()
 
 
+def test_location_delete_readiness_route_allows_empty_location():
+    fake_session = FakeAccountSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    location = _make_location(business_id=business_id, location_id=location_id)
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.scalar_queue = [0]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/delete-readiness"
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "business_id": str(business_id),
+            "location_id": str(location_id),
+            "can_delete": True,
+            "reason": None,
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_location_delete_readiness_route_blocks_location_with_shifts():
+    fake_session = FakeAccountSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    location = _make_location(business_id=business_id, location_id=location_id)
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.scalar_queue = [3]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/delete-readiness"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["business_id"] == str(business_id)
+        assert payload["location_id"] == str(location_id)
+        assert payload["can_delete"] is False
+        assert "cannot be removed" in payload["reason"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_revoke_location_manager_access_route_revokes_membership():
     fake_session = FakeAccountSession()
     business_id = uuid4()

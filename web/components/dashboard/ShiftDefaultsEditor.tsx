@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronRight, PenLine } from "lucide-react";
+import { motion } from "motion/react";
 
 import { FloatingDropdown } from "@/components/floating-dropdown";
-import type { ShiftDefault } from "@/lib/api/workspace";
+import type { ShiftDefault, ShiftDefaultKey } from "@/lib/api/workspace";
 
 import {
   formatShiftHour,
@@ -13,6 +14,23 @@ import {
   normalizeShiftDefaults,
   SHIFT_HOUR_OPTIONS,
 } from "./shift-defaults";
+
+const DETAIL_PANEL_WIDTH = 228;
+
+function getDefaultShiftLabel(key: ShiftDefaultKey): string {
+  switch (key) {
+    case "morning":
+      return "Morning";
+    case "afternoon":
+      return "Afternoon";
+    case "evening":
+      return "Evening";
+    case "night":
+      return "Night";
+    default:
+      return key;
+  }
+}
 
 function TimeSelect({
   dark,
@@ -34,7 +52,7 @@ function TimeSelect({
     <div className="relative">
       <button
         ref={buttonRef}
-        className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[12px] transition-all ${
+        className={`flex h-10 w-full items-center justify-between gap-2 rounded-lg border px-3 text-[12px] transition-all ${
           dark
             ? "border-white/[0.08] bg-white/[0.05] text-white hover:border-[#635BFF]/40"
             : "border-[#E5E7EB] bg-[#F7F8FA] text-[#0A2540] hover:border-[#635BFF]/30"
@@ -97,10 +115,7 @@ function formatShiftHourWithMinutes(hour: number): string {
 export function ShiftDefaultsEditor({
   dark,
   onChange,
-  onReset,
   presets,
-  resetLabel = "Reset",
-  showReset = false,
 }: {
   dark: boolean;
   onChange(presets: ShiftDefault[]): void;
@@ -113,6 +128,12 @@ export function ShiftDefaultsEditor({
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
+  const surfaceClass = dark ? "bg-white/[0.03]" : "bg-white";
+  const dividerClass = dark ? "border-white/[0.08]" : "border-[#F0F0F5]";
+  const labelInputClass = dark
+    ? "text-white placeholder:text-[#C1CED8]/40"
+    : "text-[#0A2540] placeholder:text-[#8898AA]/50";
 
   function updatePreset(
     key: string,
@@ -126,37 +147,121 @@ export function ShiftDefaultsEditor({
   }
 
   return (
-    <div className="space-y-3">
-      {showReset && onReset ? (
-        <div className="flex justify-end">
-          <button
-            className="flex items-center gap-1.5 text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
-            onClick={onReset}
-            style={{ fontWeight: 520 }}
-            type="button"
+    <div className="space-y-2.5">
+      {normalizedPresets.map((preset) => {
+        const Icon = getShiftDefaultIcon(preset.key);
+        const accent = getShiftDefaultColor(preset.key);
+        const isExpanded = expandedKey === preset.key;
+        return (
+          <div
+            key={preset.key}
+            className={`overflow-hidden rounded-xl border ${borderClass} ${surfaceClass}`}
           >
-            <RotateCcw size={12} />
-            {resetLabel}
-          </button>
-        </div>
-      ) : null}
+            <div className="flex items-stretch">
+              <div
+                className={`flex min-w-0 flex-1 items-center gap-3 px-3 py-3 ${
+                  isExpanded ? `border-r ${dividerClass}` : ""
+                }`}
+              >
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                  style={{ background: `${accent}12` }}
+                >
+                  <Icon size={15} style={{ color: accent }} />
+                </div>
 
-      <div className="space-y-3">
-        {normalizedPresets.map((preset) => {
-          const Icon = getShiftDefaultIcon(preset.key);
-          const accent = getShiftDefaultColor(preset.key);
-          const isExpanded = expandedKey === preset.key;
-          return (
-            <div
-              key={preset.key}
-              className={`rounded-2xl border p-4 ${
-                dark
-                  ? "border-white/[0.08] bg-white/[0.03]"
-                  : "border-[#E5E7EB] bg-white"
-              }`}
-            >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <PenLine
+                      size={11}
+                      className={dark ? "text-[#C1CED8]" : "text-[#8898AA]"}
+                    />
+                    <input
+                      className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] tracking-[-0.01em] outline-none ${labelInputClass}`}
+                      onBlur={(event) => {
+                        const trimmed = event.target.value.trim();
+                        if (!trimmed) {
+                          updatePreset(preset.key, (item) => ({
+                            ...item,
+                            label: getDefaultShiftLabel(item.key),
+                          }));
+                        }
+                      }}
+                      onChange={(event) =>
+                        updatePreset(preset.key, (item) => ({
+                          ...item,
+                          label: event.target.value,
+                        }))
+                      }
+                      style={{ fontWeight: 560 }}
+                      value={preset.label}
+                    />
+                  </div>
+                  <p
+                    className={`mt-1 text-[11px] ${textSecondary}`}
+                    style={{ fontWeight: 440 }}
+                  >
+                    {formatShiftHourWithMinutes(preset.start_hour)}
+                    {" — "}
+                    {formatShiftHourWithMinutes(preset.end_hour)}
+                  </p>
+                </div>
+              </div>
+
+              <motion.div
+                animate={{
+                  opacity: isExpanded ? 1 : 0,
+                  width: isExpanded ? DETAIL_PANEL_WIDTH : 0,
+                }}
+                className={`overflow-hidden ${dark ? "bg-[#0C243D]" : "bg-[#FAFBFC]"}`}
+                initial={false}
+                transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+              >
+                <div className="grid h-full min-w-[228px] grid-cols-2 gap-2 px-3 py-3">
+                  <label className="block">
+                    <span
+                      className={`mb-1.5 block text-[10px] uppercase tracking-[0.05em] ${textSecondary}`}
+                      style={{ fontWeight: 500 }}
+                    >
+                      Start
+                    </span>
+                    <TimeSelect
+                      dark={dark}
+                      onChange={(nextValue) =>
+                        updatePreset(preset.key, (item) => ({
+                          ...item,
+                          start_hour: nextValue,
+                        }))
+                      }
+                      value={preset.start_hour}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span
+                      className={`mb-1.5 block text-[10px] uppercase tracking-[0.05em] ${textSecondary}`}
+                      style={{ fontWeight: 500 }}
+                    >
+                      End
+                    </span>
+                    <TimeSelect
+                      dark={dark}
+                      onChange={(nextValue) =>
+                        updatePreset(preset.key, (item) => ({
+                          ...item,
+                          end_hour: nextValue,
+                        }))
+                      }
+                      value={preset.end_hour}
+                    />
+                  </label>
+                </div>
+              </motion.div>
+
               <button
-                className="flex w-full items-center gap-3 text-left"
+                className={`flex w-11 shrink-0 items-center justify-center transition-colors ${
+                  dark ? "hover:bg-white/[0.04]" : "hover:bg-[#F7F8FA]"
+                }`}
                 onClick={() =>
                   setExpandedKey((current) =>
                     current === preset.key ? null : preset.key,
@@ -164,123 +269,17 @@ export function ShiftDefaultsEditor({
                 }
                 type="button"
               >
-                <div
-                  className="flex h-11 w-11 items-center justify-center rounded-xl"
-                  style={{ background: `${accent}12` }}
-                >
-                  <Icon size={16} style={{ color: accent }} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p
-                    className={`text-[15px] tracking-[-0.01em] ${textPrimary}`}
-                    style={{ fontWeight: 600 }}
-                  >
-                    {preset.label}
-                  </p>
-                  <p
-                    className={`mt-1 text-[12px] ${textSecondary}`}
-                    style={{ fontWeight: 520 }}
-                  >
-                    {formatShiftHourWithMinutes(preset.start_hour)}
-                    {" — "}
-                    {formatShiftHourWithMinutes(preset.end_hour)}
-                  </p>
-                </div>
                 <ChevronRight
-                  size={18}
+                  size={15}
                   className={`transition-transform duration-300 ${
                     dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-                  } ${isExpanded ? "rotate-90" : ""}`}
+                  } ${isExpanded ? "rotate-180" : ""}`}
                 />
               </button>
-
-              <div
-                className={`grid overflow-hidden transition-all duration-300 ${
-                  isExpanded ? "mt-3 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-                }`}
-              >
-                <div className="overflow-hidden">
-                  <div
-                    className={`border-t pt-3 ${
-                      dark ? "border-white/[0.08]" : "border-[#E5E7EB]"
-                    }`}
-                  >
-                    <label className="mb-3 block">
-                      <span
-                        className={`mb-1.5 block text-[10px] uppercase tracking-[0.05em] ${
-                          dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-                        }`}
-                        style={{ fontWeight: 500 }}
-                      >
-                        Shift name
-                      </span>
-                      <input
-                        className={`w-full rounded-lg border px-3 py-2 text-[13px] ${
-                          dark
-                            ? "border-white/[0.08] bg-white/[0.05] text-white"
-                            : "border-[#E5E7EB] bg-[#F7F8FA] text-[#0A2540]"
-                        }`}
-                        onChange={(event) =>
-                          updatePreset(preset.key, (item) => ({
-                            ...item,
-                            label: event.target.value,
-                          }))
-                        }
-                        style={{ fontWeight: 500 }}
-                        value={preset.label}
-                      />
-                    </label>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <label className="block">
-                        <span
-                          className={`mb-1.5 block text-[10px] uppercase tracking-[0.05em] ${
-                            dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-                          }`}
-                          style={{ fontWeight: 500 }}
-                        >
-                          Start
-                        </span>
-                        <TimeSelect
-                          dark={dark}
-                          onChange={(nextValue) =>
-                            updatePreset(preset.key, (item) => ({
-                              ...item,
-                              start_hour: nextValue,
-                            }))
-                          }
-                          value={preset.start_hour}
-                        />
-                      </label>
-
-                      <label className="block">
-                        <span
-                          className={`mb-1.5 block text-[10px] uppercase tracking-[0.05em] ${
-                            dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-                          }`}
-                          style={{ fontWeight: 500 }}
-                        >
-                          End
-                        </span>
-                        <TimeSelect
-                          dark={dark}
-                          onChange={(nextValue) =>
-                            updatePreset(preset.key, (item) => ({
-                              ...item,
-                              end_hour: nextValue,
-                            }))
-                          }
-                          value={preset.end_hour}
-                        />
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

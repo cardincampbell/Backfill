@@ -16,6 +16,7 @@ from app.schemas.business import (
     BusinessRead,
     LocationCreate,
     LocationDeleteResponse,
+    LocationDeleteReadinessRead,
     LocationRead,
     LocationRoleAttach,
     LocationRoleCreateAndAssign,
@@ -296,6 +297,28 @@ async def delete_location(
     )
     await session.commit()
     return LocationDeleteResponse(deleted=True, location_id=location.id)
+
+
+@router.get(
+    "/{business_id}/locations/{location_id}/delete-readiness",
+    response_model=LocationDeleteReadinessRead,
+)
+async def get_location_delete_readiness(
+    business_id: UUID,
+    location_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        return await businesses.get_location_delete_readiness(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get(

@@ -4,10 +4,12 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, MapPin } from "lucide-react";
 
+import { useAppWorkspaceRefresh } from "@/components/app-workspace";
 import { useAppWorkspace } from "@/components/app-workspace";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import {
   createAndAssignLocationRole,
+  getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessLocations,
   listBusinessRoles,
@@ -18,6 +20,7 @@ import {
 } from "@/lib/api/businesses";
 import {
   getLocationBoard,
+  deleteLocation as deleteWorkspaceLocation,
   getLocationShiftDefaults,
   updateLocationShiftDefaults,
   type LocationShiftDefaults,
@@ -25,6 +28,7 @@ import {
   type WorkspaceLocation,
 } from "@/lib/api/workspace";
 import {
+  type LocationDeleteState,
   LocationRoleEditor,
   type LocationRoleEditorFeedback as Feedback,
 } from "./LocationRoleEditor";
@@ -69,6 +73,7 @@ export default function SettingsLocationsSection({
   dark: boolean;
 }) {
   const workspace = useAppWorkspace();
+  const refreshWorkspace = useAppWorkspaceRefresh();
   const setLocationEntryMode = useSetLocationEntryMode();
   const workspaceLocations = useMemo(
     () =>
@@ -94,9 +99,11 @@ export default function SettingsLocationsSection({
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [shiftDefaults, setShiftDefaults] = useState<LocationShiftDefaults | null>(null);
   const [shiftDefaultsLoading, setShiftDefaultsLoading] = useState(false);
+  const [deleteState, setDeleteState] = useState<LocationDeleteState | undefined>();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [editorFeedback, setEditorFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
+  const [isDeletingLocation, setIsDeletingLocation] = useState(false);
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
   const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
@@ -189,6 +196,7 @@ export default function SettingsLocationsSection({
     if (!selectedLocation) {
       setAssignments([]);
       setShiftDefaults(null);
+      setDeleteState(undefined);
       setEditorFeedback(null);
       return;
     }
@@ -200,16 +208,22 @@ export default function SettingsLocationsSection({
       try {
         setAssignmentLoading(true);
         setShiftDefaultsLoading(true);
+        setDeleteState({ canDelete: false, checking: true });
         setEditorFeedback(null);
-        const [nextAssignments, nextShiftDefaults] = await Promise.all([
+        const [nextAssignments, nextShiftDefaults, nextDeleteReadiness] = await Promise.all([
           getLocationRoles(businessId, activeLocation.id),
           getLocationShiftDefaults(businessId, activeLocation.id),
+          getLocationDeleteReadiness(businessId, activeLocation.id),
         ]);
         if (cancelled) {
           return;
         }
         setAssignments(nextAssignments);
         setShiftDefaults(nextShiftDefaults);
+        setDeleteState({
+          canDelete: nextDeleteReadiness.can_delete,
+          reason: nextDeleteReadiness.reason,
+        });
         setRoleCounts((current) => ({
           ...current,
           [activeLocation.id]: nextAssignments.length,
@@ -222,6 +236,10 @@ export default function SettingsLocationsSection({
               error instanceof Error
                 ? error.message
                 : "Could not load location roles.",
+          });
+          setDeleteState({
+            canDelete: false,
+            reason: "Could not determine whether this location can be removed.",
           });
         }
       } finally {
@@ -360,6 +378,50 @@ export default function SettingsLocationsSection({
     }
   };
 
+  const handleDeleteLocation = async () => {
+    if (!selectedLocation || isDeletingLocation) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove ${selectedLocation.display_name ?? selectedLocation.name}? This will also remove its employee location associations.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingLocation(true);
+    setEditorFeedback(null);
+    try {
+      await deleteWorkspaceLocation(businessId, selectedLocation.id);
+      const remainingLocations = locations.filter((location) => location.id !== selectedLocation.id);
+      const nextRoleCounts = Object.fromEntries(
+        Object.entries(roleCounts).filter(([locationId]) => locationId !== selectedLocation.id),
+      );
+      locationsCache.set(businessId, remainingLocations);
+      roleCountCache.set(businessId, nextRoleCounts);
+      setLocations(remainingLocations);
+      setRoleCounts(nextRoleCounts);
+      setSelectedLocation(null);
+      setAssignments([]);
+      setShiftDefaults(null);
+      setDeleteState(undefined);
+      await refreshWorkspace();
+      setFeedback({
+        tone: "success",
+        message: "Location removed.",
+      });
+    } catch (error) {
+      setEditorFeedback({
+        tone: "error",
+        message:
+          error instanceof Error ? error.message : "Could not remove this location.",
+      });
+    } finally {
+      setIsDeletingLocation(false);
+    }
+  };
+
   if (loading) {
     return <div className={`py-10 text-[13px] ${textSecondary}`}>Loading business locations...</div>;
   }
@@ -465,11 +527,22 @@ export default function SettingsLocationsSection({
           <LocationRoleEditor
             assignments={assignments}
             dark={dark}
+            deleteState={
+              deleteState
+                ? {
+                    ...deleteState,
+                    deleting: isDeletingLocation,
+                  }
+                : undefined
+            }
             feedback={editorFeedback}
             loading={assignmentLoading || shiftDefaultsLoading}
             location={selectedLocation}
             onClose={() => setSelectedLocation(null)}
             onCreateRole={handleCreateRole}
+            onDelete={() => {
+              void handleDeleteLocation();
+            }}
             onSave={handleSave}
             shiftDefaults={shiftDefaults}
             roles={roles}

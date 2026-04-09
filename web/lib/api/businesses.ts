@@ -93,6 +93,13 @@ export type LocationRoleCreateAndAssignResult = {
   location_role: LocationRoleAssignment;
 };
 
+export type LocationDeleteReadiness = {
+  business_id: string;
+  location_id: string;
+  can_delete: boolean;
+  reason?: string | null;
+};
+
 export async function listBusinessLocations(
   businessId: string,
 ): Promise<BusinessLocation[]> {
@@ -101,6 +108,19 @@ export async function listBusinessLocations(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as BusinessLocation[];
+}
+
+export async function getLocationDeleteReadiness(
+  businessId: string,
+  locationId: string,
+): Promise<LocationDeleteReadiness> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/delete-readiness`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as LocationDeleteReadiness;
 }
 
 export async function listBusinessRoles(

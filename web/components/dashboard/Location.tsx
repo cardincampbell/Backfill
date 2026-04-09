@@ -660,10 +660,10 @@ export default function Location({
                 className={`mb-1 text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
-                Select roles and employees for this location
+                Select roles for this location
               </h2>
               <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Choose the roles and the employees that belong on {locationDisplayName}. Employees need at least one assigned role before they can be added to this location for scheduling.
+                Choose the roles that apply to {locationDisplayName}. Once selected, we&apos;ll use them to build your weekly shift schedule and match available staff.
               </p>
             </div>
           </div>

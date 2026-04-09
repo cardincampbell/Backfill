@@ -69,7 +69,9 @@ import DashboardShell from "./DashboardShell";
 import SegmentedControl from "./SegmentedControl";
 import SettingsAvailabilitySection from "./SettingsAvailabilitySection";
 import SettingsLocationsSection from "./SettingsLocationsSection";
-import SettingsShiftsSection from "./SettingsShiftsSection";
+import SettingsShiftsSection, {
+  type SettingsSectionHeaderAction,
+} from "./SettingsShiftsSection";
 
 type Feedback = {
   tone: "success" | "error";
@@ -439,7 +441,7 @@ function Toggle({
 const businessSections = [
   { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
-  { key: "shifts", label: "Shift Defaults", icon: CalendarDays, saveTarget: null, description: "These names and time windows become the default starting point when creating shifts in the scheduler." },
+  { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null, description: "Manage the default shift names and time windows used throughout the scheduler." },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
   { key: "business-notifications", label: "Notifications", icon: Bell, saveTarget: null },
   { key: "integrations", label: "Integrations", icon: Link2, saveTarget: null },
@@ -502,6 +504,8 @@ export default function Settings({
   const { fullName, initials, phone } = useSessionUserDisplay();
   const [business, setBusiness] = useState<BusinessProfile | null>(null);
   const [businessLoading, setBusinessLoading] = useState(true);
+  const [sectionHeaderAction, setSectionHeaderAction] =
+    useState<SettingsSectionHeaderAction | null>(null);
 
   const [shiftAlerts, setShiftAlerts] = useState(true);
   const [complianceAlerts, setComplianceAlerts] = useState(true);
@@ -919,6 +923,12 @@ export default function Settings({
     : "bg-[#F7F8FA] border-[#E5E7EB]";
   const cardBg = isDark ? "bg-white/[0.03]" : "bg-[#F7F8FA]";
 
+  useEffect(() => {
+    if (activeSection !== "shifts") {
+      setSectionHeaderAction(null);
+    }
+  }, [activeSection]);
+
   function renderSectionContent() {
     if (scope === "business" && activeSection === "company") {
       if (businessLoading) {
@@ -1086,7 +1096,13 @@ export default function Settings({
         );
       }
 
-      return <SettingsShiftsSection businessId={primaryBusinessId} dark={isDark} />;
+      return (
+        <SettingsShiftsSection
+          businessId={primaryBusinessId}
+          dark={isDark}
+          onHeaderActionChange={setSectionHeaderAction}
+        />
+      );
     }
 
     if (scope === "business" && activeSection === "billing") {
@@ -1583,20 +1599,36 @@ export default function Settings({
 
           <div className="flex-1 min-w-0">
             <div className={`${panelClass} border ${isDark ? "backfill-ui-radius" : "rounded-2xl"} p-4 sm:p-6`}>
-              <div className={`flex items-center gap-3 mb-6 pb-5 border-b ${borderClass}`}>
+              <div className={`mb-6 flex items-start justify-between gap-4 border-b pb-5 ${borderClass}`}>
                 {currentSection ? (
                   <>
-                    <div className={`w-9 h-9 ${isDark ? "backfill-ui-radius bg-white/[0.06]" : "rounded-xl bg-[#635BFF]/10"} flex items-center justify-center`}>
-                      <currentSection.icon size={16} className="text-[#635BFF]" />
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 ${isDark ? "backfill-ui-radius bg-white/[0.06]" : "rounded-xl bg-[#635BFF]/10"} flex items-center justify-center`}>
+                        <currentSection.icon size={16} className="text-[#635BFF]" />
+                      </div>
+                      <div>
+                        <h2 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 580 }}>
+                          {currentSection.label}
+                        </h2>
+                        <p className={`text-[11px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
+                          {(currentSection as { description?: string }).description ?? (scope === "business" ? businessDescription : personalDescription)}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h2 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 580 }}>
-                        {currentSection.label}
-                      </h2>
-                      <p className={`text-[11px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
-                        {(currentSection as { description?: string }).description ?? (scope === "business" ? businessDescription : personalDescription)}
-                      </p>
-                    </div>
+                    {sectionHeaderAction ? (
+                      <button
+                        className="shrink-0 rounded-full px-4 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={sectionHeaderAction.disabled}
+                        onClick={sectionHeaderAction.onClick}
+                        style={{
+                          fontWeight: 540,
+                          background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
+                        }}
+                        type="button"
+                      >
+                        {sectionHeaderAction.label}
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
               </div>

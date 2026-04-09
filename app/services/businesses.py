@@ -386,6 +386,35 @@ async def delete_location(
     return location
 
 
+async def get_location_delete_readiness(
+    session: AsyncSession,
+    business_id: UUID,
+    location_id: UUID,
+) -> dict[str, object]:
+    location = await get_location(session, business_id, location_id)
+    if location is None:
+        raise LookupError("location_not_found")
+
+    shift_count = await session.scalar(
+        select(func.count(Shift.id)).where(Shift.location_id == location_id)
+    )
+    blocking_shift_count = int(shift_count or 0)
+    if blocking_shift_count > 0:
+        reason = (
+            "This location has scheduled shifts and cannot be removed until those "
+            "shifts are deleted or moved."
+        )
+    else:
+        reason = None
+
+    return {
+        "business_id": business_id,
+        "location_id": location_id,
+        "can_delete": blocking_shift_count == 0,
+        "reason": reason,
+    }
+
+
 async def list_roles(session: AsyncSession, business_id: UUID) -> list[Role]:
     result = await session.execute(
         select(Role).where(Role.business_id == business_id).order_by(Role.name.asc(), Role.created_at.asc())
