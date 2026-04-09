@@ -35,6 +35,7 @@ import {
   type LocationRoleEditorSaveSummary,
 } from "./LocationRoleEditor";
 import {
+  formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
 
@@ -480,6 +481,8 @@ export default function SettingsLocationsSection({
               ...location,
               name: location.display_name ?? location.name,
             });
+            const locationMeta =
+              formatLocationMeta(location) || location.timezone || locationReference.staffLabel;
             const assignedRoleCount = roleCounts[location.id];
             return (
               <button
@@ -505,8 +508,8 @@ export default function SettingsLocationsSection({
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                       {locationReference.typeLabel
-                        ? `${locationReference.typeLabel} • ${locationReference.staffLabel}`
-                        : locationReference.staffLabel}
+                        ? `${locationReference.typeLabel} • ${locationMeta}`
+                        : locationMeta}
                     </span>
                     {typeof assignedRoleCount === "number" ? (
                       <>

@@ -36,15 +36,10 @@ from app.schemas.workforce import (
 )
 
 EMPLOYEE_IMPORT_HEADERS = (
-    "full_name",
-    "preferred_name",
-    "email",
-    "phone_e164",
-    "employee_number",
-    "external_ref",
-    "employment_type",
-    "hire_date",
-    "notes",
+    "first_name",
+    "last_name",
+    "phone_number",
+    "email_address",
 )
 
 EMPLOYEE_IMPORT_REQUIRED_FIELDS = (
@@ -497,63 +492,18 @@ def parse_employee_import_file(
 
 
 def build_employee_import_template() -> bytes:
-    Workbook, _, Font, PatternFill = _require_openpyxl()
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Employees"
-    sheet.append(list(EMPLOYEE_IMPORT_HEADERS))
-    sheet.append(
+    buffer = StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(EMPLOYEE_IMPORT_HEADERS)
+    writer.writerow(
         [
-            "Taylor Smith",
             "Taylor",
-            "taylor@example.com",
+            "Smith",
             "+15555550123",
-            "EMP-001",
-            "source-123",
-            "part_time",
-            "2026-04-08",
-            "Weekend closer",
+            "taylor@example.com",
         ]
     )
-
-    header_fill = PatternFill("solid", fgColor="EEF2FF")
-    for cell in sheet[1]:
-        cell.font = Font(bold=True)
-        cell.fill = header_fill
-
-    column_widths = {
-        "A": 24,
-        "B": 18,
-        "C": 28,
-        "D": 18,
-        "E": 16,
-        "F": 18,
-        "G": 18,
-        "H": 14,
-        "I": 28,
-    }
-    for column, width in column_widths.items():
-        sheet.column_dimensions[column].width = width
-
-    instructions = workbook.create_sheet("Instructions")
-    instructions.append(["Backfill Employee Import"])
-    instructions.append(
-        [
-            "Import only general employee details here. Assign roles and locations later from the Team UI.",
-        ]
-    )
-    instructions.append(
-        [
-            "Required columns: full_name, email, phone_e164. Optional columns: preferred_name, employee_number, external_ref, employment_type, hire_date, notes",
-        ]
-    )
-    instructions["A1"].font = Font(bold=True)
-    instructions["A1"].fill = header_fill
-    instructions.column_dimensions["A"].width = 120
-
-    buffer = BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
+    return buffer.getvalue().encode("utf-8")
 
 
 async def list_employees(session: AsyncSession, business_id: UUID) -> list[Employee]:

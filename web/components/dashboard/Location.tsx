@@ -43,6 +43,7 @@ import {
 } from "./LocationEmployeeActions";
 import {
   formatDisplayLabel,
+  formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
 
@@ -352,6 +353,10 @@ export default function Location({
     name: locationDisplayName,
     slug: location.location_slug,
   });
+  const locationMeta =
+    formatLocationMeta({ ...location, name: locationDisplayName }) ||
+    location.timezone ||
+    locationReference.staffLabel;
   const textPrimary = isDark ? "text-white" : "text-[#0A2540]";
   const textSecondary = isDark ? "text-[#C1CED8]" : "text-[#8898AA]";
   const textTertiary = isDark ? "text-[#C1CED8]" : "text-[#3E4C59]";
@@ -668,7 +673,7 @@ export default function Location({
                 </span>
               ) : null}
               <span className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                {locationReference.staffLabel}
+                {locationMeta}
               </span>
             </div>
           </div>
@@ -679,7 +684,7 @@ export default function Location({
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.1 }}
-        className={`rounded-2xl border overflow-hidden ${panelClass}`}
+        className={`rounded-2xl border overflow-visible ${panelClass}`}
       >
         <div className={`px-5 sm:px-8 py-6 border-b ${borderClass}`}>
           <div className="flex items-start gap-4">
@@ -1029,7 +1034,7 @@ export default function Location({
                     return (
                       <div
                         key={employee.id}
-                        className={`group relative flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 ${
+                        className={`group relative z-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 hover:z-20 ${
                           isDark
                             ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]"
                             : "border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]"
@@ -1051,9 +1056,9 @@ export default function Location({
                         </span>
                         </button>
                         <div className="relative ml-0.5">
-                          <Info size={12} className="cursor-help text-[#FFB800]" />
+                          <Info size={12} className="cursor-default text-[#FFB800]" />
                           <div
-                            className={`pointer-events-none absolute bottom-full right-0 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                            className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
                               isDark
                                 ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
                                 : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"

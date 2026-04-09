@@ -995,7 +995,7 @@ def test_bulk_import_route_records_audit(monkeypatch):
     async def fake_bulk_import(_session, incoming_business_id, *, filename, content):
         assert incoming_business_id == business_id
         assert filename == "employees.csv"
-        assert b"full_name" in content
+        assert b"first_name" in content
         return EmployeeBulkImportRead(
             created_count=1,
             skipped_count=1,
@@ -1052,7 +1052,7 @@ def test_bulk_import_route_records_audit(monkeypatch):
             files={
                 "file": (
                     "employees.csv",
-                    b"full_name,email\nJamie Rivera,jamie@example.com\n,missing@example.com\n",
+                    b"first_name,last_name,email_address,phone_number\nJamie,Rivera,jamie@example.com,+15555550123\n,,missing@example.com,+15555550124\n",
                     "text/csv",
                 )
             },
@@ -1073,10 +1073,10 @@ def test_parse_employee_import_file_skips_rows_missing_required_fields():
     employees, errors = parse_employee_import_file(
         "employees.csv",
         (
-            b"full_name,email,phone_e164\n"
-            b"Jamie Rivera,jamie@example.com,+15555550123\n"
-            b"Missing Email,,+15555550124\n"
-            b"Missing Phone,missing.phone@example.com,\n"
+            b"first_name,last_name,email_address,phone_number\n"
+            b"Jamie,Rivera,jamie@example.com,+15555550123\n"
+            b"Missing,Email,,+15555550124\n"
+            b"Missing,Phone,missing.phone@example.com,\n"
         ),
     )
 
@@ -1108,14 +1108,14 @@ def test_parse_employee_import_file_csv_does_not_require_openpyxl(monkeypatch):
 
     employees, errors = parse_employee_import_file(
         "employees.csv",
-        b"full_name,email,phone_e164\nJamie Rivera,jamie@example.com,+15555550123\n",
+        b"first_name,last_name,email_address,phone_number\nJamie,Rivera,jamie@example.com,+15555550123\n",
     )
 
     assert len(employees) == 1
     assert errors == []
 
 
-def test_build_employee_import_template_raises_clear_error_when_openpyxl_missing(monkeypatch):
+def test_build_employee_import_template_returns_simple_csv_without_openpyxl(monkeypatch):
     import builtins
 
     real_import = builtins.__import__
@@ -1127,8 +1127,10 @@ def test_build_employee_import_template_raises_clear_error_when_openpyxl_missing
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(RuntimeError, match="employee_import_xlsx_dependency_missing"):
-        build_employee_import_template()
+    content = build_employee_import_template()
+
+    assert content.startswith(b"first_name,last_name,phone_number,email_address")
+    assert b"Taylor,Smith,+15555550123,taylor@example.com" in content
 
 
 def test_patch_employee_route_records_audit(monkeypatch):

@@ -234,6 +234,8 @@ export function LocationRoleEditor({
     ...location,
     name: location.display_name ?? location.name,
   });
+  const locationMeta =
+    formatLocationMeta(location) || location.timezone || locationReference.staffLabel;
   const assignmentsByRoleId = useMemo(
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
     [assignments],
@@ -412,7 +414,7 @@ export function LocationRoleEditor({
                   </span>
                 ) : null}
                 <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  {locationReference.staffLabel}
+                  {locationMeta}
                 </span>
               </div>
             </div>
@@ -423,7 +425,7 @@ export function LocationRoleEditor({
                 <MapPin size={14} className="text-[#8898AA]" />
               </div>
               <span className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>
-                {formatLocationMeta(location) || location.timezone}
+                {location.timezone}
               </span>
             </div>
           </div>

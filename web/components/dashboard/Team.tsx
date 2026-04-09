@@ -46,6 +46,10 @@ import {
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import DashboardShell from './DashboardShell';
 import { EmployeeEditorDrawer, type EmployeeEditorSeed } from './EmployeeEditorDrawer';
+import {
+  EmployeeBulkUploadModal,
+  EmployeeEnrollmentModal,
+} from './LocationEmployeeActions';
 import { formatLocationMeta, getLocationReference } from './location-role-reference';
 
 /* ─── Types ─── */
@@ -371,7 +375,7 @@ function StatusWithInfo({
       <div className="relative"
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}>
-        <Info size={12} className={`cursor-help transition-colors ${dark ? 'text-[#5E6D7A] hover:text-[#C1CED8]' : 'text-[#C1CED8] hover:text-[#8898AA]'}`} />
+        <Info size={12} className={`cursor-default transition-colors ${dark ? 'text-[#5E6D7A] hover:text-[#C1CED8]' : 'text-[#C1CED8] hover:text-[#8898AA]'}`} />
         <AnimatePresence>
           {showTooltip && (
             dark ? (
@@ -1803,21 +1807,23 @@ export default function Team({
       {/* Modals */}
       <AnimatePresence>
         {showAddModal && businessId && (
-          <AddEmployeeModal
+          <EmployeeEnrollmentModal
             businessId={businessId}
+            businessLocations={businessLocations}
             dark={isDark}
-            locations={businessLocations}
             onClose={() => setShowAddModal(false)}
             onCreated={handleAddEmployee}
             roles={businessRoles}
           />
         )}
         {showBulkModal && businessId && (
-          <BulkUploadModal
+          <EmployeeBulkUploadModal
             businessId={businessId}
             dark={isDark}
             onClose={() => setShowBulkModal(false)}
-            onImported={handleBulkImported}
+            onImported={async (result) => {
+              await handleBulkImported(result);
+            }}
           />
         )}
         {selectedEmployee && businessId && (

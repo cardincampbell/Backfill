@@ -567,6 +567,7 @@ export default function Settings({
     business: null,
     personal: null,
   });
+  const workspaceBusinessId = workspace?.businesses[0]?.business_id ?? null;
   const normalizedScope = normalizeSettingsScope(
     requestedScope ?? routeSegments[0],
   );
@@ -642,7 +643,7 @@ export default function Settings({
     async function loadBusiness() {
       try {
         setBusinessLoading(true);
-        const targetBusinessId = workspace?.businesses[0]?.business_id ?? null;
+        const targetBusinessId = workspaceBusinessId;
         if (!targetBusinessId) {
           setBusiness(null);
           setBusinessLoading(false);
@@ -678,7 +679,7 @@ export default function Settings({
     return () => {
       cancelled = true;
     };
-  }, [workspace]);
+  }, [workspaceBusinessId]);
 
   const personalDirty = !formsMatchPersonal(personalForm, personalBaseline);
   const companyDirty =
@@ -751,7 +752,7 @@ export default function Settings({
     }
     return business.display_name ?? business.name;
   }, [business]);
-  const primaryBusinessId = business?.id ?? workspace?.businesses[0]?.business_id ?? null;
+  const primaryBusinessId = business?.id ?? workspaceBusinessId;
 
   const businessDescription = "Organization-wide setting";
   const personalDescription = "Your personal preference";
@@ -931,7 +932,7 @@ export default function Settings({
 
   function renderSectionContent() {
     if (scope === "business" && activeSection === "company") {
-      if (businessLoading) {
+      if (businessLoading && !business) {
         return (
           <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
             Loading business profile…

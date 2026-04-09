@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
   Mail,
-  MapPin,
   Phone,
   Plus,
   Shield as ShieldCheck,
@@ -378,17 +377,6 @@ export function EmployeeEditorDrawer({
     [formData.primaryLocationId, formData.selectedLocationIds, locations],
   );
   const availableLocations = locations.filter((location) => !formData.selectedLocationIds.includes(location.id));
-  const fallbackPrimaryLocation = useMemo(
-    () =>
-      locations.find((location) => location.id === employee.primary_location_id) ??
-      locations.find((location) => employee.location_ids.includes(location.id)) ??
-      null,
-    [employee.location_ids, employee.primary_location_id, locations],
-  );
-  const primaryLocation = useMemo(
-    () => locations.find((location) => location.id === formData.primaryLocationId) ?? fallbackPrimaryLocation,
-    [fallbackPrimaryLocation, formData.primaryLocationId, locations],
-  );
   const reliability = Math.round((profile?.reliability_score ?? employee.reliability_score ?? 0.7) * 100);
   const reliabilityColor = getReliabilityColor(reliability);
   const statusKey =
@@ -765,7 +753,7 @@ export function EmployeeEditorDrawer({
                 Locations
               </h3>
               <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
-                {selectedLocations.length} assigned
+                {selectedLocations.length} selected
               </span>
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
@@ -854,16 +842,6 @@ export function EmployeeEditorDrawer({
               </div>
             ) : null}
 
-            {primaryLocation ? (
-              <div className={`mt-4 rounded-2xl px-4 py-4 ${dark ? "bg-white/[0.04]" : "bg-[#F7F8FA]"}`}>
-                <div className="flex items-center gap-2">
-                  <MapPin className="text-[#8898AA]" size={13} />
-                  <p className={`text-[13px] ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
-                    Primary location: {locationDisplayName(primaryLocation)}
-                  </p>
-                </div>
-              </div>
-            ) : null}
           </div>
 
           <div>

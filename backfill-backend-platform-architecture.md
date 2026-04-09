@@ -29,14 +29,16 @@ Current codebase note:
 - One Postgres database via Supabase.
 - One worker process for async jobs.
 - Postgres-backed queues and timers.
+- Redis is already an accepted launch dependency for shared state such as rate limiting and other short-lived coordination where it is already part of the stack.
 - Supabase Realtime for feed fanout.
-- No Kafka, no Redis, no service mesh at launch.
+- No Kafka and no service mesh at launch.
 
 ### 2.2 Control plane
 
 - The Copilot is the action surface for operators.
 - The dashboard is primarily read/visibility plus exception handling.
 - All write capabilities exposed to the Copilot must exist as internal application tools with explicit validation and side effects.
+- `1-800-BACKFILL` is the primary employee-facing and operator-facing command surface for live callouts and conversational commands.
 
 ### 2.3 Revenue object
 
@@ -50,6 +52,12 @@ Current codebase note:
 - Application services validate authorization and preconditions.
 - Execution happens only through internal tool handlers.
 - Every state change emits an event.
+
+### 2.5 Migration discipline
+
+- Do not allow two long-lived canonical models for the same concept.
+- Compatibility layers are allowed only as temporary facades with explicit cutover criteria.
+- Every compatibility layer must have an owner, an exit condition, and a removal phase in the migration plan.
 
 ## 3. System Overview
 
@@ -65,6 +73,15 @@ Channel Input
   -> Postgres Commit
   -> Realtime / Async Consumers / Feed Projection
   -> Channel-Specific Response Adapter
+```
+
+```text
+Employee / Operator
+  -> calls or texts 1-800-BACKFILL
+  -> Twilio carrier/trunk layer
+  -> Retell AI conversational runtime
+  -> Backfill channel adapter
+  -> Copilot / coverage engine / internal tools
 ```
 
 ```text
@@ -398,6 +415,12 @@ Execution flow:
 8. Emit events.
 9. Render a channel-aware response.
 
+Primary channel note:
+
+- Employees use `1-800-BACKFILL` to call out via voice or text.
+- Operators can also use that same number for conversational commands and status checks.
+- The dashboard remains important, but the phone number is the highest-priority real-time interaction surface.
+
 ### 5.2 Tool registry
 
 Every operator capability must exist in a registry definition. Code-first registry is preferred at launch, with optional DB persistence later for admin tooling and docs.
@@ -506,11 +529,16 @@ class NormalizedMessage:
 
 Adapters:
 
-- `TwilioSmsAdapter`
-- `RetellVoiceAdapter`
+- `RetellPhoneAdapter`
 - `DashboardChatAdapter`
 
 The Copilot never branches on raw provider payload shape.
+
+Transport clarification:
+
+- The operator/employee experience should be modeled as Retell-mediated conversation, not Twilio-mediated conversation.
+- Twilio exists underneath the branded number as carrier, SIP trunk, and OTP infrastructure.
+- Retell owns conversational voice and text behavior for the `1-800-BACKFILL` surface.
 
 ### 5.6 LLM boundaries
 
@@ -622,6 +650,16 @@ Rules:
 - immediate cancel of pending jobs on fill
 - dedupe by `(campaign_id, employee_id, channel, round_no)`
 - isolate concurrent campaigns by candidate lock policy
+- job claiming, locking, retry policy, dead-letter behavior, and idempotency are platform concerns implemented once in shared worker infrastructure, not reimplemented per job type
+
+Worker platform requirements:
+
+- `FOR UPDATE SKIP LOCKED` or equivalent row-claim semantics
+- bounded retries with retry classification
+- idempotency keys on externally visible job effects
+- heartbeat / stale-lock recovery
+- structured job error payloads
+- dead-letter state for exhausted jobs
 
 ### 6.6 Per-candidate state machine
 
@@ -684,10 +722,24 @@ class LlmProvider(Protocol):
 
 Provider wrappers required:
 
-- Twilio SMS / inbound webhook
-- Twilio voice events where used
-- Retell outbound/inbound voice
+- Retell conversational voice for inbound and outbound calls
+- Retell conversational messaging for inbound and outbound text interactions on `1-800-BACKFILL`
+- Twilio Verify for OTP validation
+- Twilio carrier / SIP trunk integration only where backend awareness is required for number transport or provisioning
 - LLM inference provider
+
+Telephony architecture rule:
+
+- Do not model Twilio as the primary conversational surface for coverage operations.
+- Do not route normal employee coverage texts or voice interactions through direct Twilio application logic if those interactions are meant to run through Retell.
+- Twilio is infrastructure at the edge of the phone stack; Retell is the conversational runtime.
+- If legacy direct-Twilio coverage code exists but is not confirmed live, leave it in place until the Retell delivery path is fully validated and cutover is intentional.
+
+Telephony cutover rule:
+
+- No half-live provider boundary is acceptable long term.
+- During transition, one provider path must be declared primary for each interaction class: OTP verification, inbound conversational phone, outbound conversational phone, inbound conversational text, outbound conversational text.
+- Legacy paths stay dark behind explicit configuration until removed.
 
 ## 7. Event System and Activity Feed
 
@@ -766,6 +818,13 @@ Design rule:
 - write the event record before any async consumer sees it
 - projections may lag
 - source-of-truth timeline lives in `platform_events`
+- `audit_logs` is a temporary compatibility projection once `platform_events` exists; it must not remain a parallel canonical event store
+
+Event cutover rule:
+
+- New domain features emit `platform_events` first.
+- `audit_logs` may be backfilled or projected from `platform_events` during transition.
+- Once feed reads, webhook consumers, and operator-visible timelines are sourced from `platform_events` or its projections, direct service writes to `audit_logs` should be removed.
 
 ### 7.4 Activity feed
 
@@ -818,9 +877,10 @@ Every provider interaction creates a ledger row.
 
 Examples:
 
-- Twilio SMS segment send
-- Twilio voice minute
+- Retell conversational SMS send
+- Retell voice minute
 - Retell AI minute
+- Twilio Verify OTP send / verification
 - LLM input tokens
 - LLM output tokens
 
@@ -849,6 +909,13 @@ Enforcement:
 - Supabase RLS on all production tables
 - all service queries scoped by org and, when applicable, location
 - internal jobs always carry explicit tenant context
+- worker payloads must include tenant identifiers explicitly; workers must never infer tenant scope from ambient process state
+
+Background worker rule:
+
+- Background jobs should execute with an explicit system actor plus explicit `business_id` / `location_id` context in payload and logs.
+- If a worker uses database roles that bypass RLS, tenant scoping must be enforced in application code on every query path.
+- If a worker uses RLS-bound roles, session context must be established deliberately per job before any query runs.
 
 ### 9.2 Authorization
 
@@ -899,18 +966,25 @@ Practical launch rule:
 1. Introduce `platform_events` alongside `audit_logs`.
 2. Emit both for critical coverage and scheduling paths.
 3. Create an event publisher abstraction so services stop writing `audit_logs` directly.
+4. Declare `platform_events` canonical immediately for all new work.
+5. Set an exit criterion for `audit_logs`: compatibility only until feed, webhooks, and audit-facing reads are re-pointed.
 
 ### Phase B: promote campaign as the aggregate
 
 1. Treat `CoverageCase` as the API-facing campaign object.
 2. Rename external schemas and route language from "case" to "campaign".
 3. Add missing campaign columns: `callout_id`, `mode`, `filled_by_employee_id`, `fill_source`.
+4. Do not create a second independent `CoverageCampaign` service model while `CoverageCase` still exists underneath.
+5. Use one storage-backed aggregate with compatibility aliases only, then rename storage later if still worth the migration cost.
 
 ### Phase C: formalize outreach orchestration
 
 1. Add a generic Postgres job table if `outbox_events` is not sufficient for timed internal jobs.
 2. Move dispatch/expiry/recheck behavior into worker-driven jobs.
 3. Add provider adapter wrappers with idempotency and cost logging.
+4. Treat direct Twilio coverage-delivery code as dormant compatibility code unless production usage proves otherwise.
+5. Only refactor or remove that path after the Retell conversational delivery path is live, verified, and the cutover plan is explicit.
+6. Define provider ownership per interaction class and remove ambiguity before enabling production traffic.
 
 ### Phase D: introduce Copilot runtime
 
@@ -930,7 +1004,7 @@ If execution begins now, the highest-leverage sequence is:
 
 1. Add `platform_events` and an event service abstraction.
 2. Rename public coverage concepts to campaign language without breaking storage compatibility.
-3. Add cost ledger capture around Twilio, Retell, and LLM calls.
+3. Add cost ledger capture around Retell, Twilio Verify, and LLM calls.
 4. Introduce worker-driven timed outreach jobs.
 5. Add Copilot session storage and tool registry.
 
