@@ -938,6 +938,10 @@ async def update_employee(
     refreshed = await get_employee(session, business_id, employee_id)
     if refreshed is None:
         raise LookupError("employee_not_found")
+    employee_roles = await _list_employee_roles(session, employee_id)
+    employee_locations = await _list_employee_locations(session, employee_id)
+    set_committed_value(refreshed, "employee_roles", employee_roles)
+    set_committed_value(refreshed, "employee_locations", employee_locations)
     return refreshed
 
 

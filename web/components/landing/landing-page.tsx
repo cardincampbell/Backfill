@@ -4,6 +4,7 @@ import { ArrowRight, Check, Phone, Zap } from "lucide-react";
 
 import { LandingHero } from "@/components/landing/landing-hero";
 import { LandingNav } from "@/components/landing/landing-nav";
+import { LandingReveal } from "@/components/landing/landing-reveal";
 
 const LandingBackfillShiftsInterface = dynamic(
   () =>
@@ -179,7 +180,7 @@ export default function LandingPage() {
       <LandingHero />
 
       <section className="border-y border-[#f0f0f5] bg-white px-5 py-8 sm:px-6 sm:py-10 lg:px-8">
-        <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-center gap-4 sm:gap-6 md:gap-12">
+        <LandingReveal className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-center gap-4 sm:gap-6 md:gap-12" distance={12} duration={0.5}>
           <span
             className="w-full text-center text-[13px] uppercase tracking-[0.1em] text-[#8898AA] md:w-auto"
             style={{ fontWeight: 500 }}
@@ -195,7 +196,7 @@ export default function LandingPage() {
               {industry}
             </span>
           ))}
-        </div>
+        </LandingReveal>
       </section>
 
       <section className="relative overflow-hidden bg-[#0A2540] px-5 py-20 text-white sm:px-6 sm:py-32 lg:px-8">
@@ -211,7 +212,7 @@ export default function LandingPage() {
         <div className="absolute bottom-0 left-0 h-[400px] w-[400px] rounded-full bg-gradient-to-tr from-[#00C7B7]/8 via-transparent to-transparent blur-[100px]" />
 
         <div className="relative z-10 mx-auto max-w-[900px]">
-          <div className="mb-14 sm:mb-20">
+          <LandingReveal className="mb-14 sm:mb-20">
             <div
               className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
               style={{ fontWeight: 600 }}
@@ -227,13 +228,17 @@ export default function LandingPage() {
             <p className="text-[16px] leading-[1.65] text-[#8898AA] sm:text-[19px]">
               Here&apos;s what that morning looks like without Backfill.
             </p>
-          </div>
+          </LandingReveal>
 
           <div className="relative space-y-0">
             <div className="absolute bottom-0 left-[14px] top-0 w-px bg-gradient-to-b from-[#635BFF]/30 via-white/[0.06] to-[#635BFF]/30 sm:left-[108px]" />
-            {PROBLEM_TIMELINE.map((item) => (
-              <div
+            {PROBLEM_TIMELINE.map((item, index) => (
+              <LandingReveal
                 key={item.time}
+                axis="x"
+                delay={index * 0.08}
+                duration={0.5}
+                distance={20}
                 className="group flex flex-col items-start gap-1 py-4 pl-8 sm:flex-row sm:gap-8 sm:py-5 sm:pl-0"
               >
                 <div
@@ -248,17 +253,20 @@ export default function LandingPage() {
                     {item.text}
                   </div>
                 </div>
-              </div>
+              </LandingReveal>
             ))}
           </div>
 
-          <div className="mt-12 rounded-[24px] border border-white/[0.06] bg-white/[0.02] p-6 sm:mt-16 sm:p-8">
+          <LandingReveal
+            className="mt-12 border border-white/[0.06] bg-white/[0.02] p-6 backfill-ui-radius sm:mt-16 sm:p-8"
+            delay={0.3}
+          >
             <p className="text-[15px] italic leading-[1.8] text-[#8898AA] sm:text-[17px]">
               &quot;For a 30-location group, this is happening multiple times a
               week — across every location, every manager, every shift window.
               That&apos;s not a staffing problem. That&apos;s a systems problem.&quot;
             </p>
-          </div>
+          </LandingReveal>
         </div>
       </section>
 
@@ -268,7 +276,7 @@ export default function LandingPage() {
       >
         <DotGrid className="opacity-30" />
         <div className="relative mx-auto max-w-[1200px]">
-          <div className="mb-14 max-w-2xl sm:mb-20">
+          <LandingReveal className="mb-14 max-w-2xl sm:mb-20">
             <div
               className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
               style={{ fontWeight: 600 }}
@@ -285,13 +293,15 @@ export default function LandingPage() {
               No scrambling. No group chat. Our coverage engine takes over and
               notifies you when it&apos;s done.
             </p>
-          </div>
+          </LandingReveal>
 
           <div className="grid gap-5 sm:grid-cols-2 md:grid-cols-3">
-            {HOW_IT_WORKS.map((item) => (
-              <div
+            {HOW_IT_WORKS.map((item, index) => (
+              <LandingReveal
                 key={item.step}
-                className={`group relative border border-[#e2e8f0] bg-gradient-to-b ${item.gradient} p-8 transition-all duration-300 hover:-translate-y-[2px] hover:border-[#c4d1e0] hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)]`}
+                delay={index * 0.1}
+                distance={30}
+                className={`group relative border border-[#e2e8f0] bg-gradient-to-b ${item.gradient} p-8 transition-all duration-300 hover:-translate-y-[2px] hover:border-[#c4d1e0] hover:shadow-[0_12px_40px_rgba(0,0,0,0.06)] backfill-ui-radius`}
               >
                 <div
                   className="absolute right-6 top-6 text-[72px] leading-none tracking-[-0.04em] text-[#0A2540]/[0.04]"
@@ -302,7 +312,7 @@ export default function LandingPage() {
 
                 <div className="mb-8 flex items-center gap-3">
                   <div
-                    className="flex h-10 w-10 items-center justify-center rounded-[14px] text-white"
+                    className="flex h-10 w-10 items-center justify-center text-white backfill-ui-radius"
                     style={{ backgroundColor: item.color }}
                   >
                     {item.icon}
@@ -324,16 +334,20 @@ export default function LandingPage() {
                   {item.description}
                 </p>
                 <div
-                  className="inline-block rounded-[14px] border border-[#e2e8f0] bg-white/80 px-3 py-1.5 text-[12px] text-[#425466]"
+                  className="inline-block border border-[#e2e8f0] bg-white/80 px-3 py-1.5 text-[12px] text-[#425466] backfill-ui-radius"
                   style={{ fontWeight: 500 }}
                 >
                   {item.badge}
                 </div>
-              </div>
+              </LandingReveal>
             ))}
           </div>
 
-          <blockquote className="mt-16 max-w-2xl border-l-4 border-[#635BFF] pl-7 py-1">
+          <LandingReveal
+            as="blockquote"
+            className="mt-16 max-w-2xl border-l-4 border-[#635BFF] pl-7 py-1"
+            delay={0.2}
+          >
             <p
               className="mb-4 text-[18px] italic leading-[1.65] text-[#0A2540] sm:text-[20px]"
               style={{ fontWeight: 450 }}
@@ -347,7 +361,7 @@ export default function LandingPage() {
             >
               — Operations Manager, 3-location casual dining group, Los Angeles
             </cite>
-          </blockquote>
+          </LandingReveal>
         </div>
       </section>
 
@@ -366,9 +380,9 @@ export default function LandingPage() {
         <div className="absolute left-1/2 top-0 h-[500px] w-[900px] -translate-x-1/2 rounded-full bg-gradient-to-b from-[#635BFF]/12 via-transparent to-transparent blur-[120px]" />
 
         <div className="relative z-10 mx-auto max-w-[1200px]">
-          <div className="mb-16">
+          <LandingReveal className="mb-16">
             <div
-              className="mb-8 inline-flex items-center gap-2 rounded-[14px] border border-[#635BFF]/25 bg-[#635BFF]/15 px-3.5 py-1.5 text-[12px] uppercase tracking-[0.08em] text-[#a5a0ff]"
+              className="mb-8 inline-flex items-center gap-2 border border-[#635BFF]/25 bg-[#635BFF]/15 px-3.5 py-1.5 text-[12px] uppercase tracking-[0.08em] text-[#a5a0ff] backfill-ui-radius"
               style={{ fontWeight: 600 }}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-[#635BFF]" />
@@ -403,17 +417,19 @@ export default function LandingPage() {
                 conversation.
               </p>
             </div>
-          </div>
+          </LandingReveal>
 
-          <div className="mb-16">
+          <LandingReveal className="mb-16" delay={0.2} distance={30}>
             <LandingBackfillShiftsInterface />
-          </div>
+          </LandingReveal>
 
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {SHIFT_FEATURES.map((feature) => (
-              <div
+            {SHIFT_FEATURES.map((feature, index) => (
+              <LandingReveal
                 key={feature.title}
-                className="group rounded-[24px] border border-white/[0.06] bg-white/[0.02] p-6 transition-all duration-300 hover:border-[#635BFF]/30 hover:bg-white/[0.04]"
+                delay={index * 0.06}
+                duration={0.5}
+                className="group border border-white/[0.06] bg-white/[0.02] p-6 transition-all duration-300 hover:border-[#635BFF]/30 hover:bg-white/[0.04] backfill-ui-radius"
               >
                 <h3
                   className="mb-2 text-[17px] tracking-[-0.01em] text-white/90 transition-colors group-hover:text-white"
@@ -424,15 +440,15 @@ export default function LandingPage() {
                 <p className="text-[14px] leading-[1.65] text-[#8898AA]/80 transition-colors group-hover:text-[#8898AA]">
                   {feature.description}
                 </p>
-              </div>
+              </LandingReveal>
             ))}
           </div>
 
-          <div className="mt-12 text-center">
+          <LandingReveal className="mt-12 text-center" delay={0.5} opacityOnly>
             <p className="text-[14px] text-white/30">
               Included for all Backfill customers. No additional cost.
             </p>
-          </div>
+          </LandingReveal>
         </div>
       </section>
 
@@ -441,7 +457,7 @@ export default function LandingPage() {
         className="relative overflow-hidden bg-[#fafbfd] px-5 py-20 sm:px-6 sm:py-28 lg:px-8"
       >
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
-        <div className="mx-auto max-w-[900px] text-center">
+        <LandingReveal className="mx-auto max-w-[900px] text-center">
           <div
             className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
             style={{ fontWeight: 600 }}
@@ -463,7 +479,7 @@ export default function LandingPage() {
             {INTEGRATIONS.map((integration) => (
               <div
                 key={integration}
-                className="rounded-[14px] border border-[#e2e8f0] bg-white px-6 py-4 text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)]"
+                className="border border-[#e2e8f0] bg-white px-6 py-4 text-[16px] text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-[1px] hover:scale-[1.02] hover:shadow-[0_8px_25px_rgba(0,0,0,0.07)] backfill-ui-radius"
                 style={{ fontWeight: 500 }}
               >
                 {integration}
@@ -475,7 +491,7 @@ export default function LandingPage() {
             No manual data entry. No duplicate setup. Your employees, roles,
             and availability sync automatically.
           </p>
-        </div>
+        </LandingReveal>
       </section>
 
       <section
@@ -501,7 +517,7 @@ export default function LandingPage() {
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#635BFF]/20 to-transparent" />
 
         <div className="relative z-10 mx-auto max-w-[900px]">
-          <div className="mb-16 text-center">
+          <LandingReveal className="mb-16 text-center">
             <div
               className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
               style={{ fontWeight: 600 }}
@@ -518,9 +534,11 @@ export default function LandingPage() {
               No monthly seat fees. No per-user subscriptions. Backfill charges
               like labor — when the work gets done.
             </p>
-          </div>
+          </LandingReveal>
 
-          <div className="relative overflow-hidden rounded-[32px] border border-white/[0.08] bg-white/[0.04] p-7 backdrop-blur-sm sm:p-10 lg:p-12">
+          <LandingReveal
+            className="relative overflow-hidden rounded-[32px] border border-white/[0.08] bg-white/[0.04] p-7 backdrop-blur-sm sm:p-10 lg:p-12"
+          >
             <div className="absolute inset-0 rounded-[32px] bg-gradient-to-br from-[#635BFF]/[0.06] via-transparent to-[#00C7B7]/[0.04]" />
             <div className="relative z-10">
               <div className="mb-10 text-center">
@@ -541,7 +559,7 @@ export default function LandingPage() {
               <div className="mt-10 text-center">
                 <Link
                   href="/try"
-                  className="group inline-flex items-center gap-2 rounded-[14px] bg-[#635BFF] px-7 py-3.5 text-[15px] text-white shadow-[0_4px_20px_rgba(99,91,255,0.4)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)]"
+                  className="group inline-flex items-center gap-2 bg-[#635BFF] px-7 py-3.5 text-[15px] text-white shadow-[0_4px_20px_rgba(99,91,255,0.4)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_6px_30px_rgba(99,91,255,0.55)] backfill-ui-radius"
                   style={{ fontWeight: 500 }}
                 >
                   Get Started Free
@@ -549,9 +567,13 @@ export default function LandingPage() {
                 </Link>
               </div>
             </div>
-          </div>
+          </LandingReveal>
 
-          <blockquote className="mx-auto mt-10 max-w-3xl border-l-4 border-[#635BFF]/60 pl-7 py-1">
+          <LandingReveal
+            as="blockquote"
+            className="mx-auto mt-10 max-w-3xl border-l-4 border-[#635BFF]/60 pl-7 py-1"
+            delay={0.2}
+          >
             <p
               className="mb-4 text-[17px] italic leading-[1.65] text-white/80 sm:text-[19px]"
               style={{ fontWeight: 400 }}
@@ -566,14 +588,14 @@ export default function LandingPage() {
             >
               — GM, fast casual restaurants, 4 locations
             </cite>
-          </blockquote>
+          </LandingReveal>
         </div>
       </section>
 
       <section className="relative bg-[#fafbfd] px-5 py-20 sm:px-6 sm:py-32 lg:px-8">
         <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-[#e2e8f0] to-transparent" />
         <div className="mx-auto max-w-[900px]">
-          <div className="mb-16">
+          <LandingReveal className="mb-16">
             <div
               className="mb-5 text-[12px] uppercase tracking-[0.2em] text-[#635BFF]"
               style={{ fontWeight: 600 }}
@@ -589,7 +611,7 @@ export default function LandingPage() {
             <p className="text-[16px] text-[#425466] sm:text-[18px]">
               Straight answers. No runaround.
             </p>
-          </div>
+          </LandingReveal>
 
           <LandingFaq />
         </div>
@@ -608,7 +630,7 @@ export default function LandingPage() {
           <div className="absolute left-1/2 top-[-200px] h-[500px] w-[1000px] -translate-x-1/2 rounded-full bg-gradient-to-b from-[#635BFF]/20 via-[#0070F3]/10 to-transparent blur-[120px]" />
         </div>
 
-        <div className="relative z-10 mx-auto max-w-[700px] text-center">
+        <LandingReveal className="relative z-10 mx-auto max-w-[700px] text-center">
           <h2
             className="mb-6 text-[30px] leading-[1.08] tracking-[-0.03em] sm:text-[44px] lg:text-[56px]"
             style={{ fontWeight: 600 }}
@@ -620,13 +642,13 @@ export default function LandingPage() {
           </p>
           <Link
             href="/try"
-            className="group inline-flex items-center gap-2.5 rounded-[14px] bg-white px-8 py-4 text-[16px] text-[#0A2540] shadow-[0_4px_20px_rgba(255,255,255,0.15)] transition-all hover:-translate-y-[1px] hover:bg-white/95 hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)]"
+            className="group inline-flex items-center gap-2.5 bg-white px-8 py-4 text-[16px] text-[#0A2540] shadow-[0_4px_20px_rgba(255,255,255,0.15)] transition-all hover:-translate-y-[1px] hover:bg-white/95 hover:shadow-[0_6px_30px_rgba(255,255,255,0.2)] backfill-ui-radius"
             style={{ fontWeight: 550 }}
           >
             Start filling callouts autonomously
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
-        </div>
+        </LandingReveal>
       </section>
 
       <footer className="border-t border-[#f0f0f5] bg-white px-5 py-12 sm:px-6 sm:py-16 lg:px-8">

@@ -138,6 +138,14 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             if location_name
         ]
 
+    @property
+    def roles(self) -> list["EmployeeRole"]:
+        return self._loaded_employee_roles()
+
+    @property
+    def locations(self) -> list["EmployeeLocation"]:
+        return self._loaded_employee_locations()
+
 
 class EmployeeRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "employee_roles"

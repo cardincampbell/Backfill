@@ -65,7 +65,7 @@ export function LandingHero() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.6 }}
-                className="mb-6 inline-flex w-fit items-center gap-2.5 self-start rounded-[14px] border border-[#e2e8f0] bg-white/80 px-4 py-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] backdrop-blur-sm sm:mb-8"
+                className="mb-6 inline-flex w-fit items-center gap-2.5 self-start border border-[#e2e8f0] bg-white/80 px-4 py-1.5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] backdrop-blur-sm backfill-ui-radius sm:mb-8"
               >
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#635BFF]" />
                 <span
@@ -109,7 +109,7 @@ export function LandingHero() {
               >
                 <Link
                   href="/try"
-                  className="group inline-flex w-full items-center justify-center gap-2.5 rounded-[14px] bg-[#0A2540] px-8 py-4 text-[17px] text-white shadow-[0_4px_14px_rgba(10,37,64,0.35)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_6px_24px_rgba(10,37,64,0.45)] sm:w-auto sm:px-7 sm:py-3.5 sm:text-[16px]"
+                  className="group inline-flex w-full items-center justify-center gap-2.5 bg-[#0A2540] px-8 py-4 text-[17px] text-white shadow-[0_4px_14px_rgba(10,37,64,0.35)] transition-all duration-300 hover:-translate-y-[1px] hover:shadow-[0_6px_24px_rgba(10,37,64,0.45)] backfill-ui-radius sm:w-auto sm:px-7 sm:py-3.5 sm:text-[16px]"
                   style={{ fontWeight: 500 }}
                 >
                   Try Backfill Free

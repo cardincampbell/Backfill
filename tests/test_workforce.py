@@ -5,12 +5,15 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
+from app.models.business import Business, Location, Role
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleReplace,
     EmployeeAvailabilityRuleRead,
@@ -464,6 +467,213 @@ def test_replace_self_employee_availability_route_returns_rules(monkeypatch):
         assert fake_session.commits == 1
     finally:
         app.dependency_overrides.clear()
+
+
+def test_employee_profile_read_includes_role_and_location_assignments():
+    business_id = uuid4()
+    employee_id = uuid4()
+    role_id = uuid4()
+    location_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    business = Business(
+        id=business_id,
+        name="Backfill",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        timezone="America/Los_Angeles",
+        country_code="US",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        preferred_name="Jamie",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        status="active",
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_role = EmployeeRole(
+        id=uuid4(),
+        employee_id=employee_id,
+        role_id=role_id,
+        proficiency_level=1,
+        is_primary=True,
+        role_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    set_committed_value(role, "business", business)
+    set_committed_value(location, "business", business)
+    set_committed_value(employee_role, "role", role)
+    set_committed_value(employee_location, "location", location)
+    set_committed_value(employee, "employee_roles", [employee_role])
+    set_committed_value(employee, "employee_locations", [employee_location])
+
+    payload = EmployeeProfileRead.model_validate(employee)
+
+    assert payload.role_ids == [role_id]
+    assert payload.location_ids == [location_id]
+    assert payload.roles[0].role_id == role_id
+    assert payload.roles[0].role_name == "Server"
+    assert payload.locations[0].location_id == location_id
+    assert payload.locations[0].location_name == "Pasadena"
+
+
+@pytest.mark.asyncio
+async def test_update_employee_hydrates_role_and_location_assignments(monkeypatch):
+    business_id = uuid4()
+    employee_id = uuid4()
+    role_id = uuid4()
+    location_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        timezone="America/Los_Angeles",
+        country_code="US",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        preferred_name="Jamie",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        status="active",
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_role = EmployeeRole(
+        id=uuid4(),
+        employee_id=employee_id,
+        role_id=role_id,
+        proficiency_level=1,
+        is_primary=True,
+        role_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    set_committed_value(employee_role, "role", role)
+    set_committed_value(employee_location, "location", location)
+
+    async def fake_require_employee(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return employee
+
+    async def fake_get_employee(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return employee
+
+    async def fake_list_roles(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return [employee_role]
+
+    async def fake_list_locations(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return [employee_location]
+
+    async def fake_replace_roles(_session, incoming_employee, incoming_business_id, assignments):
+        assert incoming_employee is employee
+        assert incoming_business_id == business_id
+        assert assignments[0].role_id == role_id
+
+    async def fake_replace_locations(_session, incoming_employee, incoming_business_id, assignments):
+        assert incoming_employee is employee
+        assert incoming_business_id == business_id
+        assert assignments[0].location_id == location_id
+
+    monkeypatch.setattr("app.services.workforce._require_employee", fake_require_employee)
+    monkeypatch.setattr("app.services.workforce.get_employee", fake_get_employee)
+    monkeypatch.setattr("app.services.workforce._list_employee_roles", fake_list_roles)
+    monkeypatch.setattr("app.services.workforce._list_employee_locations", fake_list_locations)
+    monkeypatch.setattr("app.services.workforce._replace_employee_roles", fake_replace_roles)
+    monkeypatch.setattr("app.services.workforce._replace_employee_locations", fake_replace_locations)
+
+    class DummyUpdateSession:
+        async def flush(self):
+            return None
+
+    updated = await workforce.update_employee(
+        DummyUpdateSession(),
+        business_id,
+        employee_id,
+        workforce.EmployeeUpdate(
+            roles=[workforce.EmployeeRoleUpsert(role_id=role_id, is_primary=True)],
+            locations=[workforce.EmployeeLocationUpsert(location_id=location_id, is_primary=True)],
+        ),
+    )
+
+    assert updated.role_ids == [role_id]
+    assert updated.location_ids == [location_id]
+    payload = EmployeeProfileRead.model_validate(updated)
+    assert payload.roles[0].role_name == "Server"
+    assert payload.locations[0].location_name == "Pasadena"
 
 
 @pytest.mark.asyncio
