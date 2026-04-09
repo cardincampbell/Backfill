@@ -428,10 +428,7 @@ export function LocationEmployeeEnrollmentModal({
                     onClick={() => toggleRole(role.id)}
                     type="button"
                   >
-                    <Plus
-                      className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
-                      size={11}
-                    />
+                    <Tag className="text-[#635BFF]" size={11} />
                     <span
                       className={`text-[12px] transition-colors ${
                         dark
@@ -442,6 +439,10 @@ export function LocationEmployeeEnrollmentModal({
                     >
                       {role.name}
                     </span>
+                    <Plus
+                      className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                      size={11}
+                    />
                   </button>
                 ))}
               </div>

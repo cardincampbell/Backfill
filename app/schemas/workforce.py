@@ -175,6 +175,18 @@ class EmployeeProfileRead(EmployeeRead):
     locations: list[EmployeeLocationRead] = Field(default_factory=list)
 
 
+class EmployeeDeleteReadinessRead(BaseSchema):
+    business_id: UUID
+    employee_id: UUID
+    can_delete: bool
+    reason: Optional[str] = None
+
+
+class EmployeeDeleteResponse(BaseSchema):
+    deleted: bool
+    employee_id: UUID
+
+
 class EmployeeAvailabilityRuleCreate(BaseSchema):
     day_of_week: int
     start_local_time: time

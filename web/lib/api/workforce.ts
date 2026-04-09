@@ -73,6 +73,13 @@ export type EmployeeProfile = EmployeeSummary & {
   locations: EmployeeLocationAssignment[];
 };
 
+export type EmployeeDeleteReadiness = {
+  business_id: string;
+  employee_id: string;
+  can_delete: boolean;
+  reason?: string | null;
+};
+
 export type EmployeeAvailabilityRule = {
   id: string;
   employee_id: string;
@@ -226,6 +233,35 @@ export async function updateEmployee(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as EmployeeProfile;
+}
+
+export async function getEmployeeDeleteReadiness(
+  businessId: string,
+  employeeId: string,
+): Promise<EmployeeDeleteReadiness> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/${employeeId}/delete-readiness`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as EmployeeDeleteReadiness;
+}
+
+export async function deleteEmployee(
+  businessId: string,
+  employeeId: string,
+): Promise<{ deleted: boolean; employee_id: string }> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/${employeeId}`,
+    {
+      method: "DELETE",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as { deleted: boolean; employee_id: string };
 }
 
 export async function getSelfEmployeeAvailability(

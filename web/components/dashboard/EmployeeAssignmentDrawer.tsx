@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { MapPin, Tag, X } from "lucide-react";
+import { MapPin, Plus, Tag, X } from "lucide-react";
 
 import type { BusinessLocation, BusinessRole } from "@/lib/api/businesses";
 import {
@@ -65,6 +65,33 @@ function buildAssignmentState(profile: EmployeeProfile): EmployeeAssignmentState
     selectedLocationIds,
     primaryLocationId:
       profile.locations.find((location) => location.is_primary)?.location_id ??
+      selectedLocationIds[0] ??
+      "",
+  };
+}
+
+function buildAssignmentStateFromSummary(
+  employee: EmployeeSummary,
+  roles: BusinessRole[],
+  locations: BusinessLocation[],
+): EmployeeAssignmentState {
+  const selectedRoleIds = roles
+    .filter((role) => employee.role_ids.includes(role.id) || employee.role_names.includes(role.name))
+    .map((role) => role.id);
+  const selectedLocationIds = locations
+    .filter((location) => employee.location_ids.includes(location.id))
+    .map((location) => location.id);
+
+  return {
+    selectedRoleIds,
+    primaryRoleId:
+      roles.find((role) => role.id === employee.primary_role_id)?.id ??
+      roles.find((role) => employee.role_names.includes(role.name))?.id ??
+      selectedRoleIds[0] ??
+      "",
+    selectedLocationIds,
+    primaryLocationId:
+      locations.find((location) => location.id === employee.primary_location_id)?.id ??
       selectedLocationIds[0] ??
       "",
   };
@@ -161,6 +188,10 @@ function AvailableAssignmentButton({
       >
         {label}
       </span>
+      <Plus
+        size={11}
+        className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+      />
     </button>
   );
 }
@@ -288,9 +319,16 @@ function LocationAssignmentPicker({
   onToggleLocation(locationId: string): void;
   onSetPrimaryLocation(locationId: string): void;
 }) {
-  const selectedLocations = locations.filter((location) =>
-    selectedLocationIds.includes(location.id),
-  );
+  const selectedLocations = locations
+    .filter((location) => selectedLocationIds.includes(location.id))
+    .sort((left, right) => {
+      const leftPrimary = left.id === primaryLocationId ? 1 : 0;
+      const rightPrimary = right.id === primaryLocationId ? 1 : 0;
+      if (leftPrimary !== rightPrimary) {
+        return rightPrimary - leftPrimary;
+      }
+      return locationDisplayName(left).localeCompare(locationDisplayName(right));
+    });
   const availableLocations = locations.filter(
     (location) => !selectedLocationIds.includes(location.id),
   );
@@ -403,12 +441,9 @@ export function EmployeeAssignmentDrawer({
   roles,
 }: EmployeeAssignmentDrawerProps) {
   const [profile, setProfile] = useState<EmployeeProfile | null>(null);
-  const [state, setState] = useState<EmployeeAssignmentState>({
-    selectedRoleIds: [],
-    primaryRoleId: "",
-    selectedLocationIds: [],
-    primaryLocationId: "",
-  });
+  const [state, setState] = useState<EmployeeAssignmentState>(() =>
+    buildAssignmentStateFromSummary(employee, roles, locations),
+  );
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
@@ -416,6 +451,15 @@ export function EmployeeAssignmentDrawer({
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#5E6D7A]";
   const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
   const panelSurface = dark ? "bg-white/[0.04]" : "bg-[#F7F8FA]";
+  const fallbackPrimaryLocation = useMemo(
+    () =>
+      locations.find((location) => location.id === employee.primary_location_id) ??
+      locations.find((location) =>
+        employee.location_ids.includes(location.id),
+      ) ??
+      null,
+    [employee.location_ids, employee.primary_location_id, locations],
+  );
   const primaryLocation = useMemo(
     () => locations.find((location) => location.id === state.primaryLocationId) ?? null,
     [locations, state.primaryLocationId],
@@ -423,24 +467,20 @@ export function EmployeeAssignmentDrawer({
 
   useEffect(() => {
     let cancelled = false;
+    setProfile(null);
+    setState(buildAssignmentStateFromSummary(employee, roles, locations));
 
     async function loadProfile() {
       try {
         setLoading(true);
         setFeedback(null);
-        const nextProfile = await getEmployeeProfile(businessId, employee.id);
+        const nextProfile = await getEmployeeProfile(businessId, employee.id).catch(() => null);
         if (cancelled) {
           return;
         }
-        setProfile(nextProfile);
-        setState(buildAssignmentState(nextProfile));
-      } catch (error) {
-        if (!cancelled) {
-          setFeedback({
-            tone: "error",
-            message:
-              error instanceof Error ? error.message : "Could not load this employee.",
-          });
+        if (nextProfile) {
+          setProfile(nextProfile);
+          setState(buildAssignmentState(nextProfile));
         }
       } finally {
         if (!cancelled) {
@@ -454,7 +494,7 @@ export function EmployeeAssignmentDrawer({
     return () => {
       cancelled = true;
     };
-  }, [businessId, employee.id]);
+  }, [businessId, employee, locations, roles]);
 
   const toggleRole = (roleId: string) => {
     setState((current) => {
@@ -584,9 +624,9 @@ export function EmployeeAssignmentDrawer({
             </div>
           ) : null}
 
-          {loading ? (
+          {loading && !profile ? (
             <div className={`py-12 text-[13px] ${textSecondary}`}>Loading employee profile...</div>
-          ) : profile ? (
+          ) : (
             <div className="space-y-5">
               <div className={`rounded-2xl px-4 py-4 ${panelSurface}`}>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -598,7 +638,7 @@ export function EmployeeAssignmentDrawer({
                       Contact
                     </p>
                     <p className={`mt-1 text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                      {profile.email ?? profile.phone_e164 ?? "No contact info"}
+                      {profile?.email ?? profile?.phone_e164 ?? employee.email ?? employee.phone_e164 ?? "No contact info"}
                     </p>
                   </div>
                   <div>
@@ -611,7 +651,11 @@ export function EmployeeAssignmentDrawer({
                     <div className="mt-1 flex items-center gap-2">
                       <MapPin className="text-[#8898AA]" size={13} />
                       <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                        {primaryLocation ? locationDisplayName(primaryLocation) : "Not set"}
+                        {primaryLocation
+                          ? locationDisplayName(primaryLocation)
+                          : fallbackPrimaryLocation
+                            ? locationDisplayName(fallbackPrimaryLocation)
+                            : "Not set"}
                       </p>
                     </div>
                   </div>
@@ -642,7 +686,7 @@ export function EmployeeAssignmentDrawer({
                 selectedLocationIds={state.selectedLocationIds}
               />
             </div>
-          ) : null}
+          )}
         </div>
 
         <div className={`flex items-center justify-end gap-3 border-t px-6 py-4 ${borderClass}`}>

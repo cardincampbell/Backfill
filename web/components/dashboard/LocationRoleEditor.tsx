@@ -413,10 +413,7 @@ export function LocationRoleEditor({
                           : "bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
                       }`}
                     >
-                      <Plus
-                        size={11}
-                        className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors"
-                      />
+                      <Tag size={11} className="text-[#635BFF]" />
                       <span
                         className={`text-[12px] transition-colors ${
                           dark
@@ -427,6 +424,10 @@ export function LocationRoleEditor({
                       >
                         {role.name}
                       </span>
+                      <Plus
+                        size={11}
+                        className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors"
+                      />
                     </button>
                   ))}
                 </div>

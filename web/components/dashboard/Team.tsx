@@ -25,6 +25,7 @@ import {
   Shield as ShieldCheck,
   Info,
 } from 'lucide-react';
+import { AppLoader } from '@/components/app-loader';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { useAppWorkspace, useAppWorkspaceReady } from '@/components/app-workspace';
 import { FloatingDropdown } from '@/components/floating-dropdown';
@@ -37,7 +38,9 @@ import {
 } from '@/lib/api/businesses';
 import {
   createEmployee,
+  deleteEmployee,
   downloadEmployeeImportTemplate,
+  getEmployeeDeleteReadiness,
   getEmployeeProfile,
   importEmployees,
   listEmployees,
@@ -507,6 +510,77 @@ function RolesTooltip({
   );
 }
 
+function LocationsTooltip({
+  dark = false,
+  locations,
+}: {
+  dark?: boolean;
+  locations: EmployeeLocation[];
+}) {
+  const [show, setShow] = useState(false);
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span
+        className={`cursor-default rounded-full px-1.5 py-0.5 text-[10px] transition-colors ${
+          dark
+            ? 'bg-white/[0.06] text-[#C1CED8] hover:bg-white/[0.1]'
+            : 'bg-[#F7F8FA] text-[#8898AA] hover:bg-[#F0F0F5]'
+        }`}
+        style={{ fontWeight: 440 }}
+      >
+        +{locations.length}
+      </span>
+      <AnimatePresence>
+        {show && (
+          dark ? (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              className="absolute z-50 bottom-full mb-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[#0A2540] px-3 py-2 shadow-xl pointer-events-none"
+            >
+              <div className="flex flex-col gap-1.5">
+                {locations.map((location) => (
+                  <div key={location.id ?? location.name} className="flex items-center gap-2">
+                    <span className="text-[12px]">{location.emoji}</span>
+                    <span className="text-[11px] text-white" style={{ fontWeight: 460 }}>
+                      {location.name}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 h-2 w-2 -mt-1 rotate-45 bg-[#0A2540]" />
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              className="absolute z-50 bottom-full mb-2 left-1/2 -translate-x-1/2 px-3 py-2.5 rounded-xl bg-white border border-[#E5E7EB] shadow-[0_4px_16px_rgba(0,0,0,0.08),0_1px_3px_rgba(0,0,0,0.04)] pointer-events-none whitespace-nowrap"
+            >
+              <div className="flex flex-col gap-1.5">
+                {locations.map((location) => (
+                  <div key={location.id ?? location.name} className="flex items-center gap-2">
+                    <span className="text-[12px]">{location.emoji}</span>
+                    <span className="text-[11px] text-[#3E4C59]" style={{ fontWeight: 460 }}>
+                      {location.name}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 const statusOptions = [
   'All Status',
   statusConfig.needs_attention.label,
@@ -636,7 +710,6 @@ function AvailableAssignmentButton({
       onClick={onClick}
       type="button"
     >
-      <Plus className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]" size={11} />
       <span className="shrink-0">{leading}</span>
       <span
         className={`text-[12px] transition-colors ${
@@ -646,6 +719,7 @@ function AvailableAssignmentButton({
       >
         {label}
       </span>
+      <Plus className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]" size={11} />
     </button>
   );
 }
@@ -1294,6 +1368,7 @@ function EmployeeDetail({
   employee,
   locations,
   onClose,
+  onDelete,
   onSave,
   onRoleCreated,
   roles,
@@ -1303,6 +1378,7 @@ function EmployeeDetail({
   employee: Employee;
   locations: BusinessLocation[];
   onClose: () => void;
+  onDelete(employeeId: string): Promise<void> | void;
   onSave(employee: EmployeeProfile): Promise<void>;
   onRoleCreated(role: BusinessRole): void;
   roles: BusinessRole[];
@@ -1315,12 +1391,19 @@ function EmployeeDetail({
 
   const [email, setEmail] = useState(employee.email);
   const [phone, setPhone] = useState(employee.phone);
-  const [formData, setFormData] = useState<EmployeeAssignmentState>(emptyEmployeeAssignmentState());
+  const [formData, setFormData] = useState<EmployeeAssignmentState>(() =>
+    buildEmployeeAssignmentState(employee, roles, locations),
+  );
   const [roleCatalog, setRoleCatalog] = useState<BusinessRole[]>(roles);
   const [customRole, setCustomRole] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [deleteState, setDeleteState] = useState<{
+    canDelete: boolean;
+    checking?: boolean;
+    deleting?: boolean;
+    reason?: string | null;
+  }>({ canDelete: false, checking: true });
 
   useEffect(() => {
     setRoleCatalog(roles);
@@ -1329,24 +1412,42 @@ function EmployeeDetail({
   useEffect(() => {
     let cancelled = false;
 
+    setEmail(employee.email);
+    setPhone(employee.phone);
+    setFormData(buildEmployeeAssignmentState(employee, roles, locations));
+    setDeleteState({ canDelete: false, checking: true, reason: null });
+
     async function loadProfile() {
       try {
-        setLoadingProfile(true);
-        setFeedback(null);
-        const profile = await getEmployeeProfile(businessId, employee.id);
+        const [profile, readiness] = await Promise.all([
+          getEmployeeProfile(businessId, employee.id).catch(() => null),
+          getEmployeeDeleteReadiness(businessId, employee.id).catch(() => null),
+        ]);
         if (cancelled) {
           return;
         }
-        setEmail(profile.email ?? '');
-        setPhone(profile.phone_e164 ?? '');
-        setFormData(buildEmployeeAssignmentStateFromProfile(profile));
-      } catch (error) {
-        if (!cancelled) {
-          setFeedback(error instanceof Error ? error.message : 'Could not load this employee.');
+        if (profile) {
+          setEmail(profile.email ?? '');
+          setPhone(profile.phone_e164 ?? '');
+          setFormData(buildEmployeeAssignmentStateFromProfile(profile));
         }
-      } finally {
+        if (readiness) {
+          setDeleteState({
+            canDelete: readiness.can_delete,
+            reason: readiness.reason,
+          });
+        } else {
+          setDeleteState({
+            canDelete: false,
+            reason: 'Could not determine whether this employee can be removed.',
+          });
+        }
+      } catch {
         if (!cancelled) {
-          setLoadingProfile(false);
+          setDeleteState({
+            canDelete: false,
+            reason: 'Could not determine whether this employee can be removed.',
+          });
         }
       }
     }
@@ -1355,10 +1456,23 @@ function EmployeeDetail({
     return () => {
       cancelled = true;
     };
-  }, [businessId, employee.id]);
+  }, [businessId, employee, locations, roles]);
 
   const selectedRoles = roleCatalog.filter((role) => formData.selectedRoleIds.includes(role.id));
-  const selectedLocations = locations.filter((location) => formData.selectedLocationIds.includes(location.id));
+  const selectedLocations = useMemo(
+    () =>
+      locations
+        .filter((location) => formData.selectedLocationIds.includes(location.id))
+        .sort((left, right) => {
+          const leftPrimary = left.id === formData.primaryLocationId ? 1 : 0;
+          const rightPrimary = right.id === formData.primaryLocationId ? 1 : 0;
+          if (leftPrimary !== rightPrimary) {
+            return rightPrimary - leftPrimary;
+          }
+          return locationDisplayName(left).localeCompare(locationDisplayName(right));
+        }),
+    [formData.primaryLocationId, formData.selectedLocationIds, locations],
+  );
   const availableRoles = roleCatalog.filter((role) => !formData.selectedRoleIds.includes(role.id));
   const availableLocations = locations.filter((location) => !formData.selectedLocationIds.includes(location.id));
 
@@ -1451,6 +1565,32 @@ function EmployeeDetail({
     }
   };
 
+  const handleDelete = async () => {
+    if (!deleteState.canDelete || deleteState.deleting) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Remove ${employee.name}? This only works when they are not tied to scheduled shifts.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setDeleteState((current) => ({ ...current, deleting: true }));
+      setFeedback(null);
+      await deleteEmployee(businessId, employee.id);
+      await onDelete(employee.id);
+    } catch (error) {
+      setFeedback(
+        error instanceof Error ? error.message : 'Could not remove this employee.',
+      );
+      setDeleteState((current) => ({
+        ...current,
+        deleting: false,
+      }));
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-sm"
@@ -1470,7 +1610,7 @@ function EmployeeDetail({
                 void handleSave();
               }}
               className="px-4 py-2 rounded-full text-[12px] text-white transition-all duration-300 hover:shadow-[0_0_16px_rgba(99,91,255,0.25)]"
-              disabled={!canSave || isSaving || loadingProfile}
+              disabled={!canSave || isSaving}
               style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
               {isSaving ? 'Saving...' : 'Save Changes'}
             </button>
@@ -1510,13 +1650,6 @@ function EmployeeDetail({
               {feedback}
             </div>
           ) : null}
-
-          {loadingProfile ? (
-            <p className={`text-[13px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-              Loading employee details...
-            </p>
-          ) : (
-            <>
           {/* Editable Contact */}
           <div>
             <h3 className="text-[11px] text-[#8898AA] uppercase tracking-[0.04em] mb-3" style={{ fontWeight: 500 }}>Contact</h3>
@@ -1613,9 +1746,9 @@ function EmployeeDetail({
                       <button key={location.id} onClick={() => toggleLocation(location.id)}
                         className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}
                         type="button">
-                        <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
                         <span className="text-[14px] mr-0.5">{reference.logo}</span>
-                        <span className={`text-[12px] transition-colors ${theme.textTertiary} group-hover:text-[#0A2540]`} style={{ fontWeight: 440 }}>{locationDisplayName(location).split(' ')[0]}</span>
+                        <span className={`text-[12px] transition-colors ${theme.textTertiary} group-hover:text-[#0A2540]`} style={{ fontWeight: 440 }}>{locationDisplayName(location)}</span>
+                        <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
                       </button>
                     );
                   })}
@@ -1667,8 +1800,9 @@ function EmployeeDetail({
                     <button key={role.id} onClick={() => toggleRole(role.id)}
                       className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}
                       type="button">
-                      <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
+                      <Tag size={11} className="text-[#635BFF]" />
                       <span className={`text-[12px] transition-colors ${theme.textTertiary} group-hover:text-[#0A2540]`} style={{ fontWeight: 440 }}>{role.name}</span>
+                      <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
                     </button>
                   ))}
                 </div>
@@ -1702,16 +1836,44 @@ function EmployeeDetail({
           </div>
 
           <div className={`pt-4 border-t ${theme.borderClass}`}>
-            <button
-              className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-[12px] text-[#E5484D] border border-[#E5484D]/20 opacity-50 cursor-not-allowed"
-              disabled
-              style={{ fontWeight: 500 }}
-              type="button">
-              Remove Employee
-            </button>
+            <div className="relative inline-flex group">
+              <button
+                className={`flex items-center gap-2 rounded-lg border px-3.5 py-2.5 text-[12px] transition-all ${
+                  deleteState.canDelete
+                    ? dark
+                      ? 'border-[#E5484D]/30 text-[#FF8A8A] hover:bg-[#E5484D]/[0.08]'
+                      : 'border-[#E5484D]/20 text-[#E5484D] hover:bg-[#E5484D]/[0.04]'
+                    : dark
+                      ? 'border-white/[0.08] text-[#8898AA]'
+                      : 'border-[#E5E7EB] text-[#8898AA]'
+                } disabled:cursor-not-allowed`}
+                disabled={!deleteState.canDelete || deleteState.checking || deleteState.deleting}
+                onClick={() => {
+                  void handleDelete();
+                }}
+                style={{ fontWeight: 500 }}
+                type="button"
+              >
+                {deleteState.deleting
+                  ? 'Removing...'
+                  : deleteState.checking
+                    ? 'Checking...'
+                    : 'Remove Employee'}
+              </button>
+              {!deleteState.canDelete && deleteState.reason ? (
+                <div
+                  className={`pointer-events-none absolute bottom-full left-0 mb-2 w-64 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                    dark
+                      ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
+                      : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
+                  }`}
+                  style={{ fontWeight: 440 }}
+                >
+                  {deleteState.reason}
+                </div>
+              ) : null}
+            </div>
           </div>
-            </>
-          )}
         </div>
       </motion.div>
     </motion.div>
@@ -1862,6 +2024,15 @@ export default function Team({
     });
   }, [businessLocations]);
 
+  const handleDeleteEmployee = useCallback(async (employeeId: string) => {
+    setEmployeesData((current) => current.filter((item) => item.id !== employeeId));
+    setSelectedEmployee(null);
+    setFeedback({
+      tone: 'success',
+      message: 'Employee removed from the roster.',
+    });
+  }, []);
+
   const handleBulkImported = useCallback(async (result: EmployeeBulkImportResponse) => {
     if (!businessId) {
       return;
@@ -1873,6 +2044,8 @@ export default function Team({
       message: `Imported ${result.created_count} employee${result.created_count === 1 ? '' : 's'}${result.skipped_count ? `, skipped ${result.skipped_count}` : ''}.`,
     });
   }, [businessId, businessLocations]);
+
+  const showBlockingLoader = loading && employeesData.length === 0;
 
   const content = (
     <>
@@ -2012,10 +2185,14 @@ export default function Team({
           <p className={`text-[14px] ${theme.textPrimary}`} style={{ fontWeight: 540 }}>No workspace business yet</p>
           <p className={`mt-1 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Create a business before managing employees.</p>
         </motion.div>
-      ) : loading ? (
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}
-          className={`rounded-2xl border px-8 py-16 text-center ${theme.panelClass}`}>
-          <p className={`text-[14px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Loading team roster...</p>
+      ) : showBlockingLoader ? (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.1 }}
+          className={`overflow-hidden rounded-2xl border ${theme.panelClass}`}
+        >
+          <AppLoader appearance={isDark ? 'dark' : 'light'} />
         </motion.div>
       ) : (
       /* Employee Table */
@@ -2080,7 +2257,7 @@ export default function Team({
                       <span className="text-[13px]">{primaryLoc.emoji}</span>
                       <span className={`text-[12px] truncate ${theme.textTertiary}`} style={{ fontWeight: 440 }}>{primaryLoc.name.split(' ')[0]}</span>
                       {emp.locations.length > 1 && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${theme.pillClass}`} style={{ fontWeight: 440 }}>+{emp.locations.length - 1}</span>
+                        <LocationsTooltip dark={isDark} locations={emp.locations.slice(1)} />
                       )}
                     </>
                   )}
@@ -2179,6 +2356,7 @@ export default function Team({
             employee={selectedEmployee}
             locations={businessLocations}
             onClose={() => setSelectedEmployee(null)}
+            onDelete={handleDeleteEmployee}
             onSave={handleSaveEmployee}
             onRoleCreated={(role) => {
               setBusinessRoles((current) =>

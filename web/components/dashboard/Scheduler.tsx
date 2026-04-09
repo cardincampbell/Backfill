@@ -19,17 +19,40 @@ import {
   Sunrise,
   Sunset,
   ClipboardCopy,
+  Edit3,
+  Settings2,
 } from 'lucide-react';
+import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
+  createAndAssignLocationRole,
+  getLocationDeleteReadiness,
+  getLocationRoles,
+  listBusinessRoles,
+  replaceLocationRoles,
+  type BusinessLocation,
+  type BusinessRole,
+  type LocationRoleAssignment,
+} from '@/lib/api/businesses';
+import {
+  deleteLocation as deleteWorkspaceLocation,
+  getLocationBoard,
   getLocationShiftDefaults,
+  updateLocationShiftDefaults,
   type ShiftDefault,
   type ShiftDefaultKey,
+  type LocationShiftDefaults,
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
 import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import { useSetLocationEntryMode } from '@/components/location-entry-provider';
 import DashboardShell from './DashboardShell';
+import {
+  LocationRoleEditor,
+  type LocationDeleteState,
+  type LocationRoleEditorFeedback,
+} from './LocationRoleEditor';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import {
@@ -114,6 +137,31 @@ function isToday(date: Date) {
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
+  return {
+    id: location.location_id,
+    business_id: location.business_id,
+    name: location.location_name,
+    display_name: location.location_display_name,
+    slug: location.location_slug,
+    address_line_1: location.address_line_1 ?? null,
+    address_line_2: null,
+    locality: location.locality ?? null,
+    region: location.region ?? null,
+    postal_code: location.postal_code ?? null,
+    country_code: location.country_code,
+    timezone: location.timezone,
+    latitude: null,
+    longitude: null,
+    google_place_id: location.google_place_id ?? null,
+    google_place_metadata: {},
+    is_active: true,
+    settings: {},
+    created_at: '',
+    updated_at: '',
+  };
+}
 
 function getSchedulerTheme(isDark: boolean) {
   return {
@@ -405,6 +453,8 @@ function SchedulerContent({
   backHref,
 }: SchedulerProps) {
   const router = useRouter();
+  const refreshWorkspace = useAppWorkspaceRefresh();
+  const setLocationEntryMode = useSetLocationEntryMode();
   const isDark = useResolvedAppAppearance() === 'dark';
   const theme = getSchedulerTheme(isDark);
   const locationDisplayName = location.location_display_name ?? location.location_name;
@@ -433,6 +483,26 @@ function SchedulerContent({
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS),
   );
+  const [showLocationMenu, setShowLocationMenu] = useState(false);
+  const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
+  const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
+  const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
+  const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
+  const [editorDeleteState, setEditorDeleteState] = useState<LocationDeleteState | undefined>();
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
+  const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
+  const [isSavingEditor, setIsSavingEditor] = useState(false);
+  const [locationDeleteState, setLocationDeleteState] = useState<LocationDeleteState>({
+    canDelete: false,
+    checking: true,
+  });
+  const editorLocationAssignmentsByRoleId = useMemo(
+    () => new Map(editorAssignments.map((assignment) => [assignment.role_id, assignment])),
+    [editorAssignments],
+  );
+  const effectiveDeleteState = editorLocation ? (editorDeleteState ?? locationDeleteState) : locationDeleteState;
 
   useEffect(() => {
     let cancelled = false;
@@ -455,6 +525,40 @@ function SchedulerContent({
     }
 
     void loadShiftDefaults();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.business_id, location.location_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDeleteReadiness() {
+      try {
+        setLocationDeleteState({ canDelete: false, checking: true });
+        const readiness = await getLocationDeleteReadiness(
+          location.business_id,
+          location.location_id,
+        );
+        if (cancelled) {
+          return;
+        }
+        setLocationDeleteState({
+          canDelete: readiness.can_delete,
+          reason: readiness.reason,
+        });
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setLocationDeleteState({
+          canDelete: false,
+          reason: 'Could not determine whether this location can be removed.',
+        });
+      }
+    }
+
+    void loadDeleteReadiness();
     return () => {
       cancelled = true;
     };
@@ -514,6 +618,182 @@ function SchedulerContent({
     });
   };
 
+  const openLocationEditor = async () => {
+    const editableLocation = adaptWorkspaceLocation(location);
+    setEditorLocation(editableLocation);
+    setEditorShiftDefaults(null);
+    setEditorDeleteState({ canDelete: false, checking: true });
+    setEditorLoading(true);
+    setEditorFeedback(null);
+
+    try {
+      const [nextRoles, nextAssignments, nextShiftDefaults, nextDeleteReadiness] =
+        await Promise.all([
+          listBusinessRoles(location.business_id),
+          getLocationRoles(location.business_id, location.location_id),
+          getLocationShiftDefaults(location.business_id, location.location_id),
+          getLocationDeleteReadiness(location.business_id, location.location_id),
+        ]);
+      setEditorRoles(nextRoles);
+      setEditorAssignments(nextAssignments);
+      setEditorShiftDefaults(nextShiftDefaults);
+      const nextDeleteState = {
+        canDelete: nextDeleteReadiness.can_delete,
+        reason: nextDeleteReadiness.reason,
+      };
+      setEditorDeleteState(nextDeleteState);
+      setLocationDeleteState(nextDeleteState);
+    } catch (error) {
+      setEditorFeedback({
+        tone: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not load location settings.',
+      });
+      setEditorDeleteState({
+        canDelete: false,
+        reason: 'Could not determine whether this location can be removed.',
+      });
+    } finally {
+      setEditorLoading(false);
+    }
+  };
+
+  const handleSaveEditor = (
+    roleIds: string[],
+    locationShiftPresets: ShiftDefault[] | null,
+  ) => {
+    if (!editorLocation || isSavingEditor) {
+      return;
+    }
+
+    setIsSavingEditor(true);
+    setEditorFeedback(null);
+
+    void (async () => {
+      try {
+        const [replacedAssignments, updatedShiftDefaults] = await Promise.all([
+          replaceLocationRoles(
+            editorLocation.business_id,
+            editorLocation.id,
+            roleIds.map((roleId) => {
+              const existing = editorLocationAssignmentsByRoleId.get(roleId);
+              return existing
+                ? {
+                    role_id: roleId,
+                    min_headcount: existing.min_headcount,
+                    max_headcount: existing.max_headcount,
+                    premium_rules: existing.premium_rules,
+                    coverage_settings: existing.coverage_settings,
+                  }
+                : { role_id: roleId };
+            }),
+          ),
+          updateLocationShiftDefaults(
+            editorLocation.business_id,
+            editorLocation.id,
+            locationShiftPresets,
+          ),
+        ]);
+        setEditorAssignments(replacedAssignments);
+        setEditorShiftDefaults(updatedShiftDefaults);
+        setShiftDefaults(normalizeShiftDefaults(updatedShiftDefaults.presets));
+        const board = await getLocationBoard(editorLocation.business_id, editorLocation.id);
+        setLocationEntryMode(
+          editorLocation.id,
+          board?.location_setup_required ? 'setup' : 'scheduler',
+        );
+        if (board?.location_setup_required) {
+          router.replace(resolvedBackHref);
+        }
+        setEditorFeedback({
+          tone: 'success',
+          message: `${roleIds.length} role${roleIds.length === 1 ? '' : 's'} enabled for ${editorLocation.display_name ?? editorLocation.name}.`,
+        });
+      } catch (error) {
+        setEditorFeedback({
+          tone: 'error',
+          message:
+            error instanceof Error ? error.message : 'Could not update location configuration.',
+        });
+      } finally {
+        setIsSavingEditor(false);
+      }
+    })();
+  };
+
+  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
+    if (!editorLocation) {
+      throw new Error('No location selected.');
+    }
+
+    const existing = editorRoles.find(
+      (role) => role.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
+
+    try {
+      setEditorFeedback(null);
+      const created = await createAndAssignLocationRole(
+        editorLocation.business_id,
+        editorLocation.id,
+        { name },
+      );
+      setEditorRoles((current) =>
+        current.some((role) => role.id === created.role.id)
+          ? current
+          : [...current, created.role],
+      );
+      setEditorAssignments((current) => {
+        const next = current.filter(
+          (assignment) => assignment.role_id !== created.location_role.role_id,
+        );
+        next.push(created.location_role);
+        return next;
+      });
+      setEditorFeedback({
+        tone: 'success',
+        message: existing
+          ? `${created.role.name} was assigned to ${editorLocation.display_name ?? editorLocation.name}.`
+          : `${created.role.name} was added to Roles and assigned to ${editorLocation.display_name ?? editorLocation.name}.`,
+      });
+      return created.role;
+    } catch (error) {
+      setEditorFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'Could not create role.',
+      });
+      throw error;
+    }
+  };
+
+  const handleDeleteLocation = async () => {
+    if (!effectiveDeleteState.canDelete || deletingLocationId === location.location_id) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${locationDisplayName}? This only works for locations that do not already have operational data.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingLocationId(location.location_id);
+      setEditorFeedback(null);
+      await deleteWorkspaceLocation(location.business_id, location.location_id);
+      await refreshWorkspace();
+      router.replace('/dashboard');
+    } catch (error) {
+      setEditorFeedback({
+        tone: 'error',
+        message:
+          error instanceof Error ? error.message : 'Could not remove this location.',
+      });
+    } finally {
+      setDeletingLocationId(null);
+    }
+  };
+
   /* ─── Week Label ─── */
   const weekLabel = useMemo(() => {
     const s = weekDates[0];
@@ -532,25 +812,103 @@ function SchedulerContent({
         {/* ─── Top Bar: Location | Week Nav | Buttons ─── */}
         <div className={`px-4 sm:px-6 md:px-8 py-3.5 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
           {/* Row 1: Location name + subtext */}
-          <div className="flex items-center gap-2.5 mb-3">
-            <button onClick={() => router.push(resolvedBackHref)}
-              className={`flex items-center transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`}
-              style={{ fontWeight: 440 }}>
-              <ChevronLeft size={16} />
-            </button>
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[14px]"
-                style={{ background: `${loc.color}10` }}>
-                {loc.emoji}
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <button onClick={() => router.push(resolvedBackHref)}
+                className={`flex items-center transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`}
+                style={{ fontWeight: 440 }}>
+                <ChevronLeft size={16} />
+              </button>
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[14px]"
+                  style={{ background: `${loc.color}10` }}>
+                  {loc.emoji}
+                </div>
+                <div>
+                  <h1 className={`text-[18px] sm:text-[20px] tracking-[-0.02em] leading-none ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
+                    {loc.name}
+                  </h1>
+                  <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                    Weekly Scheduler
+                  </p>
+                </div>
               </div>
-              <div>
-                <h1 className={`text-[18px] sm:text-[20px] tracking-[-0.02em] leading-none ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
-                  {loc.name}
-                </h1>
-                <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
-                  Weekly Scheduler
-                </p>
-              </div>
+            </div>
+            <div className="relative">
+              <button
+                ref={locationMenuButtonRef}
+                onClick={() => setShowLocationMenu((current) => !current)}
+                className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${theme.cardClass} ${theme.ghostButtonClass}`}
+                type="button"
+              >
+                <Settings2 size={15} className={theme.textMuted} />
+              </button>
+              <FloatingDropdown
+                open={showLocationMenu}
+                anchorRef={locationMenuButtonRef}
+                align="right"
+                minWidth={220}
+                className={`overflow-hidden border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'} rounded-2xl`}
+                maxHeight={220}
+                onClose={() => setShowLocationMenu(false)}
+                sideOffset={10}
+                zIndex={10050}
+              >
+                <div className="py-1.5">
+                  <button
+                    onClick={() => {
+                      setShowLocationMenu(false);
+                      void openLocationEditor();
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <Edit3 size={15} className={theme.textMuted} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
+                      Edit Location
+                    </span>
+                  </button>
+                  <div className="group relative">
+                    <button
+                      onClick={() => {
+                        setShowLocationMenu(false);
+                        void handleDeleteLocation();
+                      }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${
+                        locationDeleteState.canDelete
+                          ? isDark ? 'hover:bg-[#E5484D]/15' : 'hover:bg-[#E5484D]/10'
+                          : ''
+                      }`}
+                      disabled={!locationDeleteState.canDelete || locationDeleteState.checking || deletingLocationId === location.location_id}
+                      type="button"
+                    >
+                      <Trash2 size={15} className={locationDeleteState.canDelete ? 'text-[#E5484D]' : 'text-[#8898AA]'} />
+                      <span
+                        className={`text-[12px] ${locationDeleteState.canDelete ? 'text-[#E5484D]' : theme.textSecondary}`}
+                        style={{ fontWeight: 520 }}
+                      >
+                        {deletingLocationId === location.location_id
+                          ? 'Deleting...'
+                          : locationDeleteState.checking
+                            ? 'Checking...'
+                            : 'Delete Location'}
+                      </span>
+                    </button>
+                    {!locationDeleteState.canDelete && locationDeleteState.reason ? (
+                      <div
+                        className={`pointer-events-none absolute bottom-full right-3 mb-2 w-64 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                          isDark
+                            ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
+                            : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
+                        }`}
+                        style={{ fontWeight: 440 }}
+                      >
+                        {locationDeleteState.reason}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </FloatingDropdown>
             </div>
           </div>
 
@@ -916,6 +1274,34 @@ function SchedulerContent({
               </button>
             </motion.div>
           )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {editorLocation ? (
+            <LocationRoleEditor
+              dark={isDark}
+              location={editorLocation}
+              roles={editorRoles}
+              assignments={editorAssignments}
+              shiftDefaults={editorShiftDefaults}
+              loading={editorLoading}
+              saving={isSavingEditor}
+              feedback={editorFeedback}
+              deleteState={{
+                ...effectiveDeleteState,
+                deleting: deletingLocationId === editorLocation.id,
+              }}
+              onClose={() => {
+                setEditorLocation(null);
+                setEditorFeedback(null);
+              }}
+              onDelete={() => {
+                void handleDeleteLocation();
+              }}
+              onSave={handleSaveEditor}
+              onCreateRole={handleCreateRole}
+            />
+          ) : null}
         </AnimatePresence>
     </motion.div>
   );

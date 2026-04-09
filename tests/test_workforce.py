@@ -18,6 +18,7 @@ from app.schemas.workforce import (
     EmployeeAvailabilityRuleReplace,
     EmployeeAvailabilityRuleRead,
     EmployeeBulkImportRead,
+    EmployeeDeleteReadinessRead,
     EmployeeEnrollmentRead,
     EmployeeImportErrorRead,
     EmployeeLocationRead,
@@ -258,6 +259,48 @@ def test_get_employee_profile_route_returns_profile(monkeypatch):
         payload = response.json()
         assert payload["primary_role_name"] == "Server"
         assert payload["locations"][0]["location_slug"] == "downtown"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_employee_delete_readiness_route_returns_readiness(monkeypatch):
+    fake_session = DummyWorkforceSession()
+    business_id = uuid4()
+    employee_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id)
+
+    async def fake_get_readiness(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return EmployeeDeleteReadinessRead(
+            business_id=business_id,
+            employee_id=employee_id,
+            can_delete=False,
+            reason="This employee has scheduled shifts and cannot be removed until those shifts are cleared.",
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.workforce.workforce.get_employee_delete_readiness",
+        fake_get_readiness,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/employees/{employee_id}/delete-readiness",
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["can_delete"] is False
+        assert "scheduled shifts" in payload["reason"]
     finally:
         app.dependency_overrides.clear()
 
@@ -553,6 +596,96 @@ def test_employee_profile_read_includes_role_and_location_assignments():
     assert payload.roles[0].role_id == role_id
     assert payload.roles[0].role_name == "Server"
     assert payload.locations[0].location_id == location_id
+    assert payload.locations[0].location_name == "Pasadena"
+
+
+@pytest.mark.asyncio
+async def test_get_employee_profile_hydrates_role_and_location_assignments(monkeypatch):
+    business_id = uuid4()
+    employee_id = uuid4()
+    role_id = uuid4()
+    location_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        timezone="America/Los_Angeles",
+        country_code="US",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        preferred_name="Jamie",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        status="active",
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_role = EmployeeRole(
+        id=uuid4(),
+        employee_id=employee_id,
+        role_id=role_id,
+        proficiency_level=1,
+        is_primary=True,
+        role_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    set_committed_value(employee_role, "role", role)
+    set_committed_value(employee_location, "location", location)
+
+    async def fake_require_employee(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return employee
+
+    async def fake_list_roles(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return [employee_role]
+
+    async def fake_list_locations(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return [employee_location]
+
+    monkeypatch.setattr("app.services.workforce._require_employee", fake_require_employee)
+    monkeypatch.setattr("app.services.workforce._list_employee_roles", fake_list_roles)
+    monkeypatch.setattr("app.services.workforce._list_employee_locations", fake_list_locations)
+
+    profile = await workforce.get_employee_profile(object(), business_id, employee_id)
+
+    assert profile.role_ids == [role_id]
+    assert profile.location_ids == [location_id]
+    payload = EmployeeProfileRead.model_validate(profile)
+    assert payload.roles[0].role_name == "Server"
     assert payload.locations[0].location_name == "Pasadena"
 
 

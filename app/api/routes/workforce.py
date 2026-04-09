@@ -12,6 +12,8 @@ from app.schemas.workforce import (
     EmployeeAvailabilityRuleReplace,
     EmployeeBulkImportRead,
     EmployeeCreate,
+    EmployeeDeleteReadinessRead,
+    EmployeeDeleteResponse,
     EmployeeEnrollAtLocationCreate,
     EmployeeEnrollmentRead,
     EmployeeLocationCreate,
@@ -49,6 +51,28 @@ async def get_employee_profile(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
     try:
         return await workforce.get_employee_profile(session, business_id, employee_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{employee_id}/delete-readiness",
+    response_model=EmployeeDeleteReadinessRead,
+)
+async def get_employee_delete_readiness(
+    business_id: UUID,
+    employee_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        return await workforce.get_employee_delete_readiness(
+            session,
+            business_id,
+            employee_id,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -196,6 +220,52 @@ async def update_employee(
     )
     await session.commit()
     return employee
+
+
+@router.delete(
+    "/{employee_id}",
+    response_model=EmployeeDeleteResponse,
+)
+async def delete_employee(
+    business_id: UUID,
+    employee_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        employee = await workforce.delete_employee(session, business_id, employee_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "employee_has_operational_data":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This employee has scheduled shifts and cannot be removed until those shifts are cleared.",
+            ) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+
+    membership = auth_service.membership_for_scope(
+        auth_ctx,
+        business_id,
+        location_id=employee.primary_location_id,
+    )
+    await audit_service.append(
+        session,
+        event_name="employee.deleted",
+        target_type="employee",
+        target_id=employee.id,
+        business_id=business_id,
+        location_id=employee.primary_location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        payload={"full_name": employee.full_name},
+    )
+    await session.commit()
+    return EmployeeDeleteResponse(deleted=True, employee_id=employee.id)
 
 
 @router.post("/enroll", response_model=EmployeeEnrollmentRead, status_code=status.HTTP_201_CREATED)

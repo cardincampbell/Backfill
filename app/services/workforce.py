@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.business import Business, Location, Role
+from app.models.common import AssignmentStatus, ShiftStatus
 from app.models.workforce import (
     Employee,
     EmployeeAvailabilityRule,
@@ -100,6 +101,7 @@ async def _list_employee_locations(
 ) -> list[EmployeeLocation]:
     result = await session.execute(
         select(EmployeeLocation)
+        .options(selectinload(EmployeeLocation.location))
         .where(EmployeeLocation.employee_id == employee_id)
         .order_by(EmployeeLocation.created_at.asc())
     )
@@ -124,6 +126,22 @@ def _employee_query():
         selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
         selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
     )
+
+
+EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES = (
+    ShiftStatus.scheduled,
+    ShiftStatus.open,
+    ShiftStatus.filling,
+    ShiftStatus.covered,
+    ShiftStatus.no_fill,
+    ShiftStatus.completed,
+)
+
+EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES = (
+    AssignmentStatus.assigned,
+    AssignmentStatus.accepted,
+    AssignmentStatus.completed,
+)
 
 
 async def _list_employee_availability_rules(
@@ -899,7 +917,73 @@ async def get_employee_profile(
     business_id: UUID,
     employee_id: UUID,
 ) -> Employee:
-    return await _require_employee(session, business_id, employee_id)
+    employee = await _require_employee(session, business_id, employee_id)
+    employee_roles = await _list_employee_roles(session, employee_id)
+    employee_locations = await _list_employee_locations(session, employee_id)
+    set_committed_value(employee, "employee_roles", employee_roles)
+    set_committed_value(employee, "employee_locations", employee_locations)
+    return employee
+
+
+async def _blocking_employee_assignment_count(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> int:
+    count = await session.scalar(
+        select(func.count(ShiftAssignment.id))
+        .select_from(ShiftAssignment)
+        .join(Shift, Shift.id == ShiftAssignment.shift_id)
+        .where(
+            Shift.business_id == business_id,
+            ShiftAssignment.employee_id == employee_id,
+            Shift.status.in_(EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES),
+            ShiftAssignment.status.in_(EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES),
+        )
+    )
+    return int(count or 0)
+
+
+async def get_employee_delete_readiness(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> dict[str, object]:
+    await _require_employee(session, business_id, employee_id)
+    blocking_assignment_count = await _blocking_employee_assignment_count(
+        session,
+        business_id,
+        employee_id,
+    )
+    reason = (
+        "This employee has scheduled shifts and cannot be removed until those shifts are cleared."
+        if blocking_assignment_count > 0
+        else None
+    )
+    return {
+        "business_id": business_id,
+        "employee_id": employee_id,
+        "can_delete": blocking_assignment_count == 0,
+        "reason": reason,
+    }
+
+
+async def delete_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> Employee:
+    employee = await _require_employee(session, business_id, employee_id)
+    blocking_assignment_count = await _blocking_employee_assignment_count(
+        session,
+        business_id,
+        employee_id,
+    )
+    if blocking_assignment_count > 0:
+        raise ValueError("employee_has_operational_data")
+    await session.delete(employee)
+    await session.flush()
+    return employee
 
 
 async def update_employee(
@@ -1160,3 +1244,6 @@ async def replace_self_employee_availability_rules(
         payload,
     )
     return employee, rules
+
+
+from app.models.scheduling import Shift, ShiftAssignment  # noqa: E402

@@ -781,15 +781,16 @@ export default function Location({
                     onClick={() => addRole(role.id)}
                     disabled={loading || isPending}
                     className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 disabled:opacity-50 ${
-                      isDark
-                        ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
-                        : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
+                        isDark
+                          ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
+                          : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
                     }`}
                   >
-                    <Plus size={11} className="text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
+                    <Tag size={11} className="text-[#635BFF]" />
                     <span className={`text-[12px] transition-colors ${isDark ? "text-[#C1CED8] group-hover:text-white" : "text-[#5E6D7A] group-hover:text-[#0A2540]"}`} style={{ fontWeight: 440 }}>
                       {role.name}
                     </span>
+                    <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
                   </button>
                 ))}
               </div>
@@ -994,10 +995,6 @@ export default function Location({
                           : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
                       }`}
                     >
-                      <Plus
-                        size={11}
-                        className="text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
-                      />
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
                         {employeeInitials(employeeDisplayName(employee))}
                       </span>
@@ -1011,6 +1008,10 @@ export default function Location({
                       >
                         {employeeDisplayName(employee)}
                       </span>
+                      <Plus
+                        size={11}
+                        className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                      />
                     </button>
                   ))}
                 </div>
