@@ -5,9 +5,28 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.common import CoverageAttemptStatus, ShiftStatus
+from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
 from app.services import runtime_projections
+
+
+class _ExecuteResult:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return list(self._values)
+
+
+class FakeProjectionSession:
+    def __init__(self):
+        self.execute_queue: list[list[object]] = []
+
+    async def execute(self, _query):
+        values = self.execute_queue.pop(0) if self.execute_queue else []
+        return _ExecuteResult(values)
 
 
 @pytest.mark.asyncio
@@ -97,3 +116,106 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
     assert metadata["score_snapshots"]["fresh"] == 1
     assert metadata["score_snapshots"]["refreshed"] == 1
     assert metadata["score_snapshots"]["unknown"] == 1
+
+
+@pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_marks_hard_cooldown_and_burden():
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="Contacted Recently",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [
+            (
+                employee.id,
+                now - timedelta(minutes=5),
+                CoverageAttemptStatus.delivered,
+            ),
+            (
+                employee.id,
+                now - timedelta(hours=12),
+                CoverageAttemptStatus.accepted,
+            ),
+        ],
+        [
+            (
+                employee.id,
+                now - timedelta(days=1),
+                now + timedelta(hours=3),
+            )
+        ],
+    ]
+
+    snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    guardrails = snapshots[employee.id]
+    assert guardrails["contact_cooldown"]["status"] == "hard_cooldown"
+    assert guardrails["contact_cooldown"]["multiplier"] == 0.0
+    assert guardrails["recent_burden"]["recent_attempt_count"] == 2
+    assert guardrails["recent_burden"]["recent_accept_count"] == 1
+    assert guardrails["hard_excluded"] is True
+
+
+@pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="Heavy Load",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [],
+        [
+            (employee.id, now - timedelta(days=2), now - timedelta(days=2) + timedelta(hours=18)),
+            (employee.id, now - timedelta(days=1), now - timedelta(days=1) + timedelta(hours=16)),
+        ],
+    ]
+
+    snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    guardrails = snapshots[employee.id]
+    assert guardrails["contact_cooldown"]["status"] == "clear"
+    assert guardrails["overtime_risk"]["status"] == "high"
+    assert guardrails["overtime_risk"]["multiplier"] == 0.4
+    assert guardrails["overall_multiplier"] < 1.0

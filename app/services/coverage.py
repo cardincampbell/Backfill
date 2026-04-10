@@ -1030,6 +1030,13 @@ async def _collect_phase_1_candidates(
         now=reference_time,
     )
 
+    outreach_guardrails = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        employees,
+        shift=shift,
+        now=reference_time,
+    )
+
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
         employee_location = next(
@@ -1063,10 +1070,18 @@ async def _collect_phase_1_candidates(
             is_primary_location=is_primary_location,
             can_blast=employee_location.can_blast,
         )
+        guardrails = outreach_guardrails.get(employee.id, {})
+        if bool(guardrails.get("hard_excluded")):
+            continue
+        guardrail_multiplier = float(guardrails.get("overall_multiplier") or 1.0)
+        score = round(score * guardrail_multiplier, 3)
+        scoring_factors["outreach_guardrails"] = guardrails
+        scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
         )
+        scoring_factors["total"] = score
 
         candidates.append(
             CoverageCandidatePreview(
@@ -1165,6 +1180,13 @@ async def _collect_phase_2_candidates(
         now=reference_time,
     )
 
+    outreach_guardrails = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        employees,
+        shift=shift,
+        now=reference_time,
+    )
+
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
         if employee.primary_location_id == shift.location_id:
@@ -1211,6 +1233,13 @@ async def _collect_phase_2_candidates(
         scoring_factors["location_affinity_count"] = prior_location_count
         scoring_factors["location_affinity_bonus"] = location_affinity_bonus
         scoring_factors["employee_location"] = employee_location_details
+        guardrails = outreach_guardrails.get(employee.id, {})
+        if bool(guardrails.get("hard_excluded")):
+            continue
+        guardrail_multiplier = float(guardrails.get("overall_multiplier") or 1.0)
+        score = round(score * guardrail_multiplier, 3)
+        scoring_factors["outreach_guardrails"] = guardrails
+        scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
