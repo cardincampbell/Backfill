@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.common import OutboxChannel, OutboxStatus, SchedulerProvider, SchedulerSyncJobStatus
-from app.models.coverage import OutboxEvent
+from app.models.common import CoverageCaseStatus, OutboxChannel, OutboxStatus, SchedulerProvider, SchedulerSyncJobStatus
+from app.models.coverage import CoverageCase, OutboxEvent
 from app.models.integrations import SchedulerSyncJob
 from app.services import worker_runtime
 
@@ -189,3 +189,101 @@ def test_retry_delay_for_attempt_caps_at_last_schedule_entry() -> None:
     assert first == timedelta(minutes=1)
     assert second == timedelta(minutes=5)
     assert third == timedelta(minutes=15)
+
+
+@pytest.mark.asyncio
+async def test_claim_queued_coverage_cases_enforces_business_isolation() -> None:
+    now = datetime.now(timezone.utc)
+    business_a = uuid4()
+    business_b = uuid4()
+    first = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now,
+    )
+    second = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now + timedelta(seconds=1),
+    )
+    third = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now + timedelta(seconds=2),
+    )
+    session = FakeWorkerSession()
+    session.execute_queue = [[(first, business_a), (second, business_a), (third, business_b)]]
+
+    claimed = await worker_runtime.claim_queued_coverage_cases(session, limit=3)
+
+    assert claimed == [(first, business_a), (third, business_b)]
+
+
+@pytest.mark.asyncio
+async def test_claim_running_coverage_cases_enforces_business_isolation() -> None:
+    now = datetime.now(timezone.utc)
+    business_a = uuid4()
+    business_b = uuid4()
+    first = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now,
+    )
+    second = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now + timedelta(seconds=1),
+    )
+    third = CoverageCase(
+        id=uuid4(),
+        shift_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        opened_at=now + timedelta(seconds=2),
+    )
+    session = FakeWorkerSession()
+    session.execute_queue = [[(first, business_a), (second, business_a), (third, business_b)]]
+
+    claimed = await worker_runtime.claim_running_coverage_cases(session, limit=3)
+
+    assert claimed == [(first, business_a), (third, business_b)]
