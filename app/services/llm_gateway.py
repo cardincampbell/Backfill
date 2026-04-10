@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.ai import LlmGeneration
+from app.services import cost_ledger
 
 
 class LlmProvider:
@@ -70,6 +71,8 @@ class LlmGenerationRequest:
     messages: list[LlmMessage]
     business_id: UUID | None = None
     location_id: UUID | None = None
+    coverage_case_id: UUID | None = None
+    shift_id: UUID | None = None
     provider: str | None = None
     model: str | None = None
     prompt_version: str | None = None
@@ -174,6 +177,8 @@ def _request_payload(
         "model": model or request.model,
         "purpose": request.purpose,
         "prompt_version": request.prompt_version,
+        "coverage_case_id": _normalize_value(request.coverage_case_id),
+        "shift_id": _normalize_value(request.shift_id),
         "messages": _normalize_value(request.messages),
         "tools": _normalize_value(request.tools),
         "tool_choice": request.tool_choice,
@@ -232,8 +237,10 @@ async def generate(
 
     completed_at = datetime.now(timezone.utc)
     latency_ms = max(0, int((completed_at - started_at).total_seconds() * 1000))
+    generation_id = uuid4()
     session.add(
         LlmGeneration(
+            id=generation_id,
             business_id=request.business_id,
             location_id=request.location_id,
             provider=result.provider,
@@ -261,5 +268,26 @@ async def generate(
             started_at=started_at,
             completed_at=completed_at,
         )
+    )
+    await cost_ledger.append_llm_generation_cost(
+        session,
+        generation_id=generation_id,
+        provider=result.provider,
+        purpose=request.purpose,
+        estimated_cost_micros=result.usage.estimated_cost_micros,
+        business_id=request.business_id,
+        location_id=request.location_id,
+        coverage_case_id=request.coverage_case_id,
+        shift_id=request.shift_id,
+        model=result.model,
+        prompt_version=request.prompt_version,
+        input_tokens=result.usage.input_tokens,
+        output_tokens=result.usage.output_tokens,
+        total_tokens=result.usage.total_tokens,
+        metadata={
+            "trace_id": trace_id,
+            **dict(_normalize_value(result.metadata) or {}),
+        },
+        occurred_at=completed_at,
     )
     return result

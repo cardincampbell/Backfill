@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.ai import LlmGeneration
+from app.models.finance import CostLedgerEntry
 from app.services import llm_gateway
 
 
@@ -129,6 +130,15 @@ async def test_generate_persists_normalized_success_row_with_defaults():
     assert row.generation_metadata["provider_latency_bucket"] == "fast"
     assert row.latency_ms is not None
     assert row.latency_ms >= 0
+    cost_rows = [entry for entry in session.added if isinstance(entry, CostLedgerEntry)]
+    assert len(cost_rows) == 1
+    cost_row = cost_rows[0]
+    assert cost_row.provider == llm_gateway.LlmProvider.OPENAI
+    assert cost_row.product == "llm_generation"
+    assert cost_row.reference_type == "llm_generation"
+    assert cost_row.total_cost_micros == 4100
+    assert cost_row.cost_metadata["trace_id"] == str(trace_id)
+    assert cost_row.cost_metadata["total_tokens"] == 152
 
 
 @pytest.mark.asyncio
@@ -162,6 +172,8 @@ async def test_generate_persists_failure_row_before_reraising():
     assert row.response_payload == {}
     assert row.tool_calls == []
     assert row.generation_metadata["trace_id"] == "trace_123"
+    cost_rows = [entry for entry in session.added if isinstance(entry, CostLedgerEntry)]
+    assert cost_rows == []
 
 
 @pytest.mark.asyncio
