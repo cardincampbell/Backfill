@@ -156,8 +156,14 @@ Deliverables:
 - freeze tenant rule: `Business` is the current tenant object, not a temporary object to be replaced mid-stream
 - freeze event rule: `platform_events` becomes canonical as soon as it exists
 - freeze telephony rule: Retell is primary for conversational interactions
+- freeze campaign rule: one campaign is one bounded automated effort to fill one open shift
+- freeze assignment rule: assignments are the durable ownership history for shifts
+- freeze eligibility/availability rule:
+  eligibility = allowed to be considered
+  availability = able to work the exact interval
 - freeze worker rule: locking/retries/idempotency are shared platform behavior
-- freeze launch seat rule: automated coverage is single-seat only until an explicit seat or slot model exists
+- freeze shift rule: one shift is one fillable unit of work for one person in one role at one location over one time window
+- freeze projection rule: projections are rebuildable read models and never the source of truth
 - freeze callback ingestion rule: provider callbacks are raw append-only facts before they become business mutations
 - freeze concurrency invariants:
   aggregate versioning / optimistic concurrency with explicit compare-and-swap semantics
@@ -167,10 +173,10 @@ Deliverables:
 
 Phase 0 contracts to write down explicitly:
 
-- launch seat scope:
-  automated coverage supports one open seat per campaign at launch
-  `seats_requested` is not sufficient seat identity for multi-seat automation
-  multi-seat automated coverage is deferred until an explicit `shift_seats` or `shift_slots` model exists
+- shift semantics:
+  one shift row represents exactly one fill opportunity
+  if the business needs three people for the same role, location, and interval, model that as three shifts
+  `seats_requested` is compatibility baggage from the current schema, not a canonical coverage primitive
 - aggregate versioning:
   `coverage_campaigns.version` increments on every mutable transition
   `shift_assignments.version` increments on every mutable transition
@@ -601,4 +607,4 @@ Recommended order:
 - No async job without explicit tenant context.
 - No direct LLM mutation path.
 - No accidental half-live Twilio / Retell split.
-- No multi-seat automated coverage until explicit seat identity exists.
+- No hidden multi-person demand inside one canonical shift; represent it as multiple shifts.

@@ -11,6 +11,7 @@ This document defines the canonical backend architecture for that product:
 
 - The Copilot is the primary control plane.
 - The coverage campaign is the primary unit of work.
+- A shift is one fillable unit of labor for one person in one role at one location over one time window.
 - Events are the primary record of system behavior.
 - Cost and billing are first-class platform concerns.
 - Launch stays monolithic and Postgres-first, but the seams for future extraction are designed now.
@@ -21,9 +22,24 @@ Current codebase note:
 - `CoverageCase` is the closest existing object to the target `CoverageCampaign`.
 - `AuditLog` and `OutboxEvent` are useful launch primitives, but they are not yet the full event system this product needs.
 
-## 2. Architectural Decisions
+## 2. Canonical Primitives
 
-### 2.1 Launch shape
+- `Shift`: one fillable unit of labor for one person in one role at one location over one time window.
+- `Callout`: a signal that the current assignment for a shift is no longer valid and coverage may need to run.
+- `CoverageCampaign`: one bounded automated effort to fill one open shift. Terminal campaigns are not reopened; a new attempt is a new campaign.
+- `ShiftAssignment`: the durable record of who owns the shift now, plus the history of how that ownership changed.
+- `Eligibility`: whether someone is allowed to be considered for a shift. At minimum this is role qualification plus location eligibility.
+- `Availability`: whether someone is able to work the exact shift interval. This comes from recurring availability plus dated exceptions for that window.
+- `OutreachAttempt`: one system-initiated contact to one employee for one campaign through one channel/provider.
+- `PlatformEvent`: an immutable record that something happened in the domain.
+- `Projection`: a rebuildable read model derived from canonical facts; never the source of truth.
+- `ReliabilityScore` / `PoA snapshot`: a cached decision aid for ranking, not an authoritative business fact.
+- `CopilotSession`: persisted working state around one operational objective across turns and channels.
+- `ToolAction`: a validated internal command that application code authorizes and executes.
+
+## 3. Architectural Decisions
+
+### 3.1 Launch shape
 
 - One FastAPI application.
 - One Postgres database via Supabase.
@@ -33,33 +49,33 @@ Current codebase note:
 - Supabase Realtime for feed fanout.
 - No Kafka and no service mesh at launch.
 
-### 2.2 Control plane
+### 3.2 Control plane
 
 - The Copilot is the action surface for operators.
 - The dashboard is primarily read/visibility plus exception handling.
 - All write capabilities exposed to the Copilot must exist as internal application tools with explicit validation and side effects.
 - `1-800-BACKFILL` is the primary employee-facing and operator-facing command surface for live callouts and conversational commands.
 
-### 2.3 Revenue object
+### 3.3 Revenue object
 
 - `coverage_campaign` is the central aggregate.
 - Billing, eventing, outreach, operator visibility, and cost tracking all hang off the campaign.
 - A shift may have multiple campaigns over time, but a campaign always belongs to exactly one shift.
 
-### 2.4 Safety model
+### 3.4 Safety model
 
 - LLMs resolve intent and propose actions.
 - Application services validate authorization and preconditions.
 - Execution happens only through internal tool handlers.
 - Every state change emits an event.
 
-### 2.5 Migration discipline
+### 3.5 Migration discipline
 
 - Do not allow two long-lived canonical models for the same concept.
 - Compatibility layers are allowed only as temporary facades with explicit cutover criteria.
 - Every compatibility layer must have an owner, an exit condition, and a removal phase in the migration plan.
 
-## 3. System Overview
+## 4. System Overview
 
 ```text
 Channel Input
@@ -98,9 +114,9 @@ Callout / Shift Change
   -> Campaign Close
 ```
 
-## 4. Canonical Domain Model
+## 5. Canonical Domain Model
 
-### 4.1 Core hierarchy
+### 5.1 Core hierarchy
 
 ```text
 Business
@@ -130,7 +146,7 @@ PlatformEvent
   -> FeedProjection
 ```
 
-### 4.2 Existing-to-target mapping
+### 5.2 Existing-to-target mapping
 
 Use these mappings to evolve the current schema without a rewrite:
 
@@ -150,7 +166,7 @@ Naming guardrails:
 - Target naming: `coverage_campaigns`, `campaign_rounds`, `campaign_candidates`, and `outreach_attempts` describe the desired domain language and target logical model.
 - Not a second model: these names must not be implemented as parallel canonical models while the current storage-backed models are still active. Compatibility aliases are allowed; dual canonical models are not.
 
-### 4.3 Required schema additions
+### 5.3 Required schema additions
 
 The current schema is close enough to evolve. Add the following tables and columns before major Copilot expansion.
 
@@ -197,7 +213,7 @@ Key fields:
 - `location_id`
 - `shift_id`
 - `callout_id`
-- `status` (`created`, `scoring`, `outreach_active`, `filled`, `escalated`, `exhausted`, `cancelled`, `closed`)
+- `status` (`created`, `scoring`, `outreach_active`, `filled`, `escalated`, `exhausted`, `cancelled`, `superseded`)
 - `mode` (`standard`, `compressed`, `blast`)
 - `trigger_source`
 - `opened_at`
@@ -205,6 +221,7 @@ Key fields:
 - `filled_at`
 - `filled_by_employee_id`
 - `fill_source` (`backfill`, `manual_override`, `cancelled`)
+- `superseded_by_campaign_id`
 - `campaign_metadata`
 - `deleted_at`
 
@@ -405,7 +422,7 @@ Per-external-call cost record.
 - `occurred_at`
 - `billing_metadata`
 
-### 4.4 Soft delete policy
+### 5.4 Soft delete policy
 
 Add `deleted_at` to mutable business entities:
 
@@ -423,9 +440,9 @@ Do not soft-delete:
 - cost ledger entries
 - billing ledger entries
 
-## 5. Copilot Architecture
+## 6. Copilot Architecture
 
-### 5.1 Runtime contract
+### 6.1 Runtime contract
 
 The Copilot is an agent with tool use, not a free-form assistant with database access.
 
@@ -447,7 +464,7 @@ Primary channel note:
 - Operators can also use that same number for conversational commands and status checks.
 - The dashboard remains important, but the phone number is the highest-priority real-time interaction surface.
 
-### 5.2 Tool registry
+### 6.2 Tool registry
 
 Every operator capability must exist in a registry definition. Code-first registry is preferred at launch, with optional DB persistence later for admin tooling and docs.
 
@@ -486,7 +503,7 @@ Rules:
 - Preconditions are enforced in code before mutation.
 - Failed validation returns why it failed and what can be done next.
 
-### 5.3 Context profiles
+### 6.3 Context profiles
 
 Do not hydrate full org state into every prompt. Build intent-family context profiles.
 
@@ -516,7 +533,7 @@ Example `scheduling` context:
 - unresolved labor conflicts
 - last publish attempt
 
-### 5.4 Session state
+### 6.4 Session state
 
 Never depend on prompt history alone.
 
@@ -534,7 +551,7 @@ TTL:
 - default 15 minutes inactivity for active sessions
 - longer retention for completed summaries if needed for follow-up
 
-### 5.5 Channel abstraction
+### 6.5 Channel abstraction
 
 All channels normalize to the same envelope:
 
@@ -566,7 +583,7 @@ Transport clarification:
 - Twilio exists underneath the branded number as carrier, SIP trunk, and OTP infrastructure.
 - Retell owns conversational voice and text behavior for the `1-800-BACKFILL` surface.
 
-### 5.6 LLM boundaries
+### 6.6 LLM boundaries
 
 Allowed:
 
@@ -583,9 +600,9 @@ Not allowed:
 - direct SQL generation for execution
 - mutation without a validated tool handler
 
-## 6. Coverage Engine
+## 7. Coverage Engine
 
-### 6.1 Campaign lifecycle
+### 7.1 Campaign lifecycle
 
 ```text
 callout.received
@@ -602,7 +619,14 @@ callout.received
 
 Every transition emits an event and updates the campaign aggregate.
 
-### 6.2 Modes
+Lifecycle rules:
+
+- A campaign is created when one open shift enters automated coverage.
+- A campaign ends in one terminal business outcome: `filled`, `exhausted`, `escalated`, `cancelled`, or `superseded`.
+- `closed_at` is bookkeeping for terminality, not a separate outcome.
+- A terminal campaign is never reopened. If the shift still needs coverage, create a new campaign.
+
+### 7.2 Modes
 
 Mode selection is automatic from `time_to_shift`.
 
@@ -616,9 +640,15 @@ Implementation rule:
 - Re-evaluate mode at every round boundary and on timer ticks.
 - Emit `coverage.campaign.mode_changed` on escalation.
 
-### 6.3 Candidate eligibility
+### 7.3 Candidate eligibility
 
 Eligibility is deterministic and code-based.
+
+Definition:
+
+- `eligibility` answers whether the employee is allowed to be considered for the shift
+- `availability` answers whether the employee can actually work the exact interval
+- both must pass before scoring or outreach matter
 
 Minimum checks:
 
@@ -630,7 +660,7 @@ Minimum checks:
 - not already contacted for this campaign
 - not locked by another active campaign if exclusion policy applies
 
-### 6.4 PoA scoring
+### 7.4 PoA scoring
 
 PoA is the sort order for eligible candidates, not the eligibility gate itself.
 
@@ -656,7 +686,7 @@ Launch design:
 
 Do not use an LLM for primary scoring on the critical path at launch.
 
-### 6.5 Outreach orchestration
+### 7.5 Outreach orchestration
 
 Use a Postgres-backed job queue with scheduled jobs and row locking.
 
@@ -687,7 +717,7 @@ Worker platform requirements:
 - structured job error payloads
 - dead-letter state for exhausted jobs
 
-### 6.6 Per-candidate state machine
+### 7.6 Per-candidate state machine
 
 ```text
 queued
@@ -704,7 +734,7 @@ queued
 
 At launch, this can remain split across `coverage_offers` and `coverage_contact_attempts` so long as service logic treats them as one logical outreach attempt model.
 
-### 6.7 Stop conditions
+### 7.7 Stop conditions
 
 Campaign closes when:
 
@@ -718,10 +748,15 @@ On fill:
 - pending jobs are cancelled
 - outstanding outreach attempts are marked cancelled
 - assignment is written
+
+Assignment rule:
+
+- `shift_assignments` is the durable ownership history for the shift
+- the schedule should render the current owner from assignment state, not from a mutable field on `shifts`
 - fill event emitted
 - billing evaluation scheduled
 
-### 6.8 External adapter layer
+### 7.8 External adapter layer
 
 Each provider gets an adapter with the same concerns:
 
@@ -767,9 +802,9 @@ Telephony cutover rule:
 - During transition, one provider path must be declared primary for each interaction class: OTP verification, inbound conversational phone, outbound conversational phone, inbound conversational text, outbound conversational text.
 - Legacy paths stay dark behind explicit configuration until removed.
 
-## 7. Event System and Activity Feed
+## 8. Event System and Activity Feed
 
-### 7.1 Event contract
+### 8.1 Event contract
 
 Canonical event shape:
 
@@ -789,7 +824,7 @@ class BackfillEvent:
     metadata: dict
 ```
 
-### 7.2 Taxonomy
+### 8.2 Taxonomy
 
 Keep dot-notation and reserve the first segment as the domain.
 
@@ -826,7 +861,7 @@ Representative events:
 - `billing.fill.charged`
 - `billing.fill.capped`
 
-### 7.3 Pipeline
+### 8.3 Pipeline
 
 Launch pipeline:
 
@@ -852,7 +887,7 @@ Event cutover rule:
 - `audit_logs` may be backfilled or projected from `platform_events` during transition.
 - Once feed reads, webhook consumers, and operator-visible timelines are sourced from `platform_events` or its projections, direct service writes to `audit_logs` should be removed.
 
-### 7.4 Activity feed
+### 8.4 Activity feed
 
 The feed is not raw audit logs. It is a projection optimized for operator visibility.
 
@@ -874,9 +909,9 @@ Launch approach:
 - materialized feed projection table updated by worker
 - fall back to direct event query for low volume if needed
 
-## 8. Billing and Cost Tracking
+## 9. Billing and Cost Tracking
 
-### 8.1 Billing decision
+### 9.1 Billing decision
 
 A fill is billable only if:
 
@@ -887,7 +922,7 @@ A fill is billable only if:
 
 Billing evaluator runs after fill and again at a pre-start recheck if needed.
 
-### 8.2 Monthly cap
+### 9.2 Monthly cap
 
 Track per-location monthly billable total.
 
@@ -897,7 +932,7 @@ Rules:
 - after the cap, continue running coverage normally
 - record `billing.fill.capped` with `amount_cents = 0`
 
-### 8.3 Cost ledger
+### 9.3 Cost ledger
 
 Every provider interaction creates a ledger row.
 
@@ -924,9 +959,9 @@ This must be queryable by:
 - provider
 - mode
 
-## 9. Security and Multi-Tenancy
+## 10. Security and Multi-Tenancy
 
-### 9.1 Tenant boundary
+### 10.1 Tenant boundary
 
 Every mutable table must include `business_id` or be transitively bound through a parent row that does.
 
@@ -943,20 +978,20 @@ Background worker rule:
 - If a worker uses database roles that bypass RLS, tenant scoping must be enforced in application code on every query path.
 - If a worker uses RLS-bound roles, session context must be established deliberately per job before any query runs.
 
-### 9.2 Authorization
+### 10.2 Authorization
 
 - Copilot tools declare required roles.
 - Tool handlers enforce role checks and entity-level scope.
 - Precondition failure messages may be generated by the LLM, but the actual decision comes from application code.
 
-### 9.3 Auditability
+### 10.3 Auditability
 
 - immutable platform events
 - immutable cost and billing ledgers
 - soft deletes for business entities
 - no production backdoor bypass of org scope
 
-## 10. Module Boundaries for the Monolith
+## 11. Module Boundaries for the Monolith
 
 Recommended internal package layout:
 
@@ -985,7 +1020,7 @@ Practical launch rule:
 - keep deployable as one app
 - split by domain modules, not by separate services
 
-## 11. Migration Plan from Current Codebase
+## 12. Migration Plan from Current Codebase
 
 ### Phase A: stabilize names and event model
 
@@ -1024,7 +1059,7 @@ Practical launch rule:
 2. Add `cost_ledger_entries` and `billing_ledger_entries`.
 3. Surface per-campaign cost and monthly cap status in API reads.
 
-## 12. Immediate Implementation Priorities
+## 13. Immediate Implementation Priorities
 
 If execution begins now, the highest-leverage sequence is:
 
@@ -1034,7 +1069,7 @@ If execution begins now, the highest-leverage sequence is:
 4. Introduce worker-driven timed outreach jobs.
 5. Add Copilot session storage and tool registry.
 
-## 13. Non-Negotiable Rules
+## 14. Non-Negotiable Rules
 
 - The Copilot never mutates state without validated tool execution.
 - Conversation state is persisted server-side.

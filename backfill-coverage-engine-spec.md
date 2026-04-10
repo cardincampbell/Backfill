@@ -44,11 +44,11 @@ Callout
 **Key principles:**
 
 - **Employees belong to the Business, not to a Location.** This is the architectural decision that enables cross-location coverage in Phase 2. An employee can fill a shift at any location under their business — their role assignments and availability determine eligibility, not their "home" location.
-- **Location eligibility is still a first-class permission layer.** Employees belong to the Business, but they may still need explicit clearance to work specific locations. Cross-location eligibility is not implied by mere business membership.
+- **Location eligibility is the permission layer.** Eligibility answers "allowed to work here"; availability answers "able to work this window." Manager clearance is one possible source of eligibility, but `eligibility` is the canonical term.
 - **Roles belong to the Business.** A "Server" is a "Server" across all locations. Roles are defined once at the business level, then assigned to locations and employees independently.
 - **Shifts use canonical intervals.** A shift is a role needed, at a place, over a timezone-aware interval. Do not model the canonical shift window as separate `DATE` + `TIME` fields.
 - **Assignments are their own durable model.** Do not rely on a single nullable foreign key on the shift row as the durable assignment record.
-- **Launch auto-coverage is single-seat only.** `seats_requested` is scheduling demand metadata, not durable seat identity. Do not infer multi-seat exclusivity from an integer count alone.
+- **A shift is one fillable unit of work.** One shift means one person, in one role, at one location, over one time window. If the business needs three servers from 5 PM to 10 PM, that should be three shifts.
 - **Availability belongs to Employees.** Availability is the supply signal — when an employee can work, regardless of where.
 - **Callout is a trigger, not the canonical aggregate.** The campaign is the operational, billing, and observability object.
 
@@ -72,6 +72,11 @@ Nature:  Static, binary — you either qualify or you don't
 ```
 
 This is established during onboarding and updated when an operator adds or removes role qualifications from an employee. It doesn't change shift-to-shift.
+
+Canonical definition:
+
+- `eligibility` is whether the employee is allowed to be considered for this shift
+- at minimum, eligibility = role qualification + location eligibility
 
 ---
 
@@ -101,6 +106,11 @@ Availability has two sub-layers:
 ```
 
 Exceptions always override the recurring template for that specific date.
+
+Canonical definition:
+
+- `availability` is whether the employee is able to work this exact shift interval
+- availability = recurring availability template plus dated exceptions evaluated over the canonical interval
 
 ---
 
@@ -198,14 +208,14 @@ timezone          VARCHAR
 starts_at         TIMESTAMPTZ
 ends_at           TIMESTAMPTZ
 schedule_status   ENUM           -- draft | published | active | completed | cancelled
-seats_requested   INTEGER
+seats_requested   INTEGER         -- compatibility field from current schema; canonical shift semantics are one worker per shift
 created_at        TIMESTAMP
 updated_at        TIMESTAMP
 ```
 
-This is the demand signal for the temporal relationship. A shift is a specific need — a role, at a location, over a canonical interval.
+This is the demand signal for the temporal relationship. A shift is a specific need for one person — one role, at one location, over one canonical interval.
 
-`seats_requested` expresses scheduling demand count. In launch auto-coverage, each campaign still represents exactly one fill opportunity. Multi-seat automated coverage is deferred until there is an explicit seat or slot model.
+If the operation needs multiple workers for the same role, location, and interval, create multiple shifts. `seats_requested` exists only as compatibility baggage from the current schema and should not drive canonical coverage behavior.
 
 Schedule lifecycle:
 ```
@@ -234,7 +244,13 @@ updated_at        TIMESTAMP
 
 `shift_assignments` is the durable assignment history and race-control surface. Do not treat a nullable employee FK on the shift row as sufficient for auditability or blast-mode correctness.
 
-At launch, only one active winning assignment may exist per shift. Multi-seat automated coverage remains out of scope until explicit seat identity exists.
+Canonical definition:
+
+- an assignment is the durable record of who owns the shift now, plus the history of how that ownership changed
+
+Only one active winning assignment may exist per shift.
+
+For schedule rendering, the current expected owner of the shift is the latest non-cancelled, non-replaced assignment in a positive state. `accepted` is stronger than `assigned`; if explicit acceptance exists, it is the winner shown to operators and downstream systems.
 
 ### `employees`
 ```
@@ -301,11 +317,12 @@ shift_id          UUID, FK → shifts
 callout_id        UUID, FK → callouts
 location_id       UUID, FK → locations
 business_id       UUID, FK → businesses
-status            ENUM           -- created | scoring | outreach_active | filled | exhausted | escalated | cancelled | closed
+status            ENUM           -- created | scoring | outreach_active | filled | exhausted | escalated | cancelled | superseded
 mode              ENUM           -- standard | compressed | blast
 filled_by_employee_id UUID, FK → employees, NULLABLE
 winning_assignment_id UUID, FK → shift_assignments, NULLABLE
 winning_attempt_id UUID, FK → outreach_attempts, NULLABLE
+superseded_by_campaign_id UUID, FK → coverage_campaigns, NULLABLE
 version           BIGINT
 opened_at         TIMESTAMP
 closed_at         TIMESTAMP
@@ -315,7 +332,22 @@ updated_at        TIMESTAMP
 
 The campaign is the canonical business object for coverage execution, billing, and observability.
 
-At launch, a campaign represents one open seat or fill opportunity. Do not create multiple concurrent automated fills from `seats_requested` alone.
+One campaign represents one open shift. Do not derive multiple simultaneous automated fills from `seats_requested`.
+
+### Campaign lifecycle rules
+
+- `created`: the shift becomes open and Backfill starts a new automated fill attempt.
+- `scoring`: the campaign is building candidate and decision context.
+- `outreach_active`: candidate outreach is live or queued.
+- `filled`: one valid winning assignment is secured for the shift.
+- `exhausted`: all configured automated options were consumed and no valid fill was secured.
+- `escalated`: automation hands the still-open shift to an operator exception path.
+- `cancelled`: the shift no longer needs filling, for example because the shift itself was cancelled or the callout was withdrawn.
+- `superseded`: this campaign is no longer the active attempt because the shift was manually assigned, materially changed, or replaced by a newer campaign.
+
+Terminal campaign outcomes are `filled`, `exhausted`, `escalated`, `cancelled`, and `superseded`. `closed_at` marks when the campaign reached terminal state; it is not a separate business outcome.
+
+A terminal campaign is never reopened. If the shift still needs coverage after a terminal campaign, create a new campaign and optionally link it through `superseded_by_campaign_id` or related metadata.
 
 ### `outreach_attempts`
 ```
@@ -337,6 +369,8 @@ created_at        TIMESTAMP
 ```
 
 Every outreach attempt is logged regardless of outcome. This append-only fact stream feeds projections, scoring snapshots, and cost tracking.
+
+An outreach attempt is not the same thing as a conversation thread. One thread may contain multiple provider messages or call events, but the canonical execution fact here is one attempt to contact one employee for one campaign through one channel/provider.
 
 ### `provider_callback_logs`
 ```
@@ -371,8 +405,8 @@ These are platform rules, not implementation details.
 
 ### Canonical race rules
 
-- Launch auto-coverage is single-seat only. There may be only one active automated coverage campaign per shift at a time until an explicit seat model exists.
-- Future multi-seat automation requires explicit `shift_seats` or `shift_slots`; do not repurpose `seats_requested` as seat identity.
+- There may be only one active automated coverage campaign per shift at a time.
+- If the business needs multiple workers for the same role, location, and interval, that demand must be represented as multiple shift rows, not one shift with hidden seat semantics.
 - One winning acceptance per campaign.
 - Blast mode "first confirm wins" must be enforced by database-backed constraints or compare-and-swap rules, not by application timing alone.
 - `coverage_campaigns.version` increments on every mutable transition and must be updated with compare-and-swap semantics.
@@ -392,6 +426,8 @@ These are platform rules, not implementation details.
 
 - Early proof-of-concept candidate resolution may read authoring tables directly.
 - The target execution model should converge on engine-facing projections for eligibility, compiled availability, and scoring snapshots rather than permanent heavy live joins over authoring tables.
+- Projections are rebuildable read models. They are never authoritative source-of-truth records.
+- If a projection is stale, missing, or corrupted, rebuild it from canonical facts rather than hand-editing or treating it as a primary record.
 
 ### Projection freshness contract
 
@@ -418,7 +454,7 @@ coverage_campaigns record created
 Candidate resolution applies these checks:
 
 - role/certification match
-- location eligibility / clearance
+- location eligibility
 - availability over the canonical shift interval
 - no conflicting accepted or active assignment
 - active employee status
@@ -433,7 +469,7 @@ Candidate resolution applies these checks:
 **Phase 2 (cross-location):**
 
 - resolve from the broader business employee pool
-- still require explicit location eligibility / clearance for the target location
+- still require explicit location eligibility for the target location
 
 Phase 2 activates when Phase 1 returns zero candidates, or when the operator has enabled cross-location coverage in their settings.
 
@@ -573,6 +609,8 @@ The AI never autonomously offers compensation beyond what the operator has pre-a
 
 Derived from append-only outreach attempt facts and maintained as a projection or snapshot. For launch compatibility, a cached snapshot may still be surfaced on the employee record, but the authoritative source is attempt history. Uses a **30-day rolling window** — recent behavior weighted more heavily than historical.
 
+This score is a cached decision aid, not a business fact. Do not use it as the authoritative source for authorization, labor rules, or assignment state.
+
 ```
 reliability_score = (
   accept_rate_smoothed * 0.45                    -- do they actually take the shift?
@@ -640,7 +678,7 @@ Over time PoA becomes a highly personalized signal per employee per shift contex
 
 6. RESOLUTION
    Filled → winning assignment written, all parties notified
-   No-fill / exhausted → operator notified, campaign closed accordingly
+   No-fill / exhausted → operator notified, campaign reaches terminal state accordingly
 
 7. SCORING UPDATED
    Every outreach attempt outcome updates:
@@ -670,7 +708,7 @@ The concrete launch budgets for these units live in the execution sequencing pla
 
 ### Phase 1 — Single Location, Internal Pool
 
-**Candidate query scope:** Employees cleared for the same location as the shift  
+**Candidate query scope:** Employees eligible for the same location as the shift  
 **Cross-location:** Not enabled  
 **External workers:** Not enabled  
 **Premium rules:** Operator-configured, optional  
@@ -698,16 +736,18 @@ The concrete launch budgets for these units live in the execution sequencing pla
 **External workers:** Still not enabled (Phase 3)
 
 **Location eligibility considerations for Phase 2:**
-- Employees still belong to the Business, but location eligibility remains a first-class clearance layer
-- Employee must have worked at, been explicitly cleared for, or otherwise been granted access to the target location to be included
-- Add `employee_location_clearance` table:
+- Employees still belong to the Business, but location eligibility remains a first-class permission layer
+- Employee must already be eligible for the target location to be included
+- Manager clearance is one source of eligibility; prior assignment history or policy can also grant eligibility
+- Add `employee_location_eligibility` table:
 
 ```
-employee_location_clearance
+employee_location_eligibility
   └── employee_id
   └── location_id
-  └── cleared_by        -- manager who approved
-  └── cleared_at        TIMESTAMP
+  └── eligibility_source   -- manager_clearance | prior_assignment | policy
+  └── granted_by           -- manager or system source
+  └── granted_at           TIMESTAMP
 ```
 
 This prevents Backfill from sending an employee to a location they've never been to and the manager doesn't know them.
@@ -749,12 +789,12 @@ Simulate callout by: creating a `callouts` record and `coverage_campaigns` recor
 | Decision | Choice | Reason |
 |---|---|---|
 | Employee placement in hierarchy | Under Business, not Location | Enables cross-location coverage without schema changes |
-| Location eligibility model | Explicit clearance / eligibility layer | Prevents sending unknown workers to unfamiliar locations |
+| Location eligibility model | Explicit eligibility layer | Prevents sending unknown workers to unfamiliar locations |
 | Roles placement | Under Business | Single definition shared across all locations |
 | Availability model | Recurring rules + Exceptions | Handles standing availability and one-off changes cleanly while allowing projection-based reads later |
 | Shift time model | Canonical interval (`starts_at`, `ends_at`) | Safe across overnight shifts, DST, and timezone math |
-| Assignment model | Separate `shift_assignments` table | Durable history, concurrency safety, and clean future seat expansion |
-| Launch seat scope | Single-seat automated coverage only | `seats_requested` alone cannot guarantee seat-level exclusivity |
+| Assignment model | Separate `shift_assignments` table | Durable history and concurrency-safe assignment state |
+| Shift semantics | One shift = one worker over one interval | Cleanest model for coverage, billing, and observability |
 | Coverage aggregate | `coverage_campaigns` | Canonical operational, billing, and observability object |
 | Outreach aggregate | `outreach_attempts` | Canonical delivery/execution fact stream |
 | Concurrency contract | Aggregate versioning + compare-and-swap writes | Deterministic resolution under retries and blast-mode races |
