@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 
+from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.services import finance_reporting
 
 
@@ -14,6 +16,9 @@ class _ExecuteResult:
 
     def all(self):
         return list(self._values)
+
+    def scalars(self):
+        return self
 
 
 class FakeFinanceSession:
@@ -107,3 +112,77 @@ async def test_location_billing_cap_snapshot_uses_billing_decision():
     assert snapshot.fill_price_cents == 2_000
     assert snapshot.next_fill_charge_cents == 500
     assert snapshot.is_capped is False
+
+
+@pytest.mark.asyncio
+async def test_list_cost_entries_returns_newest_first():
+    session = FakeFinanceSession()
+    coverage_case_id = uuid4()
+    newer_entry = CostLedgerEntry(
+        id=uuid4(),
+        coverage_case_id=coverage_case_id,
+        provider="retell",
+        product="voice_ai",
+        reference_type="call",
+        quantity=Decimal("1.000000"),
+        unit_cost_micros=30_000,
+        total_cost_micros=30_000,
+        cost_metadata={},
+        occurred_at=datetime(2026, 4, 10, 18, 5, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 18, 5, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 18, 5, tzinfo=timezone.utc),
+    )
+    older_entry = CostLedgerEntry(
+        id=uuid4(),
+        coverage_case_id=coverage_case_id,
+        provider="openai",
+        product="llm_generation",
+        reference_type="llm_generation",
+        quantity=Decimal("1.000000"),
+        unit_cost_micros=4_100,
+        total_cost_micros=4_100,
+        cost_metadata={},
+        occurred_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+    )
+    session.execute_queue = [[newer_entry, older_entry]]
+
+    rows = await finance_reporting.list_cost_entries(session, coverage_case_id=coverage_case_id)
+
+    assert rows == [newer_entry, older_entry]
+
+
+@pytest.mark.asyncio
+async def test_list_billing_entries_returns_newest_first():
+    session = FakeFinanceSession()
+    coverage_case_id = uuid4()
+    newer_entry = BillingLedgerEntry(
+        id=uuid4(),
+        coverage_case_id=coverage_case_id,
+        billing_event_type="fill_voided",
+        billing_cycle_start=datetime(2026, 4, 1, 7, 0, tzinfo=timezone.utc),
+        amount_cents=-2_000,
+        cap_applied=False,
+        billing_metadata={},
+        occurred_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+    )
+    older_entry = BillingLedgerEntry(
+        id=uuid4(),
+        coverage_case_id=coverage_case_id,
+        billing_event_type="fill_charged",
+        billing_cycle_start=datetime(2026, 4, 1, 7, 0, tzinfo=timezone.utc),
+        amount_cents=2_000,
+        cap_applied=False,
+        billing_metadata={},
+        occurred_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+    )
+    session.execute_queue = [[newer_entry, older_entry]]
+
+    rows = await finance_reporting.list_billing_entries(session, coverage_case_id=coverage_case_id)
+
+    assert rows == [newer_entry, older_entry]

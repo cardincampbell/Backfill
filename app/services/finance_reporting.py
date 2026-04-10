@@ -162,3 +162,33 @@ async def location_billing_cap_snapshot(
         next_fill_charge_cents=decision.amount_cents,
         is_capped=decision.amount_cents == 0,
     )
+
+
+async def list_cost_entries(
+    session: AsyncSession,
+    *,
+    coverage_case_id: UUID,
+    limit: int = 50,
+) -> list[CostLedgerEntry]:
+    result = await session.execute(
+        select(CostLedgerEntry)
+        .where(CostLedgerEntry.coverage_case_id == coverage_case_id)
+        .order_by(CostLedgerEntry.occurred_at.desc(), CostLedgerEntry.created_at.desc())
+        .limit(max(1, min(limit, 250)))
+    )
+    return list(result.scalars().all())
+
+
+async def list_billing_entries(
+    session: AsyncSession,
+    *,
+    coverage_case_id: UUID,
+    limit: int = 50,
+) -> list[BillingLedgerEntry]:
+    result = await session.execute(
+        select(BillingLedgerEntry)
+        .where(BillingLedgerEntry.coverage_case_id == coverage_case_id)
+        .order_by(BillingLedgerEntry.occurred_at.desc(), BillingLedgerEntry.created_at.desc())
+        .limit(max(1, min(limit, 250)))
+    )
+    return list(result.scalars().all())

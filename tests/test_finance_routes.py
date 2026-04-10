@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from app.models.business import Location
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import CoverageCase
 from app.models.identity import Membership, Session, User
+from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.services import finance_reporting
 from app.services.auth import AuthContext
 
@@ -247,5 +249,132 @@ def test_get_campaign_economics_enforces_location_access():
         )
         assert response.status_code == 403
         assert response.json()["detail"] == "location_access_denied"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_list_campaign_cost_entries_returns_entries(monkeypatch):
+    fake_session = FakeFinanceRouteSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    coverage_case_id = uuid4()
+    fake_session.get_map[(Location, location_id)] = _make_location(
+        business_id=business_id,
+        location_id=location_id,
+    )
+    fake_session.get_map[(CoverageCase, coverage_case_id)] = _make_coverage_case(
+        coverage_case_id=coverage_case_id,
+        location_id=location_id,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_list_cost_entries(_session, *, coverage_case_id: object, limit: int):
+        assert coverage_case_id == fake_case_id
+        assert limit == 25
+        return [
+            CostLedgerEntry(
+                id=uuid4(),
+                business_id=business_id,
+                location_id=location_id,
+                coverage_case_id=fake_case_id,
+                provider="retell",
+                product="voice_ai",
+                reference_type="call",
+                reference_id="call_123",
+                idempotency_key="retell:call_123",
+                quantity=Decimal("1.500000"),
+                unit_cost_micros=20_000,
+                total_cost_micros=30_000,
+                cost_metadata={"minutes": "1.5"},
+                occurred_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+                created_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+            )
+        ]
+
+    fake_case_id = coverage_case_id
+    monkeypatch.setattr(finance_reporting, "list_cost_entries", fake_list_cost_entries)
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/finance/coverage-cases/{coverage_case_id}/cost-entries?limit=25"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["provider"] == "retell"
+        assert payload[0]["product"] == "voice_ai"
+        assert float(payload[0]["quantity"]) == 1.5
+        assert payload[0]["total_cost_micros"] == 30_000
+        assert payload[0]["cost_metadata"]["minutes"] == "1.5"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_list_campaign_billing_entries_returns_entries(monkeypatch):
+    fake_session = FakeFinanceRouteSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    coverage_case_id = uuid4()
+    fake_session.get_map[(Location, location_id)] = _make_location(
+        business_id=business_id,
+        location_id=location_id,
+    )
+    fake_session.get_map[(CoverageCase, coverage_case_id)] = _make_coverage_case(
+        coverage_case_id=coverage_case_id,
+        location_id=location_id,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_list_billing_entries(_session, *, coverage_case_id: object, limit: int):
+        assert coverage_case_id == fake_case_id
+        assert limit == 10
+        return [
+            BillingLedgerEntry(
+                id=uuid4(),
+                business_id=business_id,
+                location_id=location_id,
+                coverage_case_id=fake_case_id,
+                billing_event_type="fill_charged",
+                billing_cycle_start=datetime(2026, 4, 1, 7, 0, tzinfo=timezone.utc),
+                amount_cents=2_000,
+                cap_applied=False,
+                idempotency_key="fill:123",
+                billing_metadata={"billed_cents_after": 2_000},
+                occurred_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+                created_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 4, 10, 18, 45, tzinfo=timezone.utc),
+            )
+        ]
+
+    fake_case_id = coverage_case_id
+    monkeypatch.setattr(finance_reporting, "list_billing_entries", fake_list_billing_entries)
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/finance/coverage-cases/{coverage_case_id}/billing-entries?limit=10"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["billing_event_type"] == "fill_charged"
+        assert payload[0]["amount_cents"] == 2_000
+        assert payload[0]["billing_metadata"]["billed_cents_after"] == 2_000
     finally:
         app.dependency_overrides.clear()
