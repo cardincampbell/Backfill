@@ -28,11 +28,24 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
         status = "received"
         result_payload = {}
 
+    async def fake_process(session, entry):
+        assert entry.status == "received"
+        return type(
+            "CallbackResult",
+            (),
+            {
+                "response_kind": "json",
+                "response_payload": {"status": "accepted", "offer_id": "offer_123"},
+                "response_text": None,
+            },
+        )()
+
     async def fake_record(*args, **kwargs):
         return CallbackEntry(), True
 
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry", fake_process)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -47,11 +60,7 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
             },
         )
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "received",
-            "event": "function_call",
-            "callback_log_id": "cb_retell_1",
-        }
+        assert response.json() == {"status": "accepted", "offer_id": "offer_123"}
     finally:
         app.dependency_overrides.clear()
 
