@@ -104,3 +104,9 @@ async def test_append_platform_event_defaults_compatibility_name_to_event_type(m
     platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
     assert len(platform_entries) == 1
     assert platform_entries[0].compatibility_event_name == platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED
+
+
+def test_platform_event_type_includes_billing_events():
+    assert platform_events.PlatformEventType.BILLING_FILL_CHARGED == "billing.fill.charged"
+    assert platform_events.PlatformEventType.BILLING_FILL_CAPPED == "billing.fill.capped"
+    assert platform_events.PlatformEventType.BILLING_FILL_VOIDED == "billing.fill.voided"

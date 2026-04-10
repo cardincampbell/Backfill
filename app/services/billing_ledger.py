@@ -66,6 +66,15 @@ async def billed_cents_for_location_cycle(
     return int(total or 0)
 
 
+async def billed_cents_for_campaign(session: AsyncSession, coverage_case_id: UUID) -> int:
+    total = await session.scalar(
+        select(func.coalesce(func.sum(BillingLedgerEntry.amount_cents), 0)).where(
+            BillingLedgerEntry.coverage_case_id == coverage_case_id
+        )
+    )
+    return int(total or 0)
+
+
 async def evaluate_fill_charge(
     session: AsyncSession,
     *,
@@ -186,6 +195,46 @@ async def append_fill_entry(
             "monthly_cap_cents": decision.monthly_cap_cents,
             "billed_cents_before": decision.billed_cents_before,
             "billed_cents_after": decision.billed_cents_after,
+            **dict(_normalize_value(metadata) or {}),
+        },
+        occurred_at=occurred_at,
+    )
+
+
+async def append_void_entry(
+    session: AsyncSession,
+    *,
+    business_id: UUID | None,
+    location_id: UUID | None,
+    coverage_case_id: UUID,
+    shift_id: UUID | None,
+    employee_id: UUID | None,
+    billing_cycle_start: datetime,
+    amount_cents: int | None = None,
+    idempotency_key: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    occurred_at: datetime | None = None,
+) -> BillingLedgerEntry:
+    effective_amount = amount_cents
+    if effective_amount is None:
+        effective_amount = -(await billed_cents_for_campaign(session, coverage_case_id))
+    if effective_amount > 0:
+        effective_amount = -effective_amount
+    effective_idempotency_key = idempotency_key or f"fill:void:{coverage_case_id}"
+    return await append_entry(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        coverage_case_id=coverage_case_id,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        billing_event_type=BillingEventType.FILL_VOIDED,
+        billing_cycle_start=billing_cycle_start,
+        amount_cents=effective_amount,
+        cap_applied=False,
+        idempotency_key=effective_idempotency_key,
+        metadata={
+            "voided_amount_cents": abs(effective_amount),
             **dict(_normalize_value(metadata) or {}),
         },
         occurred_at=occurred_at,

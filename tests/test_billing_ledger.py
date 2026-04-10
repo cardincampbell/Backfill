@@ -140,3 +140,35 @@ async def test_append_fill_entry_records_evaluated_metadata_and_idempotency():
     assert entry.billing_metadata["trace_id"] == "trace_123"
     assert entry.billing_metadata["billed_cents_after"] == 20000
     assert entry.occurred_at == occurred_at
+
+
+@pytest.mark.asyncio
+async def test_append_void_entry_defaults_to_negative_campaign_total():
+    session = FakeBillingSession()
+    session.scalar_value = 2000
+    business_id = uuid4()
+    location_id = uuid4()
+    coverage_case_id = uuid4()
+    cycle_start = datetime(2026, 4, 1, 7, 0, tzinfo=timezone.utc)
+    occurred_at = datetime(2026, 4, 12, 18, 30, tzinfo=timezone.utc)
+
+    entry = await billing_ledger.append_void_entry(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        coverage_case_id=coverage_case_id,
+        shift_id=None,
+        employee_id=None,
+        billing_cycle_start=cycle_start,
+        occurred_at=occurred_at,
+        metadata={"reason": "shift_cancelled"},
+    )
+
+    assert isinstance(entry, BillingLedgerEntry)
+    assert entry.billing_event_type == billing_ledger.BillingEventType.FILL_VOIDED
+    assert entry.amount_cents == -2000
+    assert entry.cap_applied is False
+    assert entry.idempotency_key == f"fill:void:{coverage_case_id}"
+    assert entry.billing_metadata["voided_amount_cents"] == 2000
+    assert entry.billing_metadata["reason"] == "shift_cancelled"
+    assert entry.occurred_at == occurred_at

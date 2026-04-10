@@ -61,12 +61,7 @@ def cents_to_micros(cents: int) -> int:
 
 
 async def total_billed_for_campaign(session: AsyncSession, coverage_case_id: UUID) -> int:
-    total = await session.scalar(
-        select(func.coalesce(func.sum(BillingLedgerEntry.amount_cents), 0)).where(
-            BillingLedgerEntry.coverage_case_id == coverage_case_id
-        )
-    )
-    return int(total or 0)
+    return await billing_ledger.billed_cents_for_campaign(session, coverage_case_id)
 
 
 async def _count_cost_entries(session: AsyncSession, coverage_case_id: UUID) -> int:
