@@ -4,13 +4,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.common import AssignmentStatus, CoverageAttemptStatus
+from app.models.coverage import CoverageContactAttempt
+from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
 from app.services import delivery
 
 SCORE_SNAPSHOT_STALE_AFTER = timedelta(minutes=15)
+CONTACT_COOLDOWN_HARD = timedelta(minutes=15)
+CONTACT_COOLDOWN_SOFT = timedelta(hours=2)
+RECENT_BURDEN_WINDOW = timedelta(days=7)
+OVERTIME_LOOKBACK_WINDOW = timedelta(days=7)
 _ENGINE_RUNTIME_SOURCE = "authoring_tables"
 _SCORE_SNAPSHOT_SOURCE = "employee.response_profile"
 
@@ -129,3 +137,190 @@ def build_runtime_projection_metadata(
             **counts,
         },
     }
+
+
+def _shift_duration_hours(shift: Shift) -> float:
+    return max(0.0, (shift.ends_at - shift.starts_at).total_seconds() / 3600)
+
+
+def _contact_cooldown_snapshot(
+    *,
+    last_contact_at: datetime | None,
+    now: datetime,
+) -> dict[str, object]:
+    if last_contact_at is None:
+        return {
+            "status": "clear",
+            "multiplier": 1.0,
+            "last_contact_at": None,
+            "age_seconds": None,
+        }
+
+    age_seconds = max(0, int((now - last_contact_at).total_seconds()))
+    if age_seconds < int(CONTACT_COOLDOWN_HARD.total_seconds()):
+        return {
+            "status": "hard_cooldown",
+            "multiplier": 0.0,
+            "last_contact_at": last_contact_at.isoformat(),
+            "age_seconds": age_seconds,
+        }
+    if age_seconds < int(CONTACT_COOLDOWN_SOFT.total_seconds()):
+        return {
+            "status": "soft_cooldown",
+            "multiplier": 0.65,
+            "last_contact_at": last_contact_at.isoformat(),
+            "age_seconds": age_seconds,
+        }
+    return {
+        "status": "clear",
+        "multiplier": 1.0,
+        "last_contact_at": last_contact_at.isoformat(),
+        "age_seconds": age_seconds,
+    }
+
+
+def _recent_burden_snapshot(
+    *,
+    recent_attempt_count: int,
+    recent_accept_count: int,
+    recent_assignment_hours: float,
+) -> dict[str, object]:
+    attempt_penalty = min(max(recent_attempt_count, 0), 6) * 0.03
+    accept_penalty = min(max(recent_accept_count, 0), 3) * 0.04
+    hour_penalty = min(max(recent_assignment_hours, 0.0) / 24.0, 1.0) * 0.12
+    multiplier = max(0.7, round(1.0 - attempt_penalty - accept_penalty - hour_penalty, 3))
+    return {
+        "multiplier": multiplier,
+        "recent_attempt_count": recent_attempt_count,
+        "recent_accept_count": recent_accept_count,
+        "recent_assignment_hours": round(recent_assignment_hours, 2),
+    }
+
+
+def _overtime_risk_snapshot(
+    *,
+    projected_hours: float,
+) -> dict[str, object]:
+    if projected_hours >= 40.0:
+        multiplier = 0.4
+        status = "high"
+    elif projected_hours >= 32.0:
+        multiplier = 0.7
+        status = "elevated"
+    elif projected_hours >= 24.0:
+        multiplier = 0.85
+        status = "watch"
+    else:
+        multiplier = 1.0
+        status = "clear"
+    return {
+        "status": status,
+        "multiplier": multiplier,
+        "projected_hours": round(projected_hours, 2),
+    }
+
+
+async def build_outreach_guardrail_snapshots(
+    session: AsyncSession,
+    employees: Iterable[Employee],
+    *,
+    shift: Shift,
+    now: datetime | None = None,
+) -> dict[UUID, dict[str, object]]:
+    reference_time = now or datetime.now(timezone.utc)
+    employees_list = list(employees)
+    employee_ids = [employee.id for employee in employees_list]
+    if not employee_ids:
+        return {}
+
+    attempts_by_employee: dict[UUID, list[tuple[datetime | None, CoverageAttemptStatus | str | None]]] = {
+        employee_id: []
+        for employee_id in employee_ids
+    }
+    recent_attempts_result = await session.execute(
+        select(
+            CoverageContactAttempt.employee_id,
+            CoverageContactAttempt.requested_at,
+            CoverageContactAttempt.status,
+        ).where(
+            CoverageContactAttempt.employee_id.in_(employee_ids),
+            CoverageContactAttempt.requested_at >= reference_time - RECENT_BURDEN_WINDOW,
+        )
+    )
+    for employee_id, requested_at, status in recent_attempts_result.all():
+        if employee_id is None:
+            continue
+        attempts_by_employee.setdefault(employee_id, []).append((requested_at, status))
+
+    assignment_hours_by_employee: dict[UUID, float] = {
+        employee_id: 0.0
+        for employee_id in employee_ids
+    }
+    assignment_window_start = shift.ends_at - OVERTIME_LOOKBACK_WINDOW
+    assignment_rows = await session.execute(
+        select(
+            ShiftAssignment.employee_id,
+            Shift.starts_at,
+            Shift.ends_at,
+        )
+        .join(Shift, ShiftAssignment.shift_id == Shift.id)
+        .where(
+            ShiftAssignment.employee_id.in_(employee_ids),
+            ShiftAssignment.status.in_(
+                [
+                    AssignmentStatus.assigned,
+                    AssignmentStatus.accepted,
+                    AssignmentStatus.completed,
+                ]
+            ),
+            Shift.ends_at > assignment_window_start,
+            Shift.starts_at < shift.ends_at,
+        )
+    )
+    for employee_id, starts_at, ends_at in assignment_rows.all():
+        if employee_id is None or starts_at is None or ends_at is None:
+            continue
+        assignment_hours_by_employee[employee_id] = assignment_hours_by_employee.get(employee_id, 0.0) + max(
+            0.0,
+            (ends_at - starts_at).total_seconds() / 3600,
+        )
+
+    current_shift_hours = _shift_duration_hours(shift)
+    snapshots: dict[UUID, dict[str, object]] = {}
+    for employee in employees_list:
+        attempts = attempts_by_employee.get(employee.id, [])
+        last_contact_at = max(
+            (requested_at for requested_at, _status in attempts if requested_at is not None),
+            default=None,
+        )
+        recent_attempt_count = len(attempts)
+        recent_accept_count = sum(
+            1
+            for _requested_at, status in attempts
+            if str(status.value if hasattr(status, "value") else status) == CoverageAttemptStatus.accepted.value
+        )
+        recent_assignment_hours = assignment_hours_by_employee.get(employee.id, 0.0)
+
+        cooldown = _contact_cooldown_snapshot(last_contact_at=last_contact_at, now=reference_time)
+        burden = _recent_burden_snapshot(
+            recent_attempt_count=recent_attempt_count,
+            recent_accept_count=recent_accept_count,
+            recent_assignment_hours=recent_assignment_hours,
+        )
+        overtime = _overtime_risk_snapshot(
+            projected_hours=recent_assignment_hours + current_shift_hours,
+        )
+        overall = round(
+            float(cooldown["multiplier"]) * float(burden["multiplier"]) * float(overtime["multiplier"]),
+            3,
+        )
+
+        snapshots[employee.id] = {
+            "contact_cooldown": cooldown,
+            "recent_burden": burden,
+            "overtime_risk": overtime,
+            "overall_multiplier": overall,
+            "hard_excluded": float(cooldown["multiplier"]) == 0.0,
+        }
+
+    return snapshots
