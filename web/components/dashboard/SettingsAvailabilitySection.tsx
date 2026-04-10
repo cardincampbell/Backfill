@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Briefcase,
@@ -527,7 +534,6 @@ export default function SettingsAvailabilitySection({
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     businessId ? "loading" : "error",
   );
-  const [employeeName, setEmployeeName] = useState<string | null>(null);
   const [timezone, setTimezone] = useState<string>(businessTimezone ?? "UTC");
   const [dayStates, setDayStates] = useState<Record<number, DayState>>(
     createDefaultDayMap,
@@ -563,7 +569,6 @@ export default function SettingsAvailabilitySection({
           return;
         }
         const nextState = buildStateFromRules(availability);
-        setEmployeeName(availability.employee_name);
         setShowProvisioningHint(false);
         setTimezone(
           availability.rules.length > 0
@@ -584,7 +589,6 @@ export default function SettingsAvailabilitySection({
             : "Could not load your availability right now.";
         if (message === "employee_self_not_found") {
           const emptyState = createDefaultDayMap();
-          setEmployeeName(null);
           setShowProvisioningHint(true);
           setFeedback(null);
           setDayStates(emptyState);
@@ -744,7 +748,7 @@ export default function SettingsAvailabilitySection({
     setSavedPulse(false);
   };
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     if (!businessId || !canSave) {
       return;
     }
@@ -755,7 +759,6 @@ export default function SettingsAvailabilitySection({
         const payload = serializeAvailability(dayStates, timezone);
         const response = await replaceSelfEmployeeAvailability(businessId, payload);
         const nextState = buildStateFromRules(response);
-        setEmployeeName(response.employee_name);
         setShowProvisioningHint(false);
         setTimezone(
           response.rules.length > 0 ? response.timezone || timezone : timezone,
@@ -775,29 +778,27 @@ export default function SettingsAvailabilitySection({
         });
       }
     });
-  };
+  }, [businessId, canSave, dayStates, timezone]);
 
   useEffect(() => {
     if (!onHeaderActionChange) {
       return;
     }
-    if (status !== "ready") {
+    if (status !== "ready" || (!dirty && !isPending)) {
       onHeaderActionChange(null);
       return;
     }
     onHeaderActionChange({
-      disabled: !canSave,
+      disabled: isPending,
       label: isPending
         ? "Saving..."
-        : changeCount > 0
-          ? `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`
-          : "Save Changes",
+        : `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`,
       onClick: handleSave,
     });
     return () => {
       onHeaderActionChange(null);
     };
-  }, [canSave, changeCount, handleSave, isPending, onHeaderActionChange, status]);
+  }, [changeCount, dirty, handleSave, isPending, onHeaderActionChange, status]);
 
   if (status === "loading") {
     return (
@@ -914,27 +915,7 @@ export default function SettingsAvailabilitySection({
         </div>
       ) : null}
 
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h4
-            className={`text-[11px] uppercase tracking-[0.04em] ${
-              dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-            }`}
-            style={{ fontWeight: 500 }}
-          >
-            Set Your Hours
-          </h4>
-          {employeeName ? (
-            <p
-              className={`mt-1 text-[11px] ${
-                dark ? "text-[#C1CED8]" : "text-[#8898AA]"
-              }`}
-              style={{ fontWeight: 420 }}
-            >
-              Editing availability for {employeeName} in {timezone}
-            </p>
-          ) : null}
-        </div>
+      <div className="mb-3 flex items-center justify-end">
         <div className="flex items-center gap-2.5">
           <span
             className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}

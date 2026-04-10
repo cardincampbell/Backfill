@@ -164,17 +164,15 @@ export default function SettingsShiftsSection({
     if (!onHeaderActionChange) {
       return;
     }
-    if (loading) {
+    if (loading || (!isDirty && !saving)) {
       onHeaderActionChange(null);
       return;
     }
     onHeaderActionChange({
-      disabled: !isDirty || saving,
+      disabled: saving,
       label: saving
         ? "Saving..."
-        : changeCount > 0
-          ? `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`
-          : "Save Changes",
+        : `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`,
       onClick: () => {
         void handleSave();
       },

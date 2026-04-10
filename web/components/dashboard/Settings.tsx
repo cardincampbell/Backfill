@@ -865,6 +865,19 @@ export default function Settings({
     }
   }
 
+  const activePageAction =
+    activeSaveTarget === "business" || activeSaveTarget === "personal"
+      ? activeDirty
+        ? {
+            disabled: !activeCanSave,
+            label: activeSaving ? "Saving…" : "Save Changes",
+            onClick: () => {
+              void handleSaveActive();
+            },
+          }
+        : null
+      : sectionHeaderAction;
+
   async function handleRevokeSession(sessionId: string) {
     if (sessionId === currentSessionId) {
       return;
@@ -933,7 +946,7 @@ export default function Settings({
   const cardBg = isDark ? "bg-white/[0.03]" : "bg-[#F7F8FA]";
 
   useEffect(() => {
-    if (activeSection !== "shifts") {
+    if (activeSection !== "shifts" && activeSection !== "availability") {
       setSectionHeaderAction(null);
     }
   }, [activeSection]);
@@ -1552,22 +1565,20 @@ export default function Settings({
               Manage your business and personal preferences.
             </p>
           </div>
-          {activeDirty ? (
+          {activePageAction ? (
               <motion.button
                 animate={{ opacity: 1, scale: 1 }}
                 className="hidden sm:block px-5 py-2.5 rounded-full text-[13px] text-white whitespace-nowrap transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-60 disabled:hover:shadow-none"
-              disabled={!activeCanSave}
+              disabled={activePageAction.disabled}
               initial={{ opacity: 0, scale: 0.95 }}
-              onClick={() => {
-                void handleSaveActive();
-              }}
+              onClick={activePageAction.onClick}
               style={{
                 fontWeight: 540,
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
               type="button"
             >
-              {activeSaving ? "Saving…" : "Save Changes"}
+              {activePageAction.label}
             </motion.button>
           ) : null}
         </div>
@@ -1640,20 +1651,6 @@ export default function Settings({
                         </p>
                       </div>
                     </div>
-                    {sectionHeaderAction ? (
-                      <button
-                        className="shrink-0 rounded-full px-4 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_16px_rgba(99,91,255,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={sectionHeaderAction.disabled}
-                        onClick={sectionHeaderAction.onClick}
-                        style={{
-                          fontWeight: 540,
-                          background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-                        }}
-                        type="button"
-                      >
-                        {sectionHeaderAction.label}
-                      </button>
-                    ) : null}
                   </>
                 ) : null}
               </div>
@@ -1688,7 +1685,7 @@ export default function Settings({
       </motion.div>
 
       <AnimatePresence>
-        {activeDirty ? (
+        {activePageAction ? (
           <motion.div
             animate={{ y: 0, opacity: 1 }}
             className={`fixed bottom-0 left-0 right-0 z-30 sm:hidden px-4 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-3 border-t ${isDark ? "from-[#071B2F] via-[#071B2F] to-[#071B2F]/80 border-white/[0.08]" : "from-white via-white to-white/80 border-[#E5E7EB]"} bg-gradient-to-t`}
@@ -1698,17 +1695,15 @@ export default function Settings({
           >
             <button
               className="w-full py-3 rounded-full text-[14px] text-white transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
-              disabled={!activeCanSave}
-              onClick={() => {
-                void handleSaveActive();
-              }}
+              disabled={activePageAction.disabled}
+              onClick={activePageAction.onClick}
               style={{
                 fontWeight: 540,
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
               type="button"
             >
-              {activeSaving ? "Saving…" : "Save Changes"}
+              {activePageAction.label}
             </button>
           </motion.div>
         ) : null}
