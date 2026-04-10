@@ -3,6 +3,7 @@ from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.businesses import router as businesses_router
 from app.api.routes.coverage import router as coverage_router
+from app.api.routes.events import router as events_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.identity import router as identity_router
 from app.api.routes.internal import router as internal_router
@@ -25,6 +26,7 @@ __all__ = [
     "auth_router",
     "businesses_router",
     "coverage_router",
+    "events_router",
     "finance_router",
     "identity_router",
     "internal_router",

@@ -14,6 +14,7 @@ from app.services import platform_events
 class FakePlatformEventSession:
     def __init__(self):
         self.added: list[object] = []
+        self.execute_values: list[object] = []
 
     def add(self, obj):
         if getattr(obj, "id", None) is None:
@@ -21,6 +22,25 @@ class FakePlatformEventSession:
         if hasattr(obj, "occurred_at") and getattr(obj, "occurred_at", None) is None:
             obj.occurred_at = datetime.now(timezone.utc)
         self.added.append(obj)
+
+    async def execute(self, _stmt):
+        values = list(self.execute_values)
+
+        class _ScalarResult:
+            def __init__(self, result_values):
+                self._result_values = result_values
+
+            def all(self):
+                return list(self._result_values)
+
+        class _ExecuteResult:
+            def __init__(self, result_values):
+                self._result_values = result_values
+
+            def scalars(self):
+                return _ScalarResult(self._result_values)
+
+        return _ExecuteResult(values)
 
 
 @pytest.mark.asyncio
@@ -110,3 +130,54 @@ def test_platform_event_type_includes_billing_events():
     assert platform_events.PlatformEventType.BILLING_FILL_CHARGED == "billing.fill.charged"
     assert platform_events.PlatformEventType.BILLING_FILL_CAPPED == "billing.fill.capped"
     assert platform_events.PlatformEventType.BILLING_FILL_VOIDED == "billing.fill.voided"
+
+
+@pytest.mark.asyncio
+async def test_list_platform_events_filters_by_scope():
+    session = FakePlatformEventSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    first = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        schema_version=1,
+        event_type=platform_events.PlatformEventType.BILLING_FILL_CHARGED,
+        compatibility_event_name="billing.fill.charged",
+        entity_type="coverage_case",
+        entity_id=uuid4(),
+        actor_type=AuditActorType.system,
+        actor_user_id=None,
+        actor_membership_id=None,
+        trace_id="trace_1",
+        payload={},
+        event_metadata={},
+        occurred_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+    )
+    second = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        schema_version=1,
+        event_type=platform_events.PlatformEventType.BILLING_FILL_CAPPED,
+        compatibility_event_name="billing.fill.capped",
+        entity_type="coverage_case",
+        entity_id=uuid4(),
+        actor_type=AuditActorType.system,
+        actor_user_id=None,
+        actor_membership_id=None,
+        trace_id="trace_2",
+        payload={},
+        event_metadata={},
+        occurred_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+    )
+    session.execute_values = [first, second]
+
+    result = await platform_events.list_events(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        event_type=platform_events.PlatformEventType.BILLING_FILL_CHARGED,
+    )
+
+    assert result == [first, second]

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.common import AuditActorType
@@ -139,3 +140,28 @@ async def append(
         payload=event_payload,
         occurred_at=occurred_at,
     )
+
+
+async def list_events(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID | None = None,
+    entity_type: str | None = None,
+    event_type: str | None = None,
+    limit: int = 50,
+) -> list[PlatformEvent]:
+    stmt = (
+        select(PlatformEvent)
+        .where(PlatformEvent.business_id == business_id)
+        .order_by(PlatformEvent.occurred_at.desc())
+        .limit(max(1, min(limit, 250)))
+    )
+    if location_id is not None:
+        stmt = stmt.where(PlatformEvent.location_id == location_id)
+    if entity_type is not None:
+        stmt = stmt.where(PlatformEvent.entity_type == entity_type)
+    if event_type is not None:
+        stmt = stmt.where(PlatformEvent.event_type == event_type)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
