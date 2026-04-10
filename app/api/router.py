@@ -13,6 +13,7 @@ from app.api.routes import (
     finance_router,
     identity_router,
     internal_router,
+    llm_router,
     migrations_router,
     invites_router,
     onboarding_router,
@@ -48,6 +49,7 @@ router.include_router(identity_router)
 router.include_router(auth_router)
 router.include_router(account_router)
 router.include_router(internal_router)
+router.include_router(llm_router)
 router.include_router(migrations_router)
 router.include_router(invites_router)
 router.include_router(onboarding_router)

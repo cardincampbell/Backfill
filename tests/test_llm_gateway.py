@@ -13,6 +13,7 @@ from app.services import llm_gateway
 class FakeGatewaySession:
     def __init__(self):
         self.added: list[object] = []
+        self.execute_values: list[object] = []
 
     def add(self, obj):
         now = datetime.now(timezone.utc)
@@ -23,6 +24,28 @@ class FakeGatewaySession:
         if hasattr(obj, "updated_at") and getattr(obj, "updated_at", None) is None:
             obj.updated_at = now
         self.added.append(obj)
+
+    async def execute(self, _stmt):
+        values = list(self.execute_values)
+
+        class _ScalarResult:
+            def __init__(self, result_values):
+                self._result_values = result_values
+
+            def all(self):
+                return list(self._result_values)
+
+            def first(self):
+                return self._result_values[0] if self._result_values else None
+
+        class _ExecuteResult:
+            def __init__(self, result_values):
+                self._result_values = result_values
+
+            def scalars(self):
+                return _ScalarResult(self._result_values)
+
+        return _ExecuteResult(values)
 
 
 class SuccessAdapter:
@@ -205,3 +228,74 @@ def test_provider_is_configured_checks_per_provider_keys():
     assert llm_gateway.provider_is_configured(llm_gateway.LlmProvider.OPENAI) is True
     assert llm_gateway.provider_is_configured(llm_gateway.LlmProvider.ANTHROPIC) is True
     assert llm_gateway.provider_is_configured("unknown") is False
+
+
+@pytest.mark.asyncio
+async def test_list_generations_returns_rows_in_execute_order():
+    session = FakeGatewaySession()
+    business_id = uuid4()
+    first = LlmGeneration(
+        id=uuid4(),
+        business_id=business_id,
+        provider=llm_gateway.LlmProvider.OPENAI,
+        model="gpt-test",
+        purpose="intent_resolution",
+        status=llm_gateway.LlmGenerationStatus.SUCCEEDED,
+        request_payload={},
+        response_payload={},
+        tool_calls=[],
+        generation_metadata={},
+        started_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc),
+    )
+    second = LlmGeneration(
+        id=uuid4(),
+        business_id=business_id,
+        provider=llm_gateway.LlmProvider.ANTHROPIC,
+        model="claude-test",
+        purpose="tool_selection",
+        status=llm_gateway.LlmGenerationStatus.FAILED,
+        request_payload={},
+        response_payload={},
+        tool_calls=[],
+        generation_metadata={},
+        started_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 18, 0, tzinfo=timezone.utc),
+    )
+    session.execute_values = [first, second]
+
+    rows = await llm_gateway.list_generations(session, business_id=business_id, limit=25)
+
+    assert rows == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_get_generation_returns_first_matching_row():
+    session = FakeGatewaySession()
+    business_id = uuid4()
+    row = LlmGeneration(
+        id=uuid4(),
+        business_id=business_id,
+        provider=llm_gateway.LlmProvider.OPENAI,
+        model="gpt-test",
+        purpose="general",
+        status=llm_gateway.LlmGenerationStatus.SUCCEEDED,
+        request_payload={},
+        response_payload={},
+        tool_calls=[],
+        generation_metadata={},
+        started_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 10, 19, 0, tzinfo=timezone.utc),
+    )
+    session.execute_values = [row]
+
+    loaded = await llm_gateway.get_generation(
+        session,
+        business_id=business_id,
+        generation_id=row.id,
+    )
+
+    assert loaded == row

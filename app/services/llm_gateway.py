@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -189,6 +190,49 @@ def _request_payload(
 
 def _response_payload(result: LlmGenerationResult) -> dict[str, Any]:
     return dict(_normalize_value(result.response_payload) or {})
+
+
+async def list_generations(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID | None = None,
+    purpose: str | None = None,
+    provider: str | None = None,
+    trace_id: str | None = None,
+    limit: int = 50,
+) -> list[LlmGeneration]:
+    stmt = (
+        select(LlmGeneration)
+        .where(LlmGeneration.business_id == business_id)
+        .order_by(LlmGeneration.started_at.desc(), LlmGeneration.created_at.desc())
+        .limit(max(1, min(limit, 250)))
+    )
+    if location_id is not None:
+        stmt = stmt.where(LlmGeneration.location_id == location_id)
+    if purpose is not None:
+        stmt = stmt.where(LlmGeneration.purpose == purpose)
+    if provider is not None:
+        stmt = stmt.where(LlmGeneration.provider == provider)
+    if trace_id is not None:
+        stmt = stmt.where(LlmGeneration.trace_id == trace_id)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_generation(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    generation_id: UUID,
+) -> LlmGeneration | None:
+    result = await session.execute(
+        select(LlmGeneration).where(
+            LlmGeneration.id == generation_id,
+            LlmGeneration.business_id == business_id,
+        )
+    )
+    return result.scalars().first()
 
 
 async def generate(
