@@ -13,7 +13,17 @@ from app.models.common import CoverageCaseStatus, CoverageAttemptStatus, OfferSt
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.scheduling import Shift
 from app.schemas.coverage import CoverageExecutionDispatchRequest
-from app.services import coverage, delivery, worker_runtime
+from app.services import coverage, delivery, platform_events, worker_runtime
+
+_EVENT_COVERAGE_CAMPAIGN_FILLED = "coverage.campaign.filled"
+_EVENT_COVERAGE_CASE_FILLED = "coverage.case.filled"
+_EVENT_COVERAGE_CAMPAIGN_CANCELLED = "coverage.campaign.cancelled"
+_EVENT_COVERAGE_CASE_CANCELLED = "coverage.case.cancelled"
+_EVENT_COVERAGE_CAMPAIGN_EXHAUSTED = "coverage.campaign.exhausted"
+_EVENT_COVERAGE_CASE_EXHAUSTED = "coverage.case.exhausted"
+_EVENT_COVERAGE_CAMPAIGN_FAILED = "coverage.campaign.failed"
+_EVENT_COVERAGE_CASE_FAILED = "coverage.case.failed"
+_EVENT_COVERAGE_OFFER_CANCELLED = "coverage.offer.cancelled"
 
 
 def default_dispatch_channel() -> str:
@@ -81,6 +91,110 @@ def _runtime_error_metadata(
     }
 
 
+async def _append_campaign_event(
+    session: AsyncSession,
+    *,
+    coverage_case: CoverageCase,
+    business_id: UUID | None,
+    event_type: str,
+    compatibility_event_name: str,
+    payload: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    await platform_events.append(
+        session,
+        event_type=event_type,
+        compatibility_event_name=compatibility_event_name,
+        target_type="coverage_case",
+        target_id=coverage_case.id,
+        business_id=business_id,
+        location_id=coverage_case.location_id,
+        payload=payload or {},
+        metadata={"channel": "worker_runtime", **(metadata or {})},
+    )
+
+
+async def _append_offer_cancelled_event(
+    session: AsyncSession,
+    *,
+    coverage_case: CoverageCase,
+    offer: CoverageOffer,
+    business_id: UUID | None,
+    reason: str,
+    occurred_at: datetime,
+) -> None:
+    await platform_events.append(
+        session,
+        event_type=_EVENT_COVERAGE_OFFER_CANCELLED,
+        target_type="coverage_offer",
+        target_id=offer.id,
+        business_id=business_id,
+        location_id=coverage_case.location_id,
+        payload={
+            "coverage_case_id": str(coverage_case.id),
+            "employee_id": str(offer.employee_id),
+            "shift_id": str(coverage_case.shift_id),
+            "reason": reason,
+            "occurred_at": occurred_at.isoformat(),
+        },
+        metadata={"channel": "worker_runtime"},
+    )
+
+
+async def _append_dispatch_events(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    result: Any,
+) -> None:
+    coverage_case = getattr(result, "coverage_case", None)
+    if coverage_case is None:
+        return
+    phase_executed = str(getattr(result, "phase_executed", "") or "").strip().lower()
+    if not phase_executed:
+        return
+
+    await platform_events.append(
+        session,
+        event_type=platform_events.PlatformEventType.COVERAGE_DISPATCH_EXECUTED,
+        target_type="coverage_case",
+        target_id=coverage_case.id,
+        business_id=business_id,
+        location_id=coverage_case.location_id,
+        payload={
+            "phase_executed": phase_executed,
+            "candidate_count": int(getattr(result, "candidate_count", 0) or 0),
+            "offer_count": len(getattr(result, "offers", []) or []),
+        },
+        metadata={"channel": "worker_runtime"},
+    )
+
+    run = getattr(result, "run", None)
+    if run is None:
+        return
+    if phase_executed == "phase_1":
+        event_type = platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED
+    elif phase_executed == "phase_2":
+        event_type = platform_events.PlatformEventType.COVERAGE_PHASE_2_EXECUTED
+    else:
+        return
+
+    await platform_events.append(
+        session,
+        event_type=event_type,
+        target_type="coverage_case_run",
+        target_id=run.id,
+        business_id=business_id,
+        location_id=coverage_case.location_id,
+        payload={
+            "coverage_case_id": str(coverage_case.id),
+            "candidate_count": int(getattr(result, "candidate_count", 0) or 0),
+            "offer_count": len(getattr(result, "offers", []) or []),
+        },
+        metadata={"channel": "worker_runtime"},
+    )
+
+
 async def execute_queued_case(
     session: AsyncSession,
     *,
@@ -137,6 +251,17 @@ async def process_queued_coverage_cases(
                     "runtime_skip_reason": "shift_not_actionable",
                     "runtime_skipped_at": reference_time.isoformat(),
                 }
+                await _append_campaign_event(
+                    session,
+                    coverage_case=coverage_case,
+                    business_id=shift.business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_CANCELLED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_CANCELLED,
+                    payload={
+                        "shift_id": str(coverage_case.shift_id),
+                        "reason": "shift_not_actionable",
+                    },
+                )
                 await session.commit()
                 skipped_count += 1
                 continue
@@ -149,6 +274,17 @@ async def process_queued_coverage_cases(
                     "runtime_skip_reason": "shift_already_filled",
                     "runtime_skipped_at": reference_time.isoformat(),
                 }
+                await _append_campaign_event(
+                    session,
+                    coverage_case=coverage_case,
+                    business_id=shift.business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_FILLED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_FILLED,
+                    payload={
+                        "shift_id": str(coverage_case.shift_id),
+                        "reason": "shift_already_filled",
+                    },
+                )
                 await session.commit()
                 skipped_count += 1
                 continue
@@ -161,6 +297,24 @@ async def process_queued_coverage_cases(
                 business_id=business_id,
                 coverage_case_id=coverage_case.id,
             )
+            await _append_dispatch_events(
+                session,
+                business_id=business_id,
+                result=result,
+            )
+            if result.phase_executed is None or result.coverage_case.status == CoverageCaseStatus.exhausted:
+                await _append_campaign_event(
+                    session,
+                    coverage_case=result.coverage_case,
+                    business_id=business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_EXHAUSTED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_EXHAUSTED,
+                    payload={
+                        "shift_id": str(result.coverage_case.shift_id),
+                        "reason": "no_candidates_available",
+                    },
+                )
+            await session.commit()
             if result.phase_executed is None or result.coverage_case.status == CoverageCaseStatus.exhausted:
                 exhausted_count += 1
             else:
@@ -175,6 +329,17 @@ async def process_queued_coverage_cases(
                 refreshed_case,
                 now=reference_time,
                 error_message=str(exc),
+            )
+            await _append_campaign_event(
+                session,
+                coverage_case=refreshed_case,
+                business_id=business_id,
+                event_type=_EVENT_COVERAGE_CAMPAIGN_FAILED,
+                compatibility_event_name=_EVENT_COVERAGE_CASE_FAILED,
+                payload={
+                    "shift_id": str(refreshed_case.shift_id),
+                    "error_message": str(exc),
+                },
             )
             await session.commit()
             failed_count += 1
@@ -207,6 +372,7 @@ async def _cancel_active_offers(
     session: AsyncSession,
     *,
     coverage_case: CoverageCase,
+    business_id: UUID | None,
     now: datetime,
     reason: str,
 ) -> list[str]:
@@ -225,6 +391,14 @@ async def _cancel_active_offers(
             status=CoverageAttemptStatus.cancelled,
             occurred_at=now,
             response_payload={"runtime_cancel_reason": reason},
+        )
+        await _append_offer_cancelled_event(
+            session,
+            coverage_case=coverage_case,
+            offer=offer,
+            business_id=business_id,
+            reason=reason,
+            occurred_at=now,
         )
         cancelled_offer_ids.append(str(offer.id))
     return cancelled_offer_ids
@@ -255,6 +429,7 @@ async def reconcile_running_coverage_cases(
                 cancelled_offer_ids = await _cancel_active_offers(
                     session,
                     coverage_case=coverage_case,
+                    business_id=business_id,
                     now=reference_time,
                     reason="shift_already_filled",
                 )
@@ -266,6 +441,18 @@ async def reconcile_running_coverage_cases(
                     "runtime_reconciled_at": reference_time.isoformat(),
                     "runtime_cancelled_offer_ids": cancelled_offer_ids,
                 }
+                await _append_campaign_event(
+                    session,
+                    coverage_case=coverage_case,
+                    business_id=business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_FILLED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_FILLED,
+                    payload={
+                        "shift_id": str(coverage_case.shift_id),
+                        "reason": "shift_already_filled",
+                        "cancelled_offer_ids": cancelled_offer_ids,
+                    },
+                )
                 await session.commit()
                 filled_count += 1
                 continue
@@ -274,6 +461,7 @@ async def reconcile_running_coverage_cases(
                 cancelled_offer_ids = await _cancel_active_offers(
                     session,
                     coverage_case=coverage_case,
+                    business_id=business_id,
                     now=reference_time,
                     reason="shift_not_actionable",
                 )
@@ -285,6 +473,18 @@ async def reconcile_running_coverage_cases(
                     "runtime_reconciled_at": reference_time.isoformat(),
                     "runtime_cancelled_offer_ids": cancelled_offer_ids,
                 }
+                await _append_campaign_event(
+                    session,
+                    coverage_case=coverage_case,
+                    business_id=business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_CANCELLED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_CANCELLED,
+                    payload={
+                        "shift_id": str(coverage_case.shift_id),
+                        "reason": "shift_not_actionable",
+                        "cancelled_offer_ids": cancelled_offer_ids,
+                    },
+                )
                 await session.commit()
                 cancelled_count += 1
                 continue
@@ -298,6 +498,17 @@ async def reconcile_running_coverage_cases(
                     "runtime_reconcile_reason": "no_active_offers",
                     "runtime_reconciled_at": reference_time.isoformat(),
                 }
+                await _append_campaign_event(
+                    session,
+                    coverage_case=coverage_case,
+                    business_id=business_id,
+                    event_type=_EVENT_COVERAGE_CAMPAIGN_EXHAUSTED,
+                    compatibility_event_name=_EVENT_COVERAGE_CASE_EXHAUSTED,
+                    payload={
+                        "shift_id": str(coverage_case.shift_id),
+                        "reason": "no_active_offers",
+                    },
+                )
                 await session.commit()
                 exhausted_count += 1
                 continue
@@ -313,6 +524,17 @@ async def reconcile_running_coverage_cases(
                 refreshed_case,
                 now=reference_time,
                 error_message=str(exc),
+            )
+            await _append_campaign_event(
+                session,
+                coverage_case=refreshed_case,
+                business_id=business_id,
+                event_type=_EVENT_COVERAGE_CAMPAIGN_FAILED,
+                compatibility_event_name=_EVENT_COVERAGE_CASE_FAILED,
+                payload={
+                    "shift_id": str(refreshed_case.shift_id),
+                    "error_message": str(exc),
+                },
             )
             await session.commit()
             failed_count += 1
