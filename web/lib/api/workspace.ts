@@ -660,11 +660,14 @@ export async function getLocationBoard(
   businessId: string,
   locationId: string,
   weekStart?: string,
-) {
+): Promise<WorkspaceBoard | null> {
   const qs = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
   const board = await fetchAppJson<WorkspaceBoard>(
     `${API_PREFIX}/workspace/businesses/${businessId}/locations/${locationId}/board${qs}`,
   );
+  if (!board) {
+    return null;
+  }
   return {
     ...board,
     shifts: board.shifts.map((shift) => ({
