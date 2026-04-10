@@ -221,6 +221,8 @@ export type WorkspaceBoard = {
       assigned_via: string;
       accepted_at?: string | null;
     } | null;
+    campaign_id?: string | null;
+    campaign_status?: string | null;
     coverage_case_id?: string | null;
     coverage_case_status?: string | null;
     pending_offer_count: number;
@@ -258,7 +260,7 @@ export type ShiftUpdatePayload = Partial<
   shift_metadata?: Record<string, unknown>;
 };
 
-export type CoverageCase = {
+export type CoverageCampaign = {
   id: string;
   shift_id: string;
   location_id: string;
@@ -269,6 +271,7 @@ export type CoverageCase = {
   priority: number;
   requires_manager_approval: boolean;
   triggered_by?: string | null;
+  campaign_metadata: Record<string, unknown>;
   case_metadata: Record<string, unknown>;
   opened_at?: string | null;
   closed_at?: string | null;
@@ -276,7 +279,8 @@ export type CoverageCase = {
   updated_at: string;
 };
 
-export type CoverageExecutionDecision = {
+export type CoverageCampaignExecutionDecision = {
+  campaign_id: string;
   coverage_case_id: string;
   shift_id: string;
   recommended_phase?: string | null;
@@ -307,10 +311,11 @@ export type CoverageExecutionDecision = {
   };
 };
 
-export type CoverageDispatchResult = {
-  decision: CoverageExecutionDecision;
+export type CoverageCampaignDispatchResult = {
+  decision: CoverageCampaignExecutionDecision;
   phase_executed?: string | null;
-  coverage_case: CoverageCase;
+  campaign: CoverageCampaign;
+  coverage_case: CoverageCampaign;
   candidate_count: number;
   offers: Array<{
     id: string;
@@ -320,6 +325,10 @@ export type CoverageDispatchResult = {
     expires_at?: string | null;
   }>;
 };
+
+export type CoverageCase = CoverageCampaign;
+export type CoverageExecutionDecision = CoverageCampaignExecutionDecision;
+export type CoverageDispatchResult = CoverageCampaignDispatchResult;
 
 export type EmployeeEnrollmentPayload = {
   location_id: string;
@@ -653,9 +662,17 @@ export async function getLocationBoard(
   weekStart?: string,
 ) {
   const qs = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
-  return fetchAppJson<WorkspaceBoard>(
+  const board = await fetchAppJson<WorkspaceBoard>(
     `${API_PREFIX}/workspace/businesses/${businessId}/locations/${locationId}/board${qs}`,
   );
+  return {
+    ...board,
+    shifts: board.shifts.map((shift) => ({
+      ...shift,
+      campaign_id: shift.campaign_id ?? shift.coverage_case_id ?? null,
+      campaign_status: shift.campaign_status ?? shift.coverage_case_status ?? null,
+    })),
+  } satisfies WorkspaceBoard;
 }
 
 export async function createShift(
@@ -705,7 +722,39 @@ export async function deleteShift(businessId: string, shiftId: string) {
   return (await response.json()) as { deleted: boolean; shift_id: string };
 }
 
-export async function createCoverageCase(
+function normalizeCoverageCampaign(
+  payload: CoverageCampaign | (CoverageCampaign & { campaign_metadata?: Record<string, unknown> }),
+): CoverageCampaign {
+  return {
+    ...payload,
+    campaign_metadata: payload.campaign_metadata ?? payload.case_metadata ?? {},
+    case_metadata: payload.case_metadata ?? payload.campaign_metadata ?? {},
+  };
+}
+
+function normalizeCoverageDecision(
+  payload: CoverageCampaignExecutionDecision,
+): CoverageCampaignExecutionDecision {
+  return {
+    ...payload,
+    campaign_id: payload.campaign_id ?? payload.coverage_case_id,
+    coverage_case_id: payload.coverage_case_id ?? payload.campaign_id,
+  };
+}
+
+function normalizeCoverageDispatchResult(
+  payload: CoverageCampaignDispatchResult,
+): CoverageCampaignDispatchResult {
+  const campaign = normalizeCoverageCampaign(payload.campaign ?? payload.coverage_case);
+  return {
+    ...payload,
+    decision: normalizeCoverageDecision(payload.decision),
+    campaign,
+    coverage_case: campaign,
+  };
+}
+
+export async function createCoverageCampaign(
   businessId: string,
   payload: {
     shift_id: string;
@@ -714,11 +763,12 @@ export async function createCoverageCase(
     priority?: number;
     requires_manager_approval?: boolean;
     triggered_by?: string;
+    campaign_metadata?: Record<string, unknown>;
     case_metadata?: Record<string, unknown>;
   },
 ) {
   const response = await apiFetchApp(
-    `${API_PREFIX}/businesses/${businessId}/coverage-cases`,
+    `${API_PREFIX}/businesses/${businessId}/coverage-campaigns`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -728,25 +778,27 @@ export async function createCoverageCase(
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as CoverageCase;
+  return normalizeCoverageCampaign((await response.json()) as CoverageCampaign);
 }
 
-export async function getCoveragePlan(
+export async function getCoverageCampaignPlan(
   businessId: string,
-  coverageCaseId: string,
+  campaignId: string,
 ) {
   const response = await apiFetchApp(
-    `${API_PREFIX}/businesses/${businessId}/coverage-cases/${coverageCaseId}/plan`,
+    `${API_PREFIX}/businesses/${businessId}/coverage-campaigns/${campaignId}/plan`,
   );
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as CoverageExecutionDecision;
+  return normalizeCoverageDecision(
+    (await response.json()) as CoverageCampaignExecutionDecision,
+  );
 }
 
-export async function executeCoverageCase(
+export async function executeCoverageCampaign(
   businessId: string,
-  coverageCaseId: string,
+  campaignId: string,
   payload?: {
     phase_override?: string;
     channel?: string;
@@ -756,7 +808,7 @@ export async function executeCoverageCase(
   },
 ) {
   const response = await apiFetchApp(
-    `${API_PREFIX}/businesses/${businessId}/coverage-cases/${coverageCaseId}/execute`,
+    `${API_PREFIX}/businesses/${businessId}/coverage-campaigns/${campaignId}/execute`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -766,8 +818,14 @@ export async function executeCoverageCase(
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as CoverageDispatchResult;
+  return normalizeCoverageDispatchResult(
+    (await response.json()) as CoverageCampaignDispatchResult,
+  );
 }
+
+export const createCoverageCase = createCoverageCampaign;
+export const getCoveragePlan = getCoverageCampaignPlan;
+export const executeCoverageCase = executeCoverageCampaign;
 
 export async function enrollEmployeeAtLocation(
   businessId: string,
