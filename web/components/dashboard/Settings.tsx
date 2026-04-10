@@ -1325,6 +1325,7 @@ export default function Settings({
           businessId={primaryBusinessId}
           businessTimezone={business?.timezone ?? null}
           dark={isDark}
+          onHeaderActionChange={setSectionHeaderAction}
         />
       );
     }

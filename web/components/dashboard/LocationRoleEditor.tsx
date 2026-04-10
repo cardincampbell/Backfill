@@ -19,8 +19,11 @@ import {
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
-import { ShiftDefaultsEditor } from "./ShiftDefaultsEditor";
-import { normalizeShiftDefaults } from "./shift-defaults";
+import {
+  ShiftCoverageTimeline,
+  ShiftDefaultsEditor,
+} from "./ShiftDefaultsEditor";
+import { getShiftCoverageHours, normalizeShiftDefaults } from "./shift-defaults";
 
 export type LocationRoleEditorFeedback = {
   tone: "success" | "error";
@@ -324,6 +327,10 @@ export function LocationRoleEditor({
     [baselineShiftPresets, effectiveShiftPresets],
   );
   const totalChangeCount = roleChangeCount + shiftChangeCount;
+  const totalCoverageHours = useMemo(
+    () => Math.round(getShiftCoverageHours(effectiveShiftPresets)),
+    [effectiveShiftPresets],
+  );
 
   useEffect(() => {
     if (totalChangeCount > 0 && visibleFeedback) {
@@ -690,22 +697,37 @@ export function LocationRoleEditor({
           </div>
 
           <div>
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <div>
-                <h3
-                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                  style={{ fontWeight: 500 }}
-                >
-                  Shift Overrides
-                </h3>
-                <p
-                  className={`mt-1 text-[12px] ${textSecondary}`}
-                  style={{ fontWeight: 420 }}
-                >
-                  This location uses the business defaults unless you customize them here. Changes only affect future shifts created for this location.
-                </p>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <h3
+                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                style={{ fontWeight: 500 }}
+              >
+                Shifts
+              </h3>
+              <div className="flex items-center gap-2.5">
+                <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
+                  {effectiveShiftPresets.length} shifts
+                </span>
+                <div className={`h-3 w-px ${dark ? "bg-white/[0.08]" : "bg-[#E5E7EB]"}`} />
+                <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
+                  ~{totalCoverageHours}h total
+                </span>
               </div>
-              {!useBusinessDefaults ? (
+            </div>
+
+            <div className="mb-4">
+              <ShiftCoverageTimeline compact dark={dark} presets={effectiveShiftPresets} />
+            </div>
+
+            <ShiftDefaultsEditor
+              compact
+              dark={dark}
+              onChange={handleShiftDefaultsChange}
+              presets={effectiveShiftPresets}
+            />
+
+            {!useBusinessDefaults ? (
+              <div className="mt-3 flex justify-end">
                 <button
                   type="button"
                   onClick={() => {
@@ -719,35 +741,8 @@ export function LocationRoleEditor({
                 >
                   Reset to business defaults
                 </button>
-              ) : null}
-            </div>
-
-            <div
-              className={`rounded-xl border p-3 ${
-                dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#F7F8FA]"
-              }`}
-            >
-              <div className="mb-3 flex items-center justify-between gap-4">
-                <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                  {useBusinessDefaults
-                    ? "Using business defaults"
-                    : "Location-specific overrides"}
-                </p>
-                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                  {useBusinessDefaults ? "Inheriting" : "Override enabled"}
-                </span>
               </div>
-
-              <ShiftDefaultsEditor
-                dark={dark}
-                onChange={handleShiftDefaultsChange}
-                presets={
-                  useBusinessDefaults
-                    ? shiftDefaults?.business_presets ?? draftShiftDefaults
-                    : draftShiftDefaults
-                }
-              />
-            </div>
+            ) : null}
           </div>
 
           <div className={`border-t pt-4 ${borderClass}`}>

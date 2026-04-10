@@ -8,8 +8,11 @@ import {
   type ShiftDefault,
 } from "@/lib/api/workspace";
 
-import { ShiftDefaultsEditor } from "./ShiftDefaultsEditor";
-import { normalizeShiftDefaults } from "./shift-defaults";
+import {
+  ShiftCoverageTimeline,
+  ShiftDefaultsEditor,
+} from "./ShiftDefaultsEditor";
+import { getShiftCoverageHours, normalizeShiftDefaults } from "./shift-defaults";
 
 type Feedback =
   | {
@@ -108,6 +111,10 @@ export default function SettingsShiftsSection({
   const isDirty = useMemo(() => !presetsMatch(presets, baseline), [baseline, presets]);
   const changeCount = useMemo(() => countPresetChanges(presets, baseline), [baseline, presets]);
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const totalCoverageHours = useMemo(
+    () => Math.round(getShiftCoverageHours(presets)),
+    [presets],
+  );
 
   useEffect(() => {
     if (!feedback) {
@@ -206,11 +213,28 @@ export default function SettingsShiftsSection({
         </div>
       ) : null}
 
-      <ShiftDefaultsEditor
-        dark={dark}
-        onChange={setPresets}
-        presets={presets}
-      />
+      <div className="mb-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h4
+            className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+            style={{ fontWeight: 500 }}
+          >
+            Coverage Overview
+          </h4>
+          <div className="flex items-center gap-2.5">
+            <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
+              {presets.length} shifts
+            </span>
+            <div className={`h-3 w-px ${dark ? "bg-white/[0.08]" : "bg-[#E5E7EB]"}`} />
+            <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
+              ~{totalCoverageHours}h total
+            </span>
+          </div>
+        </div>
+        <ShiftCoverageTimeline dark={dark} presets={presets} />
+      </div>
+
+      <ShiftDefaultsEditor dark={dark} onChange={setPresets} presets={presets} />
     </div>
   );
 }

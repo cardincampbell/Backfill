@@ -59,6 +59,31 @@ export const SHIFT_HOUR_OPTIONS = Array.from({ length: 24 }, (_, hour) => ({
   value: String(hour),
 }));
 
+export function shiftHourToPercent(hour: number): number {
+  return ((hour % 24) / 24) * 100;
+}
+
+export function getShiftDurationHours(
+  startHour: number,
+  endHour: number,
+): number {
+  if (endHour === startHour) {
+    return 24;
+  }
+  if (endHour > startHour) {
+    return endHour - startHour;
+  }
+  return 24 - startHour + endHour;
+}
+
+export function getShiftCoverageHours(presets: ShiftDefault[]): number {
+  return normalizeShiftDefaults(presets).reduce(
+    (total, preset) =>
+      total + getShiftDurationHours(preset.start_hour, preset.end_hour),
+    0,
+  );
+}
+
 export function normalizeShiftDefaults(
   presets: ShiftDefault[] | null | undefined,
 ): ShiftDefault[] {
