@@ -1,4 +1,8 @@
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.config import settings
+from app.db.session import get_async_engine, get_async_sessionmaker
 from app.main import app
 
 
@@ -20,3 +24,16 @@ def client():
             yield test_client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def postgres_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    if not settings.has_database_url:
+        pytest.fail("DATABASE_URL is required for PostgreSQL row-lock integration tests")
+
+    engine = get_async_engine()
+    assert engine.dialect.name == "postgresql", (
+        "PostgreSQL is required to validate FOR UPDATE row-lock behavior; "
+        f"got {engine.dialect.name!r}"
+    )
+    return get_async_sessionmaker()
