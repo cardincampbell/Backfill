@@ -10,6 +10,7 @@ from app.models.integrations import ProviderCallbackLog
 from app.services import provider_callbacks
 
 
+@pytest.mark.postgres_lock
 @pytest.mark.asyncio
 async def test_process_callback_entry_synchronously_prevents_duplicate_execution_with_real_postgres(
     monkeypatch,
