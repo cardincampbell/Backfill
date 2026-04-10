@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +36,40 @@ class CostLedgerEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     unit_cost_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
     total_cost_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
     cost_metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+
+class BillingLedgerEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "billing_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_billing_ledger_entries_idempotency_key"),
+        Index("ix_billing_ledger_entries_business_id_occurred_at", "business_id", "occurred_at"),
+        Index("ix_billing_ledger_entries_location_cycle_occurred_at", "location_id", "billing_cycle_start", "occurred_at"),
+        Index("ix_billing_ledger_entries_case_id_occurred_at", "coverage_case_id", "occurred_at"),
+        Index("ix_billing_ledger_entries_event_type_occurred_at", "billing_event_type", "occurred_at"),
+    )
+
+    business_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("businesses.id", ondelete="SET NULL"))
+    location_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("locations.id", ondelete="SET NULL"))
+    coverage_case_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("coverage_cases.id", ondelete="SET NULL"))
+    shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("shifts.id", ondelete="SET NULL"))
+    employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
+    billing_event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    billing_cycle_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    cap_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255))
+    billing_metadata: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
         server_default=text("'{}'::jsonb"),

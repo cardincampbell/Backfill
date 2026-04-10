@@ -11,7 +11,7 @@ from app.models.coverage import (
     OutboxEvent,
 )
 from app.models.events import PlatformEvent
-from app.models.finance import CostLedgerEntry
+from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.models.identity import ManagerInvite, Membership, OTPChallenge, Session, User
 from app.models.integrations import (
     ProviderCallbackLog,
@@ -46,6 +46,7 @@ __all__ = [
     "BusinessVertical",
     "BusinessVerticalRoleArchetype",
     "BusinessVerticalTypeMapping",
+    "BillingLedgerEntry",
     "CoverageCandidate",
     "CoverageCase",
     "CoverageCaseRun",
