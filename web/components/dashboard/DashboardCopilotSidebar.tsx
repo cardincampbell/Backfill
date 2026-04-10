@@ -172,15 +172,29 @@ export default function DashboardCopilotSidebar({
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const sessionDetailRef = useRef<CopilotSessionDetail | null>(null);
+  const sessionContextKeyRef = useRef("");
+  const sessionRequestRef = useRef<Promise<CopilotSessionDetail | null> | null>(
+    null,
+  );
 
   const activeSessionId = sessionDetail?.session.id ?? null;
   const messages = sessionDetail?.messages ?? [];
   const actionRuns = sessionDetail?.action_runs ?? [];
+  const sessionContextKey = `${businessId ?? "none"}:${locationId ?? "none"}`;
   const toolResultsByMessageId = useMemo(
     () => buildToolResultMap(messages, actionRuns),
     [actionRuns, messages],
   );
   const footerBorderClass = dark ? "border-white/[0.06]" : "border-[#F0F0F5]";
+
+  useEffect(() => {
+    sessionDetailRef.current = sessionDetail;
+  }, [sessionDetail]);
+
+  useEffect(() => {
+    sessionContextKeyRef.current = sessionContextKey;
+  }, [sessionContextKey]);
 
   useEffect(() => {
     if (panelTab !== "chat") {
@@ -190,6 +204,7 @@ export default function DashboardCopilotSidebar({
   }, [messages, isTyping, panelTab]);
 
   useEffect(() => {
+    sessionRequestRef.current = null;
     if (!businessId) {
       setSessionDetail(null);
       setError("Copilot needs a business context before it can answer.");
@@ -207,34 +222,55 @@ export default function DashboardCopilotSidebar({
       setError("Copilot needs a business context before it can answer.");
       return null;
     }
-    if (sessionDetail) {
-      return sessionDetail;
+    if (sessionDetailRef.current) {
+      return sessionDetailRef.current;
+    }
+    if (sessionRequestRef.current) {
+      return sessionRequestRef.current;
     }
     setIsLoadingSession(true);
     setError(null);
-    try {
-      const detail = await createCopilotSession(businessId, {
-        location_id: locationId ?? null,
-        normalized_channel: "dashboard",
-        reuse_active: true,
+
+    const requestContextKey = sessionContextKey;
+    let request: Promise<CopilotSessionDetail | null>;
+    request = createCopilotSession(businessId, {
+      location_id: locationId ?? null,
+      normalized_channel: "dashboard",
+      reuse_active: true,
+    })
+      .then((detail) => {
+        const normalizedDetail = {
+          ...detail,
+          messages: sortCopilotMessages(detail.messages),
+        };
+        if (requestContextKey === sessionContextKeyRef.current) {
+          sessionDetailRef.current = normalizedDetail;
+          setSessionDetail(normalizedDetail);
+        }
+        return normalizedDetail;
+      })
+      .catch((nextError) => {
+        if (requestContextKey === sessionContextKeyRef.current) {
+          setError(
+            nextError instanceof Error
+              ? nextError.message
+              : "Failed to start Copilot.",
+          );
+        }
+        return null;
+      })
+      .finally(() => {
+        if (sessionRequestRef.current === request) {
+          sessionRequestRef.current = null;
+        }
+        if (requestContextKey === sessionContextKeyRef.current) {
+          setIsLoadingSession(false);
+        }
       });
-      const normalizedDetail = {
-        ...detail,
-        messages: sortCopilotMessages(detail.messages),
-      };
-      setSessionDetail(normalizedDetail);
-      return normalizedDetail;
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error
-          ? nextError.message
-          : "Failed to start Copilot.",
-      );
-      return null;
-    } finally {
-      setIsLoadingSession(false);
-    }
-  }, [businessId, locationId, sessionDetail]);
+
+    sessionRequestRef.current = request;
+    return request;
+  }, [businessId, locationId, sessionContextKey]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -246,8 +282,11 @@ export default function DashboardCopilotSidebar({
       setIsTyping(true);
       setError(null);
       try {
-        const detail = activeSessionId ? sessionDetail : await ensureSession();
-        const sessionId = detail?.session.id ?? activeSessionId;
+        const detail = activeSessionId
+          ? sessionDetailRef.current
+          : await ensureSession();
+        const sessionId =
+          detail?.session.id ?? sessionDetailRef.current?.session.id ?? activeSessionId;
         if (!sessionId) {
           setInput(trimmed);
           return;
@@ -269,7 +308,7 @@ export default function DashboardCopilotSidebar({
         setIsTyping(false);
       }
     },
-    [activeSessionId, businessId, ensureSession, locationId, sessionDetail],
+    [activeSessionId, businessId, ensureSession, locationId],
   );
 
   return (
@@ -370,7 +409,8 @@ export default function DashboardCopilotSidebar({
                         active campaigns, or manager actions.
                       </p>
                       <button
-                        className="mt-3 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] px-3.5 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.22)]"
+                        className="mt-3 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] px-3.5 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.22)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
+                        disabled={isLoadingSession}
                         onClick={() => {
                           void ensureSession();
                         }}
