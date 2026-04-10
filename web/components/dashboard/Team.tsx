@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSelectedLayoutSegments } from 'next/navigation';
 import {
   Plus,
   Upload,
@@ -1366,6 +1366,7 @@ export default function Team({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const routeSegments = useSelectedLayoutSegments();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
   const isDark = useResolvedAppAppearance() === 'dark';
@@ -1392,6 +1393,8 @@ export default function Team({
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const locationFilterRef = useRef<HTMLButtonElement>(null);
   const statusFilterRef = useRef<HTMLButtonElement>(null);
+  const activeEditingEmployeeId =
+    editingEmployeeId ?? (routeSegments[0] === 'employee' ? routeSegments[1] ?? null : null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1469,13 +1472,13 @@ export default function Team({
   }, [availableLocationOptions, locationFilter]);
 
   useEffect(() => {
-    if (!editingEmployeeId) {
+    if (!activeEditingEmployeeId) {
       setSelectedEmployee(null);
       return;
     }
 
     const nextEmployee =
-      employeesData.find((employee) => employee.id === editingEmployeeId) ?? null;
+      employeesData.find((employee) => employee.id === activeEditingEmployeeId) ?? null;
 
     if (nextEmployee) {
       setSelectedEmployee((current) =>
@@ -1488,7 +1491,7 @@ export default function Team({
       setSelectedEmployee(null);
       router.replace('/team', { scroll: false });
     }
-  }, [editingEmployeeId, employeesData, loading, router]);
+  }, [activeEditingEmployeeId, employeesData, loading, router]);
 
   const openEmployeeEditor = useCallback(
     (employee: Employee) => {

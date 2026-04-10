@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSelectedLayoutSegments } from "next/navigation";
 
 import { useAppWorkspace, useAppWorkspaceReady } from "@/components/app-workspace";
 import { useLocationEntryMode } from "@/components/location-entry-provider";
@@ -21,8 +21,11 @@ export default function LocationRouteResolver({
   editingEmployeeId = null,
 }: LocationRouteResolverProps) {
   const router = useRouter();
+  const routeSegments = useSelectedLayoutSegments();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
+  const activeEditingEmployeeId =
+    editingEmployeeId ?? (routeSegments[0] === "employee" ? routeSegments[1] ?? null : null);
   const location = useMemo(
     () =>
       workspace?.locations.find(
@@ -64,7 +67,7 @@ export default function LocationRouteResolver({
     return (
       <Location
         embeddedInShell
-        editingEmployeeId={editingEmployeeId}
+        editingEmployeeId={activeEditingEmployeeId}
         location={location}
       />
     );

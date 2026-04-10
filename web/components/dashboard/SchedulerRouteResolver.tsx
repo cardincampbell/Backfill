@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSelectedLayoutSegments } from "next/navigation";
 
 import { useAppWorkspace, useAppWorkspaceReady } from "@/components/app-workspace";
 import { useLocationEntryMode } from "@/components/location-entry-provider";
@@ -21,8 +21,11 @@ export default function SchedulerRouteResolver({
   editingLocation = false,
 }: SchedulerRouteResolverProps) {
   const router = useRouter();
+  const routeSegments = useSelectedLayoutSegments();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
+  const activeEditingLocation =
+    editingLocation || routeSegments[0] === "edit-location";
   const location = useMemo(
     () =>
       workspace?.locations.find(
@@ -66,7 +69,7 @@ export default function SchedulerRouteResolver({
   return (
     <Scheduler
       embeddedInShell
-      editingLocation={editingLocation}
+      editingLocation={activeEditingLocation}
       location={location}
       backHref={buildDashboardLocationBasePathFromAny(location)}
     />

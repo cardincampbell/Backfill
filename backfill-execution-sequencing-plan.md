@@ -149,6 +149,11 @@ Deliverables:
 - freeze event rule: `platform_events` becomes canonical as soon as it exists
 - freeze telephony rule: Retell is primary for conversational interactions
 - freeze worker rule: locking/retries/idempotency are shared platform behavior
+- freeze concurrency invariants:
+  aggregate versioning / optimistic concurrency
+  idempotency keys on every external side effect
+  first-confirm-wins semantics backed by database guarantees
+  projection freshness targets for engine-critical reads
 
 Exit criteria:
 
@@ -255,6 +260,10 @@ Work:
 - stale-lock recovery
 - job error payloads
 - explicit tenant context in every job payload
+- execution-critical projections needed by the engine:
+  candidate eligibility snapshots
+  compiled availability windows or equivalent precomputed availability reads
+  score snapshots / projections derived from attempt facts
 
 Rules:
 
@@ -266,15 +275,16 @@ Exit criteria:
 
 - at least one real campaign job uses shared worker semantics
 - the worker platform is reusable, not campaign-specific glue
+- engine-critical projections exist early enough that broad outreach execution does not depend forever on expensive runtime joins over authoring tables
 
-## 8. Phase 4: Copilot Tool Execution
+## 8. Phase 4: Copilot Tool Framework
 
 **Owner:** Developer 1  
 **Support:** Lead
 
 Goal:
 
-- formalize internal tool execution before broad conversational rollout
+- formalize internal tool execution before broad conversational rollout, without coupling Copilot to an unstable coverage execution model
 
 Work:
 
@@ -287,9 +297,13 @@ Work:
 
 First tools:
 
-- `coverage.start_campaign`
 - `schedule.publish`
 - `roster.update_availability`
+
+Coverage-tool rollout rule:
+
+- do not fully ship `coverage.start_campaign` until the outreach logical model and worker-driven execution path are stable
+- the framework ships first; the real coverage mutation tool comes later
 
 Frontend in this phase:
 

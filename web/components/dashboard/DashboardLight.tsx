@@ -84,7 +84,7 @@ import {
   Edit3,
   Trash2,
 } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSelectedLayoutSegments } from 'next/navigation';
 
 const copilotSuggestions = [
   'Show me open shifts this week',
@@ -1506,9 +1506,15 @@ export default function DashboardLight({
   editingLocationId?: string | null;
 }) {
   const pathname = usePathname();
+  const routeSegments = useSelectedLayoutSegments();
   const workspace = useAppWorkspace();
   const workspaceLocationsLoaded = useAppWorkspaceReady();
   const workspaceLocations = workspace?.locations ?? [];
+  const activeEditingLocationId =
+    editingLocationId ??
+    (routeSegments[0] === 'location' && routeSegments[2] === 'edit'
+      ? routeSegments[1] ?? null
+      : null);
   const preferredBusiness = useMemo(
     () => resolvePreferredWorkspaceBusiness(workspace, pathname),
     [pathname, workspace],
@@ -1562,7 +1568,7 @@ export default function DashboardLight({
   const content = (
       <MultiLocationView
         business={preferredBusiness}
-        editingLocationId={editingLocationId}
+        editingLocationId={activeEditingLocationId}
         locations={locations}
         locationsLoaded={workspaceLocationsLoaded}
       />

@@ -17,10 +17,10 @@ type AppShellLayoutProps = {
 };
 
 function resolveActiveNav(pathname: string): string {
-  if (pathname === "/team") {
+  if (pathname === "/team" || pathname.startsWith("/team/")) {
     return "Team";
   }
-  if (pathname === "/activity") {
+  if (pathname === "/activity" || pathname.startsWith("/activity/")) {
     return "Activity";
   }
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
