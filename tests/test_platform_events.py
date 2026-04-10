@@ -7,6 +7,7 @@ import pytest
 
 from app.models.common import AuditActorType
 from app.models.coverage import AuditLog
+from app.models.events import PlatformEvent
 from app.services import platform_events
 
 
@@ -56,6 +57,19 @@ async def test_append_platform_event_preserves_compatibility_name_and_embeds_can
     assert entry.event_name == "coverage.case.created"
     assert entry.payload["shift_id"] == "shift_123"
 
+    platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
+    assert len(platform_entries) == 1
+    platform_entry = platform_entries[0]
+    assert platform_entry.event_type == platform_events.PlatformEventType.COVERAGE_CAMPAIGN_CREATED
+    assert platform_entry.compatibility_event_name == "coverage.case.created"
+    assert platform_entry.entity_type == "coverage_case"
+    assert platform_entry.entity_id == target_id
+    assert platform_entry.payload == {"shift_id": "shift_123"}
+    assert platform_entry.event_metadata["channel"] == "dashboard"
+    assert platform_entry.event_metadata["session_id"] == str(channel_session_id)
+    assert platform_entry.trace_id == platform_entry.event_metadata["trace_id"]
+    assert platform_entry.occurred_at == entry.occurred_at
+
     envelope = entry.payload[platform_events.PLATFORM_EVENT_PAYLOAD_KEY]
     assert envelope["schema_version"] == platform_events.PLATFORM_EVENT_SCHEMA_VERSION
     assert envelope["event_type"] == platform_events.PlatformEventType.COVERAGE_CAMPAIGN_CREATED
@@ -86,3 +100,7 @@ async def test_append_platform_event_defaults_compatibility_name_to_event_type(m
     assert entry.event_name == platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED
     envelope = entry.payload[platform_events.PLATFORM_EVENT_PAYLOAD_KEY]
     assert envelope["compatibility_event_name"] == platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED
+
+    platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
+    assert len(platform_entries) == 1
+    assert platform_entries[0].compatibility_event_name == platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED

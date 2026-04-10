@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.common import AuditActorType
 from app.models.coverage import AuditLog
+from app.models.events import PlatformEvent
 from app.services import audit as audit_service
 
 PLATFORM_EVENT_SCHEMA_VERSION = 1
@@ -60,6 +62,16 @@ def _platform_event_envelope(
     }
 
 
+def _event_metadata(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = envelope.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    return {
+        str(key): _normalize_metadata_value(value)
+        for key, value in metadata.items()
+    }
+
+
 async def append(
     session: AsyncSession,
     *,
@@ -79,12 +91,35 @@ async def append(
 ) -> AuditLog:
     event_name = compatibility_event_name or event_type
     event_payload = dict(payload or {})
-    event_payload[PLATFORM_EVENT_PAYLOAD_KEY] = _platform_event_envelope(
+    envelope = _platform_event_envelope(
         event_type=event_type,
         compatibility_event_name=event_name,
         target_type=target_type,
         target_id=target_id,
         metadata=metadata,
+    )
+    event_payload[PLATFORM_EVENT_PAYLOAD_KEY] = envelope
+    event_metadata = _event_metadata(envelope)
+    occurred_at = datetime.now(timezone.utc)
+    session.add(
+        PlatformEvent(
+            business_id=business_id,
+            location_id=location_id,
+            schema_version=PLATFORM_EVENT_SCHEMA_VERSION,
+            event_type=event_type,
+            compatibility_event_name=event_name,
+            entity_type=target_type,
+            entity_id=target_id,
+            actor_type=actor_type,
+            actor_user_id=actor_user_id,
+            actor_membership_id=actor_membership_id,
+            trace_id=str(event_metadata.get("trace_id") or uuid4()),
+            ip_address=ip_address,
+            user_agent=user_agent,
+            payload=dict(payload or {}),
+            event_metadata=event_metadata,
+            occurred_at=occurred_at,
+        )
     )
     return await audit_service.append(
         session,
@@ -99,4 +134,5 @@ async def append(
         ip_address=ip_address,
         user_agent=user_agent,
         payload=event_payload,
+        occurred_at=occurred_at,
     )

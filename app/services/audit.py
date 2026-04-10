@@ -66,6 +66,7 @@ async def append(
     ip_address: str | None = None,
     user_agent: str | None = None,
     payload: Optional[dict] = None,
+    occurred_at: datetime | None = None,
 ) -> AuditLog:
     entry = AuditLog(
         business_id=business_id,
@@ -79,7 +80,7 @@ async def append(
         ip_address=ip_address,
         user_agent=user_agent,
         payload=payload or {},
-        occurred_at=datetime.now(timezone.utc),
+        occurred_at=occurred_at or datetime.now(timezone.utc),
     )
     session.add(entry)
     from app.services import webhooks

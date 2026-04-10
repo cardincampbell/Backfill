@@ -9,6 +9,7 @@ from app.models.coverage import (
     CoverageOfferResponse,
     OutboxEvent,
 )
+from app.models.events import PlatformEvent
 from app.models.identity import ManagerInvite, Membership, OTPChallenge, Session, User
 from app.models.integrations import (
     ProviderCallbackLog,
@@ -60,6 +61,7 @@ __all__ = [
     "Membership",
     "OTPChallenge",
     "OutboxEvent",
+    "PlatformEvent",
     "ProviderCallbackLog",
     "RetellConversation",
     "Role",
