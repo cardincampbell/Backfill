@@ -16,7 +16,7 @@ from app.models.coverage import CoverageCandidate, CoverageCase, CoverageCaseRun
 from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
-from app.services import messaging, retell as retell_service
+from app.services import messaging, retell as retell_service, worker_runtime
 
 
 @dataclass
@@ -27,6 +27,7 @@ class DeliverySendResult:
     sent_at: datetime | None = None
     delivered_at: datetime | None = None
     error_message: str | None = None
+    retryable: bool = False
     result_payload: dict = field(default_factory=dict)
 
 
@@ -135,6 +136,9 @@ class RetellVoiceDeliveryProvider:
 class ActionableOfferContext:
     offer: CoverageOffer
     business_id: UUID
+
+
+_DELIVERY_MAX_ATTEMPTS = 3
 
 
 def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
@@ -291,30 +295,27 @@ async def mark_offer_attempt_outcome(
     return attempt
 
 
-async def _claim_due_outbox_events(
+async def _coverage_outbox_business_keys(
     session: AsyncSession,
-    *,
-    now: datetime,
-    limit: int,
-) -> list[OutboxEvent]:
+    events: list[OutboxEvent],
+) -> dict[object, object | None]:
+    offer_ids = [event.aggregate_id for event in events if event.aggregate_id is not None]
+    if not offer_ids:
+        return {}
     result = await session.execute(
-        select(OutboxEvent)
-        .where(
-            OutboxEvent.status.in_([OutboxStatus.pending, OutboxStatus.failed]),
-            OutboxEvent.available_at <= now,
-            OutboxEvent.topic == "coverage.offer.created",
-        )
-        .order_by(OutboxEvent.available_at.asc(), OutboxEvent.created_at.asc())
-        .limit(limit)
-        .with_for_update(skip_locked=True)
+        select(CoverageOffer.id, Shift.business_id)
+        .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
+        .join(Shift, CoverageCase.shift_id == Shift.id)
+        .where(CoverageOffer.id.in_(offer_ids))
     )
-    events = list(result.scalars().all())
-    for event in events:
-        event.status = OutboxStatus.processing
-        event.locked_at = now
-        event.attempt_count = int(event.attempt_count or 0) + 1
-    await session.flush()
-    return events
+    business_by_offer_id = {
+        offer_id: business_id
+        for offer_id, business_id in result.all()
+    }
+    return {
+        event.id: business_by_offer_id.get(event.aggregate_id)
+        for event in events
+    }
 
 
 async def _get_or_create_contact_attempt(
@@ -364,7 +365,13 @@ async def process_outbox_batch(
     limit: int = 20,
 ) -> dict:
     reference_time = now or datetime.now(timezone.utc)
-    events = await _claim_due_outbox_events(session, now=reference_time, limit=limit)
+    events = await worker_runtime.claim_outbox_events(
+        session,
+        now=reference_time,
+        limit=limit,
+        topic="coverage.offer.created",
+        business_resolver=_coverage_outbox_business_keys,
+    )
 
     sent_count = 0
     failed_count = 0
@@ -373,9 +380,11 @@ async def process_outbox_batch(
     for event in events:
         offer = await session.get(CoverageOffer, event.aggregate_id)
         if offer is None:
-            event.status = OutboxStatus.failed
-            event.processed_at = reference_time
-            event.error_message = "coverage_offer_not_found"
+            worker_runtime.mark_outbox_event_cancelled(
+                event,
+                now=reference_time,
+                error_message="coverage_offer_not_found",
+            )
             failed_count += 1
             processed_event_ids.append(str(event.id))
             continue
@@ -391,9 +400,11 @@ async def process_outbox_batch(
             else None
         )
         if shift is None:
-            event.status = OutboxStatus.failed
-            event.processed_at = reference_time
-            event.error_message = "shift_not_found"
+            worker_runtime.mark_outbox_event_cancelled(
+                event,
+                now=reference_time,
+                error_message="shift_not_found",
+            )
             offer.status = OfferStatus.failed
             failed_count += 1
             processed_event_ids.append(str(event.id))
@@ -408,11 +419,40 @@ async def process_outbox_batch(
         )
 
         active_provider = provider or _resolve_provider_for_channel(offer.channel)
-        result = await active_provider.send_coverage_offer(
-            outbox_event=event,
-            offer=offer,
-            shift=shift,
-        )
+        try:
+            result = await active_provider.send_coverage_offer(
+                outbox_event=event,
+                offer=offer,
+                shift=shift,
+            )
+        except Exception as exc:
+            retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+            error_message = str(exc)
+            attempt.status = CoverageAttemptStatus.failed
+            attempt.responded_at = reference_time
+            attempt.attempt_metadata = {
+                **attempt.attempt_metadata,
+                "worker_error": error_message,
+            }
+            if retryable:
+                offer.status = OfferStatus.pending
+                worker_runtime.mark_outbox_event_retry(
+                    event,
+                    now=reference_time,
+                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
+                    error_message=error_message,
+                )
+            else:
+                offer.status = OfferStatus.failed
+                worker_runtime.mark_outbox_event_cancelled(
+                    event,
+                    now=reference_time,
+                    error_message=error_message,
+                )
+            failed_count += 1
+            processed_event_ids.append(str(event.id))
+            continue
+
         if result.success:
             sent_at = result.sent_at or reference_time
             delivered_at = result.delivered_at
@@ -428,19 +468,34 @@ async def process_outbox_batch(
             attempt.delivered_at = delivered_at
             attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
 
-            event.status = OutboxStatus.sent
-            event.processed_at = reference_time
-            event.result_payload = result.result_payload
+            worker_runtime.mark_outbox_event_sent(
+                event,
+                now=reference_time,
+                result_payload=result.result_payload,
+            )
             sent_count += 1
         else:
-            offer.status = OfferStatus.failed
+            retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
             attempt.status = CoverageAttemptStatus.failed
             attempt.responded_at = reference_time
             attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
-            event.status = OutboxStatus.failed
-            event.processed_at = reference_time
-            event.error_message = result.error_message
-            event.result_payload = result.result_payload
+            if retryable:
+                offer.status = OfferStatus.pending
+                worker_runtime.mark_outbox_event_retry(
+                    event,
+                    now=reference_time,
+                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
+                    error_message=result.error_message or "delivery_retry_scheduled",
+                    result_payload=result.result_payload,
+                )
+            else:
+                offer.status = OfferStatus.failed
+                worker_runtime.mark_outbox_event_cancelled(
+                    event,
+                    now=reference_time,
+                    error_message=result.error_message or "delivery_failed",
+                    result_payload=result.result_payload,
+                )
             failed_count += 1
 
         processed_event_ids.append(str(event.id))
@@ -603,7 +658,6 @@ async def apply_twilio_status_callback(
         advanced_offer_ids = []
         exhausted_case_id = None
 
-    await session.commit()
     return {
         "matched": True,
         "offer_id": str(offer.id),

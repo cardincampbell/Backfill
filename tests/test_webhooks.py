@@ -44,6 +44,9 @@ class _ExecuteResult:
     def scalars(self):
         return _ScalarList(self._values)
 
+    def all(self):
+        return list(self._values)
+
     def scalar_one_or_none(self):
         return self._scalar_value
 
@@ -261,6 +264,7 @@ async def test_process_webhook_outbox_success(monkeypatch):
     session = FakeWebhookSession()
     session.execute_queue = [
         _ExecuteResult(values=[event]),
+        _ExecuteResult(values=[(delivery.id, business_id)]),
         _ExecuteResult(scalar_value=delivery),
     ]
 

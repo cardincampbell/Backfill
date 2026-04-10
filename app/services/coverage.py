@@ -50,7 +50,7 @@ from app.schemas.coverage import (
     Phase2ExecutionRequest,
     Phase2ExecutionResult,
 )
-from app.services import delivery as delivery_service
+from app.services import delivery as delivery_service, runtime_projections
 
 
 def _normalize_candidate_score(
@@ -1023,6 +1023,13 @@ async def _collect_phase_1_candidates(
         )
         busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
 
+    reference_time = datetime.now(timezone.utc)
+    score_snapshot_states = await runtime_projections.refresh_employee_score_snapshots(
+        session,
+        employees,
+        now=reference_time,
+    )
+
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
         employee_location = next(
@@ -1055,6 +1062,10 @@ async def _collect_phase_1_candidates(
             is_primary_role=is_primary_role,
             is_primary_location=is_primary_location,
             can_blast=employee_location.can_blast,
+        )
+        scoring_factors["score_snapshot"] = score_snapshot_states.get(
+            employee.id,
+            runtime_projections.score_snapshot_state(employee, now=reference_time),
         )
 
         candidates.append(
@@ -1147,6 +1158,13 @@ async def _collect_phase_2_candidates(
             if employee_id is not None
         }
 
+    reference_time = datetime.now(timezone.utc)
+    score_snapshot_states = await runtime_projections.refresh_employee_score_snapshots(
+        session,
+        employees,
+        now=reference_time,
+    )
+
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
         if employee.primary_location_id == shift.location_id:
@@ -1193,6 +1211,10 @@ async def _collect_phase_2_candidates(
         scoring_factors["location_affinity_count"] = prior_location_count
         scoring_factors["location_affinity_bonus"] = location_affinity_bonus
         scoring_factors["employee_location"] = employee_location_details
+        scoring_factors["score_snapshot"] = score_snapshot_states.get(
+            employee.id,
+            runtime_projections.score_snapshot_state(employee, now=reference_time),
+        )
         scoring_factors["total"] = score
 
         candidates.append(
@@ -1273,6 +1295,7 @@ async def execute_phase_1_run(
             "premium_cents": plan.premium_cents,
             "phase_2_eligible": plan.phase_2_eligible,
             "phase_2_reason": plan.phase_2_reason,
+            "runtime_projections": runtime_projections.build_runtime_projection_metadata(ranked),
         },
     )
     session.add(run)
@@ -1401,6 +1424,7 @@ async def execute_phase_2_run(
             "premium_cents": plan.premium_cents,
             "phase_2_eligible": plan.phase_2_eligible,
             "phase_2_reason": plan.phase_2_reason,
+            "runtime_projections": runtime_projections.build_runtime_projection_metadata(ranked),
         },
     )
     session.add(run)
