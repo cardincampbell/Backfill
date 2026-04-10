@@ -14,6 +14,7 @@ class DummyCallbackSession:
         self.commits = 0
         self.rollbacks = 0
         self.get_map: dict[tuple[type, object], object] = {}
+        self.execute_queue: list[list[object]] = []
 
     async def scalar(self, _query):
         return None
@@ -22,6 +23,17 @@ class DummyCallbackSession:
         return self.get_map.get((model, object_id))
 
     async def execute(self, _query):
+        class _ExecuteResult:
+            def __init__(self, values):
+                self._values = values
+
+            def scalar_one_or_none(self):
+                if not self._values:
+                    return None
+                return self._values[0]
+
+        if self.execute_queue:
+            return _ExecuteResult(self.execute_queue.pop(0))
         raise AssertionError("execute should be stubbed in this test")
 
     def add(self, obj):
@@ -199,3 +211,62 @@ async def test_process_callback_batch_counts_processed_and_failed(monkeypatch) -
         "failed_count": 1,
         "processed_callback_ids": [str(first.id), str(second.id)],
     }
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_synchronously_claims_and_processes_received_entry(monkeypatch) -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(
+        status="received",
+        payload={"MessageSid": "SM123", "MessageStatus": "delivered"},
+    )
+    session.get_map[(ProviderCallbackLog, entry.id)] = entry
+    session.execute_queue = [[entry]]
+
+    async def fake_process(_session, claimed_entry):
+        assert claimed_entry.status == "processing"
+        claimed_entry.status = "processed"
+        claimed_entry.result_payload = {"matched": True}
+        return provider_callbacks.CallbackProcessingResult(
+            callback_log_id=claimed_entry.id,
+            response_kind="empty",
+            response_payload={"matched": True},
+        )
+
+    monkeypatch.setattr(provider_callbacks, "process_callback_entry", fake_process)
+
+    result = await provider_callbacks.process_callback_entry_synchronously(session, entry)
+
+    assert result.response_payload == {"matched": True}
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_synchronously_returns_processed_duplicate_result() -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(
+        status="processed",
+        route_key="twilio_sms_inbound",
+        result_payload={"reply_message": "Already handled."},
+    )
+    session.execute_queue = [[entry]]
+
+    result = await provider_callbacks.process_callback_entry_synchronously(session, entry)
+
+    assert result.duplicate is True
+    assert result.response_text == "Already handled."
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_synchronously_rejects_duplicate_while_processing() -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(status="processing")
+    session.execute_queue = [[entry]]
+
+    with pytest.raises(provider_callbacks.CallbackProcessingError) as exc_info:
+        await provider_callbacks.process_callback_entry_synchronously(session, entry)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "callback_processing_in_progress"
+    assert session.commits == 1

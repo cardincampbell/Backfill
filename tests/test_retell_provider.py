@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_db_session
 from app.main import app
+from app.services import provider_callbacks
 
 
 class DummyRetellSession:
@@ -45,7 +46,7 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
 
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
-    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry", fake_process)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -94,6 +95,44 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
             "event": "call_started",
             "callback_log_id": "cb_retell_2",
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_retell_function_call_route_returns_conflict_when_duplicate_is_processing(monkeypatch):
+    class CallbackEntry:
+        id = "cb_retell_3"
+        status = "processing"
+        result_payload = {}
+
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), False
+
+    async def fake_process(session, entry):
+        raise provider_callbacks.CallbackProcessingError(
+            "callback_processing_in_progress",
+            status_code=409,
+            detail="callback_processing_in_progress",
+        )
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/providers/retell/webhook",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "function_call",
+                "name": "claim_shift",
+                "args": {"offer_id": "offer_123"},
+            },
+        )
+        assert response.status_code == 409
+        assert response.json() == {"detail": "callback_processing_in_progress"}
     finally:
         app.dependency_overrides.clear()
 

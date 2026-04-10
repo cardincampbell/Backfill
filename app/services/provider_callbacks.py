@@ -248,6 +248,50 @@ async def process_callback_entry(
     return result
 
 
+async def _load_callback_entry_for_update(
+    session: AsyncSession,
+    callback_log_id: UUID,
+) -> ProviderCallbackLog | None:
+    result = await session.execute(
+        select(ProviderCallbackLog)
+        .where(ProviderCallbackLog.id == callback_log_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
+async def process_callback_entry_synchronously(
+    session: AsyncSession,
+    entry: ProviderCallbackLog,
+) -> CallbackProcessingResult:
+    locked_entry = await _load_callback_entry_for_update(session, entry.id)
+    if locked_entry is None:
+        raise CallbackProcessingError(
+            "callback_log_not_found",
+            status_code=404,
+            detail="callback_log_not_found",
+        )
+
+    if locked_entry.status == "processed":
+        await session.commit()
+        return _existing_result(locked_entry)
+
+    if locked_entry.status == "processing":
+        await session.commit()
+        raise CallbackProcessingError(
+            "callback_processing_in_progress",
+            status_code=409,
+            detail="callback_processing_in_progress",
+        )
+
+    locked_entry.status = "processing"
+    locked_entry.processed_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    refreshed_entry = await _reload_callback_entry(session, locked_entry.id, locked_entry)
+    return await process_callback_entry(session, refreshed_entry)
+
+
 async def process_callback_batch(
     session: AsyncSession,
     *,
