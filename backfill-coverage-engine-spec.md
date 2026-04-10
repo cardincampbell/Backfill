@@ -48,6 +48,7 @@ Callout
 - **Roles belong to the Business.** A "Server" is a "Server" across all locations. Roles are defined once at the business level, then assigned to locations and employees independently.
 - **Shifts use canonical intervals.** A shift is a role needed, at a place, over a timezone-aware interval. Do not model the canonical shift window as separate `DATE` + `TIME` fields.
 - **Assignments are their own durable model.** Do not rely on a single nullable foreign key on the shift row as the durable assignment record.
+- **Launch auto-coverage is single-seat only.** `seats_requested` is scheduling demand metadata, not durable seat identity. Do not infer multi-seat exclusivity from an integer count alone.
 - **Availability belongs to Employees.** Availability is the supply signal — when an employee can work, regardless of where.
 - **Callout is a trigger, not the canonical aggregate.** The campaign is the operational, billing, and observability object.
 
@@ -204,6 +205,8 @@ updated_at        TIMESTAMP
 
 This is the demand signal for the temporal relationship. A shift is a specific need — a role, at a location, over a canonical interval.
 
+`seats_requested` expresses scheduling demand count. In launch auto-coverage, each campaign still represents exactly one fill opportunity. Multi-seat automated coverage is deferred until there is an explicit seat or slot model.
+
 Schedule lifecycle:
 ```
 draft  →  published  →  active  →  completed
@@ -217,10 +220,12 @@ Coverage lifecycle is not stored on `shifts.schedule_status`. Coverage state bel
 id                UUID, primary key
 shift_id          UUID, FK → shifts
 employee_id       UUID, FK → employees, NULLABLE
+coverage_campaign_id UUID, FK → coverage_campaigns, NULLABLE
 status            ENUM           -- proposed | assigned | accepted | declined | cancelled | replaced | completed
 sequence_no       INTEGER
 assigned_via      VARCHAR        -- manual | campaign | scheduler_sync
 replaced_assignment_id UUID, FK → shift_assignments, NULLABLE
+version           BIGINT
 accepted_at       TIMESTAMP
 cancelled_at      TIMESTAMP
 created_at        TIMESTAMP
@@ -228,6 +233,8 @@ updated_at        TIMESTAMP
 ```
 
 `shift_assignments` is the durable assignment history and race-control surface. Do not treat a nullable employee FK on the shift row as sufficient for auditability or blast-mode correctness.
+
+At launch, only one active winning assignment may exist per shift. Multi-seat automated coverage remains out of scope until explicit seat identity exists.
 
 ### `employees`
 ```
@@ -297,6 +304,9 @@ business_id       UUID, FK → businesses
 status            ENUM           -- created | scoring | outreach_active | filled | exhausted | escalated | cancelled | closed
 mode              ENUM           -- standard | compressed | blast
 filled_by_employee_id UUID, FK → employees, NULLABLE
+winning_assignment_id UUID, FK → shift_assignments, NULLABLE
+winning_attempt_id UUID, FK → outreach_attempts, NULLABLE
+version           BIGINT
 opened_at         TIMESTAMP
 closed_at         TIMESTAMP
 created_at        TIMESTAMP
@@ -304,6 +314,8 @@ updated_at        TIMESTAMP
 ```
 
 The campaign is the canonical business object for coverage execution, billing, and observability.
+
+At launch, a campaign represents one open seat or fill opportunity. Do not create multiple concurrent automated fills from `seats_requested` alone.
 
 ### `outreach_attempts`
 ```
@@ -326,6 +338,24 @@ created_at        TIMESTAMP
 
 Every outreach attempt is logged regardless of outcome. This append-only fact stream feeds projections, scoring snapshots, and cost tracking.
 
+### `provider_callback_logs`
+```
+id                UUID, primary key
+provider          VARCHAR
+provider_event_id VARCHAR, NULLABLE
+dedupe_key        VARCHAR
+direction         ENUM           -- inbound_message | outbound_receipt | call_status | otp_status | other
+coverage_campaign_id UUID, FK → coverage_campaigns, NULLABLE
+outreach_attempt_id UUID, FK → outreach_attempts, NULLABLE
+payload           JSONB
+processing_status ENUM           -- received | deduped | processed | dead_letter
+received_at       TIMESTAMP
+processed_at      TIMESTAMP, NULLABLE
+error_code        VARCHAR, NULLABLE
+```
+
+This table is the raw immutable callback log. Provider payloads are persisted here before any campaign, assignment, or outreach state mutation occurs.
+
 ---
 
 ## 4. Time and Concurrency Invariants
@@ -341,16 +371,34 @@ These are platform rules, not implementation details.
 
 ### Canonical race rules
 
-- One active coverage campaign per shift seat at a time.
+- Launch auto-coverage is single-seat only. There may be only one active automated coverage campaign per shift at a time until an explicit seat model exists.
+- Future multi-seat automation requires explicit `shift_seats` or `shift_slots`; do not repurpose `seats_requested` as seat identity.
 - One winning acceptance per campaign.
 - Blast mode "first confirm wins" must be enforced by database-backed constraints or compare-and-swap rules, not by application timing alone.
+- `coverage_campaigns.version` increments on every mutable transition and must be updated with compare-and-swap semantics.
+- `shift_assignments.version` increments on every mutable transition and must be updated with compare-and-swap semantics.
 - Provider callbacks must be idempotent.
 - Shift assignment writes must be idempotent and concurrency-safe.
+
+### Provider callback contract
+
+- Raw callback payloads are written to `provider_callback_logs` before any domain mutation.
+- Dedupe uses `(provider, provider_event_id)` when the provider supplies a stable event id; otherwise it uses a stable hash of the normalized payload.
+- Callback endpoints acknowledge success only after the raw log write succeeds.
+- Translation from raw callback to campaign or outreach mutation happens asynchronously and must be replayable from the raw log.
+- Unsupported or malformed callbacks move to dead-letter state; they are never dropped silently.
 
 ### Projection rule
 
 - Early proof-of-concept candidate resolution may read authoring tables directly.
 - The target execution model should converge on engine-facing projections for eligibility, compiled availability, and scoring snapshots rather than permanent heavy live joins over authoring tables.
+
+### Projection freshness contract
+
+- Eligibility and compiled availability projections target <= 60 seconds staleness.
+- Score snapshots target <= 15 minutes staleness and should be refreshed at campaign open when older.
+- If eligibility or availability freshness exceeds the hard limit, the worker refreshes synchronously or pauses the campaign; it does not silently continue on stale data.
+- If score freshness exceeds the soft limit, the engine may recompute deterministically from attempt facts for the current campaign open.
 
 ---
 
@@ -376,6 +424,7 @@ Candidate resolution applies these checks:
 - active employee status
 - exclude the employee who called out
 - exclude already-contacted candidates for the same campaign
+- prefer engine-facing projections for eligibility, availability, and score inputs; direct reads are degraded fallback behavior only
 
 **Phase 1 (single location):**
 
@@ -395,11 +444,15 @@ Candidates are ranked by **Probability of Acceptance (PoA)** — a composite sco
 ```
 PoA = weighted combination of:
   - reliability_score           (historical acceptance rate)
+  - response_rate               (do they usually answer at all?)
   - avg_response_time           (how quickly they typically respond)
   - day_of_week_affinity        (do they often pick up shifts on this day?)
   - time_of_day_affinity        (do they often pick up shifts at this hour?)
   - recency_bonus               (have they been responsive in the last 30 days?)
   - location_affinity           (Phase 2: have they worked this location before?)
+  - contact_cooldown_penalty    (have they been contacted too recently?)
+  - recent_burden_penalty       (have they already covered a lot recently?)
+  - overtime_risk_penalty       (are they close to labor-rule thresholds?)
 ```
 
 See Section 7 for full scoring details.
@@ -522,9 +575,10 @@ Derived from append-only outreach attempt facts and maintained as a projection o
 
 ```
 reliability_score = (
-  (confirmed_count / total_attempts) * 0.5     -- acceptance rate
-  + response_speed_score * 0.3                  -- how fast they respond
-  + recency_score * 0.2                          -- behavior in last 30 days
+  accept_rate_smoothed * 0.45                    -- do they actually take the shift?
+  + response_rate_smoothed * 0.20               -- do they answer at all?
+  + response_speed_score * 0.20                 -- how fast they respond
+  + recency_score * 0.15                        -- behavior in last 30 days
 )
 ```
 
@@ -541,11 +595,19 @@ PoA = reliability_score
   * day_of_week_affinity_multiplier    (0.7 – 1.3)
   * time_of_day_affinity_multiplier    (0.7 – 1.3)
   * location_affinity_multiplier       (0.9 – 1.1, Phase 2 only)
+  * contact_cooldown_multiplier        (0.0 – 1.0)
+  * recent_burden_multiplier           (0.7 – 1.0)
+  * overtime_risk_multiplier           (0.0 – 1.0)
 ```
 
 **Affinity multipliers** are derived from historical outreach attempt data for that employee:
 - If they've accepted 80% of Friday night shifts they've been offered → Friday night multiplier = 1.3
 - If they've declined every Sunday morning offer → Sunday morning multiplier = 0.7
+
+**Cooldown and burden guardrails:**
+- `contact_cooldown_multiplier` drops to `0.0` when a hard cooldown is active, which makes the employee temporarily ineligible for automated outreach.
+- `recent_burden_multiplier` downranks employees who have recently been contacted or have already absorbed disproportionate coverage load, even if they are likely to say yes.
+- `overtime_risk_multiplier` drops toward `0.0` as the candidate approaches hard labor-rule or overtime thresholds; policy may turn this from a soft penalty into a hard exclusion.
 
 Over time PoA becomes a highly personalized signal per employee per shift context. In early operation (few data points), it degrades gracefully to the base reliability score.
 
@@ -585,11 +647,26 @@ Over time PoA becomes a highly personalized signal per employee per shift contex
    - reliability / response projections
    - response_time logged
    - day/time affinity data updated
+   - cooldown and burden projections updated
 ```
 
 ---
 
-## 9. Phase Boundaries
+## 9. Design Load Units
+
+The engine should be designed and measured against these load units, not vague user-count targets:
+
+- active coverage campaigns
+- outbound outreach attempts per second
+- inbound provider callbacks per second
+- campaign and outreach event writes per second
+- worker claim latency
+
+The concrete launch budgets for these units live in the execution sequencing plan and should be treated as operating guardrails.
+
+---
+
+## 10. Phase Boundaries
 
 ### Phase 1 — Single Location, Internal Pool
 
@@ -637,7 +714,7 @@ This prevents Backfill from sending an employee to a location they've never been
 
 ---
 
-## 10. Roster Upload Format
+## 11. Roster Upload Format
 
 For Phase 1 testing, the minimum viable roster CSV:
 
@@ -667,7 +744,7 @@ Simulate callout by: creating a `callouts` record and `coverage_campaigns` recor
 
 ---
 
-## 11. Key Design Decisions — Summary
+## 12. Key Design Decisions — Summary
 
 | Decision | Choice | Reason |
 |---|---|---|
@@ -676,9 +753,13 @@ Simulate callout by: creating a `callouts` record and `coverage_campaigns` recor
 | Roles placement | Under Business | Single definition shared across all locations |
 | Availability model | Recurring rules + Exceptions | Handles standing availability and one-off changes cleanly while allowing projection-based reads later |
 | Shift time model | Canonical interval (`starts_at`, `ends_at`) | Safe across overnight shifts, DST, and timezone math |
-| Assignment model | Separate `shift_assignments` table | Durable history, concurrency safety, multi-seat support |
+| Assignment model | Separate `shift_assignments` table | Durable history, concurrency safety, and clean future seat expansion |
+| Launch seat scope | Single-seat automated coverage only | `seats_requested` alone cannot guarantee seat-level exclusivity |
 | Coverage aggregate | `coverage_campaigns` | Canonical operational, billing, and observability object |
 | Outreach aggregate | `outreach_attempts` | Canonical delivery/execution fact stream |
+| Concurrency contract | Aggregate versioning + compare-and-swap writes | Deterministic resolution under retries and blast-mode races |
+| Callback ingestion | Immutable `provider_callback_logs` + async replay | Idempotent provider processing and auditability |
+| Projection freshness | Explicit staleness budgets + degraded fallback | Prevents silent execution on untrusted stale data |
 | Scoring window | 30-day rolling | Recent behavior is more predictive than lifetime average |
 | Ranking signal | Probability of Acceptance (PoA) | Context-aware, improves over time, smarter than static sort |
 | Operating modes | 3 modes based on time-to-shift | Matches urgency to execution strategy automatically |

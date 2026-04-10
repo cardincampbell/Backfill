@@ -13,14 +13,16 @@ export function SiteChrome({ children }: SiteChromeProps) {
   const currentYear = new Date().getFullYear();
   const isLiveAppSurface =
     pathname === "/dashboard" ||
+    pathname.startsWith("/dashboard/") ||
     pathname === "/team" ||
+    pathname.startsWith("/team/") ||
     pathname === "/activity" ||
+    pathname.startsWith("/activity/") ||
     pathname.startsWith("/location/") ||
     pathname.startsWith("/scheduler/") ||
     pathname === "/settings" ||
     pathname.startsWith("/settings/");
   const isReferenceAppSurface =
-    pathname.startsWith("/dashboard/") ||
     pathname === "/dashboard-light" ||
     pathname === "/dashboard-dark" ||
     pathname === "/dashboard-single" ||

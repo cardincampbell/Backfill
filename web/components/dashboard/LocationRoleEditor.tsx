@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, Lock, MapPin, Phone, Plus, Tag, Trash2, X } from "lucide-react";
 
@@ -204,6 +204,8 @@ export function LocationRoleEditor({
     normalizeShiftDefaults(null),
   );
   const [visibleFeedback, setVisibleFeedback] = useState<LocationRoleEditorFeedback>(feedback);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     setSelectedRoleIds(assignments.map((assignment) => assignment.role_id));
@@ -226,6 +228,19 @@ export function LocationRoleEditor({
   useEffect(() => {
     setVisibleFeedback(feedback);
   }, [feedback]);
+
+  useEffect(() => {
+    setIsClosing(false);
+  }, [location.id]);
+
+  useEffect(
+    () => () => {
+      if (closeTimeoutRef.current !== null) {
+        window.clearTimeout(closeTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!visibleFeedback) {
@@ -316,6 +331,17 @@ export function LocationRoleEditor({
     }
   }, [totalChangeCount, visibleFeedback]);
 
+  const handleDismiss = useCallback(() => {
+    if (isClosing) {
+      return;
+    }
+    setIsClosing(true);
+    closeTimeoutRef.current = window.setTimeout(() => {
+      closeTimeoutRef.current = null;
+      onClose();
+    }, 210);
+  }, [isClosing, onClose]);
+
   const handleShiftDefaultsChange = (nextPresets: ShiftDefault[]) => {
     setUseBusinessDefaults(false);
     setDraftShiftDefaults(normalizeShiftDefaults(nextPresets));
@@ -357,26 +383,27 @@ export function LocationRoleEditor({
   return (
     <motion.div
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      animate={{ opacity: isClosing ? 0 : 1 }}
       exit={{ opacity: 0 }}
+      transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
       className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={handleDismiss}
     >
       <motion.div
         initial={{ x: 460 }}
-        animate={{ x: 0 }}
+        animate={{ x: isClosing ? 460 : 0 }}
         exit={{ x: 460 }}
-        transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
+        transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
         className={`w-full sm:w-[460px] h-full shadow-2xl flex flex-col overflow-hidden ${
           dark ? "bg-[#0F2E4C]" : "bg-white"
-        }`}
+        } ${isClosing ? "pointer-events-none" : ""}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className={`px-6 py-5 border-b shrink-0 ${borderClass}`}>
           <div className="flex items-center justify-between mb-4">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleDismiss}
               className={`p-1.5 rounded-lg transition-colors ${
                 dark ? "hover:bg-white/[0.06]" : "hover:bg-[#F7F8FA]"
               }`}

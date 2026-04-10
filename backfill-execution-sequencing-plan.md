@@ -45,6 +45,14 @@ The current system still needs:
 
 Adding Kafka before those are stable would multiply moving parts without solving the current implementation risk.
 
+The real scaling units for this plan are:
+
+- active coverage campaigns
+- outbound provider attempts per second
+- inbound provider callbacks per second
+- platform event writes per second
+- worker claim latency
+
 ## 2. Team Structure
 
 ### 2.1 Lead structure
@@ -149,11 +157,33 @@ Deliverables:
 - freeze event rule: `platform_events` becomes canonical as soon as it exists
 - freeze telephony rule: Retell is primary for conversational interactions
 - freeze worker rule: locking/retries/idempotency are shared platform behavior
+- freeze launch seat rule: automated coverage is single-seat only until an explicit seat or slot model exists
+- freeze callback ingestion rule: provider callbacks are raw append-only facts before they become business mutations
 - freeze concurrency invariants:
-  aggregate versioning / optimistic concurrency
+  aggregate versioning / optimistic concurrency with explicit compare-and-swap semantics
   idempotency keys on every external side effect
   first-confirm-wins semantics backed by database guarantees
   projection freshness targets for engine-critical reads
+
+Phase 0 contracts to write down explicitly:
+
+- launch seat scope:
+  automated coverage supports one open seat per campaign at launch
+  `seats_requested` is not sufficient seat identity for multi-seat automation
+  multi-seat automated coverage is deferred until an explicit `shift_seats` or `shift_slots` model exists
+- aggregate versioning:
+  `coverage_campaigns.version` increments on every mutable transition
+  `shift_assignments.version` increments on every mutable transition
+  mutating writes use compare-and-swap semantics on `(id, version)` rather than blind overwrite
+- provider callback ingestion:
+  raw callbacks land in immutable `provider_callback_logs`
+  dedupe key is `provider + provider_event_id` when available, otherwise `provider + stable payload hash`
+  callback endpoints acknowledge only after raw callback persistence succeeds
+  expensive translation, enrichment, and state mutation happens asynchronously on the worker platform
+- projection freshness:
+  eligibility and compiled availability reads target <= 60 seconds staleness
+  score snapshots target <= 15 minutes staleness and are refreshed on campaign open when older
+  if freshness cannot be restored inside the guardrail, execution pauses or refreshes synchronously; it does not silently proceed on stale data
 
 Exit criteria:
 
@@ -260,6 +290,11 @@ Work:
 - stale-lock recovery
 - job error payloads
 - explicit tenant context in every job payload
+- provider callback ingestion path
+- immutable `provider_callback_logs`
+- replayable callback processor
+- per-business backpressure and provider rate limiting
+- projection freshness monitoring
 - execution-critical projections needed by the engine:
   candidate eligibility snapshots
   compiled availability windows or equivalent precomputed availability reads
@@ -276,6 +311,9 @@ Exit criteria:
 - at least one real campaign job uses shared worker semantics
 - the worker platform is reusable, not campaign-specific glue
 - engine-critical projections exist early enough that broad outreach execution does not depend forever on expensive runtime joins over authoring tables
+- callback ingestion is fast-ack, replayable, and idempotent
+- projection freshness is observable and alertable
+- backpressure exists at the business level rather than only globally
 
 ## 8. Phase 4: Copilot Tool Framework
 
@@ -341,6 +379,7 @@ Work:
 - align `coverage_offers` and `coverage_contact_attempts` to one logical outreach state machine
 - move dispatch, expiry, recheck, and stop-on-fill behavior onto the worker platform
 - enforce candidate dedupe and campaign isolation
+- incorporate contact cooldown, recent outreach burden, and overtime-risk penalties into ranking snapshots
 - keep dormant direct-Twilio coverage paths untouched unless explicit production evidence requires action
 
 Exit criteria:
@@ -348,6 +387,7 @@ Exit criteria:
 - one logical outreach model
 - worker-driven campaign execution
 - campaign stop conditions are deterministic and observable
+- outreach ranking no longer optimizes only for raw acceptance likelihood at the expense of employee fatigue
 
 ## 10. Phase 6: Feed Projections and UI Surfaces
 
@@ -448,7 +488,45 @@ Exit criteria:
 - no half-live provider boundary
 - production owner is clear for each interaction class
 
-## 14. Frontend Ownership
+## 14. Provider Callback Ingestion Contract
+
+Rules:
+
+- raw provider callbacks are append-only facts, not direct business mutations
+- every callback is written to immutable `provider_callback_logs` before campaign or outreach state changes
+- dedupe happens before side effects using `provider_event_id` when the provider gives one, otherwise a stable payload hash
+- callback endpoints return success only after the raw log row is persisted
+- downstream processing is worker-driven and replayable from the raw log
+- malformed or unsupported callbacks are dead-lettered, not dropped silently
+
+This contract applies to Retell, Twilio Verify, and any future messaging or voice provider.
+
+## 15. Launch Scale Budgets
+
+These are initial launch operating budgets for the Postgres-first architecture. Hitting them consistently is a tuning or architecture signal, not a reason to guess.
+
+- active campaigns: 250 sustained, 500 burst
+- outbound provider attempts: 20/sec sustained, 50/sec burst
+- inbound provider callbacks: 25/sec sustained, 75/sec burst
+- `platform_events` writes: 200/sec sustained, 500/sec burst
+- worker claim latency: p95 <= 1s, p99 <= 5s
+- campaign creation API ack: p95 <= 300ms
+- candidate resolution from engine-facing projections: p95 <= 200ms, p99 <= 750ms
+- feed projection lag: p95 <= 3s
+- per-business backlog guardrail: pending outreach jobs should not exceed 100 or 60s median dispatch lag without backpressure and alerting
+
+## 16. Data Retention and Partition Strategy
+
+Retention here means partitioning and archival for append-only operational data, not hard-deleting customer domain records.
+
+- `platform_events`: monthly partitions from day one; keep 12 months hot in the primary database and archive older partitions
+- `outreach_attempts`: monthly partitions; keep 12 months hot and preserve campaign-level summaries long term
+- `provider_callback_logs`: monthly partitions; keep 90 days hot and at least 12 months in cold archive for replay and dispute handling
+- `cost_ledger_entries`: retain indefinitely or per finance policy; no silent pruning
+- `billing_ledger_entries`: retain indefinitely or per finance policy; no silent pruning
+- worker job history: keep compact operational history 30-90 days hot, archive failure metadata needed for incident review
+
+## 17. Frontend Ownership
 
 All frontend changes belong to Developer 1.
 
@@ -461,13 +539,13 @@ That includes:
 
 Developer 1 should be treated as a junior lead full-stack owner, not a frontend-only implementer.
 
-## 15. Kafka Readiness Gates
+## 18. Kafka Readiness Gates
 
 Kafka becomes worth serious consideration only when the Postgres event/worker model is demonstrably insufficient after tuning and operational discipline.
 
 Do not adopt Kafka because the architecture looks more “real.” Adopt it when the current system can no longer meet required behavior cleanly.
 
-### 15.1 Minimum conditions
+### 18.1 Minimum conditions
 
 Consider Kafka only when all of the following are true:
 
@@ -477,7 +555,7 @@ Consider Kafka only when all of the following are true:
 - provider ownership is no longer ambiguous
 - the team can operate another piece of infrastructure reliably
 
-### 15.2 Practical trigger measures
+### 18.2 Practical trigger measures
 
 Kafka is justified when several of these are true at the same time for sustained production traffic:
 
@@ -488,7 +566,7 @@ Kafka is justified when several of these are true at the same time for sustained
 - backfills and reprocessing become a routine operational need rather than an occasional admin task
 - more than one separately deployed service depends on the same event stream as a first-class contract
 
-### 15.3 Simple rule of thumb
+### 18.3 Simple rule of thumb
 
 Do not move to Kafka because one queue is slow once.
 
@@ -498,7 +576,7 @@ Do move when:
 - replayable multi-consumer streaming is a repeated need
 - the operational cost of not having Kafka is higher than the cost of running it
 
-## 16. Near-Term PR Order
+## 19. Near-Term PR Order
 
 Recommended order:
 
@@ -515,7 +593,7 @@ Recommended order:
 11. Lead + Developer 2: billing ledger
 12. Developer 1: Retell cutover hardening and final user-facing control plane polish
 
-## 17. Non-Negotiables
+## 20. Non-Negotiables
 
 - No dual canonical model for tenant or campaign.
 - No Kafka before the current primitives are proven insufficient.
@@ -523,3 +601,4 @@ Recommended order:
 - No async job without explicit tenant context.
 - No direct LLM mutation path.
 - No accidental half-live Twilio / Retell split.
+- No multi-seat automated coverage until explicit seat identity exists.
