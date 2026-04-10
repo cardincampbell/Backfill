@@ -152,6 +152,7 @@ async def test_process_queued_coverage_cases_executes_and_skips_filled(monkeypat
     session.get_map[(CoverageCase, filled_case.id)] = filled_case
     session.get_map[(Shift, executable_shift.id)] = executable_shift
     session.get_map[(Shift, filled_shift.id)] = filled_shift
+    appended_events: list[str] = []
 
     async def fake_claim(_session, *, limit):
         assert limit == 5
@@ -165,11 +166,19 @@ async def test_process_queued_coverage_cases_executes_and_skips_filled(monkeypat
         assert coverage_case_id == executable_case.id
         return SimpleNamespace(
             phase_executed="phase_1",
-            coverage_case=SimpleNamespace(status=CoverageCaseStatus.running),
+            coverage_case=executable_case,
+            run=SimpleNamespace(id=uuid4()),
+            candidate_count=3,
+            offers=[SimpleNamespace(id=uuid4())],
         )
+
+    async def fake_platform_event_append(_session, *, event_type, **kwargs):
+        appended_events.append(event_type)
+        return None
 
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_queued_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime, "execute_queued_case", fake_execute)
+    monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
 
     result = await coverage_runtime.process_queued_coverage_cases(session, limit=5)
 
@@ -182,7 +191,12 @@ async def test_process_queued_coverage_cases_executes_and_skips_filled(monkeypat
         "processed_case_ids": [str(executable_case.id), str(filled_case.id)],
     }
     assert filled_case.status == CoverageCaseStatus.filled
-    assert session.commits == 1
+    assert session.commits == 2
+    assert appended_events == [
+        coverage_runtime.platform_events.PlatformEventType.COVERAGE_DISPATCH_EXECUTED,
+        coverage_runtime.platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED,
+        "coverage.campaign.filled",
+    ]
 
 
 @pytest.mark.asyncio
@@ -226,6 +240,7 @@ async def test_reconcile_running_coverage_cases_marks_filled_and_cancels_active_
     session.get_map[(CoverageCase, coverage_case.id)] = coverage_case
     session.get_map[(Shift, shift.id)] = shift
     session.execute_queue = [[active_offer]]
+    appended_events: list[str] = []
 
     async def fake_claim(_session, *, limit):
         assert limit == 5
@@ -234,8 +249,13 @@ async def test_reconcile_running_coverage_cases_marks_filled_and_cancels_active_
     async def fake_mark_offer_attempt_outcome(*args, **kwargs):
         return None
 
+    async def fake_platform_event_append(_session, *, event_type, **kwargs):
+        appended_events.append(event_type)
+        return None
+
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime.delivery, "mark_offer_attempt_outcome", fake_mark_offer_attempt_outcome)
+    monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 
@@ -245,6 +265,10 @@ async def test_reconcile_running_coverage_cases_marks_filled_and_cancels_active_
     assert active_offer.status == coverage_runtime.OfferStatus.cancelled
     assert coverage_case.status == CoverageCaseStatus.filled
     assert session.commits == 1
+    assert appended_events == [
+        "coverage.offer.cancelled",
+        "coverage.campaign.filled",
+    ]
 
 
 @pytest.mark.asyncio
@@ -279,11 +303,17 @@ async def test_reconcile_running_coverage_cases_exhausts_when_no_active_offers(m
     session.get_map[(CoverageCase, coverage_case.id)] = coverage_case
     session.get_map[(Shift, shift.id)] = shift
     session.execute_queue = [[]]
+    appended_events: list[str] = []
 
     async def fake_claim(_session, *, limit):
         return [(coverage_case, business_id)]
 
+    async def fake_platform_event_append(_session, *, event_type, **kwargs):
+        appended_events.append(event_type)
+        return None
+
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
+    monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 
@@ -291,6 +321,7 @@ async def test_reconcile_running_coverage_cases_exhausts_when_no_active_offers(m
     assert result["cancelled_count"] == 0
     assert result["exhausted_count"] == 1
     assert coverage_case.status == CoverageCaseStatus.exhausted
+    assert appended_events == ["coverage.campaign.exhausted"]
 
 
 @pytest.mark.asyncio
@@ -334,6 +365,7 @@ async def test_reconcile_running_coverage_cases_marks_cancelled_when_shift_not_a
     session.get_map[(CoverageCase, coverage_case.id)] = coverage_case
     session.get_map[(Shift, shift.id)] = shift
     session.execute_queue = [[active_offer]]
+    appended_events: list[str] = []
 
     async def fake_claim(_session, *, limit):
         assert limit == 5
@@ -342,8 +374,13 @@ async def test_reconcile_running_coverage_cases_marks_cancelled_when_shift_not_a
     async def fake_mark_offer_attempt_outcome(*args, **kwargs):
         return None
 
+    async def fake_platform_event_append(_session, *, event_type, **kwargs):
+        appended_events.append(event_type)
+        return None
+
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime.delivery, "mark_offer_attempt_outcome", fake_mark_offer_attempt_outcome)
+    monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 
@@ -353,6 +390,10 @@ async def test_reconcile_running_coverage_cases_marks_cancelled_when_shift_not_a
     assert active_offer.status == coverage_runtime.OfferStatus.cancelled
     assert coverage_case.status == CoverageCaseStatus.cancelled
     assert session.commits == 1
+    assert appended_events == [
+        "coverage.offer.cancelled",
+        "coverage.campaign.cancelled",
+    ]
 
 
 @pytest.mark.asyncio
