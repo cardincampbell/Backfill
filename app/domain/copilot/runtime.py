@@ -320,14 +320,23 @@ async def _find_reusable_session(
             AuditLog.business_id == business_id,
             AuditLog.target_type == SESSION_TARGET_TYPE,
             AuditLog.actor_user_id == auth_ctx.user.id,
-            AuditLog.event_name == platform_events.PlatformEventType.COPILOT_SESSION_CREATED,
         )
         .order_by(AuditLog.occurred_at.desc())
-        .limit(25)
+        .limit(200)
     )
+    seen_session_ids: set[UUID] = set()
     for entry in result.scalars().all():
-        session_state = _session_from_entry(entry)
-        if session_state is None:
+        session_id = entry.target_id
+        if session_id is None or session_id in seen_session_ids:
+            continue
+        seen_session_ids.add(session_id)
+        detail = await _get_session_detail_or_raise(
+            db,
+            business_id=business_id,
+            session_id=session_id,
+        )
+        session_state = detail.session
+        if session_state.operator_user_id != auth_ctx.user.id:
             continue
         if location_id is not None and session_state.location_id != location_id:
             continue
@@ -337,11 +346,7 @@ async def _find_reusable_session(
             continue
         if session_state.expires_at is not None and session_state.expires_at <= _now():
             continue
-        return await _get_session_detail_or_raise(
-            db,
-            business_id=business_id,
-            session_id=session_state.id,
-        )
+        return detail
     return None
 
 
@@ -358,6 +363,13 @@ async def create_or_reuse_session(
     request_context: CopilotRequestContext,
 ) -> CopilotSessionDetailRead:
     normalized_channel = (payload.normalized_channel or "dashboard").strip() or "dashboard"
+    if payload.location_id is not None and not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        payload.location_id,
+        allowed_roles=READ_ROLES,
+    ):
+        raise PermissionError("location_access_denied")
     if payload.reuse_active:
         reusable = await _find_reusable_session(
             db,
@@ -437,6 +449,13 @@ async def get_session_detail(
     detail = await _get_session_detail_or_raise(db, business_id=business_id, session_id=session_id)
     if detail.session.operator_user_id != auth_ctx.user.id:
         raise PermissionError("copilot_session_access_denied")
+    if detail.session.location_id is not None and not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        detail.session.location_id,
+        allowed_roles=READ_ROLES,
+    ):
+        raise PermissionError("location_access_denied")
     return detail
 
 

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
-from app.domain.copilot import registry, validation
+from app.domain.copilot import registry, runtime as copilot_runtime, validation
 from app.main import app
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.identity import Membership, Session, User
@@ -28,6 +28,30 @@ class FakeCopilotSession:
 
     async def commit(self):
         self.commits += 1
+
+
+class _ScalarResult:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return list(self._values)
+
+
+class _ExecuteResult:
+    def __init__(self, values):
+        self._values = values
+
+    def scalars(self):
+        return _ScalarResult(self._values)
+
+
+class FakeReuseLookupSession:
+    def __init__(self, entries):
+        self._entries = entries
+
+    async def execute(self, _query):
+        return _ExecuteResult(self._entries)
 
 
 def _make_auth_context(*, business_id, location_id=None, role=MembershipRole.manager) -> AuthContext:
@@ -187,6 +211,37 @@ def test_create_session_route_returns_copilot_session_shape(client: TestClient, 
     assert fake_db.commits == 1
 
 
+def test_create_session_route_rejects_inaccessible_location(client: TestClient):
+    business_id = uuid4()
+    allowed_location_id = uuid4()
+    blocked_location_id = uuid4()
+
+    async def override_db():
+        yield FakeCopilotSession()
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=allowed_location_id,
+        )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/copilot/sessions",
+            json={
+                "location_id": str(blocked_location_id),
+                "normalized_channel": "dashboard",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "location_access_denied"
+
+
 def test_create_message_route_returns_turn_shape(client: TestClient, monkeypatch):
     business_id = uuid4()
     auth_ctx = _make_auth_context(business_id=business_id)
@@ -268,3 +323,56 @@ def test_create_message_route_returns_turn_shape(client: TestClient, monkeypatch
     assert payload["action_run"]["status"] == "executed"
     assert payload["outbound_message"]["message_metadata"]["message_kind"] == "tool_result"
     assert fake_db.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_reusable_session_lookup_uses_latest_session_snapshot(monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+    session_id = detail.session.id
+
+    stale_created_snapshot = detail.session.model_copy(
+        update={"expires_at": datetime.now(timezone.utc) - timedelta(minutes=5)}
+    )
+    latest_snapshot = detail.session.model_copy(
+        update={"expires_at": datetime.now(timezone.utc) + timedelta(hours=4)}
+    )
+
+    created_entry = type(
+        "Entry",
+        (),
+        {
+            "target_id": session_id,
+            "payload": {"session": stale_created_snapshot.model_dump(mode="json")},
+            "occurred_at": datetime.now(timezone.utc) - timedelta(minutes=10),
+        },
+    )()
+    latest_entry = type(
+        "Entry",
+        (),
+        {
+            "target_id": session_id,
+            "payload": {"session": latest_snapshot.model_dump(mode="json")},
+            "occurred_at": datetime.now(timezone.utc),
+        },
+    )()
+
+    async def fake_get_session_detail_or_raise(_db, *, business_id, session_id):
+        assert session_id == detail.session.id
+        return detail.model_copy(update={"session": latest_snapshot})
+
+    monkeypatch.setattr(
+        "app.domain.copilot.runtime._get_session_detail_or_raise",
+        fake_get_session_detail_or_raise,
+    )
+
+    reusable = await copilot_runtime._find_reusable_session(
+        FakeReuseLookupSession([latest_entry, created_entry]),
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        location_id=None,
+    )
+
+    assert reusable is not None
+    assert reusable.session.id == detail.session.id

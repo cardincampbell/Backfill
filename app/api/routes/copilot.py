@@ -53,6 +53,13 @@ async def create_session(
 ):
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=READ_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    if payload.location_id is not None and not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        payload.location_id,
+        allowed_roles=READ_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
     try:
         detail = await copilot_runtime.create_or_reuse_session(
             session,
@@ -61,6 +68,8 @@ async def create_session(
             payload=payload,
             request_context=_request_context(request),
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await session.commit()
