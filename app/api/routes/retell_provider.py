@@ -79,8 +79,8 @@ async def retell_webhook(request: Request, session: SessionDep):
         provider_event_id=_provider_event_id(body),
     )
     await session.commit()
-    try:
-        result = await provider_callbacks.process_callback_entry(session, callback_entry)
-    except provider_callbacks.CallbackProcessingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return result.response_payload or {"status": "duplicate", "event": event}
+    return {
+        "status": "received",
+        "event": event,
+        "callback_log_id": str(callback_entry.id),
+    }
