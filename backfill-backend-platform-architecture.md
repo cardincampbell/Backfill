@@ -17,7 +17,7 @@ This document defines the canonical backend architecture for that product:
 
 Current codebase note:
 
-- `Business` maps to the product concept of `Organization`.
+- `Business` is the top-level tenant and customer account in the current codebase.
 - `CoverageCase` is the closest existing object to the target `CoverageCampaign`.
 - `AuditLog` and `OutboxEvent` are useful launch primitives, but they are not yet the full event system this product needs.
 
@@ -103,7 +103,7 @@ Callout / Shift Change
 ### 4.1 Core hierarchy
 
 ```text
-Organization (current: Business)
+Business
   -> Location
   -> Role
   -> Employee
@@ -136,13 +136,19 @@ Use these mappings to evolve the current schema without a rewrite:
 
 | Current | Target concept | Direction |
 | --- | --- | --- |
-| `businesses` | `organizations` | keep table for now, alias in service layer |
+| `businesses` | top-level tenant / customer account | keep as canonical tenant object |
 | `coverage_cases` | `coverage_campaigns` | promote as canonical aggregate |
 | `coverage_case_runs` | `campaign_rounds` | keep semantics, rename later |
 | `coverage_candidates` | `campaign_candidates` | keep, expand scoring payload |
 | `coverage_offers` + `coverage_contact_attempts` | `outreach_attempts` | merge mentally now, optionally physically later |
 | `audit_logs` | `platform_events` / feed projection seed | replace for system-wide event model |
 | `outbox_events` | external delivery outbox | keep |
+
+Naming guardrails:
+
+- Current implementation: `coverage_cases`, `coverage_case_runs`, `coverage_candidates`, `coverage_offers`, and `coverage_contact_attempts` are the real storage-backed models that exist today.
+- Target naming: `coverage_campaigns`, `campaign_rounds`, `campaign_candidates`, and `outreach_attempts` describe the desired domain language and target logical model.
+- Not a second model: these names must not be implemented as parallel canonical models while the current storage-backed models are still active. Compatibility aliases are allowed; dual canonical models are not.
 
 ### 4.3 Required schema additions
 
@@ -151,7 +157,7 @@ The current schema is close enough to evolve. Add the following tables and colum
 Storage naming note:
 
 - In the current repo, prefer physical `business_id` columns for new tables so migrations stay consistent with existing schema and RLS policies.
-- In service-layer DTOs and product language, treat `business` as the implementation of `organization` until a deliberate rename is worth the migration cost.
+- Treat `Business` as the canonical tenant object. Use `tenant` as the generic explanatory term when needed.
 
 #### `callouts`
 
@@ -160,7 +166,7 @@ Represents the trigger that caused coverage to start.
 Key fields:
 
 - `id`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `shift_id`
 - `reported_by_employee_id`
@@ -176,10 +182,18 @@ Key fields:
 
 Canonical campaign aggregate. Can be implemented initially as an evolved `coverage_cases` table.
 
+Current implementation:
+
+- today this is the existing `coverage_cases` aggregate, promoted into campaign semantics
+
+Not a second model:
+
+- do not build a separate independent `CoverageCampaign` ORM or service aggregate while `CoverageCase` remains the storage-backed source of truth
+
 Key fields:
 
 - `id`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `shift_id`
 - `callout_id`
@@ -230,6 +244,18 @@ Add or ensure:
 
 Make per-candidate outreach state explicit even if current `coverage_offers` and `coverage_contact_attempts` remain separate internally.
 
+Current implementation:
+
+- today outreach state is split across `coverage_offers` and `coverage_contact_attempts`
+
+Target logical model:
+
+- treat `outreach_attempts` as the unified business concept for execution, visibility, and eventing
+
+Not a second model:
+
+- do not create a permanently parallel second outreach system; unify behavior first, then simplify storage when it is safe
+
 Key fields:
 
 - `id`
@@ -260,7 +286,7 @@ Key fields:
 - `id`
 - `event_type`
 - `occurred_at`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `actor_type`
 - `actor_id`
@@ -277,7 +303,7 @@ Key fields:
 
 Indexes:
 
-- `(organization_id, occurred_at desc)`
+- `(business_id, occurred_at desc)`
 - `(location_id, occurred_at desc)`
 - `(entity_type, entity_id, occurred_at desc)`
 - `(campaign_id, occurred_at asc)`
@@ -290,7 +316,7 @@ Denormalized cards for low-latency dashboard reads.
 Key fields:
 
 - `id`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `projection_type` (`location_feed`, `campaign_feed`)
 - `entity_type`
@@ -311,7 +337,7 @@ Server-side multi-turn state, channel-independent.
 Key fields:
 
 - `id`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `operator_user_id`
 - `channel_last_seen`
@@ -368,7 +394,7 @@ Per-external-call cost record.
 
 - `id`
 - `coverage_campaign_id`
-- `organization_id`
+- `business_id`
 - `location_id`
 - `shift_id`
 - `employee_id`
@@ -520,7 +546,7 @@ class NormalizedMessage:
     external_conversation_id: str | None
     sender_type: str
     sender_id: str | None
-    organization_id: UUID | None
+    business_id: UUID | None
     location_id: UUID | None
     text: str
     received_at: datetime
@@ -753,7 +779,7 @@ class BackfillEvent:
     event_id: str
     event_type: str
     timestamp: datetime
-    organization_id: str
+    business_id: str
     location_id: str | None
     actor_type: str
     actor_id: str | None
@@ -902,7 +928,7 @@ This must be queryable by:
 
 ### 9.1 Tenant boundary
 
-Every mutable table must include `organization_id` or be transitively bound through a parent row that does.
+Every mutable table must include `business_id` or be transitively bound through a parent row that does.
 
 Enforcement:
 

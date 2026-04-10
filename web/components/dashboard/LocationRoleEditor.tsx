@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, Lock, MapPin, Plus, Tag, Trash2, X } from "lucide-react";
+import { AlertCircle, Lock, MapPin, Phone, Plus, Tag, Trash2, X } from "lucide-react";
 
 import type {
   BusinessLocation,
@@ -234,8 +234,19 @@ export function LocationRoleEditor({
     ...location,
     name: location.display_name ?? location.name,
   });
-  const locationMeta =
-    formatLocationMeta(location) || location.timezone || locationReference.staffLabel;
+  const locationAddress = formatLocationMeta(location) || null;
+  const googlePlaceMetadata =
+    location.google_place_metadata && typeof location.google_place_metadata === "object"
+      ? (location.google_place_metadata as Record<string, unknown>)
+      : null;
+  const locationPhone =
+    (typeof googlePlaceMetadata?.international_phone_number === "string"
+      ? googlePlaceMetadata.international_phone_number
+      : null) ??
+    (typeof googlePlaceMetadata?.national_phone_number === "string"
+      ? googlePlaceMetadata.national_phone_number
+      : null);
+  const locationMeta = locationReference.staffLabel || location.timezone;
   const assignmentsByRoleId = useMemo(
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
     [assignments],
@@ -393,14 +404,14 @@ export function LocationRoleEditor({
             >
               {locationReference.logo}
             </div>
-            <div>
+            <div className="min-w-0">
               <h2
                 className={`text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
                 {location.display_name ?? location.name}
               </h2>
-              <div className="flex items-center gap-2 mt-0.5">
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 {locationReference.typeLabel ? (
                   <span
                     className="text-[12px] px-2 py-0.5 rounded-full"
@@ -420,14 +431,30 @@ export function LocationRoleEditor({
             </div>
           </div>
           <div className="mt-4 space-y-2">
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${subtleSurfaceClass}`}>
-                <MapPin size={14} className="text-[#8898AA]" />
+            {locationAddress ? (
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center ${subtleSurfaceClass}`}
+                >
+                  <MapPin size={14} className="text-[#8898AA]" />
+                </div>
+                <span className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>
+                  {locationAddress}
+                </span>
               </div>
-              <span className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>
-                {location.timezone}
-              </span>
-            </div>
+            ) : null}
+            {locationPhone ? (
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center ${subtleSurfaceClass}`}
+                >
+                  <Phone size={14} className="text-[#8898AA]" />
+                </div>
+                <span className={`text-[13px] ${textTertiary}`} style={{ fontWeight: 440 }}>
+                  {locationPhone}
+                </span>
+              </div>
+            ) : null}
           </div>
         </div>
 
