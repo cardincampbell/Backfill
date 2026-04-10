@@ -282,7 +282,7 @@ async def test_create_vacancy_activates_standby_before_general_dispatch(monkeypa
         raise AssertionError("general coverage dispatch should not run when standby activates first")
 
     monkeypatch.setattr(scheduler_sync.coverage_service, "activate_standby_queue", fake_activate)
-    monkeypatch.setattr(scheduler_sync.coverage_service, "execute_next_coverage_phase", fail_execute)
+    monkeypatch.setattr(scheduler_sync.coverage_runtime, "execute_queued_case", fail_execute)
 
     result = await scheduler_sync.create_vacancy_for_shift(
         session,
@@ -292,3 +292,63 @@ async def test_create_vacancy_activates_standby_before_general_dispatch(monkeypa
 
     assert result["coverage_case_id"] == case_id
     assert result["offers"] == [str(standby_offer_id)]
+
+
+@pytest.mark.asyncio
+async def test_create_vacancy_delegates_general_dispatch_to_shared_runtime(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    dispatched_offer_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    coverage_case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    session = FakeVacancySession(shift=shift, coverage_case=coverage_case)
+
+    async def fake_activate(*args, **kwargs):
+        return []
+
+    async def fake_execute(_session, *, business_id, coverage_case_id, channel=None, dispatch_limit=None, offer_ttl_minutes=None, run_metadata=None):
+        assert business_id == shift.business_id
+        assert coverage_case_id == coverage_case.id
+        assert channel == scheduler_sync.default_dispatch_channel()
+        assert run_metadata == {"triggered_by": "scheduler:test"}
+        return SimpleNamespace(offers=[SimpleNamespace(id=dispatched_offer_id)])
+
+    monkeypatch.setattr(scheduler_sync.coverage_service, "activate_standby_queue", fake_activate)
+    monkeypatch.setattr(scheduler_sync.coverage_runtime, "execute_queued_case", fake_execute)
+
+    result = await scheduler_sync.create_vacancy_for_shift(
+        session,
+        shift_id=shift_id,
+        triggered_by="scheduler:test",
+    )
+
+    assert result["coverage_case_id"] == case_id
+    assert result["offers"] == [str(dispatched_offer_id)]

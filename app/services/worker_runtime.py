@@ -6,9 +6,10 @@ from typing import Awaitable, Callable, Optional, TypeVar
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.common import OutboxStatus, SchedulerSyncJobStatus
-from app.models.coverage import OutboxEvent
+from app.models.common import CoverageCaseStatus, OutboxStatus, SchedulerSyncJobStatus
+from app.models.coverage import CoverageCase, OutboxEvent
 from app.models.integrations import ProviderCallbackLog, SchedulerSyncJob
+from app.models.scheduling import Shift
 
 _CLAIM_SCAN_MULTIPLIER = 5
 _OUTBOX_STALE_LOCK_AFTER = timedelta(minutes=5)
@@ -217,6 +218,66 @@ async def claim_scheduler_jobs(
     for job in selected:
         mark_scheduler_job_claimed(job, now=now)
     await session.flush()
+    return selected
+
+
+async def claim_queued_coverage_cases(
+    session: AsyncSession,
+    *,
+    limit: int,
+) -> list[tuple[CoverageCase, object | None]]:
+    result = await session.execute(
+        select(CoverageCase, Shift.business_id)
+        .join(Shift, CoverageCase.shift_id == Shift.id)
+        .where(CoverageCase.status == CoverageCaseStatus.queued)
+        .order_by(CoverageCase.opened_at.asc(), CoverageCase.created_at.asc())
+        .limit(max(limit, 1) * _CLAIM_SCAN_MULTIPLIER)
+        .with_for_update(skip_locked=True)
+    )
+    rows = list(result.all())
+    selected: list[tuple[CoverageCase, object | None]] = []
+    seen_business_keys: set[str] = set()
+
+    for row in rows:
+        coverage_case, business_id = row
+        dedupe_key = str(business_id) if business_id is not None else f"row:{coverage_case.id}"
+        if business_id is not None and dedupe_key in seen_business_keys:
+            continue
+        seen_business_keys.add(dedupe_key)
+        selected.append((coverage_case, business_id))
+        if len(selected) >= limit:
+            break
+
+    return selected
+
+
+async def claim_running_coverage_cases(
+    session: AsyncSession,
+    *,
+    limit: int,
+) -> list[tuple[CoverageCase, object | None]]:
+    result = await session.execute(
+        select(CoverageCase, Shift.business_id)
+        .join(Shift, CoverageCase.shift_id == Shift.id)
+        .where(CoverageCase.status == CoverageCaseStatus.running)
+        .order_by(CoverageCase.opened_at.asc(), CoverageCase.created_at.asc())
+        .limit(max(limit, 1) * _CLAIM_SCAN_MULTIPLIER)
+        .with_for_update(skip_locked=True)
+    )
+    rows = list(result.all())
+    selected: list[tuple[CoverageCase, object | None]] = []
+    seen_business_keys: set[str] = set()
+
+    for row in rows:
+        coverage_case, business_id = row
+        dedupe_key = str(business_id) if business_id is not None else f"row:{coverage_case.id}"
+        if business_id is not None and dedupe_key in seen_business_keys:
+            continue
+        seen_business_keys.add(dedupe_key)
+        selected.append((coverage_case, business_id))
+        if len(selected) >= limit:
+            break
+
     return selected
 
 

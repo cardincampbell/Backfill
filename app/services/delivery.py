@@ -428,13 +428,13 @@ async def process_outbox_batch(
         except Exception as exc:
             retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
             error_message = str(exc)
-            attempt.status = CoverageAttemptStatus.failed
-            attempt.responded_at = reference_time
-            attempt.attempt_metadata = {
-                **attempt.attempt_metadata,
-                "worker_error": error_message,
-            }
             if retryable:
+                attempt.status = CoverageAttemptStatus.failed
+                attempt.responded_at = reference_time
+                attempt.attempt_metadata = {
+                    **attempt.attempt_metadata,
+                    "worker_error": error_message,
+                }
                 offer.status = OfferStatus.pending
                 worker_runtime.mark_outbox_event_retry(
                     event,
@@ -443,11 +443,21 @@ async def process_outbox_batch(
                     error_message=error_message,
                 )
             else:
-                offer.status = OfferStatus.failed
+                advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+                    session,
+                    offer=offer,
+                    attempt=attempt,
+                    reference_time=reference_time,
+                    error_message=error_message,
+                )
                 worker_runtime.mark_outbox_event_cancelled(
                     event,
                     now=reference_time,
                     error_message=error_message,
+                    result_payload={
+                        "advanced_offer_ids": advanced_offer_ids,
+                        "exhausted_case_id": exhausted_case_id,
+                    },
                 )
             failed_count += 1
             processed_event_ids.append(str(event.id))
@@ -476,10 +486,10 @@ async def process_outbox_batch(
             sent_count += 1
         else:
             retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
-            attempt.status = CoverageAttemptStatus.failed
-            attempt.responded_at = reference_time
-            attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
             if retryable:
+                attempt.status = CoverageAttemptStatus.failed
+                attempt.responded_at = reference_time
+                attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
                 offer.status = OfferStatus.pending
                 worker_runtime.mark_outbox_event_retry(
                     event,
@@ -489,12 +499,23 @@ async def process_outbox_batch(
                     result_payload=result.result_payload,
                 )
             else:
-                offer.status = OfferStatus.failed
+                advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+                    session,
+                    offer=offer,
+                    attempt=attempt,
+                    reference_time=reference_time,
+                    error_message=result.error_message or "delivery_failed",
+                    result_payload=result.result_payload,
+                )
                 worker_runtime.mark_outbox_event_cancelled(
                     event,
                     now=reference_time,
                     error_message=result.error_message or "delivery_failed",
-                    result_payload=result.result_payload,
+                    result_payload={
+                        **result.result_payload,
+                        "advanced_offer_ids": advanced_offer_ids,
+                        "exhausted_case_id": exhausted_case_id,
+                    },
                 )
             failed_count += 1
 
@@ -523,6 +544,37 @@ async def _advance_case_after_terminal_offer(
         reference_time=reference_time,
     )
     return [str(next_offer.id) for next_offer in next_offers], exhausted_case_id
+
+
+async def _handle_terminal_offer_failure(
+    session: AsyncSession,
+    *,
+    offer: CoverageOffer,
+    attempt: CoverageContactAttempt | None,
+    reference_time: datetime,
+    error_message: str,
+    result_payload: dict | None = None,
+) -> tuple[list[str], str | None]:
+    offer.status = OfferStatus.failed
+    offer.offer_metadata = {
+        **(offer.offer_metadata or {}),
+        "terminal_failure_at": reference_time.isoformat(),
+        "terminal_failure_reason": error_message,
+    }
+    if attempt is not None:
+        attempt.status = CoverageAttemptStatus.failed
+        attempt.responded_at = reference_time
+        attempt.attempt_metadata = {
+            **attempt.attempt_metadata,
+            **(result_payload or {}),
+            "worker_error": error_message,
+        }
+    await refresh_employee_reliability(session, offer.employee_id, now=reference_time)
+    return await _advance_case_after_terminal_offer(
+        session,
+        offer=offer,
+        reference_time=reference_time,
+    )
 
 
 async def expire_due_offers(

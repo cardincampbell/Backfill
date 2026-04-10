@@ -88,6 +88,11 @@ class SuccessProvider:
         )
 
 
+class ExceptionProvider:
+    async def send_coverage_offer(self, *, outbox_event, offer, shift):
+        raise RuntimeError("provider_down")
+
+
 @pytest.mark.asyncio
 async def test_process_outbox_batch_marks_offer_delivered_and_creates_attempt():
     now = datetime.now(timezone.utc)
@@ -151,6 +156,253 @@ async def test_process_outbox_batch_marks_offer_delivered_and_creates_attempt():
     assert len(attempts) == 1
     assert attempts[0].status == CoverageAttemptStatus.delivered
     assert attempts[0].outbox_event_id == event.id
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_terminal_failure_advances_next_candidate(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    run_id = uuid4()
+    offer_id = uuid4()
+    event_id = uuid4()
+    employee_id = uuid4()
+    next_employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(minutes=40),
+        ends_at=now + timedelta(hours=8),
+    )
+    coverage_case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_2",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+    )
+    run = CoverageCaseRun(
+        id=run_id,
+        coverage_case_id=case_id,
+        phase_no=2,
+        strategy="phase_2_blast",
+        status=CoverageRunStatus.completed,
+        run_metadata={"dispatch_limit": 1, "offer_ttl_minutes": 2, "operating_mode": "blast", "premium_cents": 500},
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Smith",
+        phone_e164="+15555550100",
+        reliability_score=0.7,
+        response_profile={},
+        employee_metadata={},
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        coverage_case_run_id=run_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.pending,
+        idempotency_key="offer-main",
+        expires_at=now + timedelta(minutes=2),
+        offer_metadata={"shift_id": str(shift_id), "phase_no": 2, "operating_mode": "blast"},
+    )
+    event = OutboxEvent(
+        id=event_id,
+        aggregate_type="coverage_offer",
+        aggregate_id=offer_id,
+        topic="coverage.offer.created",
+        channel="sms",
+        status=OutboxStatus.pending,
+        attempt_count=3,
+        available_at=now,
+        payload={"shift_id": str(shift_id)},
+    )
+    next_candidate = CoverageCandidate(
+        id=uuid4(),
+        coverage_case_run_id=run_id,
+        employee_id=next_employee_id,
+        source="phase_2",
+        rank=2,
+        score=80.0,
+        qualification_status="qualified",
+        exclusion_reasons=[],
+        scoring_factors={"total": 80.0},
+        availability_snapshot={"rule_match": True},
+        candidate_metadata={"employee_name": "Next Person", "phone_e164": "+15555550101"},
+    )
+
+    async def fake_refresh(_session, employee_id, *, now=None):
+        assert employee_id == employee.id
+        employee.reliability_score = 0.55
+        return employee
+
+    monkeypatch.setattr(delivery, "refresh_employee_reliability", fake_refresh)
+
+    session = FakeDeliverySession()
+    session.get_map[(CoverageOffer, offer_id)] = offer
+    session.get_map[(CoverageCase, case_id)] = coverage_case
+    session.get_map[(CoverageCaseRun, run_id)] = run
+    session.get_map[(Shift, shift_id)] = shift
+    session.get_map[(Employee, employee_id)] = employee
+    session.execute_queue = [
+        [event],
+        [(offer.id, business_id)],
+        [],
+        [],
+        [next_candidate],
+    ]
+    session.scalar_queue = [shift, None, 0]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        provider=ExceptionProvider(),
+        now=now,
+        limit=10,
+    )
+
+    new_offers = [obj for obj in session.added if isinstance(obj, CoverageOffer)]
+    attempts = [obj for obj in session.added if isinstance(obj, CoverageContactAttempt)]
+    assert result["claimed_count"] == 1
+    assert result["failed_count"] == 1
+    assert offer.status == OfferStatus.failed
+    assert employee.reliability_score == 0.55
+    assert coverage_case.status == CoverageCaseStatus.running
+    assert len(new_offers) == 1
+    assert new_offers[0].employee_id == next_employee_id
+    assert len(attempts) == 1
+    assert attempts[0].status == CoverageAttemptStatus.failed
+    assert event.status == OutboxStatus.cancelled
+    assert event.result_payload["advanced_offer_ids"] == [str(new_offers[0].id)]
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_terminal_failure_exhausts_case_when_no_next_candidate(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    run_id = uuid4()
+    offer_id = uuid4()
+    event_id = uuid4()
+    employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(minutes=40),
+        ends_at=now + timedelta(hours=8),
+    )
+    coverage_case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_2",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+    )
+    run = CoverageCaseRun(
+        id=run_id,
+        coverage_case_id=case_id,
+        phase_no=2,
+        strategy="phase_2_blast",
+        status=CoverageRunStatus.completed,
+        run_metadata={"dispatch_limit": 1, "offer_ttl_minutes": 2, "operating_mode": "blast", "premium_cents": 500},
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Smith",
+        phone_e164="+15555550100",
+        reliability_score=0.7,
+        response_profile={},
+        employee_metadata={},
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        coverage_case_run_id=run_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.pending,
+        idempotency_key="offer-main",
+        expires_at=now + timedelta(minutes=2),
+        offer_metadata={"shift_id": str(shift_id), "phase_no": 2, "operating_mode": "blast"},
+    )
+    event = OutboxEvent(
+        id=event_id,
+        aggregate_type="coverage_offer",
+        aggregate_id=offer_id,
+        topic="coverage.offer.created",
+        channel="sms",
+        status=OutboxStatus.pending,
+        attempt_count=3,
+        available_at=now,
+        payload={"shift_id": str(shift_id)},
+    )
+
+    async def fake_refresh(_session, employee_id, *, now=None):
+        assert employee_id == employee.id
+        employee.reliability_score = 0.4
+        return employee
+
+    monkeypatch.setattr(delivery, "refresh_employee_reliability", fake_refresh)
+
+    session = FakeDeliverySession()
+    session.get_map[(CoverageOffer, offer_id)] = offer
+    session.get_map[(CoverageCase, case_id)] = coverage_case
+    session.get_map[(CoverageCaseRun, run_id)] = run
+    session.get_map[(Shift, shift_id)] = shift
+    session.get_map[(Employee, employee_id)] = employee
+    session.execute_queue = [
+        [event],
+        [(offer.id, business_id)],
+        [],
+        [],
+        [],
+    ]
+    session.scalar_queue = [shift, None, 0]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        provider=ExceptionProvider(),
+        now=now,
+        limit=10,
+    )
+
+    attempts = [obj for obj in session.added if isinstance(obj, CoverageContactAttempt)]
+    assert result["claimed_count"] == 1
+    assert result["failed_count"] == 1
+    assert offer.status == OfferStatus.failed
+    assert employee.reliability_score == 0.4
+    assert coverage_case.status == CoverageCaseStatus.exhausted
+    assert coverage_case.closed_at == now
+    assert len(attempts) == 1
+    assert attempts[0].status == CoverageAttemptStatus.failed
+    assert event.status == OutboxStatus.cancelled
+    assert event.result_payload["advanced_offer_ids"] == []
+    assert event.result_payload["exhausted_case_id"] == str(case_id)
 
 
 @pytest.mark.asyncio

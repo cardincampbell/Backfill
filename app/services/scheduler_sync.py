@@ -31,13 +31,13 @@ from app.models.integrations import (
 )
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
-from app.schemas.coverage import CoverageCaseCreate, CoverageExecutionDispatchRequest
+from app.schemas.coverage import CoverageCaseCreate
 from app.schemas.integrations import (
     SchedulerConnectionRead,
     SchedulerConnectionUpsert,
     SchedulerSyncJobRead,
 )
-from app.services import coverage as coverage_service
+from app.services import coverage as coverage_service, coverage_runtime
 from app.services import businesses
 from app.services import scheduling as scheduling_service
 from app.services import worker_runtime
@@ -842,13 +842,7 @@ async def _resolve_shift_from_event(
 
 
 def default_dispatch_channel() -> str:
-    if (
-        settings.retell_api_key
-        and settings.retell_from_number
-        and (settings.retell_agent_id or settings.retell_agent_id_outbound)
-    ):
-        return "voice"
-    return "sms"
+    return coverage_runtime.default_dispatch_channel()
 
 
 async def create_vacancy_for_shift(
@@ -940,14 +934,12 @@ async def create_vacancy_for_shift(
             dispatch_limit=1,
         )
         if not standby_offers:
-            dispatch_result = await coverage_service.execute_next_coverage_phase(
+            dispatch_result = await coverage_runtime.execute_queued_case(
                 session,
-                shift.business_id,
-                coverage_case.id,
-                CoverageExecutionDispatchRequest(
-                    channel=default_dispatch_channel(),
-                    run_metadata={"triggered_by": triggered_by},
-                ),
+                business_id=shift.business_id,
+                coverage_case_id=coverage_case.id,
+                channel=default_dispatch_channel(),
+                run_metadata={"triggered_by": triggered_by},
             )
     await session.flush()
     return {

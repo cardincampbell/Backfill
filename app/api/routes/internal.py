@@ -11,7 +11,7 @@ from app.schemas.internal import (
     WebhookProcessResponse,
     WorkerBatchRequest,
 )
-from app.services import delivery, provider_callbacks, scheduler_sync, webhooks
+from app.services import coverage_runtime, delivery, provider_callbacks, scheduler_sync, webhooks
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -41,6 +41,36 @@ async def expire_coverage_offers(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await delivery.expire_due_offers(session, limit=payload.limit)
+
+
+@router.post("/coverage/cases/process")
+async def process_queued_coverage_cases(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await coverage_runtime.process_queued_coverage_cases(session, limit=payload.limit)
+
+
+@router.post("/coverage/cases/reconcile")
+async def reconcile_running_coverage_cases(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await coverage_runtime.reconcile_running_coverage_cases(session, limit=payload.limit)
+
+
+@router.post("/coverage/runtime/process")
+async def process_coverage_runtime(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await coverage_runtime.process_coverage_runtime_batch(session, limit=payload.limit)
 
 
 @router.post("/providers/callbacks/process")
