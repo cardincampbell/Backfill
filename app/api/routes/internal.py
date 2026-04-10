@@ -11,7 +11,7 @@ from app.schemas.internal import (
     WebhookProcessResponse,
     WorkerBatchRequest,
 )
-from app.services import delivery, scheduler_sync, webhooks
+from app.services import delivery, provider_callbacks, scheduler_sync, webhooks
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -41,6 +41,16 @@ async def expire_coverage_offers(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await delivery.expire_due_offers(session, limit=payload.limit)
+
+
+@router.post("/providers/callbacks/process")
+async def process_provider_callbacks(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await provider_callbacks.process_callback_batch(session, limit=payload.limit)
 
 
 @router.post("/webhooks/process", response_model=WebhookProcessResponse)

@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_db_session
 from app.main import app
+from app.services import provider_callbacks
 
 
 class DummyRetellSession:
@@ -24,24 +25,28 @@ async def _override_db():
 
 def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
     class CallbackEntry:
+        id = "cb_retell_1"
         status = "received"
         result_payload = {}
 
-    async def fake_dispatch(session, name, args):
-        assert name == "claim_shift"
-        assert args["offer_id"] == "offer_123"
-        return {"status": "accepted", "offer_id": "offer_123"}
+    async def fake_process(session, entry):
+        assert entry.status == "received"
+        return type(
+            "CallbackResult",
+            (),
+            {
+                "response_kind": "json",
+                "response_payload": {"status": "accepted", "offer_id": "offer_123"},
+                "response_text": None,
+            },
+        )()
 
     async def fake_record(*args, **kwargs):
         return CallbackEntry(), True
 
-    async def fake_mark_processed(*args, **kwargs):
-        return None
-
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
-    monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.dispatch_function_call", fake_dispatch)
     monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
-    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.mark_processed", fake_mark_processed)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -62,27 +67,16 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
 
 
 def test_retell_lifecycle_route_persists_conversation(monkeypatch):
-    class Conversation:
-        id = "conv_123"
-
     class CallbackEntry:
+        id = "cb_retell_2"
         status = "received"
         result_payload = {}
-
-    async def fake_persist(session, body):
-        assert body["event"] == "call_started"
-        return Conversation()
 
     async def fake_record(*args, **kwargs):
         return CallbackEntry(), True
 
-    async def fake_mark_processed(*args, **kwargs):
-        return None
-
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
-    monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.persist_payload", fake_persist)
     monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
-    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.mark_processed", fake_mark_processed)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -96,7 +90,49 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
             },
         )
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "conversation_id": "conv_123"}
+        assert response.json() == {
+            "status": "received",
+            "event": "call_started",
+            "callback_log_id": "cb_retell_2",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_retell_function_call_route_returns_conflict_when_duplicate_is_processing(monkeypatch):
+    class CallbackEntry:
+        id = "cb_retell_3"
+        status = "processing"
+        result_payload = {}
+
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), False
+
+    async def fake_process(session, entry):
+        raise provider_callbacks.CallbackProcessingError(
+            "callback_processing_in_progress",
+            status_code=409,
+            detail="callback_processing_in_progress",
+        )
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/providers/retell/webhook",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "function_call",
+                "name": "claim_shift",
+                "args": {"offer_id": "offer_123"},
+            },
+        )
+        assert response.status_code == 409
+        assert response.json() == {"detail": "callback_processing_in_progress"}
     finally:
         app.dependency_overrides.clear()
 

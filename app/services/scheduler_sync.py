@@ -40,6 +40,7 @@ from app.schemas.integrations import (
 from app.services import coverage as coverage_service
 from app.services import businesses
 from app.services import scheduling as scheduling_service
+from app.services import worker_runtime
 from app.services.scheduler_adapters import (
     ExternalEmployeeRecord,
     ExternalShiftRecord,
@@ -1022,9 +1023,7 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
     if job is None:
         raise LookupError("scheduler_sync_job_not_found")
     if job.status == SchedulerSyncJobStatus.queued:
-        job.status = SchedulerSyncJobStatus.running
-        job.started_at = datetime.now(timezone.utc)
-        job.attempt_count += 1
+        worker_runtime.mark_scheduler_job_claimed(job, now=datetime.now(timezone.utc))
         await session.flush()
     if job.status != SchedulerSyncJobStatus.running:
         return {"status": job.status, "job_id": str(job.id)}
@@ -1088,9 +1087,7 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
             connection.last_writeback_at = completed_at
             connection.last_sync_error = None
 
-        job.status = SchedulerSyncJobStatus.completed
-        job.completed_at = completed_at
-        job.last_error = None
+        worker_runtime.mark_scheduler_job_completed(job, completed_at=completed_at)
         if job.scheduler_event_id:
             event = await session.get(SchedulerEvent, job.scheduler_event_id)
             if event is not None:
@@ -1121,10 +1118,18 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
     except Exception as exc:
         retry_delay = _retry_delay(job.job_type, job.attempt_count)
         final_failure = retry_delay is None or job.attempt_count >= job.max_attempts
-        job.status = SchedulerSyncJobStatus.failed if final_failure else SchedulerSyncJobStatus.queued
-        job.completed_at = completed_at if final_failure else None
-        job.next_run_at = completed_at + retry_delay if retry_delay is not None else job.next_run_at
-        job.last_error = str(exc)
+        if final_failure:
+            worker_runtime.mark_scheduler_job_failed(
+                job,
+                completed_at=completed_at,
+                error_message=str(exc),
+            )
+        else:
+            worker_runtime.mark_scheduler_job_retry(
+                job,
+                next_run_at=completed_at + retry_delay,
+                error_message=str(exc),
+            )
         await _mark_connection_failure(session, connection, error=str(exc))
         if job.scheduler_event_id:
             event = await session.get(SchedulerEvent, job.scheduler_event_id)
@@ -1160,16 +1165,11 @@ async def process_due_sync_jobs(
     limit: int = 10,
 ) -> list[dict]:
     now = datetime.now(timezone.utc)
-    result = await session.execute(
-        select(SchedulerSyncJob)
-        .where(
-            SchedulerSyncJob.status == SchedulerSyncJobStatus.queued,
-            SchedulerSyncJob.next_run_at <= now,
-        )
-        .order_by(SchedulerSyncJob.priority.asc(), SchedulerSyncJob.next_run_at.asc())
-        .limit(limit)
+    jobs = await worker_runtime.claim_scheduler_jobs(
+        session,
+        now=now,
+        limit=limit,
     )
-    jobs = list(result.scalars().all())
     results: list[dict] = []
     for job in jobs:
         results.append(await process_sync_job(session, job.id))

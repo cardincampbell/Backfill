@@ -20,6 +20,7 @@ from app.models.common import OutboxChannel, OutboxStatus, WebhookDeliveryStatus
 from app.models.coverage import AuditLog, OutboxEvent
 from app.models.webhooks import WebhookDelivery, WebhookSubscription
 from app.schemas.webhooks import WebhookSubscriptionCreate, WebhookSubscriptionUpdate
+from app.services import worker_runtime
 
 SUPPORTED_WEBHOOK_EVENTS = [
     "business.created",
@@ -296,30 +297,24 @@ async def enqueue_audit_event(session: AsyncSession, entry: AuditLog) -> list[We
     return deliveries
 
 
-async def _claim_due_outbox_events(
+async def _webhook_outbox_business_keys(
     session: AsyncSession,
-    *,
-    now: datetime,
-    limit: int,
-) -> list[OutboxEvent]:
+    events: list[OutboxEvent],
+) -> dict[object, object | None]:
+    delivery_ids = [event.aggregate_id for event in events if event.aggregate_id is not None]
+    if not delivery_ids:
+        return {}
     result = await session.execute(
-        select(OutboxEvent)
-        .where(
-            OutboxEvent.channel == OutboxChannel.webhook,
-            OutboxEvent.topic == "webhook.delivery",
-            OutboxEvent.status.in_([OutboxStatus.pending, OutboxStatus.failed]),
-            OutboxEvent.available_at <= now,
-        )
-        .order_by(OutboxEvent.available_at.asc(), OutboxEvent.created_at.asc())
-        .limit(limit)
-        .with_for_update(skip_locked=True)
+        select(WebhookDelivery.id, WebhookDelivery.business_id).where(WebhookDelivery.id.in_(delivery_ids))
     )
-    events = list(result.scalars().all())
-    for event in events:
-        event.status = OutboxStatus.processing
-        event.locked_at = now
-    await session.flush()
-    return events
+    business_by_delivery_id = {
+        delivery_id: business_id
+        for delivery_id, business_id in result.all()
+    }
+    return {
+        event.id: business_by_delivery_id.get(event.aggregate_id)
+        for event in events
+    }
 
 
 def _response_preview(response: httpx.Response | None = None, error_message: str | None = None) -> str | None:
@@ -349,10 +344,11 @@ async def _mark_cancelled(
     error_message: str,
     now: datetime,
 ) -> None:
-    event.status = OutboxStatus.cancelled
-    event.processed_at = now
-    event.locked_at = None
-    event.error_message = error_message
+    worker_runtime.mark_outbox_event_cancelled(
+        event,
+        now=now,
+        error_message=error_message,
+    )
     if delivery is not None:
         delivery.status = WebhookDeliveryStatus.cancelled
         delivery.error_message = error_message
@@ -362,7 +358,13 @@ async def _mark_cancelled(
 
 async def process_outbox_batch(session: AsyncSession, *, limit: int = 20) -> WebhookProcessResult:
     reference_time = datetime.now(timezone.utc)
-    events = await _claim_due_outbox_events(session, now=reference_time, limit=limit)
+    events = await worker_runtime.claim_outbox_events(
+        session,
+        now=reference_time,
+        limit=limit,
+        topic="webhook.delivery",
+        business_resolver=_webhook_outbox_business_keys,
+    )
     sent_count = 0
     failed_count = 0
     cancelled_count = 0
@@ -416,7 +418,6 @@ async def process_outbox_batch(session: AsyncSession, *, limit: int = 20) -> Web
             delivery.last_attempted_at = reference_time
             delivery.attempt_count += 1
             delivery.status = WebhookDeliveryStatus.processing
-            event.attempt_count += 1
             await session.flush()
 
             response: httpx.Response | None = None
@@ -436,11 +437,11 @@ async def process_outbox_batch(session: AsyncSession, *, limit: int = 20) -> Web
                     delivery.next_attempt_at = None
                     subscription.last_delivery_at = reference_time
                     subscription.failure_count = 0
-                    event.status = OutboxStatus.sent
-                    event.processed_at = reference_time
-                    event.locked_at = None
-                    event.result_payload = {"status_code": response.status_code}
-                    event.error_message = None
+                    worker_runtime.mark_outbox_event_sent(
+                        event,
+                        now=reference_time,
+                        result_payload={"status_code": response.status_code},
+                    )
                     sent_count += 1
                     await session.flush()
                     continue
@@ -456,22 +457,25 @@ async def process_outbox_batch(session: AsyncSession, *, limit: int = 20) -> Web
 
             if delivery.attempt_count >= settings.webhook_max_attempts:
                 delivery.next_attempt_at = None
-                event.status = OutboxStatus.cancelled
-                event.processed_at = reference_time
-                event.locked_at = None
-                event.error_message = error_message
+                worker_runtime.mark_outbox_event_cancelled(
+                    event,
+                    now=reference_time,
+                    error_message=error_message or "webhook_delivery_failed",
+                )
                 cancelled_count += 1
             else:
                 next_attempt_at = reference_time + timedelta(seconds=_retry_delay_for_attempt(delivery.attempt_count))
                 delivery.next_attempt_at = next_attempt_at
-                event.status = OutboxStatus.failed
-                event.available_at = next_attempt_at
-                event.locked_at = None
-                event.error_message = error_message
-                event.result_payload = {
-                    "status_code": response.status_code if response is not None else None,
-                    "retry_at": next_attempt_at.isoformat(),
-                }
+                worker_runtime.mark_outbox_event_retry(
+                    event,
+                    now=reference_time,
+                    next_attempt_at=next_attempt_at,
+                    error_message=error_message or "webhook_delivery_retry_scheduled",
+                    result_payload={
+                        "status_code": response.status_code if response is not None else None,
+                        "retry_at": next_attempt_at.isoformat(),
+                    },
+                )
                 failed_count += 1
             await session.flush()
 

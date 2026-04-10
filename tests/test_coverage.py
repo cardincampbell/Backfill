@@ -216,6 +216,8 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
     assert result.plan.operating_mode == CoverageOperatingMode.standard_queue
     assert result.plan.dispatch_limit == 1
     assert result.candidate_count == 1
+    assert result.run.run_metadata["runtime_projections"]["score_snapshots"]["candidate_count"] == 1
+    assert result.run.run_metadata["runtime_projections"]["score_snapshots"]["unknown"] == 1
     assert len(candidates) == 1
     assert len(offers) == 1
     assert offers[0].status == OfferStatus.pending
@@ -940,6 +942,8 @@ async def test_execute_phase_2_run_uses_blast_mode_when_urgent(monkeypatch):
     assert result.plan.operating_mode == CoverageOperatingMode.blast
     assert result.plan.dispatch_limit == 5
     assert result.plan.premium_cents == 900
+    assert result.run.run_metadata["runtime_projections"]["score_snapshots"]["candidate_count"] == 1
+    assert result.run.run_metadata["runtime_projections"]["score_snapshots"]["unknown"] == 1
     assert offers[0].offer_metadata["premium_cents"] == 900
     assert offers[0].offer_metadata["operating_mode"] == CoverageOperatingMode.blast
 

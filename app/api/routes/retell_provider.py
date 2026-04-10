@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.api.deps import SessionDep
 from app.config import settings
-from app.services import provider_callbacks, rate_limit, retell_workflow
+from app.services import provider_callbacks, rate_limit
 
 router = APIRouter(prefix="/providers/retell", tags=["retell"])
 
@@ -69,7 +69,7 @@ async def retell_webhook(request: Request, session: SessionDep):
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_json_payload") from exc
     event = str(body.get("event") or "").strip()
-    callback_entry, created = await provider_callbacks.record_raw_callback(
+    callback_entry, _created = await provider_callbacks.record_raw_callback(
         session,
         provider="retell",
         route_key="retell_webhook",
@@ -79,55 +79,14 @@ async def retell_webhook(request: Request, session: SessionDep):
         provider_event_id=_provider_event_id(body),
     )
     await session.commit()
-    if not created and callback_entry.status == "processed":
-        previous = callback_entry.result_payload or {}
-        return previous or {"status": "duplicate", "event": event}
-    try:
-        if event in {"call_started", "call_ended", "call_analyzed", "chat_started", "chat_ended", "chat_analyzed"}:
-            conversation = await retell_workflow.persist_payload(session, body)
-            response_payload = {
-                "status": "ok",
-                "conversation_id": str(conversation.id) if conversation is not None else None,
-            }
-            await session.commit()
-            await provider_callbacks.mark_processed(session, callback_entry, result_payload=response_payload)
-            await session.commit()
-            return response_payload
-        if event == "function_call":
-            result = await retell_workflow.dispatch_function_call(
-                session,
-                str(body.get("name") or "").strip(),
-                body.get("args") or {},
-            )
-            await session.commit()
-            await provider_callbacks.mark_processed(session, callback_entry, result_payload=result)
-            await session.commit()
-            return result
-        conversation = await retell_workflow.persist_payload(session, body)
-        response_payload = {
-            "status": "ignored",
-            "conversation_id": str(conversation.id) if conversation is not None else None,
-            "event": event,
-        }
-        await session.commit()
-        await provider_callbacks.mark_processed(session, callback_entry, result_payload=response_payload)
-        await session.commit()
-        return response_payload
-    except LookupError as exc:
-        if hasattr(session, "rollback"):
-            await session.rollback()
-        await provider_callbacks.mark_failed(session, callback_entry, error_message=str(exc))
-        await session.commit()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        if hasattr(session, "rollback"):
-            await session.rollback()
-        await provider_callbacks.mark_failed(session, callback_entry, error_message=str(exc))
-        await session.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:
-        if hasattr(session, "rollback"):
-            await session.rollback()
-        await provider_callbacks.mark_failed(session, callback_entry, error_message=str(exc))
-        await session.commit()
-        raise
+    if event == "function_call":
+        try:
+            result = await provider_callbacks.process_callback_entry_synchronously(session, callback_entry)
+        except provider_callbacks.CallbackProcessingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return result.response_payload or {"status": "duplicate", "event": event}
+    return {
+        "status": "received",
+        "event": event,
+        "callback_log_id": str(callback_entry.id),
+    }

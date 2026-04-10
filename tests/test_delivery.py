@@ -28,6 +28,9 @@ class _ExecuteResult:
     def scalars(self):
         return _ScalarResult(self._values)
 
+    def all(self):
+        return list(self._values)
+
     def first(self):
         return self._values[0] if self._values else None
 
