@@ -97,3 +97,17 @@ async def test_run_startup_migrations_if_disabled(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(main_module.asyncio, "to_thread", fail_to_thread)
 
     await main_module._run_startup_migrations_if_enabled()
+
+
+def test_register_llm_adapters_delegates_to_adapter_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        main_module.llm_adapters,
+        "register_configured_adapters",
+        lambda: calls.append("register"),
+    )
+
+    main_module._register_llm_adapters()
+
+    assert calls == ["register"]

@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 
 from app.api import router as api_router
 from app.config import settings
+from app.services import llm_adapters
 
 logger = logging.getLogger(__name__)
 MIGRATION_ADVISORY_LOCK_KEY = 2_420_401_001
@@ -54,9 +55,14 @@ async def _run_startup_migrations_if_enabled() -> None:
     await asyncio.to_thread(_run_migrations_with_advisory_lock)
 
 
+def _register_llm_adapters() -> None:
+    llm_adapters.register_configured_adapters()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await _run_startup_migrations_if_enabled()
+    _register_llm_adapters()
     yield
 
 
