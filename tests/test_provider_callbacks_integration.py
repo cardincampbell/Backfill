@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete
 
-from app.db.session import get_async_sessionmaker
 from app.models.integrations import ProviderCallbackLog
 from app.services import provider_callbacks
 
@@ -14,8 +13,9 @@ from app.services import provider_callbacks
 @pytest.mark.asyncio
 async def test_process_callback_entry_synchronously_prevents_duplicate_execution_with_real_postgres(
     monkeypatch,
+    postgres_sessionmaker,
 ):
-    sessionmaker = get_async_sessionmaker()
+    sessionmaker = postgres_sessionmaker
     callback_log_id = None
     first_request: asyncio.Task | None = None
     dispatch_started = asyncio.Event()
