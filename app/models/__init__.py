@@ -1,3 +1,4 @@
+from app.models.ai import LlmGeneration
 from app.models.business import Business, Location, LocationRole, Role
 from app.models.coverage import (
     AuditLog,
@@ -55,6 +56,7 @@ __all__ = [
     "EmployeeAvailabilityRule",
     "EmployeeLocation",
     "EmployeeRole",
+    "LlmGeneration",
     "Location",
     "LocationRole",
     "ManagerInvite",
