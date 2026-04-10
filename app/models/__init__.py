@@ -11,6 +11,7 @@ from app.models.coverage import (
 )
 from app.models.identity import ManagerInvite, Membership, OTPChallenge, Session, User
 from app.models.integrations import (
+    ProviderCallbackLog,
     RetellConversation,
     SchedulerConnection,
     SchedulerEvent,
@@ -59,6 +60,7 @@ __all__ = [
     "Membership",
     "OTPChallenge",
     "OutboxEvent",
+    "ProviderCallbackLog",
     "RetellConversation",
     "Role",
     "SchedulerConnection",

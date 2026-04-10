@@ -8,7 +8,7 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, Nume
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, VersionedMixin
 from app.models.common import (
     AuditActorType,
     CandidateSource,
@@ -22,7 +22,7 @@ from app.models.common import (
 )
 
 
-class CoverageCase(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class CoverageCase(UUIDPrimaryKeyMixin, TimestampMixin, VersionedMixin, Base):
     __tablename__ = "coverage_cases"
     __table_args__ = (
         Index("ix_coverage_cases_shift_id_status", "shift_id", "status"),

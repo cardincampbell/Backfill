@@ -196,6 +196,28 @@ class RetellConversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+class ProviderCallbackLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "provider_callback_logs"
+    __table_args__ = (
+        UniqueConstraint("provider", "dedupe_key", name="uq_provider_callback_logs_provider_dedupe_key"),
+        Index("ix_provider_callback_logs_provider_received_at", "provider", "received_at"),
+        Index("ix_provider_callback_logs_status_received_at", "status", "received_at"),
+    )
+
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    route_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    event_type: Mapped[Optional[str]] = mapped_column(String(120))
+    provider_event_id: Mapped[Optional[str]] = mapped_column(String(255))
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="received")
+    headers: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    result_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 from app.models.business import Business, Location  # noqa: E402
 from app.models.coverage import CoverageCase, CoverageOffer  # noqa: E402
 from app.models.scheduling import Shift  # noqa: E402

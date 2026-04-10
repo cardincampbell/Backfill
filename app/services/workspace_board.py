@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import AssignmentStatus, CoverageCaseStatus, MembershipRole, OfferStatus
+from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeRole
@@ -23,6 +23,7 @@ from app.schemas.workspace_board import (
     WorkspaceBoardWorkerRead,
     WorkspaceLocationBoardRead,
 )
+from app.services import shift_assignments as shift_assignment_service
 
 
 READ_ROLES = {
@@ -67,18 +68,7 @@ def _to_float(value: Decimal | float | int | None) -> float:
 
 
 def _best_assignment(shift: Shift) -> ShiftAssignment | None:
-    active = [
-        assignment
-        for assignment in (shift.assignments or [])
-        if assignment.status not in {
-            AssignmentStatus.cancelled,
-            AssignmentStatus.declined,
-            AssignmentStatus.replaced,
-        }
-    ]
-    if not active:
-        return None
-    return max(active, key=lambda item: (item.sequence_no, item.created_at))
+    return shift_assignment_service.current_assignment(shift.assignments or [])
 
 
 def _latest_case(shift: Shift) -> CoverageCase | None:

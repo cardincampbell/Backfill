@@ -11,6 +11,7 @@ import psycopg
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm.exc import StaleDataError
 from starlette.responses import JSONResponse
 
 from app.api import router as api_router
@@ -96,6 +97,31 @@ def create_app() -> FastAPI:
         headers = {"X-Backfill-Request-ID": request_id, **_cors_error_headers(request)}
         return JSONResponse(
             status_code=500,
+            content=payload,
+            headers=headers,
+        )
+
+    @app.exception_handler(StaleDataError)
+    async def handle_stale_data_error(request: Request, exc: StaleDataError):
+        request_id = getattr(request.state, "request_id", uuid4().hex)
+        logger.warning(
+            "Write conflict request_id=%s method=%s path=%s error=%s",
+            request_id,
+            request.method,
+            request.url.path,
+            exc,
+        )
+        payload: dict[str, str] = {
+            "detail": "write_conflict",
+            "request_id": request_id,
+        }
+        if settings.expose_internal_errors:
+            payload["debug"] = f"{exc.__class__.__name__}: {exc}"
+            payload["path"] = request.url.path
+            payload["method"] = request.method
+        headers = {"X-Backfill-Request-ID": request_id, **_cors_error_headers(request)}
+        return JSONResponse(
+            status_code=409,
             content=payload,
             headers=headers,
         )

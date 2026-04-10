@@ -23,6 +23,7 @@ from app.schemas.coverage import (
 )
 from app.services import audit as audit_service
 from app.services import auth as auth_service, coverage
+from app.services import platform_events
 
 router = APIRouter(prefix="/businesses/{business_id}/coverage-cases", tags=["coverage"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
@@ -50,9 +51,10 @@ async def create_coverage_case(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=coverage_case.location_id)
-    await audit_service.append(
+    await platform_events.append(
         session,
-        event_name="coverage.case.created",
+        event_type=platform_events.PlatformEventType.COVERAGE_CAMPAIGN_CREATED,
+        compatibility_event_name="coverage.case.created",
         target_type="coverage_case",
         target_id=coverage_case.id,
         business_id=business_id,
@@ -63,6 +65,7 @@ async def create_coverage_case(
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={"shift_id": str(coverage_case.shift_id), "phase_target": coverage_case.phase_target},
+        metadata={"channel": "dashboard"},
     )
     await session.commit()
     return coverage_case
@@ -121,9 +124,9 @@ async def execute_phase_1_run(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
-    await audit_service.append(
+    await platform_events.append(
         session,
-        event_name="coverage.phase_1.executed",
+        event_type=platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED,
         target_type="coverage_case_run",
         target_id=result.run.id,
         business_id=business_id,
@@ -138,6 +141,7 @@ async def execute_phase_1_run(
             "candidate_count": result.candidate_count,
             "offer_count": len(result.offers),
         },
+        metadata={"channel": "dashboard"},
     )
     await session.commit()
     return result
@@ -161,9 +165,9 @@ async def execute_phase_2_run(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
-    await audit_service.append(
+    await platform_events.append(
         session,
-        event_name="coverage.phase_2.executed",
+        event_type=platform_events.PlatformEventType.COVERAGE_PHASE_2_EXECUTED,
         target_type="coverage_case_run",
         target_id=result.run.id,
         business_id=business_id,
@@ -178,6 +182,7 @@ async def execute_phase_2_run(
             "candidate_count": result.candidate_count,
             "offer_count": len(result.offers),
         },
+        metadata={"channel": "dashboard"},
     )
     await session.commit()
     return result
@@ -205,9 +210,9 @@ async def execute_next_coverage_phase(
         business_id,
         location_id=result.coverage_case.location_id,
     )
-    await audit_service.append(
+    await platform_events.append(
         session,
-        event_name="coverage.dispatch.executed",
+        event_type=platform_events.PlatformEventType.COVERAGE_DISPATCH_EXECUTED,
         target_type="coverage_case",
         target_id=result.coverage_case.id,
         business_id=business_id,
@@ -224,6 +229,7 @@ async def execute_next_coverage_phase(
             "candidate_count": result.candidate_count,
             "offer_count": len(result.offers),
         },
+        metadata={"channel": "dashboard"},
     )
     await session.commit()
     return result
@@ -247,9 +253,14 @@ async def respond_to_offer(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
-    await audit_service.append(
+    action_event_type = (
+        platform_events.PlatformEventType.COVERAGE_OFFER_ACCEPTED
+        if payload.response.strip().lower() == "accepted"
+        else platform_events.PlatformEventType.COVERAGE_OFFER_DECLINED
+    )
+    await platform_events.append(
         session,
-        event_name=f"coverage.offer.{payload.response.strip().lower()}",
+        event_type=action_event_type,
         target_type="coverage_offer",
         target_id=result.offer.id,
         business_id=business_id,
@@ -264,6 +275,7 @@ async def respond_to_offer(
             "shift_id": str(result.shift_id),
             "assignment_id": str(result.assignment_id) if result.assignment_id is not None else None,
         },
+        metadata={"channel": "dashboard"},
     )
     await session.commit()
     return result

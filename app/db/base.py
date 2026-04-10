@@ -3,8 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, Uuid, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import DateTime, Integer, MetaData, Uuid, func, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
 
 NAMING_CONVENTION = {
@@ -36,3 +36,16 @@ class TimestampMixin:
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class VersionedMixin:
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("1"),
+        default=1,
+    )
+
+    @declared_attr.directive
+    def __mapper_args__(cls):
+        return {"version_id_col": cls.version}

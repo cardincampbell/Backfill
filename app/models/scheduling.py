@@ -8,7 +8,7 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, Stri
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, VersionedMixin
 from app.models.common import AssignmentStatus, ShiftStatus
 
 
@@ -47,7 +47,7 @@ class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     coverage_cases: Mapped[list["CoverageCase"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
 
 
-class ShiftAssignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class ShiftAssignment(UUIDPrimaryKeyMixin, TimestampMixin, VersionedMixin, Base):
     __tablename__ = "shift_assignments"
     __table_args__ = (
         UniqueConstraint("shift_id", "sequence_no", name="uq_shift_assignments_shift_id_sequence_no"),

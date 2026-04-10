@@ -23,13 +23,25 @@ async def _override_db():
 
 
 def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
+    class CallbackEntry:
+        status = "received"
+        result_payload = {}
+
     async def fake_dispatch(session, name, args):
         assert name == "claim_shift"
         assert args["offer_id"] == "offer_123"
         return {"status": "accepted", "offer_id": "offer_123"}
 
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), True
+
+    async def fake_mark_processed(*args, **kwargs):
+        return None
+
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.dispatch_function_call", fake_dispatch)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.mark_processed", fake_mark_processed)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -53,12 +65,24 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
     class Conversation:
         id = "conv_123"
 
+    class CallbackEntry:
+        status = "received"
+        result_payload = {}
+
     async def fake_persist(session, body):
         assert body["event"] == "call_started"
         return Conversation()
 
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), True
+
+    async def fake_mark_processed(*args, **kwargs):
+        return None
+
     monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
     monkeypatch.setattr("app.api.routes.retell_provider.retell_workflow.persist_payload", fake_persist)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.mark_processed", fake_mark_processed)
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
