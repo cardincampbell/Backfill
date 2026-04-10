@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -16,11 +16,18 @@ import { signOutClientSession } from '@/lib/auth/client-signout';
 import {
   buildDashboardLocationBasePathFromAny,
   buildSchedulerBasePathFromAny,
+  findLocationByDashboardSlugsFromAny,
 } from '@/lib/dashboard-paths';
 import {
   persistAppShellSidebarTabPreference,
   type AppShellSidebarTab,
 } from '@/lib/app-shell-prefs';
+import { createCopilotMessage, createCopilotSession } from '@/lib/api/copilot';
+import type {
+  CopilotMessage as CopilotMessageRecord,
+  CopilotSessionDetail,
+  CopilotTurn,
+} from '@/lib/types/copilot';
 import { buildSettingsPath } from '@/lib/settings-routing';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import { usePathname } from 'next/navigation';
@@ -59,34 +66,53 @@ const navItems = [
 
 const copilotSuggestions = [
   'Show me open shifts this week',
-  'Who has the most hours?',
-  'Draft a shift for tomorrow 7am',
+  'What needs my attention right now?',
+  'Show active coverage campaigns',
 ];
 
-interface ChatMessage {
-  id: number;
-  role: 'user' | 'assistant';
-  text: string;
+function sortCopilotMessages(messages: CopilotMessageRecord[]) {
+  return [...messages].sort(
+    (left, right) =>
+      new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+  );
 }
 
-function buildInitialMessages(firstName: string): ChatMessage[] {
-  return [
-    {
-      id: 1,
-      role: 'assistant',
-      text: `Hi ${firstName}! I'm your Backfill Copilot. I can help you manage shifts, find available staff, generate reports, and more. What can I help with?`,
-    },
-  ];
+function mergeTurnIntoSession(
+  current: CopilotSessionDetail | null,
+  turn: CopilotTurn,
+): CopilotSessionDetail {
+  const messages = sortCopilotMessages([
+    ...(current?.messages ?? []),
+    turn.inbound_message,
+    turn.outbound_message,
+  ]);
+  return {
+    session: turn.session,
+    tools: turn.tools,
+    messages,
+    action_runs: [...(current?.action_runs ?? []), turn.action_run],
+  };
 }
 
-function CopilotPanel({ isDark }: { isDark: boolean }) {
-  const { firstName } = useSessionUserDisplay();
-  const [messages, setMessages] = useState<ChatMessage[]>(() =>
-    buildInitialMessages(firstName),
+function CopilotPanel({
+  isDark,
+  businessId,
+  locationId,
+}: {
+  isDark: boolean;
+  businessId?: string | null;
+  locationId?: string | null;
+}) {
+  const [sessionDetail, setSessionDetail] = useState<CopilotSessionDetail | null>(
+    null,
   );
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const activeSessionId = sessionDetail?.session.id ?? null;
+  const messages = sessionDetail?.messages ?? [];
 
   const assistantBubbleClass = isDark
     ? 'bg-white/[0.06] text-[#C1CED8] rounded-bl-md'
@@ -112,56 +138,129 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
-    setMessages((current) => [
-      ...current,
-      { id: Date.now(), role: 'user', text: text.trim() },
-    ]);
-    setInput('');
-    setIsTyping(true);
-    setTimeout(() => {
-      const responses: Record<string, string> = {
-        'Show me open shifts this week': "You have 20 open shifts this week across all locations:\n\n• Downtown Medical — 3 (ER, ICU)\n• Sunrise Senior — 5 (Weekend AM/PM)\n• Bay Area Staffing — 12 (Various)\n\nWould you like me to auto-broadcast these to available staff?",
-        'Who has the most hours?': "Top hours this pay period:\n\n1. Carlos Rivera — 42 hrs (Bay Area)\n2. Aisha Patel — 38 hrs (Downtown Medical)\n3. Sarah Martinez — 36 hrs (Downtown Medical)\n\nCarlos is approaching overtime. Want me to flag shifts for rebalancing?",
-        'Draft a shift for tomorrow 7am': "Here's a draft shift:\n\n📋 **New Shift**\nDate: Tomorrow, 7:00 AM — 3:00 PM\nLocation: Downtown Medical Center\nRole: RN\nRate: $45/hr\n\nShall I post this and notify qualified staff?",
-      };
-      const reply =
-        responses[text] ??
-        "I can help with that! Let me pull up the relevant data for you. What specifically would you like to know?";
-      setMessages((current) => [
-        ...current,
-        { id: Date.now() + 1, role: 'assistant', text: reply },
-      ]);
-      setIsTyping(false);
-    }, 1200);
-  };
+  useEffect(() => {
+    if (!businessId) {
+      setSessionDetail(null);
+      setError('Copilot needs a business context before it can answer.');
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingSession(true);
+    setError(null);
+    void createCopilotSession(businessId, {
+      location_id: locationId ?? null,
+      normalized_channel: 'dashboard',
+      reuse_active: true,
+    })
+      .then((detail) => {
+        if (cancelled) {
+          return;
+        }
+        setSessionDetail({
+          ...detail,
+          messages: sortCopilotMessages(detail.messages),
+        });
+      })
+      .catch((nextError) => {
+        if (cancelled) {
+          return;
+        }
+        setSessionDetail(null);
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : 'Failed to start Copilot.',
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingSession(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId, locationId]);
+
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || !businessId || !activeSessionId) {
+        return;
+      }
+      setInput('');
+      setIsTyping(true);
+      setError(null);
+      try {
+        const turn = await createCopilotMessage(businessId, activeSessionId, {
+          text: trimmed,
+          location_id: locationId ?? null,
+          normalized_channel: 'dashboard',
+        });
+        setSessionDetail((current) => mergeTurnIntoSession(current, turn));
+      } catch (nextError) {
+        setInput(trimmed);
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : 'Failed to send Copilot message.',
+        );
+      } finally {
+        setIsTyping(false);
+      }
+    },
+    [activeSessionId, businessId, locationId],
+  );
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
+        {error ? (
+          <div
+            className={`rounded-xl border px-3 py-2 text-[11px] ${
+              isDark
+                ? 'border-[#E5484D]/30 bg-[#E5484D]/10 text-[#F8B4B4]'
+                : 'border-[#E5484D]/20 bg-[#FFF2F2] text-[#A33A3A]'
+            }`}
+            style={{ fontWeight: 500 }}
+          >
+            {error}
+          </div>
+        ) : null}
+        {isLoadingSession && messages.length === 0 ? (
+          <div
+            className={`rounded-2xl px-3.5 py-3 text-[12px] ${
+              isDark ? 'bg-white/[0.05] text-[#C1CED8]' : 'bg-[#F0F0F5] text-[#5E6D7A]'
+            }`}
+            style={{ fontWeight: 420 }}
+          >
+            Loading Copilot…
+          </div>
+        ) : null}
         {messages.map((msg) => (
           <motion.div
             key={msg.id}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.25 }}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex ${msg.direction === 'inbound' ? 'justify-end' : 'justify-start'}`}
           >
-            {msg.role === 'assistant' ? (
+            {msg.direction === 'outbound' ? (
               <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0 mr-2 mt-0.5">
                 <Sparkles size={11} className="text-white" />
               </div>
             ) : null}
             <div
               className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
-                msg.role === 'user'
+                msg.direction === 'inbound'
                   ? 'bg-[#635BFF] text-white rounded-br-md'
                   : assistantBubbleClass
               }`}
               style={{ fontWeight: 420, whiteSpace: 'pre-line' }}
             >
-              {msg.text}
+              {msg.raw_text}
             </div>
           </motion.div>
         ))}
@@ -185,8 +284,9 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
           {copilotSuggestions.map((suggestion) => (
             <button
               key={suggestion}
-              onClick={() => sendMessage(suggestion)}
+              onClick={() => void sendMessage(suggestion)}
               className={suggestionButtonClass}
+              disabled={!activeSessionId || isLoadingSession || isTyping}
               style={{ fontWeight: 440 }}
               type="button"
             >
@@ -204,7 +304,7 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
-                sendMessage(input);
+                void sendMessage(input);
               }
             }}
             placeholder="Ask Copilot..."
@@ -212,8 +312,8 @@ function CopilotPanel({ isDark }: { isDark: boolean }) {
             style={{ fontWeight: 420 }}
           />
           <button
-            onClick={() => sendMessage(input)}
-            disabled={!input.trim()}
+            onClick={() => void sendMessage(input)}
+            disabled={!input.trim() || !activeSessionId || isLoadingSession}
             className={sendButtonClass}
             type="button"
           >
@@ -342,6 +442,23 @@ export default function DashboardShell({
     () => resolvePreferredWorkspaceBusiness(workspace, pathname),
     [pathname, workspace],
   );
+  const activeWorkspaceLocation = useMemo(() => {
+    if (!pathname) {
+      return null;
+    }
+    const parts = pathname.split('/').filter(Boolean);
+    if (parts.length < 3) {
+      return null;
+    }
+    if (parts[0] !== 'location' && parts[0] !== 'scheduler') {
+      return null;
+    }
+    return findLocationByDashboardSlugsFromAny(
+      workspaceLocations,
+      parts[1] ?? '',
+      parts[2] ?? '',
+    );
+  }, [pathname, workspaceLocations]);
 
   const handleNav = (path: string) => {
     navigate(path);
@@ -515,7 +632,15 @@ export default function DashboardShell({
                 transition={{ duration: 0.2 }}
                 className="flex-1 flex flex-col overflow-hidden"
               >
-                <CopilotPanel isDark={isDark} />
+                <CopilotPanel
+                  isDark={isDark}
+                  businessId={
+                    activeWorkspaceLocation?.business_id ??
+                    preferredBusiness?.business_id ??
+                    null
+                  }
+                  locationId={activeWorkspaceLocation?.location_id ?? null}
+                />
               </motion.div>
             )}
           </AnimatePresence>

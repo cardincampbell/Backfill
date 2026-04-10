@@ -21,6 +21,11 @@ class PlatformEventType:
     COVERAGE_DISPATCH_EXECUTED = "coverage.dispatch.executed"
     COVERAGE_OFFER_ACCEPTED = "coverage.offer.accepted"
     COVERAGE_OFFER_DECLINED = "coverage.offer.declined"
+    COPILOT_SESSION_CREATED = "copilot.session.created"
+    COPILOT_MESSAGE_RECORDED = "copilot.message.recorded"
+    COPILOT_INTENT_RESOLVED = "copilot.intent.resolved"
+    COPILOT_ACTION_EXECUTED = "copilot.action.executed"
+    COPILOT_ACTION_FAILED = "copilot.action.failed"
 
 
 def _normalize_metadata_value(value: Any) -> Any:
