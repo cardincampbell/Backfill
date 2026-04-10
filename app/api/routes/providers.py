@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, HTTPException, Request, Response, status
+from fastapi import APIRouter, Form, Request, Response, status
 
 from app.api.deps import SessionDep
 from app.services import messaging, provider_callbacks
 
 router = APIRouter(prefix="/providers/twilio", tags=["providers"])
+_INBOUND_ACK_MESSAGE = "Thanks, we received your response."
 
 
 def _twiml(message: str) -> Response:
@@ -57,10 +58,6 @@ async def twilio_sms_status_callback(
         provider_event_id=MessageSid,
     )
     await session.commit()
-    try:
-        await provider_callbacks.process_callback_entry(session, callback_entry)
-    except provider_callbacks.CallbackProcessingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -89,9 +86,4 @@ async def twilio_sms_inbound(
         provider_event_id=str(form_params.get("SmsSid") or form_params.get("MessageSid") or "").strip() or None,
     )
     await session.commit()
-    try:
-        result = await provider_callbacks.process_callback_entry(session, callback_entry)
-    except provider_callbacks.CallbackProcessingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    reply = result.response_text or str((result.response_payload or {}).get("reply_message") or "").strip()
-    return _twiml(reply or "Thanks, we already received that response.")
+    return _twiml(_INBOUND_ACK_MESSAGE)
