@@ -36,13 +36,14 @@ from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import (
     CoverageCandidatePreview,
-    CoverageExecutionDecision,
+    CoverageCampaignCreate,
+    CoverageCampaignDispatchRequest,
+    CoverageCampaignDispatchResult,
+    CoverageCampaignExecutionDecision,
     CoverageExecutionDispatchRequest,
-    CoverageExecutionDispatchResult,
     CoverageExecutionPlan,
     CoverageOfferActionResult,
     CoverageOfferResponseCreate,
-    CoverageCaseCreate,
     Phase1CoveragePreview,
     Phase1ExecutionRequest,
     Phase1ExecutionResult,
@@ -728,7 +729,7 @@ def _is_available_for_shift(employee: Employee, shift: Shift) -> tuple[bool, dic
     return False, snapshot
 
 
-async def list_coverage_cases(session: AsyncSession, business_id: UUID) -> list[CoverageCase]:
+async def list_campaigns(session: AsyncSession, business_id: UUID) -> list[CoverageCase]:
     result = await session.execute(
         select(CoverageCase)
         .join(Shift, CoverageCase.shift_id == Shift.id)
@@ -738,7 +739,11 @@ async def list_coverage_cases(session: AsyncSession, business_id: UUID) -> list[
     return list(result.scalars().all())
 
 
-async def create_coverage_case(session: AsyncSession, business_id: UUID, payload: CoverageCaseCreate) -> CoverageCase:
+async def create_campaign(
+    session: AsyncSession,
+    business_id: UUID,
+    payload: CoverageCampaignCreate,
+) -> CoverageCase:
     shift = await session.get(Shift, payload.shift_id)
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
@@ -754,7 +759,7 @@ async def create_coverage_case(session: AsyncSession, business_id: UUID, payload
         requires_manager_approval=payload.requires_manager_approval,
         triggered_by=payload.triggered_by,
         opened_at=datetime.now(timezone.utc),
-        case_metadata=payload.case_metadata,
+        case_metadata=payload.campaign_metadata,
     )
     session.add(case)
     await session.commit()
@@ -762,12 +767,12 @@ async def create_coverage_case(session: AsyncSession, business_id: UUID, payload
     return case
 
 
-async def _load_coverage_case_shift(
+async def _load_campaign_shift(
     session: AsyncSession,
     business_id: UUID,
-    coverage_case_id: UUID,
+    campaign_id: UUID,
 ) -> tuple[CoverageCase, Shift]:
-    case = await session.get(CoverageCase, coverage_case_id)
+    case = await session.get(CoverageCase, campaign_id)
     if case is None:
         raise LookupError("coverage_case_not_found")
 
@@ -781,12 +786,12 @@ async def _load_coverage_case_shift(
     return case, shift
 
 
-async def plan_coverage_case_execution(
+async def plan_campaign_execution(
     session: AsyncSession,
     business_id: UUID,
-    coverage_case_id: UUID,
-) -> CoverageExecutionDecision:
-    case, shift = await _load_coverage_case_shift(session, business_id, coverage_case_id)
+    campaign_id: UUID,
+) -> CoverageCampaignExecutionDecision:
+    case, shift = await _load_campaign_shift(session, business_id, campaign_id)
     _, phase_1_candidates = await _collect_phase_1_candidates(session, business_id, shift.id)
     phase_1_plan = await _build_execution_plan(
         session,
@@ -825,8 +830,8 @@ async def plan_coverage_case_execution(
     else:
         recommendation_reason = phase_2_plan.phase_2_reason or "phase_2_not_eligible"
 
-    return CoverageExecutionDecision(
-        coverage_case_id=case.id,
+    return CoverageCampaignExecutionDecision(
+        campaign_id=case.id,
         shift_id=shift.id,
         recommended_phase=recommended_phase,
         recommendation_reason=recommendation_reason,
@@ -837,20 +842,20 @@ async def plan_coverage_case_execution(
     )
 
 
-async def execute_next_coverage_phase(
+async def execute_next_campaign_phase(
     session: AsyncSession,
     business_id: UUID,
-    coverage_case_id: UUID,
-    payload: CoverageExecutionDispatchRequest,
-) -> CoverageExecutionDispatchResult:
-    decision = await plan_coverage_case_execution(session, business_id, coverage_case_id)
+    campaign_id: UUID,
+    payload: CoverageCampaignDispatchRequest,
+) -> CoverageCampaignDispatchResult:
+    decision = await plan_campaign_execution(session, business_id, campaign_id)
     selected_phase = payload.phase_override or decision.recommended_phase
 
     if selected_phase == "phase_1":
         result = await execute_phase_1_run(
             session,
             business_id,
-            coverage_case_id,
+            campaign_id,
             Phase1ExecutionRequest(
                 dispatch_limit=(
                     payload.dispatch_limit
@@ -866,10 +871,10 @@ async def execute_next_coverage_phase(
                 run_metadata=payload.run_metadata,
             ),
         )
-        return CoverageExecutionDispatchResult(
+        return CoverageCampaignDispatchResult(
             decision=decision,
             phase_executed="phase_1",
-            coverage_case=result.coverage_case,
+            campaign=result.campaign,
             run=result.run,
             plan=result.plan,
             candidate_count=result.candidate_count,
@@ -880,7 +885,7 @@ async def execute_next_coverage_phase(
         result = await execute_phase_2_run(
             session,
             business_id,
-            coverage_case_id,
+            campaign_id,
             Phase2ExecutionRequest(
                 dispatch_limit=(
                     payload.dispatch_limit
@@ -896,26 +901,63 @@ async def execute_next_coverage_phase(
                 run_metadata=payload.run_metadata,
             ),
         )
-        return CoverageExecutionDispatchResult(
+        return CoverageCampaignDispatchResult(
             decision=decision,
             phase_executed="phase_2",
-            coverage_case=result.coverage_case,
+            campaign=result.campaign,
             run=result.run,
             plan=result.plan,
             candidate_count=result.candidate_count,
             offers=result.offers,
         )
 
-    case, _shift = await _load_coverage_case_shift(session, business_id, coverage_case_id)
+    case, _shift = await _load_campaign_shift(session, business_id, campaign_id)
     case.status = CoverageCaseStatus.exhausted
     case.closed_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(case)
-    return CoverageExecutionDispatchResult(
+    return CoverageCampaignDispatchResult(
         decision=decision,
         phase_executed=None,
-        coverage_case=case,
+        campaign=case,
     )
+
+
+async def list_coverage_cases(session: AsyncSession, business_id: UUID) -> list[CoverageCase]:
+    return await list_campaigns(session, business_id)
+
+
+async def create_coverage_case(
+    session: AsyncSession,
+    business_id: UUID,
+    payload: CoverageCampaignCreate,
+) -> CoverageCase:
+    return await create_campaign(session, business_id, payload)
+
+
+async def _load_coverage_case_shift(
+    session: AsyncSession,
+    business_id: UUID,
+    coverage_case_id: UUID,
+) -> tuple[CoverageCase, Shift]:
+    return await _load_campaign_shift(session, business_id, coverage_case_id)
+
+
+async def plan_coverage_case_execution(
+    session: AsyncSession,
+    business_id: UUID,
+    coverage_case_id: UUID,
+) -> CoverageCampaignExecutionDecision:
+    return await plan_campaign_execution(session, business_id, coverage_case_id)
+
+
+async def execute_next_coverage_phase(
+    session: AsyncSession,
+    business_id: UUID,
+    coverage_case_id: UUID,
+    payload: CoverageCampaignDispatchRequest,
+) -> CoverageCampaignDispatchResult:
+    return await execute_next_campaign_phase(session, business_id, coverage_case_id, payload)
 
 
 async def preview_phase_1_candidates(
@@ -1336,7 +1378,7 @@ async def execute_phase_1_run(
         await session.refresh(offer)
 
     return Phase1ExecutionResult(
-        coverage_case=case,
+        campaign=case,
         run=run,
         plan=plan,
         candidate_count=len(ranked),
@@ -1464,7 +1506,7 @@ async def execute_phase_2_run(
         await session.refresh(offer)
 
     return Phase2ExecutionResult(
-        coverage_case=case,
+        campaign=case,
         run=run,
         plan=plan,
         candidate_count=len(ranked),
@@ -1721,7 +1763,7 @@ async def respond_to_offer(
     return CoverageOfferActionResult(
         offer=offer,
         response=response,
-        coverage_case=coverage_case,
+        campaign=coverage_case,
         shift_id=shift.id,
         assignment_id=assignment.id if assignment is not None else None,
         assignment_status=assignment_status or (assignment.status if assignment is not None else None),

@@ -4,9 +4,9 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
 import {
-  createCoverageCase,
-  executeCoverageCase,
-  getCoveragePlan,
+  createCoverageCampaign,
+  executeCoverageCampaign,
+  getCoverageCampaignPlan,
   type WorkspaceBoard,
 } from "@/lib/api/workspace";
 
@@ -42,10 +42,10 @@ function canRunCoverage(shift: ShiftRow): boolean {
   return shift.status !== "covered";
 }
 
-function shouldReuseCoverageCase(shift: ShiftRow): boolean {
-  if (!shift.coverage_case_id) return false;
+function shouldReuseCampaign(shift: ShiftRow): boolean {
+  if (!shift.campaign_id && !shift.coverage_case_id) return false;
   return !["filled", "cancelled", "exhausted"].includes(
-    shift.coverage_case_status ?? "",
+    shift.campaign_status ?? shift.coverage_case_status ?? "",
   );
 }
 
@@ -72,22 +72,22 @@ export function CoverageControlPanel({
 
     startTransition(async () => {
       try {
-        const coverageCaseId =
-          shouldReuseCoverageCase(shift)
-            ? shift.coverage_case_id!
+        const campaignId =
+          shouldReuseCampaign(shift)
+            ? (shift.campaign_id ?? shift.coverage_case_id)!
             : (
-                await createCoverageCase(businessId, {
+                await createCoverageCampaign(businessId, {
                 shift_id: shift.shift_id,
                 phase_target: "phase_1",
                 priority: 100,
                 requires_manager_approval: shift.requires_manager_approval,
                 triggered_by: "manager_workspace",
-                case_metadata: { source: "workspace" },
+                campaign_metadata: { source: "workspace" },
               })
               ).id;
 
-        const decision = await getCoveragePlan(businessId, coverageCaseId);
-        const result = await executeCoverageCase(businessId, coverageCaseId, {
+        const decision = await getCoverageCampaignPlan(businessId, campaignId);
+        const result = await executeCoverageCampaign(businessId, campaignId, {
           phase_override: decision.recommended_phase ?? undefined,
           channel: "sms",
           run_metadata: { source: "workspace" },
@@ -97,8 +97,8 @@ export function CoverageControlPanel({
           tone: "success",
           message:
             result.phase_executed
-              ? `${shift.role_name}: ${result.phase_executed.replace("_", " ")} dispatched to ${result.candidate_count} candidates with ${result.offers.length} offers.`
-              : `${shift.role_name}: no dispatch was needed.`,
+              ? `${shift.role_name}: ${result.phase_executed.replace("_", " ")} campaign dispatched to ${result.candidate_count} candidates with ${result.offers.length} offers.`
+              : `${shift.role_name}: no campaign dispatch was needed.`,
         });
         router.refresh();
       } catch (error) {
@@ -135,7 +135,8 @@ export function CoverageControlPanel({
         <div className="manager-list">
           {shifts.length ? (
             shifts.map((shift) => {
-              const buttonLabel = shift.coverage_case_id ? "Advance coverage" : "Start coverage";
+              const hasCampaign = Boolean(shift.campaign_id ?? shift.coverage_case_id);
+              const buttonLabel = hasCampaign ? "Advance campaign" : "Start campaign";
               const disabled = !canRunCoverage(shift) || busyShiftId === shift.shift_id || isPending;
               return (
                 <article key={shift.shift_id} className="account-location-card">
@@ -147,7 +148,9 @@ export function CoverageControlPanel({
                     <div className="account-location-card-meta">
                       <span>
                         {shift.status}
-                        {shift.coverage_case_status ? ` · ${shift.coverage_case_status}` : ""}
+                        {(shift.campaign_status ?? shift.coverage_case_status)
+                          ? ` · ${shift.campaign_status ?? shift.coverage_case_status}`
+                          : ""}
                         {shift.pending_offer_count > 0 ? ` · ${shift.pending_offer_count} pending` : ""}
                         {shift.delivered_offer_count > 0 ? ` · ${shift.delivered_offer_count} delivered` : ""}
                         {shift.standby_depth > 0 ? ` · ${shift.standby_depth} standby` : ""}

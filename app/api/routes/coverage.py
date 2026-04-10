@@ -7,13 +7,13 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
 from app.schemas.coverage import (
-    CoverageExecutionDecision,
-    CoverageExecutionDispatchRequest,
-    CoverageExecutionDispatchResult,
+    CoverageCampaignCreate,
+    CoverageCampaignDispatchRequest,
+    CoverageCampaignDispatchResult,
+    CoverageCampaignExecutionDecision,
+    CoverageCampaignRead,
     CoverageOfferActionResult,
     CoverageOfferResponseCreate,
-    CoverageCaseCreate,
-    CoverageCaseRead,
     Phase1CoveragePreview,
     Phase1ExecutionRequest,
     Phase1ExecutionResult,
@@ -25,119 +25,153 @@ from app.services import audit as audit_service
 from app.services import auth as auth_service, coverage
 from app.services import platform_events
 
-router = APIRouter(prefix="/businesses/{business_id}/coverage-cases", tags=["coverage"])
+router = APIRouter(tags=["coverage"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
+CAMPAIGN_PREFIX = "/businesses/{business_id}/coverage-campaigns"
+LEGACY_PREFIX = "/businesses/{business_id}/coverage-cases"
 
 
-@router.get("", response_model=list[CoverageCaseRead])
-async def list_coverage_cases(business_id: UUID, session: SessionDep, auth_ctx: AuthDep):
+def _ensure_manager_access(auth_ctx: AuthDep, business_id: UUID) -> None:
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
-    return await coverage.list_coverage_cases(session, business_id)
 
 
-@router.post("", response_model=CoverageCaseRead, status_code=status.HTTP_201_CREATED)
-async def create_coverage_case(
+@router.get(f"{CAMPAIGN_PREFIX}", response_model=list[CoverageCampaignRead])
+@router.get(f"{LEGACY_PREFIX}", response_model=list[CoverageCampaignRead], include_in_schema=False)
+async def list_campaigns(business_id: UUID, session: SessionDep, auth_ctx: AuthDep):
+    _ensure_manager_access(auth_ctx, business_id)
+    return await coverage.list_campaigns(session, business_id)
+
+
+@router.post(f"{CAMPAIGN_PREFIX}", response_model=CoverageCampaignRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    f"{LEGACY_PREFIX}",
+    response_model=CoverageCampaignRead,
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+)
+async def create_campaign(
     business_id: UUID,
-    payload: CoverageCaseCreate,
+    payload: CoverageCampaignCreate,
     session: SessionDep,
     auth_ctx: AuthDep,
     request: Request,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
-        coverage_case = await coverage.create_coverage_case(session, business_id, payload)
+        campaign = await coverage.create_campaign(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=coverage_case.location_id)
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=campaign.location_id)
     await platform_events.append(
         session,
         event_type=platform_events.PlatformEventType.COVERAGE_CAMPAIGN_CREATED,
         compatibility_event_name="coverage.case.created",
         target_type="coverage_case",
-        target_id=coverage_case.id,
+        target_id=campaign.id,
         business_id=business_id,
-        location_id=coverage_case.location_id,
+        location_id=campaign.location_id,
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
-        payload={"shift_id": str(coverage_case.shift_id), "phase_target": coverage_case.phase_target},
+        payload={
+            "campaign_id": str(campaign.id),
+            "coverage_case_id": str(campaign.id),
+            "shift_id": str(campaign.shift_id),
+            "phase_target": campaign.phase_target,
+        },
         metadata={"channel": "dashboard"},
     )
     await session.commit()
-    return coverage_case
+    return campaign
 
 
-@router.get("/{coverage_case_id}/plan", response_model=CoverageExecutionDecision)
-async def plan_coverage_execution(
+@router.get(f"{CAMPAIGN_PREFIX}/{{campaign_id}}/plan", response_model=CoverageCampaignExecutionDecision)
+@router.get(
+    f"{LEGACY_PREFIX}/{{campaign_id}}/plan",
+    response_model=CoverageCampaignExecutionDecision,
+    include_in_schema=False,
+)
+async def plan_campaign_execution(
     business_id: UUID,
-    coverage_case_id: UUID,
+    campaign_id: UUID,
     session: SessionDep,
     auth_ctx: AuthDep,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
-        return await coverage.plan_coverage_case_execution(session, business_id, coverage_case_id)
+        return await coverage.plan_campaign_execution(session, business_id, campaign_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.post("/preview/phase-1/{shift_id}", response_model=Phase1CoveragePreview)
+@router.post(f"{CAMPAIGN_PREFIX}/preview/phase-1/{{shift_id}}", response_model=Phase1CoveragePreview)
+@router.post(
+    f"{LEGACY_PREFIX}/preview/phase-1/{{shift_id}}",
+    response_model=Phase1CoveragePreview,
+    include_in_schema=False,
+)
 async def preview_phase_1_candidates(business_id: UUID, shift_id: UUID, session: SessionDep, auth_ctx: AuthDep):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
         return await coverage.preview_phase_1_candidates(session, business_id, shift_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.post("/preview/phase-2/{shift_id}", response_model=Phase2CoveragePreview)
+@router.post(f"{CAMPAIGN_PREFIX}/preview/phase-2/{{shift_id}}", response_model=Phase2CoveragePreview)
+@router.post(
+    f"{LEGACY_PREFIX}/preview/phase-2/{{shift_id}}",
+    response_model=Phase2CoveragePreview,
+    include_in_schema=False,
+)
 async def preview_phase_2_candidates(business_id: UUID, shift_id: UUID, session: SessionDep, auth_ctx: AuthDep):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
         return await coverage.preview_phase_2_candidates(session, business_id, shift_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.post("/{coverage_case_id}/execute/phase-1", response_model=Phase1ExecutionResult)
-async def execute_phase_1_run(
+@router.post(f"{CAMPAIGN_PREFIX}/{{campaign_id}}/execute/phase-1", response_model=Phase1ExecutionResult)
+@router.post(
+    f"{LEGACY_PREFIX}/{{campaign_id}}/execute/phase-1",
+    response_model=Phase1ExecutionResult,
+    include_in_schema=False,
+)
+async def execute_phase_1_campaign_run(
     business_id: UUID,
-    coverage_case_id: UUID,
+    campaign_id: UUID,
     payload: Phase1ExecutionRequest,
     session: SessionDep,
     auth_ctx: AuthDep,
     request: Request,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
-        result = await coverage.execute_phase_1_run(session, business_id, coverage_case_id, payload)
+        result = await coverage.execute_phase_1_run(session, business_id, campaign_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.campaign.location_id)
     await platform_events.append(
         session,
         event_type=platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED,
         target_type="coverage_case_run",
         target_id=result.run.id,
         business_id=business_id,
-        location_id=result.coverage_case.location_id,
+        location_id=result.campaign.location_id,
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={
-            "coverage_case_id": str(result.coverage_case.id),
+            "campaign_id": str(result.campaign.id),
+            "coverage_case_id": str(result.campaign.id),
             "candidate_count": result.candidate_count,
             "offer_count": len(result.offers),
         },
@@ -147,38 +181,43 @@ async def execute_phase_1_run(
     return result
 
 
-@router.post("/{coverage_case_id}/execute/phase-2", response_model=Phase2ExecutionResult)
-async def execute_phase_2_run(
+@router.post(f"{CAMPAIGN_PREFIX}/{{campaign_id}}/execute/phase-2", response_model=Phase2ExecutionResult)
+@router.post(
+    f"{LEGACY_PREFIX}/{{campaign_id}}/execute/phase-2",
+    response_model=Phase2ExecutionResult,
+    include_in_schema=False,
+)
+async def execute_phase_2_campaign_run(
     business_id: UUID,
-    coverage_case_id: UUID,
+    campaign_id: UUID,
     payload: Phase2ExecutionRequest,
     session: SessionDep,
     auth_ctx: AuthDep,
     request: Request,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
-        result = await coverage.execute_phase_2_run(session, business_id, coverage_case_id, payload)
+        result = await coverage.execute_phase_2_run(session, business_id, campaign_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.campaign.location_id)
     await platform_events.append(
         session,
         event_type=platform_events.PlatformEventType.COVERAGE_PHASE_2_EXECUTED,
         target_type="coverage_case_run",
         target_id=result.run.id,
         business_id=business_id,
-        location_id=result.coverage_case.location_id,
+        location_id=result.campaign.location_id,
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={
-            "coverage_case_id": str(result.coverage_case.id),
+            "campaign_id": str(result.campaign.id),
+            "coverage_case_id": str(result.campaign.id),
             "candidate_count": result.candidate_count,
             "offer_count": len(result.offers),
         },
@@ -188,41 +227,43 @@ async def execute_phase_2_run(
     return result
 
 
-@router.post("/{coverage_case_id}/execute", response_model=CoverageExecutionDispatchResult)
-async def execute_next_coverage_phase(
+@router.post(f"{CAMPAIGN_PREFIX}/{{campaign_id}}/execute", response_model=CoverageCampaignDispatchResult)
+@router.post(
+    f"{LEGACY_PREFIX}/{{campaign_id}}/execute",
+    response_model=CoverageCampaignDispatchResult,
+    include_in_schema=False,
+)
+async def execute_campaign(
     business_id: UUID,
-    coverage_case_id: UUID,
-    payload: CoverageExecutionDispatchRequest,
+    campaign_id: UUID,
+    payload: CoverageCampaignDispatchRequest,
     session: SessionDep,
     auth_ctx: AuthDep,
     request: Request,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
-        result = await coverage.execute_next_coverage_phase(session, business_id, coverage_case_id, payload)
+        result = await coverage.execute_next_campaign_phase(session, business_id, campaign_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(
-        auth_ctx,
-        business_id,
-        location_id=result.coverage_case.location_id,
-    )
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.campaign.location_id)
     await platform_events.append(
         session,
         event_type=platform_events.PlatformEventType.COVERAGE_DISPATCH_EXECUTED,
         target_type="coverage_case",
-        target_id=result.coverage_case.id,
+        target_id=result.campaign.id,
         business_id=business_id,
-        location_id=result.coverage_case.location_id,
+        location_id=result.campaign.location_id,
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={
+            "campaign_id": str(result.campaign.id),
+            "coverage_case_id": str(result.campaign.id),
             "phase_executed": result.phase_executed,
             "recommended_phase": result.decision.recommended_phase,
             "recommendation_reason": result.decision.recommendation_reason,
@@ -235,7 +276,12 @@ async def execute_next_coverage_phase(
     return result
 
 
-@router.post("/offers/{offer_id}/respond", response_model=CoverageOfferActionResult)
+@router.post(f"{CAMPAIGN_PREFIX}/offers/{{offer_id}}/respond", response_model=CoverageOfferActionResult)
+@router.post(
+    f"{LEGACY_PREFIX}/offers/{{offer_id}}/respond",
+    response_model=CoverageOfferActionResult,
+    include_in_schema=False,
+)
 async def respond_to_offer(
     business_id: UUID,
     offer_id: UUID,
@@ -244,15 +290,14 @@ async def respond_to_offer(
     auth_ctx: AuthDep,
     request: Request,
 ):
-    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    _ensure_manager_access(auth_ctx, business_id)
     try:
         result = await coverage.respond_to_offer(session, business_id, offer_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.coverage_case.location_id)
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.campaign.location_id)
     action_event_type = (
         platform_events.PlatformEventType.COVERAGE_OFFER_ACCEPTED
         if payload.response.strip().lower() == "accepted"
@@ -264,14 +309,15 @@ async def respond_to_offer(
         target_type="coverage_offer",
         target_id=result.offer.id,
         business_id=business_id,
-        location_id=result.coverage_case.location_id,
+        location_id=result.campaign.location_id,
         actor_type=AuditActorType.user,
         actor_user_id=auth_ctx.user.id,
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
         payload={
-            "coverage_case_id": str(result.coverage_case.id),
+            "campaign_id": str(result.campaign.id),
+            "coverage_case_id": str(result.campaign.id),
             "shift_id": str(result.shift_id),
             "assignment_id": str(result.assignment_id) if result.assignment_id is not None else None,
         },
