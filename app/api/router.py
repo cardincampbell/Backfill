@@ -9,6 +9,7 @@ from app.api.routes import (
     auth_router,
     businesses_router,
     coverage_router,
+    finance_router,
     identity_router,
     internal_router,
     migrations_router,
@@ -61,3 +62,4 @@ router.include_router(webhooks_router)
 router.include_router(workforce_router)
 router.include_router(scheduling_router)
 router.include_router(coverage_router)
+router.include_router(finance_router)
