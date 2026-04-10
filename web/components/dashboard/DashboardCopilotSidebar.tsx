@@ -193,59 +193,66 @@ export default function DashboardCopilotSidebar({
     if (!businessId) {
       setSessionDetail(null);
       setError("Copilot needs a business context before it can answer.");
-      return;
+    } else {
+      setSessionDetail(null);
+      setError(null);
     }
+    setInput("");
+    setIsTyping(false);
+    setIsLoadingSession(false);
+  }, [businessId, locationId]);
 
-    let cancelled = false;
+  const ensureSession = useCallback(async (): Promise<CopilotSessionDetail | null> => {
+    if (!businessId) {
+      setError("Copilot needs a business context before it can answer.");
+      return null;
+    }
+    if (sessionDetail) {
+      return sessionDetail;
+    }
     setIsLoadingSession(true);
     setError(null);
-    void createCopilotSession(businessId, {
-      location_id: locationId ?? null,
-      normalized_channel: "dashboard",
-      reuse_active: true,
-    })
-      .then((detail) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionDetail({
-          ...detail,
-          messages: sortCopilotMessages(detail.messages),
-        });
-      })
-      .catch((nextError) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionDetail(null);
-        setError(
-          nextError instanceof Error
-            ? nextError.message
-            : "Failed to start Copilot.",
-        );
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingSession(false);
-        }
+    try {
+      const detail = await createCopilotSession(businessId, {
+        location_id: locationId ?? null,
+        normalized_channel: "dashboard",
+        reuse_active: true,
       });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [businessId, locationId]);
+      const normalizedDetail = {
+        ...detail,
+        messages: sortCopilotMessages(detail.messages),
+      };
+      setSessionDetail(normalizedDetail);
+      return normalizedDetail;
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to start Copilot.",
+      );
+      return null;
+    } finally {
+      setIsLoadingSession(false);
+    }
+  }, [businessId, locationId, sessionDetail]);
 
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || !businessId || !activeSessionId) {
+      if (!trimmed || !businessId) {
         return;
       }
       setInput("");
       setIsTyping(true);
       setError(null);
       try {
-        const turn = await createCopilotMessage(businessId, activeSessionId, {
+        const detail = activeSessionId ? sessionDetail : await ensureSession();
+        const sessionId = detail?.session.id ?? activeSessionId;
+        if (!sessionId) {
+          setInput(trimmed);
+          return;
+        }
+        const turn = await createCopilotMessage(businessId, sessionId, {
           text: trimmed,
           location_id: locationId ?? null,
           normalized_channel: "dashboard",
@@ -262,7 +269,7 @@ export default function DashboardCopilotSidebar({
         setIsTyping(false);
       }
     },
-    [activeSessionId, businessId, locationId],
+    [activeSessionId, businessId, ensureSession, locationId, sessionDetail],
   );
 
   return (
@@ -329,6 +336,51 @@ export default function DashboardCopilotSidebar({
                 >
                   <Loader2 size={14} className="animate-spin" />
                   Loading Copilot…
+                </div>
+              ) : null}
+
+              {!error && !isLoadingSession && !sessionDetail ? (
+                <div
+                  className={`rounded-2xl border px-4 py-4 ${
+                    dark
+                      ? "border-white/[0.06] bg-white/[0.03]"
+                      : "border-[#E5E7EB] bg-white"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
+                      <Sparkles size={14} className="text-white" />
+                    </div>
+                    <div className="min-w-0">
+                      <p
+                        className={`text-[13px] ${
+                          dark ? "text-white" : "text-[#0A2540]"
+                        }`}
+                        style={{ fontWeight: 560 }}
+                      >
+                        Copilot is ready when you are
+                      </p>
+                      <p
+                        className={`mt-1 text-[12px] ${
+                          dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
+                        }`}
+                        style={{ fontWeight: 420 }}
+                      >
+                        Start a session only when you want to ask about open shifts,
+                        active campaigns, or manager actions.
+                      </p>
+                      <button
+                        className="mt-3 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] px-3.5 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.22)]"
+                        onClick={() => {
+                          void ensureSession();
+                        }}
+                        style={{ fontWeight: 540 }}
+                        type="button"
+                      >
+                        Start Copilot
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : null}
 
@@ -404,7 +456,7 @@ export default function DashboardCopilotSidebar({
                   <button
                     key={suggestion}
                     className={suggestionButtonClass(dark)}
-                    disabled={!activeSessionId || isLoadingSession || isTyping}
+                    disabled={!businessId || isLoadingSession || isTyping}
                     onClick={() => {
                       void sendMessage(suggestion);
                     }}
@@ -439,7 +491,7 @@ export default function DashboardCopilotSidebar({
                 <button
                   className={sendButtonClass(dark)}
                   disabled={
-                    !input.trim() || !activeSessionId || isLoadingSession || isTyping
+                    !input.trim() || !businessId || isLoadingSession || isTyping
                   }
                   onClick={() => {
                     void sendMessage(input);
