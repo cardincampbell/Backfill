@@ -7,3 +7,4 @@ export * from "./publishing";
 export * from "./operations";
 export * from "./ai-actions";
 export * from "./copilot";
+export * from "./events";

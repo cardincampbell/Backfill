@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import { Link, useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -22,12 +22,6 @@ import {
   persistAppShellSidebarTabPreference,
   type AppShellSidebarTab,
 } from '@/lib/app-shell-prefs';
-import { createCopilotMessage, createCopilotSession } from '@/lib/api/copilot';
-import type {
-  CopilotMessage as CopilotMessageRecord,
-  CopilotSessionDetail,
-  CopilotTurn,
-} from '@/lib/types/copilot';
 import { buildSettingsPath } from '@/lib/settings-routing';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import { usePathname } from 'next/navigation';
@@ -42,7 +36,6 @@ import {
   LayoutGrid,
   HelpCircle,
   LifeBuoy,
-  Send,
   Sparkles,
   Menu,
   X,
@@ -55,6 +48,7 @@ import {
   sourceDashboardNotifications,
 } from './mock-data';
 import AddLocationModal from './AddLocationModal';
+import DashboardCopilotSidebar from './DashboardCopilotSidebar';
 import SegmentedControl from './SegmentedControl';
 
 const navItems = [
@@ -63,267 +57,6 @@ const navItems = [
   { label: 'Activity', icon: Activity, path: '/activity' },
   { label: 'Settings', icon: Settings, path: '/settings' },
 ];
-
-const copilotSuggestions = [
-  'Show me open shifts this week',
-  'What needs my attention right now?',
-  'Show active coverage campaigns',
-];
-
-function sortCopilotMessages(messages: CopilotMessageRecord[]) {
-  return [...messages].sort(
-    (left, right) =>
-      new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
-  );
-}
-
-function mergeTurnIntoSession(
-  current: CopilotSessionDetail | null,
-  turn: CopilotTurn,
-): CopilotSessionDetail {
-  const messages = sortCopilotMessages([
-    ...(current?.messages ?? []),
-    turn.inbound_message,
-    turn.outbound_message,
-  ]);
-  return {
-    session: turn.session,
-    tools: turn.tools,
-    messages,
-    action_runs: [...(current?.action_runs ?? []), turn.action_run],
-  };
-}
-
-function CopilotPanel({
-  isDark,
-  businessId,
-  locationId,
-}: {
-  isDark: boolean;
-  businessId?: string | null;
-  locationId?: string | null;
-}) {
-  const [sessionDetail, setSessionDetail] = useState<CopilotSessionDetail | null>(
-    null,
-  );
-  const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [isLoadingSession, setIsLoadingSession] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const activeSessionId = sessionDetail?.session.id ?? null;
-  const messages = sessionDetail?.messages ?? [];
-
-  const assistantBubbleClass = isDark
-    ? 'bg-white/[0.06] text-[#C1CED8] rounded-bl-md'
-    : 'bg-[#F0F0F5] text-[#3E4C59] rounded-bl-md';
-  const typingBubbleClass = isDark
-    ? 'bg-white/[0.06] backfill-ui-radius rounded-bl-md px-4 py-3 flex items-center gap-1.5'
-    : 'bg-[#F0F0F5] rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-1.5';
-  const suggestionButtonClass = isDark
-    ? 'w-full text-left px-3 py-2 backfill-ui-radius bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors text-[11px] text-[#C1CED8]'
-    : 'w-full text-left px-3 py-2 rounded-lg bg-[#F7F8FA] border border-[#E5E7EB] hover:bg-[#F0F0F5] transition-colors text-[11px] text-[#5E6D7A]';
-  const inputWrapClass = isDark
-    ? 'flex items-center gap-2 bg-white/[0.04] border border-white/[0.06] backfill-ui-radius px-3 py-2 focus-within:border-[#635BFF]/40 transition-colors'
-    : 'flex items-center gap-2 bg-[#F7F8FA] border border-[#E5E7EB] rounded-xl px-3 py-2 focus-within:border-[#635BFF]/40 focus-within:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all';
-  const inputClass = isDark
-    ? 'flex-1 bg-transparent text-[12px] text-white placeholder-[#8898AA]/50 focus:outline-none'
-    : 'flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none';
-  const sendButtonClass = isDark
-    ? 'p-1.5 backfill-ui-radius hover:bg-white/[0.06] transition-colors disabled:opacity-30'
-    : 'p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30';
-  const footerBorderClass = isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]';
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping]);
-
-  useEffect(() => {
-    if (!businessId) {
-      setSessionDetail(null);
-      setError('Copilot needs a business context before it can answer.');
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoadingSession(true);
-    setError(null);
-    void createCopilotSession(businessId, {
-      location_id: locationId ?? null,
-      normalized_channel: 'dashboard',
-      reuse_active: true,
-    })
-      .then((detail) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionDetail({
-          ...detail,
-          messages: sortCopilotMessages(detail.messages),
-        });
-      })
-      .catch((nextError) => {
-        if (cancelled) {
-          return;
-        }
-        setSessionDetail(null);
-        setError(
-          nextError instanceof Error
-            ? nextError.message
-            : 'Failed to start Copilot.',
-        );
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingSession(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [businessId, locationId]);
-
-  const sendMessage = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || !businessId || !activeSessionId) {
-        return;
-      }
-      setInput('');
-      setIsTyping(true);
-      setError(null);
-      try {
-        const turn = await createCopilotMessage(businessId, activeSessionId, {
-          text: trimmed,
-          location_id: locationId ?? null,
-          normalized_channel: 'dashboard',
-        });
-        setSessionDetail((current) => mergeTurnIntoSession(current, turn));
-      } catch (nextError) {
-        setInput(trimmed);
-        setError(
-          nextError instanceof Error
-            ? nextError.message
-            : 'Failed to send Copilot message.',
-        );
-      } finally {
-        setIsTyping(false);
-      }
-    },
-    [activeSessionId, businessId, locationId],
-  );
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
-        {error ? (
-          <div
-            className={`rounded-xl border px-3 py-2 text-[11px] ${
-              isDark
-                ? 'border-[#E5484D]/30 bg-[#E5484D]/10 text-[#F8B4B4]'
-                : 'border-[#E5484D]/20 bg-[#FFF2F2] text-[#A33A3A]'
-            }`}
-            style={{ fontWeight: 500 }}
-          >
-            {error}
-          </div>
-        ) : null}
-        {isLoadingSession && messages.length === 0 ? (
-          <div
-            className={`rounded-2xl px-3.5 py-3 text-[12px] ${
-              isDark ? 'bg-white/[0.05] text-[#C1CED8]' : 'bg-[#F0F0F5] text-[#5E6D7A]'
-            }`}
-            style={{ fontWeight: 420 }}
-          >
-            Loading Copilot…
-          </div>
-        ) : null}
-        {messages.map((msg) => (
-          <motion.div
-            key={msg.id}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25 }}
-            className={`flex ${msg.direction === 'inbound' ? 'justify-end' : 'justify-start'}`}
-          >
-            {msg.direction === 'outbound' ? (
-              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0 mr-2 mt-0.5">
-                <Sparkles size={11} className="text-white" />
-              </div>
-            ) : null}
-            <div
-              className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${
-                msg.direction === 'inbound'
-                  ? 'bg-[#635BFF] text-white rounded-br-md'
-                  : assistantBubbleClass
-              }`}
-              style={{ fontWeight: 420, whiteSpace: 'pre-line' }}
-            >
-              {msg.raw_text}
-            </div>
-          </motion.div>
-        ))}
-        {isTyping ? (
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
-              <Sparkles size={11} className="text-white" />
-            </div>
-            <div className={typingBubbleClass}>
-              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-1.5 h-1.5 rounded-full bg-[#8898AA] animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        ) : null}
-        <div ref={bottomRef} />
-      </div>
-
-      {messages.length <= 2 ? (
-        <div className="px-3 pb-2 space-y-1.5">
-          {copilotSuggestions.map((suggestion) => (
-            <button
-              key={suggestion}
-              onClick={() => void sendMessage(suggestion)}
-              className={suggestionButtonClass}
-              disabled={!activeSessionId || isLoadingSession || isTyping}
-              style={{ fontWeight: 440 }}
-              type="button"
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      <div className={`p-3 border-t ${footerBorderClass}`}>
-        <div className={inputWrapClass}>
-          <input
-            type="text"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                void sendMessage(input);
-              }
-            }}
-            placeholder="Ask Copilot..."
-            className={inputClass}
-            style={{ fontWeight: 420 }}
-          />
-          <button
-            onClick={() => void sendMessage(input)}
-            disabled={!input.trim() || !activeSessionId || isLoadingSession}
-            className={sendButtonClass}
-            type="button"
-          >
-            <Send size={14} className="text-[#635BFF]" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface DashboardShellProps {
   activeNav: string;
@@ -632,14 +365,19 @@ export default function DashboardShell({
                 transition={{ duration: 0.2 }}
                 className="flex-1 flex flex-col overflow-hidden"
               >
-                <CopilotPanel
-                  isDark={isDark}
+                <DashboardCopilotSidebar
+                  dark={isDark}
                   businessId={
                     activeWorkspaceLocation?.business_id ??
                     preferredBusiness?.business_id ??
                     null
                   }
                   locationId={activeWorkspaceLocation?.location_id ?? null}
+                  locationName={
+                    activeWorkspaceLocation?.location_display_name ??
+                    activeWorkspaceLocation?.location_name ??
+                    null
+                  }
                 />
               </motion.div>
             )}

@@ -13,6 +13,68 @@ export type CopilotValidationResult = {
   message: string;
 };
 
+export type CopilotOpenShiftResultItem = {
+  shift_id: string;
+  location_id?: string | null;
+  location_name?: string | null;
+  role_name?: string | null;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+};
+
+export type CopilotOpenShiftsResult = {
+  kind: "open_shifts";
+  total_open_shifts: number;
+  location_count?: number;
+  items: CopilotOpenShiftResultItem[];
+};
+
+export type CopilotCampaignResultItem = {
+  campaign_id: string;
+  shift_id: string;
+  location_name?: string | null;
+  role_name?: string | null;
+  status: string;
+  phase_target?: string | null;
+  opened_at?: string | null;
+};
+
+export type CopilotCampaignsResult = {
+  kind: "campaigns";
+  total_active_campaigns: number;
+  running_count?: number;
+  queued_count?: number;
+  items: CopilotCampaignResultItem[];
+};
+
+export type CopilotManagerActionResultItem = {
+  campaign_id: string;
+  shift_id: string;
+  location_name?: string | null;
+  role_name?: string | null;
+  starts_at?: string | null;
+  status: string;
+};
+
+export type CopilotManagerActionsResult = {
+  kind: "manager_actions";
+  total_actions: number;
+  items: CopilotManagerActionResultItem[];
+};
+
+export type CopilotHelpResult = {
+  kind: "help";
+  tools: CopilotTool[];
+};
+
+export type CopilotToolResultPayload =
+  | CopilotOpenShiftsResult
+  | CopilotCampaignsResult
+  | CopilotManagerActionsResult
+  | CopilotHelpResult
+  | Record<string, unknown>;
+
 export type CopilotIntent = {
   family: string;
   tool_name: string;
@@ -58,7 +120,7 @@ export type CopilotActionRun = {
   status: "planned" | "validated" | "executed" | "failed" | "cancelled";
   input_payload: Record<string, unknown>;
   validation_result: CopilotValidationResult;
-  result_payload: Record<string, unknown>;
+  result_payload: CopilotToolResultPayload;
   error_payload: Record<string, unknown>;
   started_at: string;
   finished_at?: string | null;
