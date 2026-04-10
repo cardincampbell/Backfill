@@ -28,6 +28,11 @@ class PlatformEventType:
     BILLING_FILL_CHARGED = "billing.fill.charged"
     BILLING_FILL_CAPPED = "billing.fill.capped"
     BILLING_FILL_VOIDED = "billing.fill.voided"
+    COPILOT_SESSION_CREATED = "copilot.session.created"
+    COPILOT_MESSAGE_RECORDED = "copilot.message.recorded"
+    COPILOT_INTENT_RESOLVED = "copilot.intent.resolved"
+    COPILOT_ACTION_EXECUTED = "copilot.action.executed"
+    COPILOT_ACTION_FAILED = "copilot.action.failed"
 
 
 def _normalize_metadata_value(value: Any) -> Any:

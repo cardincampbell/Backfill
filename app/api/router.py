@@ -8,6 +8,7 @@ from app.api.routes import (
     audit_router,
     auth_router,
     businesses_router,
+    copilot_router,
     coverage_router,
     events_router,
     finance_router,
@@ -62,6 +63,7 @@ router.include_router(workspace_router)
 router.include_router(audit_router)
 router.include_router(events_router)
 router.include_router(businesses_router)
+router.include_router(copilot_router)
 router.include_router(webhooks_router)
 router.include_router(workforce_router)
 router.include_router(scheduling_router)
