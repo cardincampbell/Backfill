@@ -132,6 +132,46 @@ async def record_raw_callback(
     return entry, True
 
 
+async def list_callback_logs(
+    session: AsyncSession,
+    *,
+    provider: str | None = None,
+    route_key: str | None = None,
+    status: str | None = None,
+    event_type: str | None = None,
+    provider_event_id: str | None = None,
+    dedupe_key: str | None = None,
+    limit: int = 50,
+) -> list[ProviderCallbackLog]:
+    stmt = (
+        select(ProviderCallbackLog)
+        .order_by(ProviderCallbackLog.received_at.desc(), ProviderCallbackLog.created_at.desc())
+        .limit(max(1, min(limit, 250)))
+    )
+    if provider is not None:
+        stmt = stmt.where(ProviderCallbackLog.provider == provider.strip().lower())
+    if route_key is not None:
+        stmt = stmt.where(ProviderCallbackLog.route_key == route_key.strip())
+    if status is not None:
+        stmt = stmt.where(ProviderCallbackLog.status == status.strip())
+    if event_type is not None:
+        stmt = stmt.where(ProviderCallbackLog.event_type == event_type.strip())
+    if provider_event_id is not None:
+        stmt = stmt.where(ProviderCallbackLog.provider_event_id == provider_event_id.strip())
+    if dedupe_key is not None:
+        stmt = stmt.where(ProviderCallbackLog.dedupe_key == dedupe_key.strip())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_callback_log(
+    session: AsyncSession,
+    *,
+    callback_log_id: UUID,
+) -> ProviderCallbackLog | None:
+    return await session.get(ProviderCallbackLog, callback_log_id)
+
+
 async def mark_processed(
     session: AsyncSession,
     entry: ProviderCallbackLog,

@@ -12,6 +12,7 @@ from app.api.routes.llm import router as llm_router
 from app.api.routes.migrations import router as migrations_router
 from app.api.routes.invites import router as invites_router
 from app.api.routes.onboarding import router as onboarding_router
+from app.api.routes.ops import router as ops_router
 from app.api.routes.places import places_router
 from app.api.routes.providers import router as providers_router
 from app.api.routes.retell_provider import router as retell_provider_router
@@ -37,6 +38,7 @@ __all__ = [
     "migrations_router",
     "invites_router",
     "onboarding_router",
+    "ops_router",
     "places_router",
     "providers_router",
     "retell_provider_router",

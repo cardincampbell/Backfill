@@ -18,6 +18,7 @@ from app.api.routes import (
     migrations_router,
     invites_router,
     onboarding_router,
+    ops_router,
     places_router,
     providers_router,
     retell_provider_router,
@@ -69,3 +70,4 @@ router.include_router(workforce_router)
 router.include_router(scheduling_router)
 router.include_router(coverage_router)
 router.include_router(finance_router)
+router.include_router(ops_router)
