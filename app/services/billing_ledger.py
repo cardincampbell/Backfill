@@ -12,12 +12,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.finance import BillingLedgerEntry
+from app.services import platform_events
 
 
 class BillingEventType:
     FILL_CHARGED = "fill_charged"
     FILL_CAPPED = "fill_capped"
     FILL_VOIDED = "fill_voided"
+
+
+def _platform_event_type_for_billing_event(billing_event_type: str) -> str:
+    mapping = {
+        BillingEventType.FILL_CHARGED: platform_events.PlatformEventType.BILLING_FILL_CHARGED,
+        BillingEventType.FILL_CAPPED: platform_events.PlatformEventType.BILLING_FILL_CAPPED,
+        BillingEventType.FILL_VOIDED: platform_events.PlatformEventType.BILLING_FILL_VOIDED,
+    }
+    return mapping.get(billing_event_type, billing_event_type)
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,37 @@ def _normalize_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_normalize_value(item) for item in value]
     return value
+
+
+def _billing_event_payload(entry: BillingLedgerEntry) -> dict[str, Any]:
+    return {
+        "billing_ledger_entry_id": str(entry.id),
+        "billing_event_type": entry.billing_event_type,
+        "amount_cents": entry.amount_cents,
+        "cap_applied": entry.cap_applied,
+        "billing_cycle_start": entry.billing_cycle_start.isoformat(),
+        "shift_id": str(entry.shift_id) if entry.shift_id is not None else None,
+        "employee_id": str(entry.employee_id) if entry.employee_id is not None else None,
+        "occurred_at": entry.occurred_at.isoformat(),
+    }
+
+
+async def _append_platform_event(session: AsyncSession, entry: BillingLedgerEntry) -> None:
+    trace_id = entry.billing_metadata.get("trace_id") if isinstance(entry.billing_metadata, Mapping) else None
+    await platform_events.append(
+        session,
+        event_type=_platform_event_type_for_billing_event(entry.billing_event_type),
+        target_type="coverage_case" if entry.coverage_case_id is not None else "billing_ledger_entry",
+        target_id=entry.coverage_case_id or entry.id,
+        business_id=entry.business_id,
+        location_id=entry.location_id,
+        payload=_billing_event_payload(entry),
+        metadata={
+            "trace_id": trace_id,
+            "billing_event_type": entry.billing_event_type,
+            "idempotency_key": entry.idempotency_key,
+        },
+    )
 
 
 def billing_cycle_start_for(*, occurred_at: datetime, timezone_name: str) -> datetime:
@@ -134,6 +175,7 @@ async def append_entry(
     metadata: Mapping[str, Any] | None = None,
     error_message: str | None = None,
     occurred_at: datetime | None = None,
+    emit_platform_event: bool = True,
 ) -> BillingLedgerEntry:
     entry = BillingLedgerEntry(
         business_id=business_id,
@@ -151,6 +193,8 @@ async def append_entry(
         occurred_at=occurred_at or billing_cycle_start,
     )
     session.add(entry)
+    if emit_platform_event:
+        await _append_platform_event(session, entry)
     return entry
 
 
@@ -168,6 +212,7 @@ async def append_fill_entry(
     monthly_cap_cents: int | None = None,
     idempotency_key: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    emit_platform_event: bool = True,
 ) -> BillingLedgerEntry:
     decision = await evaluate_fill_charge(
         session,
@@ -198,6 +243,7 @@ async def append_fill_entry(
             **dict(_normalize_value(metadata) or {}),
         },
         occurred_at=occurred_at,
+        emit_platform_event=emit_platform_event,
     )
 
 
@@ -214,6 +260,7 @@ async def append_void_entry(
     idempotency_key: str | None = None,
     metadata: Mapping[str, Any] | None = None,
     occurred_at: datetime | None = None,
+    emit_platform_event: bool = True,
 ) -> BillingLedgerEntry:
     effective_amount = amount_cents
     if effective_amount is None:
@@ -238,4 +285,5 @@ async def append_void_entry(
             **dict(_normalize_value(metadata) or {}),
         },
         occurred_at=occurred_at,
+        emit_platform_event=emit_platform_event,
     )

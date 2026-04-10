@@ -69,6 +69,10 @@ class FakeSettings:
 def reset_gateway_registry(monkeypatch):
     llm_gateway.clear_adapters()
     monkeypatch.setattr(llm_gateway, "settings", FakeSettings())
+    async def fake_append_platform_event(_session, **_kwargs):
+        return None
+
+    monkeypatch.setattr(llm_gateway.cost_ledger.platform_events, "append", fake_append_platform_event)
     yield
     llm_gateway.clear_adapters()
 

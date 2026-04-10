@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.finance import CostLedgerEntry
+from app.services import platform_events
 
 
 class CostProvider:
@@ -51,6 +52,42 @@ def _total_cost_micros(quantity: Decimal, unit_cost_micros: int) -> int:
     return int((quantity * Decimal(unit_cost_micros)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _cost_event_payload(entry: CostLedgerEntry) -> dict[str, Any]:
+    return {
+        "cost_ledger_entry_id": str(entry.id),
+        "provider": entry.provider,
+        "product": entry.product,
+        "reference_type": entry.reference_type,
+        "reference_id": entry.reference_id,
+        "quantity": str(entry.quantity),
+        "unit_cost_micros": entry.unit_cost_micros,
+        "total_cost_micros": entry.total_cost_micros,
+        "shift_id": str(entry.shift_id) if entry.shift_id is not None else None,
+        "employee_id": str(entry.employee_id) if entry.employee_id is not None else None,
+        "occurred_at": entry.occurred_at.isoformat(),
+    }
+
+
+async def _append_platform_event(session: AsyncSession, entry: CostLedgerEntry) -> None:
+    trace_id = entry.cost_metadata.get("trace_id") if isinstance(entry.cost_metadata, Mapping) else None
+    await platform_events.append(
+        session,
+        event_type=platform_events.PlatformEventType.FINANCE_COST_RECORDED,
+        target_type="coverage_case" if entry.coverage_case_id is not None else "cost_ledger_entry",
+        target_id=entry.coverage_case_id or entry.id,
+        business_id=entry.business_id,
+        location_id=entry.location_id,
+        payload=_cost_event_payload(entry),
+        metadata={
+            "trace_id": trace_id,
+            "provider": entry.provider,
+            "product": entry.product,
+            "reference_type": entry.reference_type,
+            "idempotency_key": entry.idempotency_key,
+        },
+    )
+
+
 async def append_entry(
     session: AsyncSession,
     *,
@@ -70,6 +107,7 @@ async def append_entry(
     metadata: Mapping[str, Any] | None = None,
     error_message: str | None = None,
     occurred_at: datetime | None = None,
+    emit_platform_event: bool = True,
 ) -> CostLedgerEntry:
     normalized_quantity = _decimal_quantity(quantity)
     computed_total = total_cost_micros
@@ -94,6 +132,8 @@ async def append_entry(
         occurred_at=occurred_at or datetime.now(timezone.utc),
     )
     session.add(entry)
+    if emit_platform_event:
+        await _append_platform_event(session, entry)
     return entry
 
 
@@ -115,6 +155,7 @@ async def append_llm_generation_cost(
     total_tokens: int | None = None,
     metadata: Mapping[str, Any] | None = None,
     occurred_at: datetime | None = None,
+    emit_platform_event: bool = True,
 ) -> CostLedgerEntry | None:
     if estimated_cost_micros is None:
         return None
@@ -143,6 +184,7 @@ async def append_llm_generation_cost(
             **dict(_normalize_value(metadata) or {}),
         },
         occurred_at=occurred_at,
+        emit_platform_event=emit_platform_event,
     )
 
 

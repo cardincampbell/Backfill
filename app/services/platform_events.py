@@ -24,6 +24,7 @@ class PlatformEventType:
     COVERAGE_DISPATCH_EXECUTED = "coverage.dispatch.executed"
     COVERAGE_OFFER_ACCEPTED = "coverage.offer.accepted"
     COVERAGE_OFFER_DECLINED = "coverage.offer.declined"
+    FINANCE_COST_RECORDED = "finance.cost.recorded"
     BILLING_FILL_CHARGED = "billing.fill.charged"
     BILLING_FILL_CAPPED = "billing.fill.capped"
     BILLING_FILL_VOIDED = "billing.fill.voided"

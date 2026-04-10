@@ -29,8 +29,20 @@ class FakeCostLedgerSession:
         return self.scalar_value
 
 
+@pytest.fixture
+def captured_platform_events(monkeypatch):
+    captured: list[dict] = []
+
+    async def fake_append(_session, **kwargs):
+        captured.append(kwargs)
+        return None
+
+    monkeypatch.setattr(cost_ledger.platform_events, "append", fake_append)
+    return captured
+
+
 @pytest.mark.asyncio
-async def test_append_entry_computes_total_cost_and_normalizes_metadata():
+async def test_append_entry_computes_total_cost_and_normalizes_metadata(captured_platform_events):
     session = FakeCostLedgerSession()
     business_id = uuid4()
     coverage_case_id = uuid4()
@@ -62,10 +74,14 @@ async def test_append_entry_computes_total_cost_and_normalizes_metadata():
     assert isinstance(entry.cost_metadata["trace_id"], str)
     assert entry.cost_metadata["minutes"] == "2.5"
     assert entry.occurred_at == occurred_at
+    assert len(captured_platform_events) == 1
+    assert captured_platform_events[0]["event_type"] == cost_ledger.platform_events.PlatformEventType.FINANCE_COST_RECORDED
+    assert captured_platform_events[0]["target_type"] == "coverage_case"
+    assert captured_platform_events[0]["target_id"] == coverage_case_id
 
 
 @pytest.mark.asyncio
-async def test_append_llm_generation_cost_is_idempotent_shaped_and_optional():
+async def test_append_llm_generation_cost_is_idempotent_shaped_and_optional(captured_platform_events):
     session = FakeCostLedgerSession()
     generation_id = uuid4()
     coverage_case_id = uuid4()
@@ -95,6 +111,9 @@ async def test_append_llm_generation_cost_is_idempotent_shaped_and_optional():
     assert entry.cost_metadata["model"] == "gpt-test"
     assert entry.cost_metadata["total_tokens"] == 120
     assert entry.coverage_case_id == coverage_case_id
+    assert len(captured_platform_events) == 1
+    assert captured_platform_events[0]["payload"]["reference_type"] == "llm_generation"
+    assert captured_platform_events[0]["payload"]["total_cost_micros"] == 4100
 
     none_entry = await cost_ledger.append_llm_generation_cost(
         session,
@@ -104,6 +123,7 @@ async def test_append_llm_generation_cost_is_idempotent_shaped_and_optional():
         estimated_cost_micros=None,
     )
     assert none_entry is None
+    assert len(captured_platform_events) == 1
 
 
 @pytest.mark.asyncio

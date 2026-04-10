@@ -38,6 +38,18 @@ def override_settings(monkeypatch):
     monkeypatch.setattr(billing_ledger, "settings", FakeSettings())
 
 
+@pytest.fixture
+def captured_platform_events(monkeypatch):
+    captured: list[dict] = []
+
+    async def fake_append(_session, **kwargs):
+        captured.append(kwargs)
+        return None
+
+    monkeypatch.setattr(billing_ledger.platform_events, "append", fake_append)
+    return captured
+
+
 def test_billing_cycle_start_uses_location_timezone_boundary():
     occurred_at = datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc)
 
@@ -104,7 +116,7 @@ async def test_evaluate_fill_charge_caps_when_cycle_is_already_exhausted():
 
 
 @pytest.mark.asyncio
-async def test_append_fill_entry_records_evaluated_metadata_and_idempotency():
+async def test_append_fill_entry_records_evaluated_metadata_and_idempotency(captured_platform_events):
     session = FakeBillingSession()
     session.scalar_value = 18000
     business_id = uuid4()
@@ -140,10 +152,14 @@ async def test_append_fill_entry_records_evaluated_metadata_and_idempotency():
     assert entry.billing_metadata["trace_id"] == "trace_123"
     assert entry.billing_metadata["billed_cents_after"] == 20000
     assert entry.occurred_at == occurred_at
+    assert len(captured_platform_events) == 1
+    assert captured_platform_events[0]["event_type"] == billing_ledger.platform_events.PlatformEventType.BILLING_FILL_CHARGED
+    assert captured_platform_events[0]["target_type"] == "coverage_case"
+    assert captured_platform_events[0]["target_id"] == coverage_case_id
 
 
 @pytest.mark.asyncio
-async def test_append_void_entry_defaults_to_negative_campaign_total():
+async def test_append_void_entry_defaults_to_negative_campaign_total(captured_platform_events):
     session = FakeBillingSession()
     session.scalar_value = 2000
     business_id = uuid4()
@@ -172,3 +188,6 @@ async def test_append_void_entry_defaults_to_negative_campaign_total():
     assert entry.billing_metadata["voided_amount_cents"] == 2000
     assert entry.billing_metadata["reason"] == "shift_cancelled"
     assert entry.occurred_at == occurred_at
+    assert len(captured_platform_events) == 1
+    assert captured_platform_events[0]["event_type"] == billing_ledger.platform_events.PlatformEventType.BILLING_FILL_VOIDED
+    assert captured_platform_events[0]["payload"]["amount_cents"] == -2000

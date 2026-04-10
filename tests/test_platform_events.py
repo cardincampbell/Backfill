@@ -127,6 +127,7 @@ async def test_append_platform_event_defaults_compatibility_name_to_event_type(m
 
 
 def test_platform_event_type_includes_billing_events():
+    assert platform_events.PlatformEventType.FINANCE_COST_RECORDED == "finance.cost.recorded"
     assert platform_events.PlatformEventType.BILLING_FILL_CHARGED == "billing.fill.charged"
     assert platform_events.PlatformEventType.BILLING_FILL_CAPPED == "billing.fill.capped"
     assert platform_events.PlatformEventType.BILLING_FILL_VOIDED == "billing.fill.voided"
