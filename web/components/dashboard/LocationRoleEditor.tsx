@@ -15,6 +15,7 @@ import type {
 } from "@/lib/api/workspace";
 
 import {
+  formatDisplayLabel,
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
@@ -161,6 +162,8 @@ function RoleTag({
 export function LocationRoleEditor({
   dark,
   location,
+  businessTypeLabel,
+  staffCount,
   roles,
   assignments,
   shiftDefaults,
@@ -175,6 +178,8 @@ export function LocationRoleEditor({
 }: {
   dark: boolean;
   location: BusinessLocation;
+  businessTypeLabel?: string | null;
+  staffCount?: number | null;
   roles: BusinessRole[];
   assignments: LocationRoleAssignment[];
   shiftDefaults: LocationShiftDefaults | null;
@@ -246,7 +251,15 @@ export function LocationRoleEditor({
     (typeof googlePlaceMetadata?.national_phone_number === "string"
       ? googlePlaceMetadata.national_phone_number
       : null);
-  const locationMeta = locationReference.staffLabel || location.timezone;
+  const placeTypeLabel =
+    typeof googlePlaceMetadata?.primary_type_display_name === "string"
+      ? googlePlaceMetadata.primary_type_display_name
+      : null;
+  const resolvedTypeLabel = businessTypeLabel
+    ? formatDisplayLabel(businessTypeLabel)
+    : placeTypeLabel;
+  const resolvedStaffLabel =
+    typeof staffCount === "number" ? `${staffCount} staff` : null;
   const assignmentsByRoleId = useMemo(
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
     [assignments],
@@ -412,7 +425,7 @@ export function LocationRoleEditor({
                 {location.display_name ?? location.name}
               </h2>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                {locationReference.typeLabel ? (
+                {resolvedTypeLabel ? (
                   <span
                     className="text-[12px] px-2 py-0.5 rounded-full"
                     style={{
@@ -421,12 +434,17 @@ export function LocationRoleEditor({
                       background: `${locationReference.color}10`,
                     }}
                   >
-                    {locationReference.typeLabel}
+                    {resolvedTypeLabel}
                   </span>
                 ) : null}
-                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  {locationMeta}
-                </span>
+                {resolvedStaffLabel ? (
+                  <span
+                    className={`text-[11px] ${textSecondary}`}
+                    style={{ fontWeight: 420 }}
+                  >
+                    {resolvedStaffLabel}
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>

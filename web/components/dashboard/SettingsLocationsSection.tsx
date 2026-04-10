@@ -9,6 +9,7 @@ import { useAppWorkspace } from "@/components/app-workspace";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import {
   createAndAssignLocationRole,
+  getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessLocations,
@@ -18,6 +19,7 @@ import {
   type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
+import { listEmployees } from "@/lib/api/workforce";
 import {
   getLocationBoard,
   deleteLocation as deleteWorkspaceLocation,
@@ -70,10 +72,18 @@ function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
 
 export default function SettingsLocationsSection({
   businessId,
+  businessType,
   dark,
+  editorLocationId,
+  onOpenLocationEditor,
+  onCloseLocationEditor,
 }: {
   businessId: string;
+  businessType?: string | null;
   dark: boolean;
+  editorLocationId?: string | null;
+  onOpenLocationEditor?(locationId: string): void;
+  onCloseLocationEditor?(): void;
 }) {
   const workspace = useAppWorkspace();
   const refreshWorkspace = useAppWorkspaceRefresh();
@@ -102,11 +112,18 @@ export default function SettingsLocationsSection({
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [shiftDefaults, setShiftDefaults] = useState<LocationShiftDefaults | null>(null);
   const [shiftDefaultsLoading, setShiftDefaultsLoading] = useState(false);
+  const [selectedLocationStaffCount, setSelectedLocationStaffCount] = useState<number | null>(
+    null,
+  );
   const [deleteState, setDeleteState] = useState<LocationDeleteState | undefined>();
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [editorFeedback, setEditorFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
   const [isDeletingLocation, setIsDeletingLocation] = useState(false);
+  const routeControlled = editorLocationId !== undefined;
+  const selectedLocationId = routeControlled
+    ? (editorLocationId ?? null)
+    : (selectedLocation?.id ?? null);
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
   const borderClass = dark ? "border-white/[0.08]" : "border-[#E5E7EB]";
@@ -124,8 +141,38 @@ export default function SettingsLocationsSection({
     setSelectedLocation(null);
     setAssignments([]);
     setShiftDefaults(null);
+    setSelectedLocationStaffCount(null);
     setEditorFeedback(null);
   }, [businessId, workspaceLocations]);
+
+  useEffect(() => {
+    if (!routeControlled) {
+      return;
+    }
+
+    if (!editorLocationId) {
+      setSelectedLocation(null);
+      return;
+    }
+
+    const nextLocation =
+      locations.find((location) => location.id === editorLocationId) ?? null;
+    if (nextLocation && selectedLocation?.id !== nextLocation.id) {
+      setSelectedLocation(nextLocation);
+      return;
+    }
+
+    if (!loading && !nextLocation) {
+      onCloseLocationEditor?.();
+    }
+  }, [
+    editorLocationId,
+    loading,
+    locations,
+    onCloseLocationEditor,
+    routeControlled,
+    selectedLocation,
+  ]);
 
   useEffect(() => {
     if (workspaceLocations.length === 0) {
@@ -196,15 +243,16 @@ export default function SettingsLocationsSection({
   }, [businessId]);
 
   useEffect(() => {
-    if (!selectedLocation) {
+    if (!selectedLocationId) {
       setAssignments([]);
       setShiftDefaults(null);
+      setSelectedLocationStaffCount(null);
       setDeleteState(undefined);
       setEditorFeedback(null);
       return;
     }
 
-    const activeLocation = selectedLocation;
+    const activeLocationId = selectedLocationId;
     let cancelled = false;
 
     async function loadAssignments() {
@@ -213,23 +261,35 @@ export default function SettingsLocationsSection({
         setShiftDefaultsLoading(true);
         setDeleteState({ canDelete: false, checking: true });
         setEditorFeedback(null);
-        const [nextAssignments, nextShiftDefaults, nextDeleteReadiness] = await Promise.all([
-          getLocationRoles(businessId, activeLocation.id),
-          getLocationShiftDefaults(businessId, activeLocation.id),
-          getLocationDeleteReadiness(businessId, activeLocation.id),
+        const [
+          nextLocation,
+          nextAssignments,
+          nextShiftDefaults,
+          nextDeleteReadiness,
+          employees,
+        ] = await Promise.all([
+          getBusinessLocation(businessId, activeLocationId),
+          getLocationRoles(businessId, activeLocationId),
+          getLocationShiftDefaults(businessId, activeLocationId),
+          getLocationDeleteReadiness(businessId, activeLocationId),
+          listEmployees(businessId),
         ]);
         if (cancelled) {
           return;
         }
+        setSelectedLocation(nextLocation);
         setAssignments(nextAssignments);
         setShiftDefaults(nextShiftDefaults);
+        setSelectedLocationStaffCount(
+          employees.filter((employee) => employee.location_ids.includes(activeLocationId)).length,
+        );
         setDeleteState({
           canDelete: nextDeleteReadiness.can_delete,
           reason: nextDeleteReadiness.reason,
         });
         setRoleCounts((current) => ({
           ...current,
-          [activeLocation.id]: nextAssignments.length,
+          [activeLocationId]: nextAssignments.length,
         }));
       } catch (error) {
         if (!cancelled) {
@@ -258,7 +318,7 @@ export default function SettingsLocationsSection({
     return () => {
       cancelled = true;
     };
-  }, [businessId, selectedLocation]);
+  }, [businessId, selectedLocationId]);
 
   const assignmentsByRoleId = useMemo(
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
@@ -409,7 +469,11 @@ export default function SettingsLocationsSection({
       roleCountCache.set(businessId, nextRoleCounts);
       setLocations(remainingLocations);
       setRoleCounts(nextRoleCounts);
-      setSelectedLocation(null);
+      if (onCloseLocationEditor) {
+        onCloseLocationEditor();
+      } else {
+        setSelectedLocation(null);
+      }
       setAssignments([]);
       setShiftDefaults(null);
       setDeleteState(undefined);
@@ -488,7 +552,13 @@ export default function SettingsLocationsSection({
               <button
                 key={location.id}
                 type="button"
-                onClick={() => setSelectedLocation(location)}
+                onClick={() => {
+                  if (onOpenLocationEditor) {
+                    onOpenLocationEditor(location.id);
+                    return;
+                  }
+                  setSelectedLocation(location);
+                }}
                 className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all group text-left cursor-pointer ${
                   dark
                     ? "border-white/[0.08] bg-white/[0.03] hover:border-white/[0.14] hover:bg-white/[0.05]"
@@ -535,6 +605,7 @@ export default function SettingsLocationsSection({
         {selectedLocation ? (
           <LocationRoleEditor
             assignments={assignments}
+            businessTypeLabel={businessType}
             dark={dark}
             deleteState={
               deleteState
@@ -547,13 +618,20 @@ export default function SettingsLocationsSection({
             feedback={editorFeedback}
             loading={assignmentLoading || shiftDefaultsLoading}
             location={selectedLocation}
-            onClose={() => setSelectedLocation(null)}
+            onClose={() => {
+              if (onCloseLocationEditor) {
+                onCloseLocationEditor();
+                return;
+              }
+              setSelectedLocation(null);
+            }}
             onCreateRole={handleCreateRole}
             onDelete={() => {
               void handleDeleteLocation();
             }}
             onSave={handleSave}
             shiftDefaults={shiftDefaults}
+            staffCount={selectedLocationStaffCount}
             roles={roles}
             saving={isPending}
           />

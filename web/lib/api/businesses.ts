@@ -110,6 +110,19 @@ export async function listBusinessLocations(
   return (await response.json()) as BusinessLocation[];
 }
 
+export async function getBusinessLocation(
+  businessId: string,
+  locationId: string,
+): Promise<BusinessLocation> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as BusinessLocation;
+}
+
 export async function getLocationDeleteReadiness(
   businessId: string,
   locationId: string,

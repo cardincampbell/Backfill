@@ -86,6 +86,35 @@ export function buildSchedulerBasePathFromAny(
   return `/scheduler/${businessSlug}/${locationSlug}`;
 }
 
+export function buildDashboardOverviewLocationEditPath(
+  locationId: string | number,
+): string {
+  return `/dashboard/location/${String(locationId)}/edit`;
+}
+
+export function buildDashboardOverviewLocationEditPathFromAny(
+  location: DashboardLocationLike,
+): string {
+  return buildDashboardOverviewLocationEditPath(getDashboardLocationId(location));
+}
+
+export function buildTeamEmployeeEditPath(employeeId: string | number): string {
+  return `/team/employee/${String(employeeId)}`;
+}
+
+export function buildLocationEmployeeEditPathFromAny(
+  location: DashboardLocationLike,
+  employeeId: string | number,
+): string {
+  return `${buildDashboardLocationBasePathFromAny(location)}/employee/${String(employeeId)}`;
+}
+
+export function buildSchedulerLocationEditPathFromAny(
+  location: DashboardLocationLike,
+): string {
+  return `${buildSchedulerBasePathFromAny(location)}/edit-location`;
+}
+
 export function buildDashboardLocationPath(
   location: DashboardLocationRef,
   params?: Record<string, string | number | undefined | null>,

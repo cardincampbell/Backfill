@@ -51,6 +51,7 @@ import {
   updateAccountProfile,
 } from "@/lib/api/auth";
 import {
+  buildSettingsLocationEditPath,
   buildSettingsPath,
   DEFAULT_SECTION_BY_SCOPE,
   type SettingsScope,
@@ -579,6 +580,13 @@ export default function Settings({
       ? requestedSection ?? routeSegments[1]
       : null,
   );
+  const activeSettingsLocationEditorId =
+    scope === "business" &&
+    activeSection === "locations" &&
+    routeSegments[2] === "location" &&
+    routeSegments[3]
+      ? routeSegments[3]
+      : null;
 
   useEffect(() => {
     if (!session) {
@@ -1085,7 +1093,22 @@ export default function Settings({
         );
       }
 
-      return <SettingsLocationsSection businessId={primaryBusinessId} dark={isDark} />;
+      return (
+        <SettingsLocationsSection
+          businessId={primaryBusinessId}
+          businessType={business?.vertical ?? null}
+          dark={isDark}
+          editorLocationId={activeSettingsLocationEditorId}
+          onCloseLocationEditor={() =>
+            replaceSettingsLocation("business", "locations")
+          }
+          onOpenLocationEditor={(locationId) =>
+            router.push(buildSettingsLocationEditPath(locationId), {
+              scroll: false,
+            })
+          }
+        />
+      );
     }
 
     if (scope === "business" && activeSection === "shifts") {

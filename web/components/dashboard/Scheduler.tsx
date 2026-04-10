@@ -27,6 +27,7 @@ import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
   createAndAssignLocationRole,
+  getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessRoles,
@@ -45,7 +46,12 @@ import {
   type LocationShiftDefaults,
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
-import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import { listEmployees } from '@/lib/api/workforce';
+import {
+  buildDashboardLocationBasePathFromAny,
+  buildSchedulerBasePathFromAny,
+  buildSchedulerLocationEditPathFromAny,
+} from '@/lib/dashboard-paths';
 import { useSetLocationEntryMode } from '@/components/location-entry-provider';
 import DashboardShell from './DashboardShell';
 import {
@@ -446,6 +452,7 @@ type SchedulerProps = {
   embeddedInShell?: boolean;
   location: WorkspaceLocation;
   backHref?: string;
+  editingLocation?: boolean;
 };
 
 /* ─── Main Scheduler ─── */
@@ -453,6 +460,7 @@ function SchedulerContent({
   embeddedInShell = false,
   location,
   backHref,
+  editingLocation = false,
 }: SchedulerProps) {
   const router = useRouter();
   const refreshWorkspace = useAppWorkspaceRefresh();
@@ -491,6 +499,7 @@ function SchedulerContent({
   const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
+  const [editorStaffCount, setEditorStaffCount] = useState<number | null>(null);
   const [editorDeleteState, setEditorDeleteState] = useState<LocationDeleteState | undefined>();
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
@@ -505,6 +514,13 @@ function SchedulerContent({
     [editorAssignments],
   );
   const effectiveDeleteState = editorLocation ? (editorDeleteState ?? locationDeleteState) : locationDeleteState;
+
+  const closeLocationEditor = useCallback(() => {
+    setEditorLocation(null);
+    setEditorFeedback(null);
+    setEditorStaffCount(null);
+    router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
+  }, [location, router]);
 
   useEffect(() => {
     let cancelled = false;
@@ -620,25 +636,40 @@ function SchedulerContent({
     });
   };
 
-  const openLocationEditor = async () => {
+  const openLocationEditor = useCallback(async () => {
     const editableLocation = adaptWorkspaceLocation(location);
     setEditorLocation(editableLocation);
     setEditorShiftDefaults(null);
+    setEditorStaffCount(null);
     setEditorDeleteState({ canDelete: false, checking: true });
     setEditorLoading(true);
     setEditorFeedback(null);
 
     try {
-      const [nextRoles, nextAssignments, nextShiftDefaults, nextDeleteReadiness] =
+      const [
+        nextLocation,
+        nextRoles,
+        nextAssignments,
+        nextShiftDefaults,
+        nextDeleteReadiness,
+        employees,
+      ] =
         await Promise.all([
+          getBusinessLocation(location.business_id, location.location_id),
           listBusinessRoles(location.business_id),
           getLocationRoles(location.business_id, location.location_id),
           getLocationShiftDefaults(location.business_id, location.location_id),
           getLocationDeleteReadiness(location.business_id, location.location_id),
+          listEmployees(location.business_id),
         ]);
+      setEditorLocation(nextLocation);
       setEditorRoles(nextRoles);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
+      setEditorStaffCount(
+        employees.filter((employee) => employee.location_ids.includes(location.location_id))
+          .length,
+      );
       const nextDeleteState = {
         canDelete: nextDeleteReadiness.can_delete,
         reason: nextDeleteReadiness.reason,
@@ -658,7 +689,22 @@ function SchedulerContent({
     } finally {
       setEditorLoading(false);
     }
-  };
+  }, [location]);
+
+  useEffect(() => {
+    if (editingLocation) {
+      if (!editorLocation && !editorLoading) {
+        void openLocationEditor();
+      }
+      return;
+    }
+
+    if (editorLocation) {
+      setEditorLocation(null);
+      setEditorFeedback(null);
+      setEditorStaffCount(null);
+    }
+  }, [editingLocation, editorLoading, editorLocation, openLocationEditor]);
 
   const handleSaveEditor = (
     roleIds: string[],
@@ -864,7 +910,9 @@ function SchedulerContent({
                   <button
                     onClick={() => {
                       setShowLocationMenu(false);
-                      void openLocationEditor();
+                      router.push(buildSchedulerLocationEditPathFromAny(location), {
+                        scroll: false,
+                      });
                     }}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
                     type="button"
@@ -1290,6 +1338,7 @@ function SchedulerContent({
               roles={editorRoles}
               assignments={editorAssignments}
               shiftDefaults={editorShiftDefaults}
+              staffCount={editorStaffCount}
               loading={editorLoading}
               saving={isSavingEditor}
               feedback={editorFeedback}
@@ -1297,10 +1346,7 @@ function SchedulerContent({
                 ...effectiveDeleteState,
                 deleting: deletingLocationId === editorLocation.id,
               }}
-              onClose={() => {
-                setEditorLocation(null);
-                setEditorFeedback(null);
-              }}
+              onClose={closeLocationEditor}
               onDelete={() => {
                 void handleDeleteLocation();
               }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, useTransition } from 'react';
+import { useState, useRef, useEffect, useMemo, useTransition, useCallback } from 'react';
 import { useNavigate } from './router-shim';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -14,9 +14,13 @@ import {
 } from '@/components/app-workspace';
 import { useLocationEntryRouting, useSetLocationEntryMode } from '@/components/location-entry-provider';
 import { FloatingDropdown } from '@/components/floating-dropdown';
-import { buildDashboardLocationBasePathFromAny } from '@/lib/dashboard-paths';
+import {
+  buildDashboardLocationBasePathFromAny,
+  buildDashboardOverviewLocationEditPathFromAny,
+} from '@/lib/dashboard-paths';
 import {
   createAndAssignLocationRole,
+  getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessRoles,
@@ -34,6 +38,7 @@ import {
   type ShiftDefault,
   type WorkspaceBusiness,
 } from '@/lib/api/workspace';
+import { listEmployees } from '@/lib/api/workforce';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
@@ -79,7 +84,7 @@ import {
   Edit3,
   Trash2,
 } from 'lucide-react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 const copilotSuggestions = [
   'Show me open shifts this week',
@@ -738,10 +743,12 @@ function MultiLocationView({
   locations,
   locationsLoaded,
   business,
+  editingLocationId = null,
 }: {
   locations: DashboardSurfaceLocation[];
   locationsLoaded: boolean;
   business: WorkspaceBusiness | null;
+  editingLocationId?: string | null;
 }) {
   const {
     isDark,
@@ -765,6 +772,7 @@ function MultiLocationView({
   const actionIconRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-lg';
   const progressRadiusClass = isDark ? 'backfill-ui-radius' : 'rounded-full';
   const navigate = useNavigate();
+  const router = useRouter();
   const refreshWorkspace = useAppWorkspaceRefresh();
   const { getLocationEntryHref } = useLocationEntryRouting();
   const setLocationEntryMode = useSetLocationEntryMode();
@@ -775,6 +783,7 @@ function MultiLocationView({
   const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
+  const [editorStaffCount, setEditorStaffCount] = useState<number | null>(null);
   const [editorDeleteState, setEditorDeleteState] = useState<LocationDeleteState | undefined>();
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
@@ -798,7 +807,20 @@ function MultiLocationView({
     [editorAssignments],
   );
 
-  const openLocationEditor = async (location: DashboardSurfaceLocation) => {
+  const resetLocationEditor = useCallback(() => {
+    setEditorLocation(null);
+    setEditorFeedback(null);
+    setEditorStaffCount(null);
+    setEditorShiftDefaults(null);
+    setEditorDeleteState(undefined);
+  }, []);
+
+  const closeLocationEditor = useCallback(() => {
+    resetLocationEditor();
+    router.replace('/dashboard', { scroll: false });
+  }, [resetLocationEditor, router]);
+
+  const openLocationEditor = useCallback(async (location: DashboardSurfaceLocation) => {
     const editableLocation = adaptDashboardLocation(location);
     if (!editableLocation) {
       setActionFeedback({
@@ -810,20 +832,34 @@ function MultiLocationView({
 
     setEditorLocation(editableLocation);
     setEditorShiftDefaults(null);
+    setEditorStaffCount(null);
     setEditorDeleteState({ canDelete: false, checking: true });
     setEditorLoading(true);
     setEditorFeedback(null);
 
     try {
-      const [nextRoles, nextAssignments, nextShiftDefaults, nextDeleteReadiness] = await Promise.all([
+      const [
+        nextLocation,
+        nextRoles,
+        nextAssignments,
+        nextShiftDefaults,
+        nextDeleteReadiness,
+        employees,
+      ] = await Promise.all([
+        getBusinessLocation(editableLocation.business_id, editableLocation.id),
         listBusinessRoles(editableLocation.business_id),
         getLocationRoles(editableLocation.business_id, editableLocation.id),
         getLocationShiftDefaults(editableLocation.business_id, editableLocation.id),
         getLocationDeleteReadiness(editableLocation.business_id, editableLocation.id),
+        listEmployees(editableLocation.business_id),
       ]);
+      setEditorLocation(nextLocation);
       setEditorRoles(nextRoles);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
+      setEditorStaffCount(
+        employees.filter((employee) => employee.location_ids.includes(editableLocation.id)).length,
+      );
       setEditorDeleteState({
         canDelete: nextDeleteReadiness.can_delete,
         reason: nextDeleteReadiness.reason,
@@ -841,7 +877,36 @@ function MultiLocationView({
     } finally {
       setEditorLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!editingLocationId) {
+      if (editorLocation) {
+        resetLocationEditor();
+      }
+      return;
+    }
+
+    if (!locationsLoaded) {
+      return;
+    }
+
+    const targetLocation =
+      locations.find(
+        (location) => String(location.location_id ?? location.id) === editingLocationId,
+      ) ?? null;
+
+    if (!targetLocation) {
+      router.replace('/dashboard', { scroll: false });
+      return;
+    }
+
+    if (editorLocation?.id === String(targetLocation.location_id ?? targetLocation.id)) {
+      return;
+    }
+
+    void openLocationEditor(targetLocation);
+  }, [editingLocationId, editorLocation, locations, locationsLoaded, openLocationEditor, resetLocationEditor]);
 
   const handleSaveEditor = (
     roleIds: string[],
@@ -969,8 +1034,7 @@ function MultiLocationView({
     try {
       await deleteWorkspaceLocation(location.business_id, location.location_id);
       if (editorLocation?.id === location.location_id) {
-        setEditorLocation(null);
-        setEditorFeedback(null);
+        closeLocationEditor();
       }
       await refreshWorkspace();
       setActionFeedback({
@@ -1004,9 +1068,7 @@ function MultiLocationView({
     setEditorFeedback(null);
     try {
       await deleteWorkspaceLocation(editorLocation.business_id, editorLocation.id);
-      setEditorLocation(null);
-      setEditorShiftDefaults(null);
-      setEditorDeleteState(undefined);
+      closeLocationEditor();
       await refreshWorkspace();
       setActionFeedback({
         tone: 'success',
@@ -1241,7 +1303,9 @@ function MultiLocationView({
                 void handleDeleteLocation(loc);
               }}
               onEdit={() => {
-                void openLocationEditor(loc);
+                router.push(buildDashboardOverviewLocationEditPathFromAny(loc), {
+                  scroll: false,
+                });
               }}
             />
           ))}
@@ -1323,12 +1387,7 @@ function MultiLocationView({
             feedback={editorFeedback}
             loading={editorLoading}
             location={editorLocation}
-            onClose={() => {
-              setEditorLocation(null);
-              setEditorFeedback(null);
-              setEditorShiftDefaults(null);
-              setEditorDeleteState(undefined);
-            }}
+            onClose={closeLocationEditor}
             onCreateRole={handleCreateRole}
             onDelete={() => {
               void handleDeleteEditorLocation();
@@ -1336,6 +1395,7 @@ function MultiLocationView({
             onSave={handleSaveEditor}
             roles={editorRoles}
             saving={isSavingEditor}
+            staffCount={editorStaffCount}
             shiftDefaults={editorShiftDefaults}
           />
         ) : null}
@@ -1440,8 +1500,10 @@ function CopilotPanel() {
 /* ─── Main Dashboard Light ─── */
 export default function DashboardLight({
   embeddedInShell = false,
+  editingLocationId = null,
 }: {
   embeddedInShell?: boolean;
+  editingLocationId?: string | null;
 }) {
   const pathname = usePathname();
   const workspace = useAppWorkspace();
@@ -1498,11 +1560,12 @@ export default function DashboardLight({
   }, [workspaceLocations, workspaceLocationsLoaded]);
 
   const content = (
-    <MultiLocationView
-      business={preferredBusiness}
-      locations={locations}
-      locationsLoaded={workspaceLocationsLoaded}
-    />
+      <MultiLocationView
+        business={preferredBusiness}
+        editingLocationId={editingLocationId}
+        locations={locations}
+        locationsLoaded={workspaceLocationsLoaded}
+      />
   );
 
   if (embeddedInShell) {

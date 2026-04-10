@@ -12,11 +12,13 @@ import { AppRouteState } from "./AppRouteState";
 type LocationRouteResolverProps = {
   businessSlug: string;
   locationSlug: string;
+  editingEmployeeId?: string | null;
 };
 
 export default function LocationRouteResolver({
   businessSlug,
   locationSlug,
+  editingEmployeeId = null,
 }: LocationRouteResolverProps) {
   const router = useRouter();
   const workspace = useAppWorkspace();
@@ -62,6 +64,7 @@ export default function LocationRouteResolver({
     return (
       <Location
         embeddedInShell
+        editingEmployeeId={editingEmployeeId}
         location={location}
       />
     );

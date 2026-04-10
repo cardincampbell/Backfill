@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import {
@@ -18,7 +18,11 @@ import {
 import { useResolvedAppAppearance } from "@/components/app-session-gate";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import type { WorkspaceLocation } from "@/lib/api/workspace";
-import { buildSchedulerBasePathFromAny } from "@/lib/dashboard-paths";
+import {
+  buildDashboardLocationBasePathFromAny,
+  buildLocationEmployeeEditPathFromAny,
+  buildSchedulerBasePathFromAny,
+} from "@/lib/dashboard-paths";
 import {
   createAndAssignLocationRole,
   getLocationRoles,
@@ -56,6 +60,7 @@ type LocationProps = {
   embeddedInShell?: boolean;
   location: WorkspaceLocation;
   backHref?: string;
+  editingEmployeeId?: string | null;
 };
 
 const CATEGORY_PRIORITY = [
@@ -187,6 +192,7 @@ export default function Location({
   embeddedInShell = false,
   location,
   backHref = "/dashboard",
+  editingEmployeeId = null,
 }: LocationProps) {
   const router = useRouter();
   const isDark = useResolvedAppAppearance() === "dark";
@@ -206,6 +212,13 @@ export default function Location({
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
   const [isPending, startTransition] = useTransition();
+
+  const closeEmployeeEditor = useCallback(() => {
+    setEditingEmployee(null);
+    router.replace(buildDashboardLocationBasePathFromAny(location), {
+      scroll: false,
+    });
+  }, [location, router]);
 
   useEffect(() => {
     if (!feedback) {
@@ -272,6 +285,30 @@ export default function Location({
       cancelled = true;
     };
   }, [location.business_id, location.location_id]);
+
+  useEffect(() => {
+    if (!editingEmployeeId) {
+      setEditingEmployee(null);
+      return;
+    }
+
+    const nextEmployee =
+      employees.find((employee) => employee.id === editingEmployeeId) ?? null;
+
+    if (nextEmployee) {
+      setEditingEmployee((current) =>
+        current?.id === nextEmployee.id ? current : nextEmployee,
+      );
+      return;
+    }
+
+    if (!loading) {
+      setEditingEmployee(null);
+      router.replace(buildDashboardLocationBasePathFromAny(location), {
+        scroll: false,
+      });
+    }
+  }, [editingEmployeeId, employees, loading, location, router]);
 
   useEffect(() => {
     setSelectedEmployeeIds((current) =>
@@ -490,7 +527,7 @@ export default function Location({
   const handleEmployeeDeleted = async (employeeId: string) => {
     setEmployees((current) => current.filter((employee) => employee.id !== employeeId));
     setSelectedEmployeeIds((current) => current.filter((item) => item !== employeeId));
-    setEditingEmployee(null);
+    closeEmployeeEditor();
     setFeedback({
       tone: "success",
       message: "Employee removed from the roster.",
@@ -927,7 +964,12 @@ export default function Location({
                   >
                     <button
                       type="button"
-                      onClick={() => setEditingEmployee(employee)}
+                      onClick={() =>
+                        router.push(
+                          buildLocationEmployeeEditPathFromAny(location, employee.id),
+                          { scroll: false },
+                        )
+                      }
                       className="flex min-w-0 items-center gap-2 text-left"
                     >
                       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
@@ -1042,7 +1084,12 @@ export default function Location({
                       >
                         <button
                           type="button"
-                          onClick={() => setEditingEmployee(employee)}
+                          onClick={() =>
+                            router.push(
+                              buildLocationEmployeeEditPathFromAny(location, employee.id),
+                              { scroll: false },
+                            )
+                          }
                           className="flex min-w-0 items-center gap-2 text-left"
                         >
                         <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
@@ -1180,7 +1227,7 @@ export default function Location({
             dark={isDark}
             employee={editingEmployee}
             locations={effectiveBusinessLocations}
-            onClose={() => setEditingEmployee(null)}
+            onClose={closeEmployeeEditor}
             onDeleted={handleEmployeeDeleted}
             onRoleCreated={handleBusinessRoleCreated}
             onSaved={handleEmployeeSaved}

@@ -12,11 +12,13 @@ import Scheduler from "./Scheduler";
 type SchedulerRouteResolverProps = {
   businessSlug: string;
   locationSlug: string;
+  editingLocation?: boolean;
 };
 
 export default function SchedulerRouteResolver({
   businessSlug,
   locationSlug,
+  editingLocation = false,
 }: SchedulerRouteResolverProps) {
   const router = useRouter();
   const workspace = useAppWorkspace();
@@ -64,6 +66,7 @@ export default function SchedulerRouteResolver({
   return (
     <Scheduler
       embeddedInShell
+      editingLocation={editingLocation}
       location={location}
       backHref={buildDashboardLocationBasePathFromAny(location)}
     />

@@ -57,3 +57,7 @@ export function buildSettingsPath(
 ): string {
   return `/settings/${scope}/${section}`;
 }
+
+export function buildSettingsLocationEditPath(locationId: string | number): string {
+  return `/settings/business/locations/location/${String(locationId)}`;
+}

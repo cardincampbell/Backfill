@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Plus,
   Upload,
@@ -43,6 +43,7 @@ import {
   type EmployeeProfile,
   type EmployeeSummary,
 } from '@/lib/api/workforce';
+import { buildTeamEmployeeEditPath } from '@/lib/dashboard-paths';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import DashboardShell from './DashboardShell';
 import { EmployeeEditorDrawer, type EmployeeEditorSeed } from './EmployeeEditorDrawer';
@@ -1358,10 +1359,13 @@ function EmployeeDetail({
 /* ─── Main Team Page ─── */
 export default function Team({
   embeddedInShell = false,
+  editingEmployeeId = null,
 }: {
   embeddedInShell?: boolean;
+  editingEmployeeId?: string | null;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const workspace = useAppWorkspace();
   const workspaceReady = useAppWorkspaceReady();
   const isDark = useResolvedAppAppearance() === 'dark';
@@ -1453,11 +1457,45 @@ export default function Team({
     [businessLocations],
   );
 
+  const closeEmployeeEditor = useCallback(() => {
+    setSelectedEmployee(null);
+    router.replace('/team', { scroll: false });
+  }, [router]);
+
   useEffect(() => {
     if (!availableLocationOptions.includes(locationFilter)) {
       setLocationFilter('All Locations');
     }
   }, [availableLocationOptions, locationFilter]);
+
+  useEffect(() => {
+    if (!editingEmployeeId) {
+      setSelectedEmployee(null);
+      return;
+    }
+
+    const nextEmployee =
+      employeesData.find((employee) => employee.id === editingEmployeeId) ?? null;
+
+    if (nextEmployee) {
+      setSelectedEmployee((current) =>
+        current?.id === nextEmployee.id ? current : nextEmployee,
+      );
+      return;
+    }
+
+    if (!loading) {
+      setSelectedEmployee(null);
+      router.replace('/team', { scroll: false });
+    }
+  }, [editingEmployeeId, employeesData, loading, router]);
+
+  const openEmployeeEditor = useCallback(
+    (employee: Employee) => {
+      router.push(buildTeamEmployeeEditPath(employee.id), { scroll: false });
+    },
+    [router],
+  );
 
   const filtered = employeesData
     .filter((e) => {
@@ -1501,12 +1539,12 @@ export default function Team({
 
   const handleDeleteEmployee = useCallback(async (employeeId: string) => {
     setEmployeesData((current) => current.filter((item) => item.id !== employeeId));
-    setSelectedEmployee(null);
+    closeEmployeeEditor();
     setFeedback({
       tone: 'success',
       message: 'Employee removed from the roster.',
     });
-  }, []);
+  }, [closeEmployeeEditor]);
 
   const handleBulkImported = useCallback(async (result: EmployeeBulkImportResponse) => {
     if (!businessId) {
@@ -1708,7 +1746,7 @@ export default function Team({
             const reliabilityColor = getReliabilityColor(emp.reliability);
             return (
               <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
-                onClick={() => setSelectedEmployee(emp)}
+                onClick={() => openEmployeeEditor(emp)}
                 className={`grid grid-cols-[2fr_1fr_1fr_1fr_0.8fr_44px] gap-4 px-5 py-3.5 border-b last:border-0 cursor-pointer transition-colors group ${theme.rowBorderClass} ${theme.rowHoverClass}`}>
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] text-white shrink-0"
@@ -1745,7 +1783,7 @@ export default function Team({
                   <span className="text-[13px] tabular-nums" style={{ fontWeight: 520, color: reliabilityColor }}>{emp.reliability}%</span>
                 </div>
                 <div className="flex items-center justify-center">
-                  <button onClick={(e) => { e.stopPropagation(); setSelectedEmployee(emp); }}
+                  <button onClick={(e) => { e.stopPropagation(); openEmployeeEditor(emp); }}
                     className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F0F0F5]'}`}>
                     <Eye size={14} className="text-[#8898AA]" />
                   </button>
@@ -1764,7 +1802,7 @@ export default function Team({
             const reliabilityColor = getReliabilityColor(emp.reliability);
             return (
               <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
-                onClick={() => setSelectedEmployee(emp)}
+                onClick={() => openEmployeeEditor(emp)}
                 className={`px-4 py-3.5 cursor-pointer transition-colors ${isDark ? 'active:bg-white/[0.03]' : 'active:bg-[#FAFBFC]'}`}>
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-[12px] text-white shrink-0"
@@ -1832,7 +1870,7 @@ export default function Team({
             dark={isDark}
             employee={selectedEmployee}
             locations={businessLocations}
-            onClose={() => setSelectedEmployee(null)}
+            onClose={closeEmployeeEditor}
             onDelete={handleDeleteEmployee}
             onSave={handleSaveEmployee}
             onRoleCreated={(role) => {
