@@ -156,11 +156,13 @@ export default function DashboardCopilotSidebar({
   dark,
   businessId,
   locationId,
+  locationHref,
   locationName,
 }: {
   dark: boolean;
   businessId?: string | null;
   locationId?: string | null;
+  locationHref?: string | null;
   locationName?: string | null;
 }) {
   const [panelTab, setPanelTab] = useState<"chat" | "feed">("chat");
@@ -552,8 +554,10 @@ export default function DashboardCopilotSidebar({
             transition={{ duration: 0.18 }}
           >
             <DashboardActivityFeedPanel
+              active={panelTab === "feed"}
               businessId={businessId}
               dark={dark}
+              locationHref={locationHref}
               locationId={locationId}
               locationName={locationName}
             />

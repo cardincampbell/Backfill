@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   Activity,
+  ArrowUpRight,
   CalendarClock,
   Clock3,
   MapPin,
@@ -19,6 +21,7 @@ import type {
   CopilotOpenShiftResultItem,
   CopilotOpenShiftsResult,
 } from "@/lib/types/copilot";
+import { Link } from "./router-shim";
 
 function formatDateTime(value: string | null | undefined): string | null {
   if (!value) {
@@ -43,7 +46,7 @@ function formatDateRange(
   const start = formatDateTime(startsAt);
   const end = formatDateTime(endsAt);
   if (start && end) {
-    return `${start} – ${end}`;
+    return `${start} - ${end}`;
   }
   return start ?? end;
 }
@@ -60,6 +63,10 @@ function getResultKind(
   }
   const kind = (payload as { kind?: unknown }).kind;
   return typeof kind === "string" ? kind : null;
+}
+
+function buildShiftHref(shiftId: string): string {
+  return `/dashboard/shifts/${shiftId}`;
 }
 
 function StatusPill({
@@ -81,33 +88,69 @@ function StatusPill({
   );
 }
 
-function ResultRow({
+function ResultMetric({
   dark,
-  title,
-  subtitle,
-  status,
+  label,
+  value,
 }: {
   dark: boolean;
-  title: string;
-  subtitle?: string | null;
-  status?: string | null;
+  label: string;
+  value: string;
 }) {
   return (
     <div
-      className={`flex items-start justify-between gap-3 rounded-xl border px-3 py-2.5 ${
+      className={`rounded-xl border px-3 py-2 ${
         dark
           ? "border-white/[0.06] bg-white/[0.03]"
           : "border-[#E5E7EB] bg-[#FAFBFC]"
       }`}
     >
-      <div className="min-w-0">
-        <p
-          className={`truncate text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-          style={{ fontWeight: 560 }}
-        >
-          {title}
-        </p>
-        {subtitle ? (
+      <p
+        className={`text-[14px] ${dark ? "text-white" : "text-[#0A2540]"}`}
+        style={{ fontWeight: 620 }}
+      >
+        {value}
+      </p>
+      <p
+        className={`mt-1 text-[10px] uppercase tracking-[0.08em] ${
+          dark ? "text-[#8898AA]" : "text-[#8898AA]"
+        }`}
+        style={{ fontWeight: 560 }}
+      >
+        {label}
+      </p>
+    </div>
+  );
+}
+
+function ResultHeader({
+  dark,
+  title,
+  subtitle,
+  icon,
+  badges,
+  metrics,
+}: {
+  dark: boolean;
+  title: string;
+  subtitle: string;
+  icon: ReactNode;
+  badges?: string[];
+  metrics?: Array<{ label: string; value: string }>;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {icon}
+            <span
+              className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
+              style={{ fontWeight: 560 }}
+            >
+              {title}
+            </span>
+          </div>
           <p
             className={`mt-1 text-[11px] ${
               dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
@@ -116,9 +159,150 @@ function ResultRow({
           >
             {subtitle}
           </p>
+        </div>
+        {badges?.length ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            {badges.map((badge) => (
+              <StatusPill key={badge} dark={dark} label={badge} />
+            ))}
+          </div>
         ) : null}
       </div>
-      {status ? <StatusPill dark={dark} label={normalizeStatusLabel(status)} /> : null}
+      {metrics?.length ? (
+        <div className={`grid gap-2 ${metrics.length > 2 ? "grid-cols-3" : "grid-cols-2"}`}>
+          {metrics.map((metric) => (
+            <ResultMetric
+              key={metric.label}
+              dark={dark}
+              label={metric.label}
+              value={metric.value}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EmptyState({
+  dark,
+  message,
+}: {
+  dark: boolean;
+  message: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border border-dashed px-3 py-3 text-[11px] ${
+        dark
+          ? "border-white/[0.08] bg-white/[0.02] text-[#C1CED8]"
+          : "border-[#D7DBE0] bg-[#FAFBFC] text-[#5E6D7A]"
+      }`}
+      style={{ fontWeight: 420 }}
+    >
+      {message}
+    </div>
+  );
+}
+
+function ActionLink({
+  dark,
+  href,
+  label,
+}: {
+  dark: boolean;
+  href: string;
+  label: string;
+}) {
+  return (
+    <Link
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] transition-colors ${
+        dark
+          ? "bg-white/[0.06] text-white hover:bg-white/[0.1]"
+          : "bg-[#EEF2FF] text-[#4F46E5] hover:bg-[#E0E7FF]"
+      }`}
+      style={{ fontWeight: 560 }}
+      to={href}
+    >
+      {label}
+      <ArrowUpRight size={11} />
+    </Link>
+  );
+}
+
+function DetailChip({
+  dark,
+  value,
+}: {
+  dark: boolean;
+  value: string;
+}) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] ${
+        dark ? "bg-white/[0.06] text-[#C1CED8]" : "bg-[#F0F0F5] text-[#5E6D7A]"
+      }`}
+      style={{ fontWeight: 500 }}
+    >
+      {value}
+    </span>
+  );
+}
+
+function ResultRow({
+  dark,
+  eyebrow,
+  title,
+  details,
+  status,
+  action,
+}: {
+  dark: boolean;
+  eyebrow: string;
+  title: string;
+  details: string[];
+  status?: string | null;
+  action?: { href: string; label: string } | null;
+}) {
+  return (
+    <div
+      className={`rounded-xl border px-3 py-3 ${
+        dark
+          ? "border-white/[0.06] bg-white/[0.03]"
+          : "border-[#E5E7EB] bg-[#FAFBFC]"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p
+            className={`text-[10px] uppercase tracking-[0.08em] ${
+              dark ? "text-[#8898AA]" : "text-[#8898AA]"
+            }`}
+            style={{ fontWeight: 560 }}
+          >
+            {eyebrow}
+          </p>
+          <p
+            className={`mt-1 text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
+            style={{ fontWeight: 560 }}
+          >
+            {title}
+          </p>
+        </div>
+        {status ? <StatusPill dark={dark} label={normalizeStatusLabel(status)} /> : null}
+      </div>
+      {details.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {details.map((detail) => (
+            <DetailChip key={detail} dark={dark} value={detail} />
+          ))}
+        </div>
+      ) : null}
+      {action ? (
+        <div className="mt-3">
+          <ActionLink dark={dark} href={action.href} label={action.label} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -132,34 +316,48 @@ function OpenShiftsCard({
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <CalendarClock size={14} className="text-[#635BFF]" />
-          <span
-            className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-            style={{ fontWeight: 560 }}
-          >
-            Open shifts
-          </span>
+      <ResultHeader
+        badges={[
+          `${payload.total_open_shifts} open`,
+          ...(typeof payload.location_count === "number"
+            ? [`${payload.location_count} locations`]
+            : []),
+        ]}
+        dark={dark}
+        icon={<CalendarClock size={14} className="text-[#635BFF]" />}
+        metrics={[
+          { label: "open shifts", value: String(payload.total_open_shifts) },
+          { label: "locations", value: String(payload.location_count ?? payload.items.length) },
+        ]}
+        subtitle="Open shifts that still need coverage right now."
+        title="Open shifts"
+      />
+      {payload.items.length === 0 ? (
+        <EmptyState
+          dark={dark}
+          message="No open shifts need coverage right now."
+        />
+      ) : (
+        <div className="space-y-2">
+          {payload.items.map((item: CopilotOpenShiftResultItem) => (
+            <ResultRow
+              key={item.shift_id}
+              action={{
+                href: buildShiftHref(item.shift_id),
+                label: "Open shift",
+              }}
+              dark={dark}
+              details={[
+                item.location_name ?? "Unknown location",
+                formatDateRange(item.starts_at, item.ends_at) ?? "Time unavailable",
+              ]}
+              eyebrow={item.role_name ?? "Open role"}
+              status={item.status}
+              title={item.location_name ?? "Coverage needed"}
+            />
+          ))}
         </div>
-        <div className="flex items-center gap-2">
-          <StatusPill dark={dark} label={`${payload.total_open_shifts} open`} />
-          {typeof payload.location_count === "number" ? (
-            <StatusPill dark={dark} label={`${payload.location_count} locations`} />
-          ) : null}
-        </div>
-      </div>
-      <div className="space-y-2">
-        {payload.items.map((item: CopilotOpenShiftResultItem) => (
-          <ResultRow
-            key={item.shift_id}
-            dark={dark}
-            title={`${item.role_name ?? "Open role"} · ${item.location_name ?? "Unknown location"}`}
-            subtitle={formatDateRange(item.starts_at, item.ends_at)}
-            status={item.status}
-          />
-        ))}
-      </div>
+      )}
     </div>
   );
 }
@@ -173,41 +371,55 @@ function CampaignsCard({
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Activity size={14} className="text-[#635BFF]" />
-          <span
-            className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-            style={{ fontWeight: 560 }}
-          >
-            Active campaigns
-          </span>
+      <ResultHeader
+        badges={[
+          `${payload.total_active_campaigns} active`,
+          ...(typeof payload.running_count === "number"
+            ? [`${payload.running_count} running`]
+            : []),
+          ...(typeof payload.queued_count === "number"
+            ? [`${payload.queued_count} queued`]
+            : []),
+        ]}
+        dark={dark}
+        icon={<Activity size={14} className="text-[#635BFF]" />}
+        metrics={[
+          { label: "active", value: String(payload.total_active_campaigns) },
+          { label: "running", value: String(payload.running_count ?? 0) },
+          { label: "queued", value: String(payload.queued_count ?? 0) },
+        ]}
+        subtitle="Coverage campaigns currently in motion."
+        title="Active campaigns"
+      />
+      {payload.items.length === 0 ? (
+        <EmptyState
+          dark={dark}
+          message="There are no active campaigns right now."
+        />
+      ) : (
+        <div className="space-y-2">
+          {payload.items.map((item: CopilotCampaignResultItem) => (
+            <ResultRow
+              key={item.campaign_id}
+              action={{
+                href: buildShiftHref(item.shift_id),
+                label: "Open shift",
+              }}
+              dark={dark}
+              details={[
+                item.location_name ?? "Unknown location",
+                item.phase_target
+                  ? `${normalizeStatusLabel(item.phase_target)} target`
+                  : "Phase target unavailable",
+                formatDateTime(item.opened_at) ?? "Opened recently",
+              ]}
+              eyebrow={item.role_name ?? "Coverage campaign"}
+              status={item.status}
+              title={item.location_name ?? "Campaign in progress"}
+            />
+          ))}
         </div>
-        <div className="flex items-center gap-2">
-          <StatusPill dark={dark} label={`${payload.total_active_campaigns} active`} />
-          {typeof payload.running_count === "number" ? (
-            <StatusPill dark={dark} label={`${payload.running_count} running`} />
-          ) : null}
-          {typeof payload.queued_count === "number" ? (
-            <StatusPill dark={dark} label={`${payload.queued_count} queued`} />
-          ) : null}
-        </div>
-      </div>
-      <div className="space-y-2">
-        {payload.items.map((item: CopilotCampaignResultItem) => (
-          <ResultRow
-            key={item.campaign_id}
-            dark={dark}
-            title={`${item.role_name ?? "Coverage campaign"} · ${item.location_name ?? "Unknown location"}`}
-            subtitle={
-              item.phase_target
-                ? `${formatDateTime(item.opened_at) ?? "Opened"} · ${normalizeStatusLabel(item.phase_target)} target`
-                : formatDateTime(item.opened_at)
-            }
-            status={item.status}
-          />
-        ))}
-      </div>
+      )}
     </div>
   );
 }
@@ -221,29 +433,48 @@ function ManagerActionsCard({
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <ShieldAlert size={14} className="text-[#E5484D]" />
-          <span
-            className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-            style={{ fontWeight: 560 }}
-          >
-            Manager actions
-          </span>
+      <ResultHeader
+        badges={[`${payload.total_actions} pending`]}
+        dark={dark}
+        icon={<ShieldAlert size={14} className="text-[#E5484D]" />}
+        metrics={[
+          { label: "pending", value: String(payload.total_actions) },
+          {
+            label: "next up",
+            value: payload.items[0]?.starts_at
+              ? formatDateTime(payload.items[0].starts_at)?.split(",")[0] ?? "Now"
+              : "Now",
+          },
+        ]}
+        subtitle="Shifts that still need manager review or intervention."
+        title="Manager actions"
+      />
+      {payload.items.length === 0 ? (
+        <EmptyState
+          dark={dark}
+          message="No manager actions need attention right now."
+        />
+      ) : (
+        <div className="space-y-2">
+          {payload.items.map((item: CopilotManagerActionResultItem) => (
+            <ResultRow
+              key={item.campaign_id}
+              action={{
+                href: buildShiftHref(item.shift_id),
+                label: "Review shift",
+              }}
+              dark={dark}
+              details={[
+                item.location_name ?? "Unknown location",
+                formatDateTime(item.starts_at) ?? "Time unavailable",
+              ]}
+              eyebrow={item.role_name ?? "Manager review"}
+              status={item.status}
+              title={item.location_name ?? "Review needed"}
+            />
+          ))}
         </div>
-        <StatusPill dark={dark} label={`${payload.total_actions} pending`} />
-      </div>
-      <div className="space-y-2">
-        {payload.items.map((item: CopilotManagerActionResultItem) => (
-          <ResultRow
-            key={item.campaign_id}
-            dark={dark}
-            title={`${item.role_name ?? "Manager review"} · ${item.location_name ?? "Unknown location"}`}
-            subtitle={formatDateTime(item.starts_at)}
-            status={item.status}
-          />
-        ))}
-      </div>
+      )}
     </div>
   );
 }
@@ -257,15 +488,13 @@ function HelpCard({
 }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Sparkles size={14} className="text-[#635BFF]" />
-        <span
-          className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-          style={{ fontWeight: 560 }}
-        >
-          Available tools
-        </span>
-      </div>
+      <ResultHeader
+        dark={dark}
+        icon={<Sparkles size={14} className="text-[#635BFF]" />}
+        metrics={[{ label: "tools", value: String(payload.tools.length) }]}
+        subtitle="These are the dashboard tools Copilot can currently use."
+        title="Available tools"
+      />
       <div className="flex flex-wrap gap-2">
         {payload.tools.map((tool) => (
           <span
@@ -281,6 +510,32 @@ function HelpCard({
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ResultFooter({
+  dark,
+  actionRun,
+}: {
+  dark: boolean;
+  actionRun: CopilotActionRun;
+}) {
+  return (
+    <div
+      className={`mt-3 flex flex-wrap items-center gap-2 text-[10px] ${
+        dark ? "text-[#8898AA]" : "text-[#8898AA]"
+      }`}
+      style={{ fontWeight: 500 }}
+    >
+      <span className="inline-flex items-center gap-1">
+        <Clock3 size={11} />
+        {formatDateTime(actionRun.finished_at ?? actionRun.started_at) ?? "Just now"}
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <MapPin size={11} />
+        {normalizeStatusLabel(actionRun.tool_name.replace(/\./g, " "))}
+      </span>
     </div>
   );
 }
@@ -330,17 +585,7 @@ export default function DashboardCopilotToolResult({
           payload={actionRun.result_payload as CopilotHelpResult}
         />
       ) : null}
-      <div
-        className={`mt-3 flex items-center gap-2 text-[10px] ${
-          dark ? "text-[#8898AA]" : "text-[#8898AA]"
-        }`}
-        style={{ fontWeight: 500 }}
-      >
-        <Clock3 size={11} />
-        <span>{formatDateTime(actionRun.finished_at ?? actionRun.started_at) ?? "Just now"}</span>
-        <MapPin size={11} />
-        <span>{normalizeStatusLabel(actionRun.tool_name.replace(/\./g, " "))}</span>
-      </div>
+      <ResultFooter actionRun={actionRun} dark={dark} />
     </div>
   );
 }
