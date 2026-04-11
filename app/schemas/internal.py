@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
@@ -36,3 +38,26 @@ class SchedulerSyncProcessResponse(BaseSchema):
     failed_count: int
     retrying_count: int
     processed_job_ids: list[str] = Field(default_factory=list)
+
+
+class FeedProjectionProcessResponse(BaseSchema):
+    projection_name: str
+    status: str
+    claimed: bool
+    cursor_status: str
+    processed_count: int
+    processed_source_event_ids: list[str] = Field(default_factory=list)
+    latest_source_event_id: str | None = None
+    latest_source_created_at: datetime | None = None
+
+
+class FeedProjectionRebuildResponse(BaseSchema):
+    projection_name: str
+    status: str
+    claimed: bool
+    cursor_status: str
+    deleted_count: int
+    processed_count: int
+    processed_source_event_ids: list[str] = Field(default_factory=list)
+    latest_source_event_id: str | None = None
+    latest_source_created_at: datetime | None = None

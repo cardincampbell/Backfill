@@ -8,7 +8,7 @@ from app.api.deps import AuthDep, SessionDep
 from app.models.common import MembershipRole
 from app.schemas.events import PlatformEventRead
 from app.services import auth as auth_service
-from app.services import platform_events
+from app.services import feed_projections
 
 router = APIRouter(prefix="/businesses/{business_id}/events", tags=["events"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
@@ -26,7 +26,7 @@ async def list_platform_events(
 ):
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
         raise HTTPException(status_code=403, detail="business_access_denied")
-    return await platform_events.list_events(
+    return await feed_projections.list_feed_events(
         session,
         business_id=business_id,
         location_id=location_id,
