@@ -471,13 +471,7 @@ export function LocationRoleEditor({
           ) : null}
 
           <div>
-            <div className={`rounded-xl border px-4 py-4 ${subtleSurfaceClass} ${subtleBorderClass}`}>
-              <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Assign employees here and we will automatically make their existing roles available for scheduling at this location. Removing an employee later does not remove those location roles.
-              </p>
-            </div>
-
-            <div className="mt-6">
+            <div>
               <div className="mb-3 flex items-center justify-between">
                 <h3
                   className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
