@@ -21,6 +21,7 @@ from app.models.integrations import (
     SchedulerSyncJob,
     SchedulerSyncRun,
 )
+from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.role_taxonomy import (
     BusinessPlaceType,
     BusinessRoleArchetype,
@@ -59,6 +60,7 @@ __all__ = [
     "EmployeeAvailabilityRule",
     "EmployeeLocation",
     "EmployeeRole",
+    "FeedProjection",
     "LlmGeneration",
     "Location",
     "LocationRole",
@@ -67,6 +69,7 @@ __all__ = [
     "OTPChallenge",
     "OutboxEvent",
     "PlatformEvent",
+    "ProjectionCursor",
     "ProviderCallbackLog",
     "RetellConversation",
     "Role",

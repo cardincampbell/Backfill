@@ -34,6 +34,9 @@ def test_metadata_contains_core_tables():
         "sessions",
         "otp_challenges",
         "audit_logs",
+        "platform_events",
+        "feed_projections",
+        "projection_cursors",
     }
     assert expected.issubset(set(Base.metadata.tables.keys()))
 

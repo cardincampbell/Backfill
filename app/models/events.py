@@ -20,6 +20,7 @@ class PlatformEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_platform_events_event_type_occurred_at", "event_type", "occurred_at"),
         Index("ix_platform_events_entity_type_entity_id", "entity_type", "entity_id"),
         Index("ix_platform_events_trace_id", "trace_id"),
+        Index("ix_platform_events_created_at_id", "created_at", "id"),
     )
 
     business_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("businesses.id", ondelete="SET NULL"))
@@ -42,4 +43,3 @@ class PlatformEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     event_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
-
