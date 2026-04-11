@@ -337,6 +337,120 @@ def test_runtime_tick_route_returns_orchestration_batch_result(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_feed_projection_process_route_rejects_invalid_worker_key(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/internal/feed/projections/process",
+            json={"limit": 5},
+            headers={"X-Backfill-Worker-Key": "wrong_key"},
+        )
+        assert response.status_code == 401
+        assert response.json() == {"detail": "worker_auth_failed"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feed_projection_process_route_returns_service_batch_result(monkeypatch):
+    captured: dict[str, int] = {}
+
+    async def fake_process(_session, *, limit: int):
+        captured["limit"] = limit
+        return {
+            "projection_name": "dashboard_activity_feed",
+            "status": "processed",
+            "claimed": True,
+            "cursor_status": "idle",
+            "processed_count": 2,
+            "processed_source_event_ids": ["evt_1", "evt_2"],
+            "latest_source_event_id": "evt_2",
+            "latest_source_created_at": "2026-04-10T20:10:00Z",
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.feed_projections.process_feed_projection_batch", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/internal/feed/projections/process",
+            json={"limit": 11},
+            headers={"X-Backfill-Worker-Key": "worker_test_key"},
+        )
+        assert response.status_code == 200
+        assert captured["limit"] == 11
+        assert response.json() == {
+            "projection_name": "dashboard_activity_feed",
+            "status": "processed",
+            "claimed": True,
+            "cursor_status": "idle",
+            "processed_count": 2,
+            "processed_source_event_ids": ["evt_1", "evt_2"],
+            "latest_source_event_id": "evt_2",
+            "latest_source_created_at": "2026-04-10T20:10:00Z",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_feed_projection_rebuild_route_returns_service_batch_result(monkeypatch):
+    captured: dict[str, int] = {}
+
+    async def fake_rebuild(_session, *, limit: int):
+        captured["limit"] = limit
+        return {
+            "projection_name": "dashboard_activity_feed",
+            "status": "processed",
+            "claimed": True,
+            "cursor_status": "idle",
+            "deleted_count": 4,
+            "processed_count": 3,
+            "processed_source_event_ids": ["evt_3", "evt_4", "evt_5"],
+            "latest_source_event_id": "evt_5",
+            "latest_source_created_at": "2026-04-10T20:15:00Z",
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.feed_projections.rebuild_feed_projection", fake_rebuild)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/internal/feed/projections/rebuild",
+            json={"limit": 25},
+            headers={"X-Backfill-Worker-Key": "worker_test_key"},
+        )
+        assert response.status_code == 200
+        assert captured["limit"] == 25
+        assert response.json() == {
+            "projection_name": "dashboard_activity_feed",
+            "status": "processed",
+            "claimed": True,
+            "cursor_status": "idle",
+            "deleted_count": 4,
+            "processed_count": 3,
+            "processed_source_event_ids": ["evt_3", "evt_4", "evt_5"],
+            "latest_source_event_id": "evt_5",
+            "latest_source_created_at": "2026-04-10T20:15:00Z",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_runtime_tick_route_returns_503_when_worker_key_not_configured(monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.internal.settings",

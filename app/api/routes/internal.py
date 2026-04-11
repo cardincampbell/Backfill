@@ -7,6 +7,8 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 from app.api.deps import SessionDep
 from app.config import settings
 from app.schemas.internal import (
+    FeedProjectionProcessResponse,
+    FeedProjectionRebuildResponse,
     OfferExpiryResponse,
     OutboxProcessResponse,
     SchedulerSyncProcessResponse,
@@ -14,7 +16,15 @@ from app.schemas.internal import (
     WorkerBatchRequest,
 )
 from app.schemas.ops import ProviderCallbackLogRead
-from app.services import coverage_runtime, delivery, provider_callbacks, runtime_orchestration, scheduler_sync, webhooks
+from app.services import (
+    coverage_runtime,
+    delivery,
+    feed_projections,
+    provider_callbacks,
+    runtime_orchestration,
+    scheduler_sync,
+    webhooks,
+)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -84,6 +94,26 @@ async def process_runtime_tick(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await runtime_orchestration.process_runtime_tick(session, limit=payload.limit)
+
+
+@router.post("/feed/projections/process", response_model=FeedProjectionProcessResponse)
+async def process_feed_projection_batch(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await feed_projections.process_feed_projection_batch(session, limit=payload.limit)
+
+
+@router.post("/feed/projections/rebuild", response_model=FeedProjectionRebuildResponse)
+async def rebuild_feed_projection(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await feed_projections.rebuild_feed_projection(session, limit=payload.limit)
 
 
 @router.post("/providers/callbacks/process")

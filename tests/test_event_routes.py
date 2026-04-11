@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
-from app.models.events import PlatformEvent
 from app.models.identity import Membership, Session, User
-from app.services import platform_events
+from app.schemas.events import PlatformEventRead
+from app.services import feed_projections
 from app.services.auth import AuthContext
 
 
@@ -74,7 +74,7 @@ def test_list_platform_events_returns_canonical_events(monkeypatch):
         assert kwargs["business_id"] == business_id
         assert kwargs["location_id"] == location_id
         return [
-            PlatformEvent(
+            PlatformEventRead(
                 id=event_id,
                 business_id=business_id,
                 location_id=location_id,
@@ -96,7 +96,7 @@ def test_list_platform_events_returns_canonical_events(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(platform_events, "list_events", fake_list_events)
+    monkeypatch.setattr(feed_projections, "list_feed_events", fake_list_events)
     app.dependency_overrides[get_db_session] = override_db
     app.dependency_overrides[get_auth_context] = override_auth
     client = TestClient(app)
