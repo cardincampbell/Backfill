@@ -171,6 +171,54 @@ class CoverageOfferRead(BaseSchema):
         return self.campaign_run_id
 
 
+class CoverageOutreachAttemptRead(BaseSchema):
+    id: UUID
+    campaign_id: UUID = Field(
+        validation_alias=AliasChoices("campaign_id", "coverage_case_id"),
+    )
+    campaign_run_id: Optional[UUID] = Field(
+        default=None,
+        validation_alias=AliasChoices("campaign_run_id", "coverage_case_run_id"),
+    )
+    coverage_candidate_id: Optional[UUID]
+    employee_id: UUID
+    channel: str
+    status: str
+    offer_status: str
+    attempt_status: Optional[str] = None
+    attempt_no: int = 0
+    outbox_event_id: Optional[UUID] = None
+    delivery_provider: Optional[str] = None
+    provider_message_id: Optional[str] = None
+    idempotency_key: str
+    requested_at: datetime
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    responded_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
+    declined_at: Optional[datetime] = None
+    offer_metadata: dict = Field(default_factory=dict)
+    attempt_metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+    @computed_field(return_type=UUID)
+    @property
+    def coverage_case_id(self) -> UUID:
+        return self.campaign_id
+
+    @computed_field(return_type=Optional[UUID])
+    @property
+    def coverage_case_run_id(self) -> Optional[UUID]:
+        return self.campaign_run_id
+
+    @computed_field(return_type=UUID)
+    @property
+    def coverage_offer_id(self) -> UUID:
+        return self.id
+
+
 class CoverageOfferResponseCreate(BaseSchema):
     response: str
     response_channel: str = "web"
@@ -193,6 +241,7 @@ class CoverageOfferResponseRead(BaseSchema):
 
 class CoverageOfferActionResult(BaseSchema):
     offer: CoverageOfferRead
+    outreach_attempt: CoverageOutreachAttemptRead
     response: CoverageOfferResponseRead
     campaign: CoverageCampaignRead = Field(
         validation_alias=AliasChoices("campaign", "coverage_case"),
@@ -224,6 +273,7 @@ class CoverageCampaignDispatchResult(BaseSchema):
     run: Optional[CoverageCampaignRunRead] = None
     plan: Optional[CoverageExecutionPlan] = None
     candidate_count: int = 0
+    outreach_attempts: list[CoverageOutreachAttemptRead] = Field(default_factory=list)
     offers: list[CoverageOfferRead] = Field(default_factory=list)
 
     @computed_field(return_type=CoverageCampaignRead)
@@ -247,6 +297,7 @@ class Phase1ExecutionResult(BaseSchema):
     plan: CoverageExecutionPlan
     candidate_count: int
     candidates: list[CoverageCandidatePreview]
+    outreach_attempts: list[CoverageOutreachAttemptRead]
     offers: list[CoverageOfferRead]
 
     @computed_field(return_type=CoverageCampaignRead)
@@ -270,6 +321,7 @@ class Phase2ExecutionResult(BaseSchema):
     plan: CoverageExecutionPlan
     candidate_count: int
     candidates: list[CoverageCandidatePreview]
+    outreach_attempts: list[CoverageOutreachAttemptRead]
     offers: list[CoverageOfferRead]
 
     @computed_field(return_type=CoverageCampaignRead)

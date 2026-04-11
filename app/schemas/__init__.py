@@ -16,6 +16,7 @@ from app.schemas.business import (
 )
 from app.schemas.coverage import (
     CoverageOfferActionResult,
+    CoverageOutreachAttemptRead,
     CoverageOfferResponseCreate,
     CoverageOfferResponseRead,
     CoverageCandidatePreview,
@@ -89,6 +90,7 @@ __all__ = [
     "CoverageCaseCreate",
     "CoverageCaseRead",
     "CoverageOfferActionResult",
+    "CoverageOutreachAttemptRead",
     "CoverageCaseRunRead",
     "CoverageExecutionDecision",
     "CoverageExecutionDispatchRequest",

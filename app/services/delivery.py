@@ -16,7 +16,7 @@ from app.models.coverage import CoverageCandidate, CoverageCase, CoverageCaseRun
 from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
-from app.services import messaging, retell as retell_service, worker_runtime
+from app.services import messaging, outreach as outreach_service, platform_events, retell as retell_service, worker_runtime
 
 
 @dataclass
@@ -483,6 +483,19 @@ async def process_outbox_batch(
                 now=reference_time,
                 result_payload=result.result_payload,
             )
+            await outreach_service.append_outreach_attempt_event(
+                session,
+                event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_AWAITING_RESPONSE,
+                offer=offer,
+                business_id=shift.business_id,
+                location_id=shift.location_id,
+                shift_id=shift.id,
+                attempt=attempt,
+                metadata={
+                    "channel": "worker_runtime",
+                    "provider": result.provider,
+                },
+            )
             sent_count += 1
         else:
             retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
@@ -569,6 +582,16 @@ async def _handle_terminal_offer_failure(
             **(result_payload or {}),
             "worker_error": error_message,
         }
+    await outreach_service.append_outreach_attempt_event(
+        session,
+        event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_FAILED,
+        offer=offer,
+        attempt=attempt,
+        metadata={
+            "channel": "worker_runtime",
+            "error_message": error_message,
+        },
+    )
     await refresh_employee_reliability(session, offer.employee_id, now=reference_time)
     return await _advance_case_after_terminal_offer(
         session,
@@ -596,11 +619,20 @@ async def expire_due_offers(
     for offer in offers:
         offer.status = OfferStatus.expired
         offer.offer_metadata = {**offer.offer_metadata, "expired_at": reference_time.isoformat()}
-        await mark_offer_attempt_outcome(
+        attempt = await mark_offer_attempt_outcome(
             session,
             offer,
             status=CoverageAttemptStatus.expired,
             occurred_at=reference_time,
+        )
+        await outreach_service.append_outreach_attempt_event(
+            session,
+            event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_EXPIRED,
+            offer=offer,
+            attempt=attempt,
+            metadata={
+                "channel": "worker_runtime",
+            },
         )
         await refresh_employee_reliability(session, offer.employee_id, now=reference_time)
 
@@ -694,6 +726,17 @@ async def apply_twilio_status_callback(
                 "error_code": error_code,
                 "error_message": error_message,
             }
+        await outreach_service.append_outreach_attempt_event(
+            session,
+            event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_FAILED,
+            offer=offer,
+            attempt=attempt,
+            metadata={
+                "channel": "provider_callback",
+                "provider": "twilio",
+                "error_code": error_code,
+            },
+        )
         await refresh_employee_reliability(session, offer.employee_id, now=reference_time)
         advanced_offer_ids, exhausted_case_id = await _advance_case_after_terminal_offer(
             session,

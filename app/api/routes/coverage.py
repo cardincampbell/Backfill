@@ -13,6 +13,7 @@ from app.schemas.coverage import (
     CoverageCampaignExecutionDecision,
     CoverageCampaignRead,
     CoverageOfferActionResult,
+    CoverageOutreachAttemptRead,
     CoverageOfferResponseCreate,
     Phase1CoveragePreview,
     Phase1ExecutionRequest,
@@ -22,7 +23,7 @@ from app.schemas.coverage import (
     Phase2ExecutionResult,
 )
 from app.services import audit as audit_service
-from app.services import auth as auth_service, coverage
+from app.services import auth as auth_service, coverage, outreach as outreach_service
 from app.services import platform_events
 
 router = APIRouter(tags=["coverage"])
@@ -41,6 +42,29 @@ def _ensure_manager_access(auth_ctx: AuthDep, business_id: UUID) -> None:
 async def list_campaigns(business_id: UUID, session: SessionDep, auth_ctx: AuthDep):
     _ensure_manager_access(auth_ctx, business_id)
     return await coverage.list_campaigns(session, business_id)
+
+
+@router.get(f"{CAMPAIGN_PREFIX}/{{campaign_id}}/outreach-attempts", response_model=list[CoverageOutreachAttemptRead])
+@router.get(
+    f"{LEGACY_PREFIX}/{{campaign_id}}/outreach-attempts",
+    response_model=list[CoverageOutreachAttemptRead],
+    include_in_schema=False,
+)
+async def list_campaign_outreach_attempts(
+    business_id: UUID,
+    campaign_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    _ensure_manager_access(auth_ctx, business_id)
+    try:
+        return await outreach_service.list_campaign_outreach_attempts(
+            session,
+            business_id=business_id,
+            campaign_id=campaign_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post(f"{CAMPAIGN_PREFIX}", response_model=CoverageCampaignRead, status_code=status.HTTP_201_CREATED)
@@ -292,36 +316,20 @@ async def respond_to_offer(
 ):
     _ensure_manager_access(auth_ctx, business_id)
     try:
-        result = await coverage.respond_to_offer(session, business_id, offer_id, payload)
+        membership = auth_service.membership_for_scope(auth_ctx, business_id)
+        result = await coverage.respond_to_offer(
+            session,
+            business_id,
+            offer_id,
+            payload,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=audit_service.request_client_ip(request),
+            user_agent=audit_service.request_user_agent(request),
+        )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.campaign.location_id)
-    action_event_type = (
-        platform_events.PlatformEventType.COVERAGE_OFFER_ACCEPTED
-        if payload.response.strip().lower() == "accepted"
-        else platform_events.PlatformEventType.COVERAGE_OFFER_DECLINED
-    )
-    await platform_events.append(
-        session,
-        event_type=action_event_type,
-        target_type="coverage_offer",
-        target_id=result.offer.id,
-        business_id=business_id,
-        location_id=result.campaign.location_id,
-        actor_type=AuditActorType.user,
-        actor_user_id=auth_ctx.user.id,
-        actor_membership_id=membership.id if membership is not None else None,
-        ip_address=audit_service.request_client_ip(request),
-        user_agent=audit_service.request_user_agent(request),
-        payload={
-            "campaign_id": str(result.campaign.id),
-            "coverage_case_id": str(result.campaign.id),
-            "shift_id": str(result.shift_id),
-            "assignment_id": str(result.assignment_id) if result.assignment_id is not None else None,
-        },
-        metadata={"channel": "dashboard"},
-    )
-    await session.commit()
     return result

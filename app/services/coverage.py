@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, LocationRole
 from app.models.common import (
+    AuditActorType,
     AssignmentStatus,
     CandidateSource,
     CoverageOperatingMode,
@@ -51,7 +52,7 @@ from app.schemas.coverage import (
     Phase2ExecutionRequest,
     Phase2ExecutionResult,
 )
-from app.services import delivery as delivery_service, runtime_projections
+from app.services import delivery as delivery_service, outreach as outreach_service, platform_events, runtime_projections
 
 
 def _normalize_candidate_score(
@@ -492,6 +493,19 @@ async def activate_standby_queue(
                 },
             )
         )
+        await outreach_service.append_outreach_attempt_event(
+            session,
+            event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_QUEUED,
+            compatibility_event_name="coverage.offer.created",
+            offer=reactivation_offer,
+            business_id=shift.business_id,
+            location_id=shift.location_id,
+            shift_id=shift.id,
+            metadata={
+                "channel": "coverage_service",
+                "operating_mode": "standby_queue",
+            },
+        )
         entry["status"] = "activated"
         entry["activation_offer_id"] = str(reactivation_offer.id)
         entry["activation_requested_at"] = reference_time.isoformat()
@@ -878,6 +892,7 @@ async def execute_next_campaign_phase(
             run=result.run,
             plan=result.plan,
             candidate_count=result.candidate_count,
+            outreach_attempts=result.outreach_attempts,
             offers=result.offers,
         )
 
@@ -908,6 +923,7 @@ async def execute_next_campaign_phase(
             run=result.run,
             plan=result.plan,
             candidate_count=result.candidate_count,
+            outreach_attempts=result.outreach_attempts,
             offers=result.offers,
         )
 
@@ -920,6 +936,7 @@ async def execute_next_campaign_phase(
         decision=decision,
         phase_executed=None,
         campaign=case,
+        outreach_attempts=[],
     )
 
 
@@ -1435,6 +1452,7 @@ async def execute_phase_1_run(
         plan=plan,
         candidate_count=len(ranked),
         candidates=ranked,
+        outreach_attempts=outreach_service.outreach_attempt_reads_from_offers(offers),
         offers=offers,
     )
 
@@ -1564,6 +1582,7 @@ async def execute_phase_2_run(
         plan=plan,
         candidate_count=len(ranked),
         candidates=ranked,
+        outreach_attempts=outreach_service.outreach_attempt_reads_from_offers(offers),
         offers=offers,
     )
 
@@ -1624,6 +1643,20 @@ async def _create_offer_for_candidate(
             },
         )
     )
+    await outreach_service.append_outreach_attempt_event(
+        session,
+        event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_QUEUED,
+        compatibility_event_name="coverage.offer.created",
+        offer=offer,
+        business_id=shift.business_id,
+        location_id=shift.location_id,
+        shift_id=shift.id,
+        metadata={
+            "channel": "coverage_service",
+            "phase_no": phase_no,
+            "operating_mode": operating_mode,
+        },
+    )
     return offer
 
 
@@ -1632,6 +1665,12 @@ async def respond_to_offer(
     business_id: UUID,
     offer_id: UUID,
     payload: CoverageOfferResponseCreate,
+    *,
+    actor_type: AuditActorType = AuditActorType.system,
+    actor_user_id: UUID | None = None,
+    actor_membership_id: UUID | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> CoverageOfferActionResult:
     offer = await session.get(CoverageOffer, offer_id)
     if offer is None:
@@ -1757,6 +1796,19 @@ async def respond_to_offer(
                     status=delivery_service.CoverageAttemptStatus.cancelled,
                     occurred_at=responded_at,
                 )
+                await outreach_service.append_outreach_attempt_event(
+                    session,
+                    event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_CANCELLED,
+                    compatibility_event_name="coverage.offer.cancelled",
+                    offer=sibling,
+                    business_id=business_id,
+                    location_id=coverage_case.location_id,
+                    shift_id=shift.id,
+                    metadata={
+                        "channel": "coverage_response",
+                        "reason": "shift_filled",
+                    },
+                )
 
             from app.services import scheduler_sync
 
@@ -1789,7 +1841,7 @@ async def respond_to_offer(
             coverage_case.closed_at = responded_at
 
     if action == "accepted":
-        await delivery_service.mark_offer_attempt_outcome(
+        contact_attempt = await delivery_service.mark_offer_attempt_outcome(
             session,
             offer,
             status=delivery_service.CoverageAttemptStatus.accepted,
@@ -1797,7 +1849,7 @@ async def respond_to_offer(
             response_payload=payload.response_payload,
         )
     else:
-        await delivery_service.mark_offer_attempt_outcome(
+        contact_attempt = await delivery_service.mark_offer_attempt_outcome(
             session,
             offer,
             status=delivery_service.CoverageAttemptStatus.declined,
@@ -1805,6 +1857,33 @@ async def respond_to_offer(
             response_payload=payload.response_payload,
         )
     await delivery_service.refresh_employee_reliability(session, offer.employee_id, now=responded_at)
+    await outreach_service.append_outreach_attempt_event(
+        session,
+        event_type=(
+            platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_ACCEPTED
+            if action == "accepted"
+            else platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_DECLINED
+        ),
+        compatibility_event_name=(
+            platform_events.PlatformEventType.COVERAGE_OFFER_ACCEPTED
+            if action == "accepted"
+            else platform_events.PlatformEventType.COVERAGE_OFFER_DECLINED
+        ),
+        offer=offer,
+        attempt=contact_attempt,
+        business_id=business_id,
+        location_id=coverage_case.location_id,
+        shift_id=shift.id,
+        actor_type=actor_type,
+        actor_user_id=actor_user_id,
+        actor_membership_id=actor_membership_id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        metadata={
+            "channel": payload.response_channel,
+            "response_code": payload.response_code,
+        },
+    )
 
     await session.commit()
     await session.refresh(offer)
@@ -1815,6 +1894,7 @@ async def respond_to_offer(
 
     return CoverageOfferActionResult(
         offer=offer,
+        outreach_attempt=outreach_service.outreach_attempt_read_from_offer(offer, attempt=contact_attempt),
         response=response,
         campaign=coverage_case,
         shift_id=shift.id,
