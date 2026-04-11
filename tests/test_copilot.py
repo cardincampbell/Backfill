@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -19,6 +20,7 @@ from app.schemas.copilot import (
     CopilotSessionRead,
     CopilotValidationResultRead,
 )
+from app.services import llm_gateway
 from app.services.auth import AuthContext
 
 
@@ -104,7 +106,7 @@ def _detail(*, business_id, user_id, location_id=None) -> CopilotSessionDetailRe
         operator_user_id=user_id,
         channel_last_seen="dashboard",
         state="active",
-        context_profile={"business_name": "Backfill"},
+        context_profile={"business_name": "Backfill", "timezone": "America/Los_Angeles"},
         working_memory={},
         created_at=now,
         expires_at=now + timedelta(hours=12),
@@ -168,8 +170,11 @@ def test_list_tools_route_returns_campaign_oriented_tools(client: TestClient):
     assert response.status_code == 200
     payload = response.json()
     tool_names = {item["name"] for item in payload}
+    tools_by_name = {item["name"]: item for item in payload}
     assert "coverage.list_active_campaigns" in tool_names
     assert "schedule.list_open_shifts" in tool_names
+    assert tools_by_name["roster.update_availability"]["mutates_state"] is True
+    assert tools_by_name["schedule.publish"]["availability"] == "planned"
     assert "coverage.start_campaign" not in tool_names
 
 
@@ -376,3 +381,311 @@ async def test_reusable_session_lookup_uses_latest_session_snapshot(monkeypatch)
 
     assert reusable is not None
     assert reusable.session.id == detail.session.id
+
+
+def test_validation_normalizes_roster_update_availability_arguments():
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+
+    validated = validation.validate_and_normalize_tool_call(
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        location_id=None,
+        tool_name="roster.update_availability",
+        tool_arguments={
+            "timezone": "America/Los_Angeles",
+            "rules": [
+                {
+                    "day_of_week": "monday",
+                    "start_local_time": "9:00 AM",
+                    "end_local_time": "5:00 PM",
+                }
+            ],
+        },
+        default_timezone="America/Los_Angeles",
+    )
+
+    assert validated.validation_result.ok is True
+    assert validated.normalized_arguments["timezone"] == "America/Los_Angeles"
+    assert validated.normalized_arguments["rules"][0]["day_of_week"] == 0
+    assert validated.normalized_arguments["rules"][0]["start_local_time"] == "09:00:00"
+    assert validated.normalized_arguments["rules"][0]["end_local_time"] == "17:00:00"
+
+
+def test_validation_rejects_missing_or_implicit_clear_availability_payload():
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+
+    missing_rules = validation.validate_and_normalize_tool_call(
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        location_id=None,
+        tool_name="roster.update_availability",
+        tool_arguments={"timezone": "America/Los_Angeles"},
+        default_timezone="America/Los_Angeles",
+    )
+    implicit_clear = validation.validate_and_normalize_tool_call(
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        location_id=None,
+        tool_name="roster.update_availability",
+        tool_arguments={"timezone": "America/Los_Angeles", "rules": []},
+        default_timezone="America/Los_Angeles",
+    )
+    explicit_clear = validation.validate_and_normalize_tool_call(
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        location_id=None,
+        tool_name="roster.update_availability",
+        tool_arguments={
+            "timezone": "America/Los_Angeles",
+            "clear_requested": True,
+            "rules": [],
+        },
+        default_timezone="America/Los_Angeles",
+    )
+
+    assert missing_rules.validation_result.ok is False
+    assert missing_rules.validation_result.code == "invalid_arguments"
+    assert implicit_clear.validation_result.ok is False
+    assert implicit_clear.validation_result.code == "invalid_arguments"
+    assert explicit_clear.validation_result.ok is True
+    assert explicit_clear.normalized_arguments["clear_requested"] is True
+    assert explicit_clear.normalized_arguments["rules"] == []
+
+
+@pytest.mark.asyncio
+async def test_plan_tool_call_includes_current_availability_snapshot(monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+
+    async def fake_get_self_employee_availability_rules(
+        _session,
+        _business_id,
+        *,
+        user_id,
+        email,
+        phone_e164,
+        full_name,
+    ):
+        assert _business_id == business_id
+        assert user_id == auth_ctx.user.id
+        assert email == auth_ctx.user.email
+        assert phone_e164 == auth_ctx.user.primary_phone_e164
+        assert full_name == auth_ctx.user.full_name
+        return (
+            SimpleNamespace(id=uuid4()),
+            [
+                SimpleNamespace(
+                    day_of_week=1,
+                    start_local_time=time(9, 0),
+                    end_local_time=time(17, 0),
+                    timezone="America/Los_Angeles",
+                    availability_type="available",
+                )
+            ],
+        )
+
+    async def fake_generate(_db, *, request):
+        planner_context = "\n".join(message.content for message in request.messages)
+        assert "Current recurring weekly availability" in planner_context
+        assert '"day_label": "Tuesday"' in planner_context
+        return llm_gateway.LlmGenerationResult(
+            provider="openai",
+            model="gpt-test",
+            output_text="Use the availability tool.",
+            tool_calls=[
+                llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="roster.update_availability",
+                    arguments={
+                        "timezone": "America/Los_Angeles",
+                        "rules": [
+                            {
+                                "day_of_week": 1,
+                                "start_local_time": "09:00",
+                                "end_local_time": "17:00",
+                            },
+                            {
+                                "day_of_week": 4,
+                                "start_local_time": "09:00",
+                                "end_local_time": "17:00",
+                            },
+                        ],
+                    },
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.domain.copilot.runtime.workforce.get_self_employee_availability_rules",
+        fake_get_self_employee_availability_rules,
+    )
+    monkeypatch.setattr("app.domain.copilot.runtime.llm_gateway.generate", fake_generate)
+
+    planned = await copilot_runtime._plan_tool_call(
+        FakeCopilotSession(),
+        auth_ctx=auth_ctx,
+        session_state=detail.session,
+        history=detail.messages,
+        payload=copilot_runtime.CopilotMessageCreate(
+            text="Add Friday 9 to 5",
+            normalized_channel="dashboard",
+        ),
+    )
+
+    assert planned.planner_source == "llm"
+    assert planned.intent.tool_name == "roster.update_availability"
+
+
+@pytest.mark.asyncio
+async def test_create_turn_uses_llm_planner_for_availability_update(monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+    session_id = detail.session.id
+
+    async def fake_get_session_detail(_db, **_kwargs):
+        return detail
+
+    async def fake_append_event(*_args, **_kwargs):
+        return None
+
+    async def fake_current_availability_rules(*_args, **_kwargs):
+        return []
+
+    async def fake_generate(_db, *, request):
+        assert request.purpose == "copilot_tool_planning"
+        return llm_gateway.LlmGenerationResult(
+            provider="openai",
+            model="gpt-test",
+            output_text="Update the operator's weekly availability.",
+            tool_calls=[
+                llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="roster.update_availability",
+                    arguments={
+                        "timezone": "America/Los_Angeles",
+                        "rules": [
+                            {
+                                "day_of_week": 0,
+                                "start_local_time": "09:00",
+                                "end_local_time": "17:00",
+                            },
+                            {
+                                "day_of_week": 1,
+                                "start_local_time": "09:00",
+                                "end_local_time": "17:00",
+                            },
+                        ],
+                    },
+                )
+            ],
+        )
+
+    async def fake_replace_self_employee_availability_rules(
+        _session,
+        _business_id,
+        *,
+        user_id,
+        email,
+        phone_e164,
+        full_name,
+        payload,
+    ):
+        assert _business_id == business_id
+        assert user_id == auth_ctx.user.id
+        assert email == auth_ctx.user.email
+        assert phone_e164 == auth_ctx.user.primary_phone_e164
+        assert full_name == auth_ctx.user.full_name
+        assert len(payload.rules) == 2
+        return (
+            SimpleNamespace(id=uuid4(), preferred_name="Jordan", full_name="Jordan Lead"),
+            [
+                SimpleNamespace(
+                    day_of_week=rule.day_of_week,
+                    start_local_time=rule.start_local_time,
+                    end_local_time=rule.end_local_time,
+                    timezone=rule.timezone,
+                )
+                for rule in payload.rules
+            ],
+        )
+
+    monkeypatch.setattr("app.domain.copilot.runtime.get_session_detail", fake_get_session_detail)
+    monkeypatch.setattr("app.domain.copilot.runtime._append_copilot_event", fake_append_event)
+    monkeypatch.setattr("app.domain.copilot.runtime._current_availability_rules", fake_current_availability_rules)
+    monkeypatch.setattr("app.domain.copilot.runtime.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr(
+        "app.domain.copilot.runtime.workforce.replace_self_employee_availability_rules",
+        fake_replace_self_employee_availability_rules,
+    )
+
+    turn = await copilot_runtime.create_turn(
+        FakeCopilotSession(),
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        session_id=session_id,
+        payload=copilot_runtime.CopilotMessageCreate(
+            text="Update my availability to Monday and Tuesday from 9 AM to 5 PM",
+            normalized_channel="dashboard",
+        ),
+        request_context=copilot_runtime.CopilotRequestContext(),
+    )
+
+    assert turn.resolved_intent.tool_name == "roster.update_availability"
+    assert turn.action_run.status == "executed"
+    assert turn.action_run.input_payload["planner_source"] == "llm"
+    assert turn.action_run.result_payload["kind"] == "availability_update"
+    assert turn.action_run.result_payload["day_count"] == 2
+    assert turn.outbound_message.message_metadata["tool_name"] == "roster.update_availability"
+
+
+@pytest.mark.asyncio
+async def test_create_turn_falls_back_to_heuristic_when_llm_planner_fails(monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+    session_id = detail.session.id
+
+    async def fake_get_session_detail(_db, **_kwargs):
+        return detail
+
+    async def fake_append_event(*_args, **_kwargs):
+        return None
+
+    async def fake_current_availability_rules(*_args, **_kwargs):
+        return []
+
+    async def fake_generate(_db, *, request):
+        raise RuntimeError(f"planner_unavailable:{request.purpose}")
+
+    async def fake_execute_active_campaigns(_db, **_kwargs):
+        return (
+            {"kind": "campaigns", "total_active_campaigns": 1, "running_count": 1, "queued_count": 0, "items": []},
+            "There is 1 active campaign.",
+        )
+
+    monkeypatch.setattr("app.domain.copilot.runtime.get_session_detail", fake_get_session_detail)
+    monkeypatch.setattr("app.domain.copilot.runtime._append_copilot_event", fake_append_event)
+    monkeypatch.setattr("app.domain.copilot.runtime._current_availability_rules", fake_current_availability_rules)
+    monkeypatch.setattr("app.domain.copilot.runtime.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr("app.domain.copilot.runtime._execute_active_campaigns", fake_execute_active_campaigns)
+
+    turn = await copilot_runtime.create_turn(
+        FakeCopilotSession(),
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        session_id=session_id,
+        payload=copilot_runtime.CopilotMessageCreate(
+            text="Show active coverage campaigns",
+            normalized_channel="dashboard",
+        ),
+        request_context=copilot_runtime.CopilotRequestContext(),
+    )
+
+    assert turn.resolved_intent.tool_name == "coverage.list_active_campaigns"
+    assert turn.action_run.status == "executed"
+    assert turn.action_run.input_payload["planner_source"] == "heuristic"
+    assert turn.action_run.result_payload["kind"] == "campaigns"

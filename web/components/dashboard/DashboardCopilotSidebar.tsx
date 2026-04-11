@@ -33,6 +33,7 @@ const copilotSuggestions = [
   "Show me open shifts this week",
   "What needs my attention right now?",
   "Show active coverage campaigns",
+  "Update my availability to weekdays from 9 AM to 5 PM",
 ];
 
 function sortCopilotMessages(messages: CopilotMessageRecord[]) {

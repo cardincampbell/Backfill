@@ -2,20 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
+import re
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.domain.copilot.registry import list_tools, resolve_intent
-from app.domain.copilot.validation import validate_tool_call
+from app.domain.copilot.registry import get_tool, list_tools, planner_tools, resolve_intent
+from app.domain.copilot.validation import validate_and_normalize_tool_call
 from app.models.business import Business, Location
 from app.models.common import AuditActorType, CoverageCaseStatus, MembershipRole, ShiftStatus
 from app.models.coverage import AuditLog, CoverageCase
 from app.models.scheduling import Shift
 from app.schemas.copilot import (
     CopilotActionRunRead,
+    CopilotIntentRead,
     CopilotMessageCreate,
     CopilotMessageRead,
     CopilotSessionCreate,
@@ -24,12 +28,16 @@ from app.schemas.copilot import (
     CopilotTurnRead,
     CopilotValidationResultRead,
 )
+from app.schemas.workforce import EmployeeAvailabilityRuleCreate, EmployeeAvailabilityRuleReplace
 from app.services import auth as auth_service
+from app.services import llm_gateway
 from app.services import platform_events
+from app.services import workforce
 from app.services.auth import AuthContext
 
 SESSION_TARGET_TYPE = "copilot_session"
 SESSION_TTL_HOURS = 12
+DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 READ_ROLES = {
     MembershipRole.owner,
     MembershipRole.admin,
@@ -42,6 +50,13 @@ READ_ROLES = {
 class CopilotRequestContext:
     ip_address: str | None = None
     user_agent: str | None = None
+
+
+@dataclass(frozen=True)
+class CopilotPlannedToolCall:
+    intent: CopilotIntentRead
+    tool_arguments: dict[str, Any]
+    planner_source: str
 
 
 def _now() -> datetime:
@@ -350,6 +365,329 @@ async def _find_reusable_session(
     return None
 
 
+async def _current_availability_rules(
+    db: AsyncSession,
+    *,
+    auth_ctx: AuthContext,
+    business_id: UUID,
+) -> list[dict[str, Any]]:
+    try:
+        _, rules = await workforce.get_self_employee_availability_rules(
+            db,
+            business_id,
+            user_id=auth_ctx.user.id,
+            email=auth_ctx.user.email,
+            phone_e164=auth_ctx.user.primary_phone_e164,
+            full_name=auth_ctx.user.full_name,
+        )
+    except LookupError:
+        return []
+    return [
+        {
+            "day_of_week": rule.day_of_week,
+            "day_label": DAY_LABELS[rule.day_of_week] if 0 <= rule.day_of_week < len(DAY_LABELS) else str(rule.day_of_week),
+            "start_local_time": rule.start_local_time.isoformat() if hasattr(rule.start_local_time, "isoformat") else str(rule.start_local_time),
+            "end_local_time": rule.end_local_time.isoformat() if hasattr(rule.end_local_time, "isoformat") else str(rule.end_local_time),
+            "timezone": rule.timezone,
+        }
+        for rule in rules
+        if getattr(rule, "availability_type", "available") == "available"
+    ]
+
+
+def _planner_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
+    return [
+        llm_gateway.LlmToolDefinition(
+            name=tool.name,
+            description=tool.description,
+            input_schema=tool.input_schema,
+        )
+        for tool in planner_tools()
+    ]
+
+
+def _preferred_timezone(session_state: CopilotSessionRead) -> str | None:
+    context_profile = session_state.context_profile or {}
+    raw_timezone = context_profile.get("location_timezone") or context_profile.get("timezone")
+    return raw_timezone if isinstance(raw_timezone, str) and raw_timezone.strip() else None
+
+
+def _planner_messages(
+    *,
+    session_state: CopilotSessionRead,
+    history: list[CopilotMessageRead],
+    current_availability_rules: list[dict[str, Any]],
+    user_text: str,
+) -> list[llm_gateway.LlmMessage]:
+    context_profile = session_state.context_profile or {}
+    business_name = context_profile.get("business_name") or "this business"
+    location_name = context_profile.get("location_name") or "all accessible locations"
+    timezone_name = _preferred_timezone(session_state) or "UTC"
+    messages = [
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "You are Backfill Copilot. Choose exactly one available tool for the operator's request. "
+                "Use roster.update_availability only for the signed-in operator's own general weekly availability. "
+                "That tool replaces the full weekly availability set, so return the complete replacement rules array. "
+                "For availability rules, day_of_week uses 0=Monday through 6=Sunday and times should be plain local clock values. "
+                "If the request does not clearly map to an execution tool, choose copilot.help. "
+                "Do not choose planned or unavailable tools."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                f"Business context: {business_name}. "
+                f"Location context: {location_name}. "
+                f"Default timezone: {timezone_name}."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "Current recurring weekly availability for the signed-in operator is: "
+                f"{json.dumps(current_availability_rules)}. "
+                "If the user asks to add, remove, or adjust availability, preserve unaffected existing rules and return the full replacement rules array. "
+                "Use an empty rules array only when the operator explicitly asks to clear all availability, and set clear_requested=true in that case."
+            ),
+        ),
+    ]
+    for message in history[-6:]:
+        messages.append(
+            llm_gateway.LlmMessage(
+                role="assistant" if message.direction == "outbound" else "user",
+                content=message.raw_text,
+            )
+        )
+    messages.append(llm_gateway.LlmMessage(role="user", content=user_text))
+    return messages
+
+
+def _llm_reasoning_text(result: llm_gateway.LlmGenerationResult, tool_name: str) -> str:
+    if result.output_text and result.output_text.strip():
+        return result.output_text.strip()
+    tool_definition = get_tool(tool_name)
+    tool_title = tool_definition.title if tool_definition is not None else tool_name
+    return f"The planner selected {tool_title} for this request."
+
+
+def _heuristic_intent(text: str) -> CopilotIntentRead:
+    normalized = " ".join(text.lower().split())
+    if any(
+        phrase in normalized
+        for phrase in (
+            "set my availability",
+            "update my availability",
+            "clear my availability",
+            "clear availability",
+            "set my hours",
+            "update my hours",
+            "make my availability",
+        )
+    ):
+        return CopilotIntentRead(
+            family="roster",
+            tool_name="roster.update_availability",
+            reasoning="The request appears to be about updating the signed-in operator's recurring availability.",
+            confidence=0.78,
+        )
+    return resolve_intent(text)
+
+
+def _normalize_heuristic_time_token(value: str) -> str | None:
+    raw = value.strip().lower().replace(".", "")
+    patterns = ("%I:%M %p", "%I %p", "%I:%M%p", "%I%p", "%H:%M", "%H")
+    normalized = raw.upper()
+    for pattern in patterns:
+        try:
+            parsed = datetime.strptime(normalized, pattern)
+            return parsed.strftime("%H:%M:%S")
+        except ValueError:
+            continue
+    return None
+
+
+def _time_phrase_to_range(text: str) -> tuple[str, str] | None:
+    lowered = text.lower()
+    if "all day" in lowered:
+        return "00:00:00", "23:59:00"
+    matches = [
+        match.group(0)
+        for match in re.finditer(
+            r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    ]
+    if len(matches) < 2:
+        return None
+    start_raw, end_raw = matches[0], matches[1]
+    start = _normalize_heuristic_time_token(start_raw)
+    end = _normalize_heuristic_time_token(end_raw)
+    if start is None or end is None:
+        return None
+    if end <= start and ("am" not in end_raw.lower() and "pm" not in end_raw.lower()):
+        end_hour = int(end.split(":", maxsplit=1)[0])
+        if end_hour < 12:
+            candidate = f"{end_hour + 12:02d}{end[2:]}"
+            if candidate > start:
+                end = candidate
+    return (start, end) if end > start else None
+
+
+def _availability_days_from_text(text: str) -> list[int]:
+    lowered = text.lower()
+    if "weekdays" in lowered:
+        return [0, 1, 2, 3, 4]
+    if "weekends" in lowered:
+        return [5, 6]
+    if any(token in lowered for token in ("every day", "all days", "daily", "all week")):
+        return list(range(7))
+
+    day_patterns = {
+        0: ("monday", "mon"),
+        1: ("tuesday", "tue", "tues"),
+        2: ("wednesday", "wed"),
+        3: ("thursday", "thu", "thurs"),
+        4: ("friday", "fri"),
+        5: ("saturday", "sat"),
+        6: ("sunday", "sun"),
+    }
+    token_to_day = {
+        pattern: index
+        for index, patterns in day_patterns.items()
+        for pattern in patterns
+    }
+    for match in re.finditer(
+        r"\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat|sunday|sun)\b\s*(?:through|thru|to|-)\s*\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat|sunday|sun)\b",
+        lowered,
+    ):
+        start_day = token_to_day.get(match.group(1))
+        end_day = token_to_day.get(match.group(2))
+        if start_day is None or end_day is None:
+            continue
+        if start_day <= end_day:
+            return list(range(start_day, end_day + 1))
+        return list(range(start_day, 7)) + list(range(0, end_day + 1))
+
+    days: list[int] = []
+    for index, patterns in day_patterns.items():
+        if any(re.search(rf"\b{pattern}\b", lowered) for pattern in patterns):
+            days.append(index)
+    if days:
+        return sorted(set(days))
+    return []
+
+
+def _heuristic_availability_arguments(
+    *,
+    text: str,
+    default_timezone: str | None,
+) -> dict[str, Any] | None:
+    lowered = text.lower()
+    if any(token in lowered for token in (" add ", " remove ", " delete ", " except ", " also ", " plus ", " minus ")):
+        return None
+    if any(phrase in lowered for phrase in ("clear my availability", "clear availability", "remove all availability")):
+        return {
+            "timezone": default_timezone or "UTC",
+            "clear_requested": True,
+            "rules": [],
+        }
+    days = _availability_days_from_text(text)
+    if not days:
+        return None
+    time_range = _time_phrase_to_range(text)
+    if time_range is None:
+        return None
+    start_local_time, end_local_time = time_range
+    timezone_name = default_timezone or "UTC"
+    return {
+        "timezone": timezone_name,
+        "clear_requested": False,
+        "rules": [
+            {
+                "day_of_week": day_of_week,
+                "start_local_time": start_local_time,
+                "end_local_time": end_local_time,
+                "timezone": timezone_name,
+            }
+            for day_of_week in days
+        ],
+    }
+
+
+async def _plan_tool_call(
+    db: AsyncSession,
+    *,
+    auth_ctx: AuthContext,
+    session_state: CopilotSessionRead,
+    history: list[CopilotMessageRead],
+    payload: CopilotMessageCreate,
+) -> CopilotPlannedToolCall:
+    current_availability_rules = await _current_availability_rules(
+        db,
+        auth_ctx=auth_ctx,
+        business_id=session_state.business_id,
+    )
+    planner_request = llm_gateway.LlmGenerationRequest(
+        purpose="copilot_tool_planning",
+        business_id=session_state.business_id,
+        location_id=payload.location_id or session_state.location_id,
+        messages=_planner_messages(
+            session_state=session_state,
+            history=history,
+            current_availability_rules=current_availability_rules,
+            user_text=payload.text.strip(),
+        ),
+        tools=_planner_tool_definitions(),
+        tool_choice="required",
+        metadata={
+            "channel": payload.normalized_channel or session_state.channel_last_seen or "dashboard",
+            "copilot_session_id": str(session_state.id),
+        },
+    )
+    try:
+        result = await llm_gateway.generate(db, request=planner_request)
+    except Exception:
+        result = None
+
+    if result is not None and result.tool_calls:
+        selected_call = result.tool_calls[0]
+        tool_definition = get_tool(selected_call.name)
+        if tool_definition is not None and tool_definition.availability == "available":
+            return CopilotPlannedToolCall(
+                intent=CopilotIntentRead(
+                    family=tool_definition.intent_family,
+                    tool_name=tool_definition.name,
+                    reasoning=_llm_reasoning_text(result, tool_definition.name),
+                    confidence=0.88,
+                ),
+                tool_arguments=dict(selected_call.arguments or {}),
+                planner_source="llm",
+            )
+
+    heuristic_intent = _heuristic_intent(payload.text)
+    heuristic_arguments: dict[str, Any] = {}
+    if heuristic_intent.tool_name == "roster.update_availability":
+        heuristic_arguments = _heuristic_availability_arguments(
+            text=payload.text,
+            default_timezone=_preferred_timezone(session_state),
+        ) or {}
+        if not heuristic_arguments:
+            heuristic_intent = CopilotIntentRead(
+                family="copilot",
+                tool_name="copilot.help",
+                reasoning="Availability updates need a clearer day-and-time request when the LLM planner is unavailable.",
+                confidence=0.45,
+            )
+    return CopilotPlannedToolCall(
+        intent=heuristic_intent,
+        tool_arguments=heuristic_arguments,
+        planner_source="heuristic",
+    )
+
+
 async def list_copilot_tools() -> list:
     return list_tools()
 
@@ -405,7 +743,7 @@ async def create_or_reuse_session(
     )
 
     greeting_text = (
-        f"Hi {_first_name(auth_ctx)}. I can summarize open shifts, active campaigns, and manager actions for you."
+        f"Hi {_first_name(auth_ctx)}. I can summarize open shifts, active campaigns, manager actions, and update your availability."
     )
     greeting = _build_message(
         session_id=session_state.id,
@@ -689,7 +1027,84 @@ async def _execute_help() -> tuple[dict, str]:
     return {
         "kind": "help",
         "tools": [tool.model_dump(mode="json") for tool in tools],
-    }, "I can summarize open shifts, active campaigns, and manager actions. Coverage-starting tools are intentionally not enabled in this scaffold."
+    }, "I can summarize open shifts, active campaigns, and manager actions, and I can update your availability. Schedule publishing is still planned, and coverage-starting tools are intentionally not enabled in this scaffold."
+
+
+def _display_local_time(value: str) -> str:
+    try:
+        parsed = datetime.strptime(value, "%H:%M:%S")
+    except ValueError:
+        return value
+    return parsed.strftime("%-I:%M %p")
+
+
+def _availability_update_summary(result_payload: dict[str, Any]) -> str:
+    rules = result_payload.get("rules", [])
+    if not isinstance(rules, list) or not rules:
+        return "Cleared your general availability."
+    if all(isinstance(rule, dict) for rule in rules):
+        first_rule = rules[0]
+        shared_hours = all(
+            rule.get("start_local_time") == first_rule.get("start_local_time")
+            and rule.get("end_local_time") == first_rule.get("end_local_time")
+            for rule in rules
+        )
+        if shared_hours:
+            day_labels = ", ".join(
+                DAY_LABELS[int(rule["day_of_week"])]
+                for rule in rules
+                if isinstance(rule.get("day_of_week"), int)
+            )
+            return (
+                f"Updated your availability for {day_labels} from "
+                f"{_display_local_time(first_rule.get('start_local_time', ''))} to "
+                f"{_display_local_time(first_rule.get('end_local_time', ''))}."
+            )
+    day_count = result_payload.get("day_count") or len(rules)
+    return f"Updated your general availability across {day_count} day{'s' if day_count != 1 else ''}."
+
+
+async def _execute_update_availability(
+    db: AsyncSession,
+    *,
+    auth_ctx: AuthContext,
+    business_id: UUID,
+    tool_arguments: dict[str, Any],
+) -> tuple[dict, str]:
+    payload = EmployeeAvailabilityRuleReplace(
+        rules=[
+            EmployeeAvailabilityRuleCreate.model_validate(rule)
+            for rule in tool_arguments.get("rules", [])
+        ]
+    )
+    employee, rules = await workforce.replace_self_employee_availability_rules(
+        db,
+        business_id,
+        user_id=auth_ctx.user.id,
+        email=auth_ctx.user.email,
+        phone_e164=auth_ctx.user.primary_phone_e164,
+        full_name=auth_ctx.user.full_name,
+        payload=payload,
+    )
+    serialized_rules = [
+        {
+            "day_of_week": rule.day_of_week,
+            "start_local_time": rule.start_local_time.isoformat() if hasattr(rule.start_local_time, "isoformat") else str(rule.start_local_time),
+            "end_local_time": rule.end_local_time.isoformat() if hasattr(rule.end_local_time, "isoformat") else str(rule.end_local_time),
+            "timezone": rule.timezone,
+        }
+        for rule in rules
+    ]
+    result_payload = {
+        "kind": "availability_update",
+        "employee_id": str(employee.id),
+        "employee_name": employee.preferred_name or employee.full_name,
+        "timezone": rules[0].timezone if rules else tool_arguments.get("timezone") or "UTC",
+        "day_count": len({rule["day_of_week"] for rule in serialized_rules}),
+        "rule_count": len(serialized_rules),
+        "rules": serialized_rules,
+    }
+    return result_payload, _availability_update_summary(result_payload)
 
 
 async def _execute_tool(
@@ -699,6 +1114,7 @@ async def _execute_tool(
     business_id: UUID,
     location_id: UUID | None,
     tool_name: str,
+    tool_arguments: dict[str, Any] | None = None,
 ) -> tuple[dict, str]:
     if tool_name == "schedule.list_open_shifts":
         return await _execute_open_shifts(
@@ -721,6 +1137,13 @@ async def _execute_tool(
             business_id=business_id,
             location_id=location_id,
         )
+    if tool_name == "roster.update_availability":
+        return await _execute_update_availability(
+            db,
+            auth_ctx=auth_ctx,
+            business_id=business_id,
+            tool_arguments=tool_arguments or {},
+        )
     return await _execute_help()
 
 
@@ -741,7 +1164,14 @@ async def create_turn(
     )
     normalized_channel = (payload.normalized_channel or detail.session.channel_last_seen or "dashboard").strip() or "dashboard"
     effective_location_id = payload.location_id or detail.session.location_id
-    intent = resolve_intent(payload.text)
+    planned_tool_call = await _plan_tool_call(
+        db,
+        auth_ctx=auth_ctx,
+        session_state=detail.session,
+        history=detail.messages,
+        payload=payload,
+    )
+    intent = planned_tool_call.intent
 
     inbound = _build_message(
         session_id=session_id,
@@ -778,21 +1208,29 @@ async def create_turn(
         location_id=effective_location_id,
         session_state=session_after_intent,
         event_type=platform_events.PlatformEventType.COPILOT_INTENT_RESOLVED,
-        payload={"resolved_intent": intent.model_dump(mode="json")},
+        payload={
+            "resolved_intent": intent.model_dump(mode="json"),
+            "planner_source": planned_tool_call.planner_source,
+        },
         request_context=request_context,
     )
 
-    validation_result = validate_tool_call(
+    validated_tool_call = validate_and_normalize_tool_call(
         auth_ctx=auth_ctx,
         business_id=business_id,
         location_id=effective_location_id,
         tool_name=intent.tool_name,
+        tool_arguments=planned_tool_call.tool_arguments,
+        default_timezone=_preferred_timezone(detail.session),
     )
+    validation_result = validated_tool_call.validation_result
     tool_input = {
         "business_id": str(business_id),
         "location_id": str(effective_location_id) if effective_location_id is not None else None,
         "message_id": str(inbound.id),
         "text": inbound.raw_text,
+        "planner_source": planned_tool_call.planner_source,
+        "tool_arguments": validated_tool_call.normalized_arguments,
     }
 
     if not validation_result.ok:
@@ -851,6 +1289,7 @@ async def create_turn(
         business_id=business_id,
         location_id=effective_location_id,
         tool_name=intent.tool_name,
+        tool_arguments=validated_tool_call.normalized_arguments,
     )
     action_run = _build_action_run(
         session_id=session_id,
