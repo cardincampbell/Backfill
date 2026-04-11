@@ -11,7 +11,7 @@ from app.schemas.internal import (
     WebhookProcessResponse,
     WorkerBatchRequest,
 )
-from app.services import coverage_runtime, delivery, provider_callbacks, scheduler_sync, webhooks
+from app.services import coverage_runtime, delivery, provider_callbacks, runtime_orchestration, scheduler_sync, webhooks
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -71,6 +71,16 @@ async def process_coverage_runtime(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await coverage_runtime.process_coverage_runtime_batch(session, limit=payload.limit)
+
+
+@router.post("/runtime/tick")
+async def process_runtime_tick(
+    payload: WorkerBatchRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await runtime_orchestration.process_runtime_tick(session, limit=payload.limit)
 
 
 @router.post("/providers/callbacks/process")

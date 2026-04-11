@@ -6,8 +6,8 @@ from typing import Awaitable, Callable, Optional, TypeVar
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.common import CoverageCaseStatus, OutboxStatus, SchedulerSyncJobStatus
-from app.models.coverage import CoverageCase, OutboxEvent
+from app.models.common import CoverageCaseStatus, OfferStatus, OutboxStatus, SchedulerSyncJobStatus
+from app.models.coverage import CoverageCase, CoverageOffer, OutboxEvent
 from app.models.integrations import ProviderCallbackLog, SchedulerSyncJob
 from app.models.scheduling import Shift
 
@@ -275,6 +275,40 @@ async def claim_running_coverage_cases(
             continue
         seen_business_keys.add(dedupe_key)
         selected.append((coverage_case, business_id))
+        if len(selected) >= limit:
+            break
+
+    return selected
+
+
+async def claim_expiring_coverage_offers(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    limit: int,
+) -> list[CoverageOffer]:
+    result = await session.execute(
+        select(CoverageOffer, CoverageCase.id)
+        .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
+        .where(
+            CoverageOffer.status.in_([OfferStatus.pending, OfferStatus.delivered]),
+            CoverageOffer.expires_at.is_not(None),
+            CoverageOffer.expires_at <= now,
+        )
+        .order_by(CoverageOffer.expires_at.asc(), CoverageOffer.created_at.asc())
+        .limit(max(limit, 1) * _CLAIM_SCAN_MULTIPLIER)
+        .with_for_update(skip_locked=True, of=(CoverageOffer, CoverageCase))
+    )
+    rows = list(result.all())
+    selected: list[CoverageOffer] = []
+    seen_case_ids: set[str] = set()
+
+    for offer, coverage_case_id in rows:
+        dedupe_key = str(coverage_case_id)
+        if dedupe_key in seen_case_ids:
+            continue
+        seen_case_ids.add(dedupe_key)
+        selected.append(offer)
         if len(selected) >= limit:
             break
 

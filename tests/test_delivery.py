@@ -406,7 +406,7 @@ async def test_process_outbox_batch_terminal_failure_exhausts_case_when_no_next_
 
 
 @pytest.mark.asyncio
-async def test_expire_due_offers_advances_next_candidate_and_updates_reliability():
+async def test_expire_due_offers_advances_next_candidate_and_updates_reliability(monkeypatch):
     now = datetime.now(timezone.utc)
     business_id = uuid4()
     location_id = uuid4()
@@ -503,13 +503,20 @@ async def test_expire_due_offers_advances_next_candidate_and_updates_reliability
     session.get_map[(Employee, employee_id)] = employee
     session.get_map[(CoverageCaseRun, run_id)] = run
     session.execute_queue = [
-        [offer],
         [attempt],
         [],
         [offer.coverage_candidate_id] if offer.coverage_candidate_id is not None else [],
         [next_candidate],
     ]
     session.scalar_queue = [attempt]
+
+    async def fake_claim_expiring_offers(_session, *, now, limit):
+        assert limit == 10
+        assert now == reference_time
+        return [offer]
+
+    reference_time = now
+    monkeypatch.setattr(delivery.worker_runtime, "claim_expiring_coverage_offers", fake_claim_expiring_offers)
 
     result = await delivery.expire_due_offers(session, now=now, limit=10)
 
@@ -521,6 +528,25 @@ async def test_expire_due_offers_advances_next_candidate_and_updates_reliability
     assert len(new_offers) == 1
     assert new_offers[0].employee_id == next_employee_id
     assert new_offers[0].offer_metadata["premium_cents"] == 500
+
+
+@pytest.mark.asyncio
+async def test_expire_due_offers_returns_zero_when_no_offers_are_claimed(monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    async def fake_claim_expiring_offers(_session, *, now, limit):
+        assert limit == 10
+        return []
+
+    monkeypatch.setattr(delivery.worker_runtime, "claim_expiring_coverage_offers", fake_claim_expiring_offers)
+
+    result = await delivery.expire_due_offers(FakeDeliverySession(), now=now, limit=10)
+
+    assert result == {
+        "expired_count": 0,
+        "exhausted_case_ids": [],
+        "advanced_offer_ids": [],
+    }
 
 
 @pytest.mark.asyncio

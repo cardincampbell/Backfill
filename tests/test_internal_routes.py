@@ -146,3 +146,173 @@ def test_coverage_runtime_process_route_returns_503_when_worker_key_not_configur
         assert response.json() == {"detail": "worker_api_key_not_configured"}
     finally:
         app.dependency_overrides.clear()
+
+
+def test_runtime_tick_route_rejects_invalid_worker_key(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/internal/runtime/tick",
+            json={"limit": 5},
+            headers={"X-Backfill-Worker-Key": "wrong_key"},
+        )
+        assert response.status_code == 401
+        assert response.json() == {"detail": "worker_auth_failed"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_runtime_tick_route_returns_orchestration_batch_result(monkeypatch):
+    captured: dict[str, int] = {}
+
+    async def fake_process(_session, *, limit: int):
+        captured["limit"] = limit
+        return {
+            "status": "processed",
+            "summary": {
+                "callback_claimed_count": 1,
+                "callback_processed_count": 1,
+                "callback_failed_count": 0,
+                "coverage_claimed_case_count": 2,
+                "coverage_processed_case_count": 2,
+                "offer_expiry_expired_count": 0,
+                "offer_expiry_advanced_offer_count": 0,
+                "offer_expiry_exhausted_case_count": 0,
+                "delivery_claimed_count": 1,
+                "total_failed_count": 0,
+            },
+            "callbacks": {
+                "claimed_count": 1,
+                "processed_count": 1,
+                "failed_count": 0,
+                "processed_callback_ids": ["cb_1"],
+            },
+            "coverage_runtime": {
+                "reconcile": {
+                    "claimed_count": 1,
+                    "filled_count": 0,
+                    "cancelled_count": 0,
+                    "exhausted_count": 0,
+                    "unchanged_count": 1,
+                    "failed_count": 0,
+                    "processed_case_ids": ["case_a"],
+                },
+                "offer_expiry": {
+                    "expired_count": 0,
+                    "exhausted_case_ids": [],
+                    "advanced_offer_ids": [],
+                },
+                "queued_cases": {
+                    "claimed_count": 1,
+                    "executed_count": 1,
+                    "exhausted_count": 0,
+                    "skipped_count": 0,
+                    "failed_count": 0,
+                    "processed_case_ids": ["case_b"],
+                },
+                "delivery": {
+                    "claimed_count": 1,
+                    "sent_count": 1,
+                    "failed_count": 0,
+                    "processed_event_ids": ["evt_1"],
+                },
+                "processed_case_ids": ["case_a", "case_b"],
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.runtime_orchestration.process_runtime_tick", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/internal/runtime/tick",
+            json={"limit": 9},
+            headers={"X-Backfill-Worker-Key": "worker_test_key"},
+        )
+        assert response.status_code == 200
+        assert captured["limit"] == 9
+        assert response.json() == {
+            "status": "processed",
+            "summary": {
+                "callback_claimed_count": 1,
+                "callback_processed_count": 1,
+                "callback_failed_count": 0,
+                "coverage_claimed_case_count": 2,
+                "coverage_processed_case_count": 2,
+                "offer_expiry_expired_count": 0,
+                "offer_expiry_advanced_offer_count": 0,
+                "offer_expiry_exhausted_case_count": 0,
+                "delivery_claimed_count": 1,
+                "total_failed_count": 0,
+            },
+            "callbacks": {
+                "claimed_count": 1,
+                "processed_count": 1,
+                "failed_count": 0,
+                "processed_callback_ids": ["cb_1"],
+            },
+            "coverage_runtime": {
+                "reconcile": {
+                    "claimed_count": 1,
+                    "filled_count": 0,
+                    "cancelled_count": 0,
+                    "exhausted_count": 0,
+                    "unchanged_count": 1,
+                    "failed_count": 0,
+                    "processed_case_ids": ["case_a"],
+                },
+                "offer_expiry": {
+                    "expired_count": 0,
+                    "exhausted_case_ids": [],
+                    "advanced_offer_ids": [],
+                },
+                "queued_cases": {
+                    "claimed_count": 1,
+                    "executed_count": 1,
+                    "exhausted_count": 0,
+                    "skipped_count": 0,
+                    "failed_count": 0,
+                    "processed_case_ids": ["case_b"],
+                },
+                "delivery": {
+                    "claimed_count": 1,
+                    "sent_count": 1,
+                    "failed_count": 0,
+                    "processed_event_ids": ["evt_1"],
+                },
+                "processed_case_ids": ["case_a", "case_b"],
+            },
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_runtime_tick_route_returns_503_when_worker_key_not_configured(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key=""),
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/internal/runtime/tick",
+                json={"limit": 3},
+                headers={"X-Backfill-Worker-Key": "anything"},
+            )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "worker_api_key_not_configured"}
+    finally:
+        app.dependency_overrides.clear()
