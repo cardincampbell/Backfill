@@ -63,6 +63,23 @@ export type CopilotManagerActionsResult = {
   items: CopilotManagerActionResultItem[];
 };
 
+export type CopilotAvailabilityRuleResultItem = {
+  day_of_week: number;
+  start_local_time: string;
+  end_local_time: string;
+  timezone: string;
+};
+
+export type CopilotAvailabilityUpdateResult = {
+  kind: "availability_update";
+  employee_id: string;
+  employee_name: string;
+  timezone: string;
+  day_count: number;
+  rule_count: number;
+  rules: CopilotAvailabilityRuleResultItem[];
+};
+
 export type CopilotHelpResult = {
   kind: "help";
   tools: CopilotTool[];
@@ -72,6 +89,7 @@ export type CopilotToolResultPayload =
   | CopilotOpenShiftsResult
   | CopilotCampaignsResult
   | CopilotManagerActionsResult
+  | CopilotAvailabilityUpdateResult
   | CopilotHelpResult
   | Record<string, unknown>;
 

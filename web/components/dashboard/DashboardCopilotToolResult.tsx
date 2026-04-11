@@ -5,6 +5,7 @@ import {
   Activity,
   ArrowUpRight,
   CalendarClock,
+  CheckCircle2,
   Clock3,
   MapPin,
   ShieldAlert,
@@ -13,6 +14,8 @@ import {
 
 import type {
   CopilotActionRun,
+  CopilotAvailabilityRuleResultItem,
+  CopilotAvailabilityUpdateResult,
   CopilotCampaignResultItem,
   CopilotCampaignsResult,
   CopilotHelpResult,
@@ -22,6 +25,16 @@ import type {
   CopilotOpenShiftsResult,
 } from "@/lib/types/copilot";
 import { Link } from "./router-shim";
+
+const DAY_LABELS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
 
 function formatDateTime(value: string | null | undefined): string | null {
   if (!value) {
@@ -51,6 +64,20 @@ function formatDateRange(
   return start ?? end;
 }
 
+function formatClockTime(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(`1970-01-01T${value}`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function normalizeStatusLabel(status: string | null | undefined): string {
   return (status ?? "unknown").replace(/_/g, " ");
 }
@@ -67,6 +94,10 @@ function getResultKind(
 
 function buildShiftHref(shiftId: string): string {
   return `/dashboard/shifts/${shiftId}`;
+}
+
+function buildAvailabilityHref(): string {
+  return "/settings/personal/availability";
 }
 
 function StatusPill({
@@ -479,6 +510,61 @@ function ManagerActionsCard({
   );
 }
 
+function AvailabilityUpdateCard({
+  dark,
+  payload,
+}: {
+  dark: boolean;
+  payload: CopilotAvailabilityUpdateResult;
+}) {
+  return (
+    <div className="space-y-3">
+      <ResultHeader
+        badges={[
+          `${payload.day_count} days`,
+          `${payload.rule_count} rules`,
+        ]}
+        dark={dark}
+        icon={<CheckCircle2 size={14} className="text-[#16A34A]" />}
+        metrics={[
+          { label: "days", value: String(payload.day_count) },
+          { label: "rules", value: String(payload.rule_count) },
+          { label: "timezone", value: payload.timezone },
+        ]}
+        subtitle={`Saved for ${payload.employee_name}.`}
+        title="Availability updated"
+      />
+      {payload.rules.length === 0 ? (
+        <EmptyState
+          dark={dark}
+          message="General availability was cleared."
+        />
+      ) : (
+        <div className="space-y-2">
+          {payload.rules.map((rule: CopilotAvailabilityRuleResultItem) => (
+            <ResultRow
+              key={`${rule.day_of_week}-${rule.start_local_time}-${rule.end_local_time}`}
+              action={null}
+              dark={dark}
+              details={[
+                `${formatClockTime(rule.start_local_time) ?? rule.start_local_time} - ${formatClockTime(rule.end_local_time) ?? rule.end_local_time}`,
+                rule.timezone,
+              ]}
+              eyebrow={DAY_LABELS[rule.day_of_week] ?? "Availability"}
+              title={DAY_LABELS[rule.day_of_week] ?? "Availability"}
+            />
+          ))}
+        </div>
+      )}
+      <ActionLink
+        dark={dark}
+        href={buildAvailabilityHref()}
+        label="Open availability"
+      />
+    </div>
+  );
+}
+
 function HelpCard({
   dark,
   payload,
@@ -577,6 +663,12 @@ export default function DashboardCopilotToolResult({
         <ManagerActionsCard
           dark={dark}
           payload={actionRun.result_payload as CopilotManagerActionsResult}
+        />
+      ) : null}
+      {resultKind === "availability_update" ? (
+        <AvailabilityUpdateCard
+          dark={dark}
+          payload={actionRun.result_payload as CopilotAvailabilityUpdateResult}
         />
       ) : null}
       {resultKind === "help" ? (

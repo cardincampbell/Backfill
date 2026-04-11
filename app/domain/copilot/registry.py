@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from app.schemas.copilot import CopilotIntentRead, CopilotToolRead
 
@@ -13,6 +14,7 @@ class CopilotToolDefinition:
     intent_family: str
     mutates_state: bool = False
     availability: str = "available"
+    input_schema: dict[str, Any] = field(default_factory=lambda: {"type": "object", "additionalProperties": False})
 
     def to_read(self) -> CopilotToolRead:
         return CopilotToolRead(
@@ -44,6 +46,66 @@ _TOOL_REGISTRY: tuple[CopilotToolDefinition, ...] = (
         description="Show items that need manager attention right now.",
         intent_family="schedule",
     ),
+    CopilotToolDefinition(
+        name="roster.update_availability",
+        title="Update my availability",
+        description=(
+            "Update the signed-in operator's own general weekly availability. "
+            "Use backend-native arguments: rules is the full replacement set, "
+            "day_of_week uses 0=Monday through 6=Sunday, and local times should "
+            "be plain local clock values such as 09:00, 17:30, or 9:00 AM."
+        ),
+        intent_family="roster",
+        mutates_state=True,
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone for the replacement availability rules. Optional if the current business/session timezone should be reused.",
+                },
+                "clear_requested": {
+                    "type": "boolean",
+                    "description": "Set true only when the operator explicitly wants to clear all existing availability.",
+                },
+                "rules": {
+                    "type": "array",
+                    "description": "Full replacement availability rules for the signed-in operator. Use an empty array to clear availability.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "day_of_week": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 6,
+                                "description": "0=Monday through 6=Sunday.",
+                            },
+                            "start_local_time": {
+                                "type": "string",
+                                "description": "Local start time, for example 09:00 or 9:00 AM.",
+                            },
+                            "end_local_time": {
+                                "type": "string",
+                                "description": "Local end time, for example 17:00 or 5:00 PM.",
+                            },
+                        },
+                        "required": ["day_of_week", "start_local_time", "end_local_time"],
+                    },
+                },
+            },
+            "required": ["rules"],
+        },
+    ),
+    CopilotToolDefinition(
+        name="schedule.publish",
+        title="Publish schedule",
+        description="Publish the current draft schedule for a location.",
+        intent_family="schedule",
+        mutates_state=True,
+        availability="planned",
+    ),
 )
 
 _HELP_TOOL = CopilotToolDefinition(
@@ -56,6 +118,10 @@ _HELP_TOOL = CopilotToolDefinition(
 
 def list_tools() -> list[CopilotToolRead]:
     return [tool.to_read() for tool in (*_TOOL_REGISTRY, _HELP_TOOL)]
+
+
+def planner_tools() -> tuple[CopilotToolDefinition, ...]:
+    return tuple(tool for tool in (*_TOOL_REGISTRY, _HELP_TOOL) if tool.availability == "available")
 
 
 def get_tool(tool_name: str) -> CopilotToolDefinition | None:
