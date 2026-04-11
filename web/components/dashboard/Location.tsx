@@ -6,11 +6,9 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
-  Check,
   ChevronLeft,
   Info,
   Plus,
-  Tag,
   Upload,
   X,
 } from "lucide-react";
@@ -24,7 +22,6 @@ import {
   buildSchedulerBasePathFromAny,
 } from "@/lib/dashboard-paths";
 import {
-  createBusinessRole,
   getLocationRoles,
   listBusinessLocations,
   listBusinessRoles,
@@ -46,11 +43,19 @@ import {
   LocationEmployeeEnrollmentModal,
 } from "./LocationEmployeeActions";
 import {
-  formatDisplayLabel,
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
-import { validateCustomRoleName } from "@/lib/role-name-validation";
+import {
+  buildEmployeeLocationAssignments,
+  buildInheritedLocationRoleIds,
+  employeeAssignedHere,
+  employeeDisplayName,
+  employeeEligibilityReason,
+  employeeHasAssignedRoles,
+  employeeInitials,
+  mergeUpdatedEmployees,
+} from "./location-employee-utils";
 
 type Feedback = {
   tone: "success" | "error";
@@ -63,40 +68,6 @@ type LocationProps = {
   backHref?: string;
   editingEmployeeId?: string | null;
 };
-
-const CATEGORY_PRIORITY = [
-  "management",
-  "operations",
-  "front_of_house",
-  "back_of_house",
-  "healthcare",
-  "senior_care",
-  "hospitality",
-];
-
-function getRoleCategoryKey(role: BusinessRole): string {
-  const category = role.category?.trim();
-  return category && category.length > 0 ? category.toLowerCase() : "other";
-}
-
-function getRoleCategoryLabel(categoryKey: string): string {
-  return formatDisplayLabel(categoryKey);
-}
-
-function sortCategoryLabels(labels: string[]): string[] {
-  return [...labels].sort((left, right) => {
-    const leftPriority = CATEGORY_PRIORITY.indexOf(left);
-    const rightPriority = CATEGORY_PRIORITY.indexOf(right);
-
-    if (leftPriority !== -1 || rightPriority !== -1) {
-      if (leftPriority === -1) return 1;
-      if (rightPriority === -1) return -1;
-      return leftPriority - rightPriority;
-    }
-
-    return left.localeCompare(right);
-  });
-}
 
 function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
   return {
@@ -123,72 +94,6 @@ function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
   };
 }
 
-function employeeDisplayName(employee: Pick<EmployeeSummary, "full_name" | "preferred_name">) {
-  return employee.preferred_name?.trim() || employee.full_name;
-}
-
-function employeeInitials(name: string) {
-  return (
-    name
-      .split(" ")
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? "")
-      .join("") || "BF"
-  );
-}
-
-function employeeHasAssignedRoles(employee: EmployeeSummary) {
-  return employee.role_ids.length > 0;
-}
-
-function employeeEligibilityReason(employee: EmployeeSummary) {
-  const missingRole = employee.role_ids.length === 0;
-  const missingLocation = employee.location_ids.length === 0;
-
-  if (missingRole && missingLocation) {
-    return "Missing role and location assignment";
-  }
-  if (missingRole) {
-    return "Missing role assignment";
-  }
-  if (missingLocation) {
-    return "Missing location assignment";
-  }
-  return "Missing scheduling requirements";
-}
-
-function employeeAssignedHere(employee: EmployeeSummary, locationId: string) {
-  return employee.location_ids.includes(locationId);
-}
-
-function buildEmployeeLocationAssignments(
-  employee: EmployeeSummary,
-  locationId: string,
-  includeLocation: boolean,
-) {
-  const nextLocationIds = employee.location_ids.filter((item) => item !== locationId);
-  if (includeLocation) {
-    nextLocationIds.push(locationId);
-  }
-
-  if (!nextLocationIds.length) {
-    return [];
-  }
-
-  const preservedPrimaryLocationId =
-    employee.primary_location_id && nextLocationIds.includes(employee.primary_location_id)
-      ? employee.primary_location_id
-      : includeLocation
-        ? locationId
-        : nextLocationIds[0];
-
-  return nextLocationIds.map((item) => ({
-    location_id: item,
-    is_primary: item === preservedPrimaryLocationId,
-  }));
-}
-
 export default function Location({
   embeddedInShell = false,
   location,
@@ -203,12 +108,9 @@ export default function Location({
   const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
   const [employees, setEmployees] = useState<EmployeeSummary[]>([]);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
-  const [customRole, setCustomRole] = useState("");
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback>(null);
-  const [isCreatingRole, setIsCreatingRole] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<EmployeeSummary | null>(null);
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
   const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
@@ -248,16 +150,7 @@ export default function Location({
         setRoles(nextRoles);
         setBusinessLocations(nextLocations.filter((item) => item.is_active));
         setEmployees(nextEmployees);
-        const syncedRoleIds = Array.from(
-          new Set([
-            ...nextAssignments.map((assignment) => assignment.role_id),
-            ...nextEmployees
-              .filter((employee) => employeeAssignedHere(employee, location.location_id))
-              .flatMap((employee) => employee.role_ids),
-          ]),
-        );
         setAssignments(nextAssignments);
-        setSelectedRoleIds(syncedRoleIds);
         setSelectedEmployeeIds(
           nextEmployees
             .filter((employee) => employeeAssignedHere(employee, location.location_id))
@@ -323,32 +216,6 @@ export default function Location({
     () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
     [assignments],
   );
-  const selectedRoles = useMemo(
-    () => roles.filter((role) => selectedRoleIds.includes(role.id)),
-    [roles, selectedRoleIds],
-  );
-  const availableRoles = useMemo(
-    () => roles.filter((role) => !selectedRoleIds.includes(role.id)),
-    [roles, selectedRoleIds],
-  );
-  const groupedAvailableRoles = useMemo(() => {
-    const grouped = new Map<string, BusinessRole[]>();
-    for (const role of availableRoles) {
-      const categoryKey = getRoleCategoryKey(role);
-      const existing = grouped.get(categoryKey);
-      if (existing) {
-        existing.push(role);
-      } else {
-        grouped.set(categoryKey, [role]);
-      }
-    }
-
-    return sortCategoryLabels(Array.from(grouped.keys())).map((categoryKey) => ({
-      categoryKey,
-      categoryLabel: getRoleCategoryLabel(categoryKey),
-      roles: grouped.get(categoryKey) ?? [],
-    }));
-  }, [availableRoles]);
   const selectedEmployeeSet = useMemo(
     () => new Set(selectedEmployeeIds),
     [selectedEmployeeIds],
@@ -368,14 +235,10 @@ export default function Location({
     [employees],
   );
   const selectedEmployees = useMemo(
-    () =>
-      sortedEmployees.filter(
-        (employee) =>
-          selectedEmployeeSet.has(employee.id) && employeeHasAssignedRoles(employee),
-      ),
+    () => sortedEmployees.filter((employee) => selectedEmployeeSet.has(employee.id)),
     [selectedEmployeeSet, sortedEmployees],
   );
-  const availableEmployees = useMemo(
+  const availableReadyEmployees = useMemo(
     () =>
       sortedEmployees.filter(
         (employee) =>
@@ -383,9 +246,17 @@ export default function Location({
       ),
     [selectedEmployeeSet, sortedEmployees],
   );
-  const ineligibleEmployees = useMemo(
-    () => sortedEmployees.filter((employee) => !employeeHasAssignedRoles(employee)),
-    [sortedEmployees],
+  const availableUnavailableEmployees = useMemo(
+    () =>
+      sortedEmployees.filter(
+        (employee) =>
+          !selectedEmployeeSet.has(employee.id) && !employeeHasAssignedRoles(employee),
+      ),
+    [selectedEmployeeSet, sortedEmployees],
+  );
+  const inheritedRoleIds = useMemo(
+    () => buildInheritedLocationRoleIds(assignments, employees, selectedEmployeeIds),
+    [assignments, employees, selectedEmployeeIds],
   );
   const locationReference = getLocationReference({
     name: locationDisplayName,
@@ -409,37 +280,10 @@ export default function Location({
     ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
     : "bg-[#635BFF]/[0.06] border-[#635BFF]/15";
 
-  const addRole = (roleId: string) => {
-    setSelectedRoleIds((current) =>
-      current.includes(roleId) ? current : [...current, roleId],
-    );
-  };
-
-  const removeRole = (roleId: string) => {
-    setSelectedRoleIds((current) => current.filter((item) => item !== roleId));
-  };
-
-  const addAllInCategory = (category: string) => {
-    const roleIds = roles
-      .filter((role) => getRoleCategoryKey(role) === category)
-      .map((role) => role.id);
-    setSelectedRoleIds((current) => Array.from(new Set([...current, ...roleIds])));
-  };
-
-  const addAllRoles = () => {
-    setSelectedRoleIds(roles.map((role) => role.id));
-  };
-
   const addEmployee = (employeeId: string) => {
-    const employee = employees.find((item) => item.id === employeeId);
     setSelectedEmployeeIds((current) =>
       current.includes(employeeId) ? current : [...current, employeeId],
     );
-    if (employee) {
-      setSelectedRoleIds((current) =>
-        Array.from(new Set([...current, ...employee.role_ids])),
-      );
-    }
   };
 
   const removeEmployee = (employeeId: string) => {
@@ -448,60 +292,13 @@ export default function Location({
 
   const addAllEmployees = () => {
     setSelectedEmployeeIds((current) =>
-      Array.from(new Set([...current, ...availableEmployees.map((employee) => employee.id)])),
+      Array.from(
+        new Set([
+          ...current,
+          ...availableReadyEmployees.map((employee) => employee.id),
+        ]),
+      ),
     );
-  };
-
-  const handleCreateRole = async () => {
-    const trimmed = customRole.trim();
-    if (!trimmed || isCreatingRole) {
-      return;
-    }
-
-    const existing = roles.find(
-      (role) => role.name.trim().toLowerCase() === trimmed.toLowerCase(),
-    );
-    if (existing) {
-      addRole(existing.id);
-      setCustomRole("");
-      return;
-    }
-
-    const validation = validateCustomRoleName(
-      trimmed,
-      roles.map((role) => role.name),
-    );
-    if (!validation.ok) {
-      setFeedback({
-        tone: "error",
-        message: validation.message,
-      });
-      return;
-    }
-
-    try {
-      setIsCreatingRole(true);
-      setFeedback(null);
-      const created = await createBusinessRole(location.business_id, {
-        name: validation.roleName,
-      });
-      setRoles((current) =>
-        current.some((role) => role.id === created.id)
-          ? current
-          : [...current, created],
-      );
-      setSelectedRoleIds((current) =>
-        current.includes(created.id) ? current : [...current, created.id],
-      );
-      setCustomRole("");
-    } catch (error) {
-      setFeedback({
-        tone: "error",
-        message: error instanceof Error ? error.message : "Could not create role.",
-      });
-    } finally {
-      setIsCreatingRole(false);
-    }
   };
 
   const handleEmployeeSaved = async (nextEmployee: EmployeeProfile) => {
@@ -519,11 +316,6 @@ export default function Location({
       }
       return current.filter((item) => item !== nextEmployee.id);
     });
-    if (selectedEmployeeSet.has(nextEmployee.id)) {
-      setSelectedRoleIds((current) =>
-        Array.from(new Set([...current, ...nextEmployee.role_ids])),
-      );
-    }
     setEditingEmployee(nextEmployee);
   };
 
@@ -558,9 +350,6 @@ export default function Location({
         ? current
         : [...current, nextEmployee.id],
     );
-    setSelectedRoleIds((current) =>
-      Array.from(new Set([...current, ...nextEmployee.role_ids])),
-    );
     setFeedback({
       tone: "success",
       message: `${nextEmployee.full_name} was added to ${locationDisplayName}.`,
@@ -594,23 +383,17 @@ export default function Location({
   };
 
   const handleContinue = () => {
-    if (!selectedRoleIds.length || !selectedEmployees.length) {
+    if (!selectedEmployeeIds.length || inheritedRoleIds.length === 0) {
       return;
     }
 
     startTransition(async () => {
       try {
         setFeedback(null);
-        const roleIdsToSave = Array.from(
-          new Set([
-            ...selectedRoleIds,
-            ...selectedEmployees.flatMap((employee) => employee.role_ids),
-          ]),
-        );
         const nextAssignments = await replaceLocationRoles(
           location.business_id,
           location.location_id,
-          roleIdsToSave.map((roleId) => {
+          inheritedRoleIds.map((roleId) => {
             const existing = assignmentsByRoleId.get(roleId);
             return existing
               ? {
@@ -640,18 +423,10 @@ export default function Location({
           ),
         );
         setAssignments(nextAssignments);
-        setSelectedRoleIds(nextAssignments.map((assignment) => assignment.role_id));
-        if (updatedEmployees.length > 0) {
-          const updatedById = new Map(
-            updatedEmployees.map((employee) => [employee.id, employee]),
-          );
-          setEmployees((current) =>
-            current.map((employee) => updatedById.get(employee.id) ?? employee),
-          );
-        }
+        setEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setLocationEntryMode(
           location.location_id,
-          nextAssignments.length > 0 && selectedEmployees.length > 0
+          nextAssignments.length > 0 && selectedEmployeeIds.length > 0
             ? "scheduler"
             : "setup",
         );
@@ -662,7 +437,7 @@ export default function Location({
           message:
             error instanceof Error
               ? error.message
-              : "Could not update location roles.",
+              : "Could not update this location.",
         });
       }
     });
@@ -739,10 +514,10 @@ export default function Location({
                 className={`mb-1 text-[18px] tracking-[-0.01em] ${textPrimary}`}
                 style={{ fontWeight: 600 }}
               >
-                Select roles for this location
+                Assign employees to this location
               </h2>
               <p className={`text-[13px] leading-relaxed ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Choose the roles that apply to {locationDisplayName}. Once selected, we&apos;ll use them to build your weekly shift schedule and match available staff.
+                Assign employees here and we&apos;ll automatically make their existing roles available for scheduling at {locationDisplayName}. Removing an employee later does not remove those location roles.
               </p>
             </div>
           </div>
@@ -765,272 +540,128 @@ export default function Location({
           </div>
         ) : null}
 
-        <div className={`px-5 sm:px-8 py-5 border-b ${borderClass}`}>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
-              Selected Roles
-            </h3>
-            <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-              {selectedRoles.length} of {roles.length}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2 min-h-[36px]">
-            <AnimatePresence>
-              {selectedRoles.map((role) => (
-                <motion.div
-                  key={role.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${chipClass}`}
-                >
-                  <Tag size={11} className="text-[#635BFF]" />
-                  <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                    {role.name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeRole(role.id)}
-                    disabled={loading || isPending}
-                    className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5 disabled:opacity-50"
-                  >
-                    <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-                  </button>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-            {!loading && selectedRoles.length === 0 ? (
-              <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                No roles selected yet. Add from the list below.
-              </p>
-            ) : null}
-            {loading ? (
-              <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Loading location roles...
-              </p>
-            ) : null}
-          </div>
-        </div>
-
         <div className="px-5 sm:px-8 py-6 space-y-6">
-          {availableRoles.length > 0 ? (
-            <div className="flex items-center justify-between">
-              <h3 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
-                Available Roles
-              </h3>
-              <button
-                type="button"
-                onClick={addAllRoles}
-                disabled={loading || isPending}
-                className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors disabled:opacity-50"
-                style={{ fontWeight: 520 }}
-              >
-                + Add All
-              </button>
-            </div>
-          ) : null}
-
-          {groupedAvailableRoles.map((group, index) => (
-            <motion.div
-              key={group.categoryKey}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.15 + index * 0.08 }}
-            >
-              <div className="flex items-center justify-between mb-2.5">
-                <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
-                  {group.categoryLabel}
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => addAllInCategory(group.categoryKey)}
-                  disabled={loading || isPending}
-                  className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors disabled:opacity-50"
-                  style={{ fontWeight: 520 }}
+          <div className={`space-y-6 ${borderClass}`}>
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <h3
+                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                  style={{ fontWeight: 500 }}
                 >
-                  + Add all
-                </button>
+                  Assigned Employees
+                </h3>
+                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  {selectedEmployees.length} of {employees.length}
+                </span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {group.roles.map((role) => (
-                  <button
-                    key={role.id}
-                    type="button"
-                    onClick={() => addRole(role.id)}
-                    disabled={loading || isPending}
-                    className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 disabled:opacity-50 ${
-                        isDark
-                          ? "border-white/[0.08] bg-white/[0.03] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
-                          : "border-[#E5E7EB] bg-[#F7F8FA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
-                    }`}
-                  >
-                    <Tag size={11} className="text-[#635BFF]" />
-                    <span className={`text-[12px] transition-colors ${isDark ? "text-[#C1CED8] group-hover:text-white" : "text-[#5E6D7A] group-hover:text-[#0A2540]"}`} style={{ fontWeight: 440 }}>
-                      {role.name}
-                    </span>
-                    <Plus size={11} className="ml-0.5 text-[#8898AA] group-hover:text-[#635BFF] transition-colors" />
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          ))}
-
-          {!loading && roles.length === 0 ? (
-            <div className={`flex items-center gap-3 p-4 rounded-xl border ${subtleSurfaceClass} ${subtleBorderClass}`}>
-              <X size={16} className="text-[#8898AA] shrink-0" />
-              <p className={`text-[12px] ${isDark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 440 }}>
-                This business does not have any roles yet. Business roles are the source of truth for location assignments.
-              </p>
-            </div>
-          ) : null}
-
-          {availableRoles.length === 0 && roles.length > 0 ? (
-            <div
-              className={`flex items-center gap-3 rounded-xl border p-4 ${
-                isDark
-                  ? "border-[#00B893]/20 bg-[#00B893]/[0.08]"
-                  : "border-[#00B893]/10 bg-[#00B893]/[0.04]"
-              }`}
-            >
-              <Check size={16} className="shrink-0 text-[#00B893]" />
-              <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                All available roles have been selected for this location.
-              </p>
-            </div>
-          ) : null}
-
-          <div>
-            <h3
-              className={`mb-2 text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-              style={{ fontWeight: 500 }}
-            >
-              Custom Role
-            </h3>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={customRole}
-                onChange={(event) => setCustomRole(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleCreateRole();
-                  }
-                }}
-                placeholder="Type a new role name..."
-                spellCheck
-                className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
-                  isDark
-                    ? "border-white/[0.08] bg-white/[0.04] text-white"
-                    : "border-[#E5E7EB] bg-white text-[#0A2540]"
-                }`}
-                style={{ fontWeight: 440 }}
-              />
-              <button
-                type="button"
-                onClick={() => void handleCreateRole()}
-                disabled={!customRole.trim() || isCreatingRole}
-                className="px-3.5 py-2.5 rounded-lg text-[12px] text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-[0_0_12px_rgba(99,91,255,0.2)]"
-                style={{
-                  fontWeight: 520,
-                  background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-                }}
-              >
-                {isCreatingRole ? "Adding..." : "Add"}
-              </button>
-            </div>
-          </div>
-
-          <div className={`space-y-6 border-t pt-6 ${borderClass}`}>
-            <div className="flex items-center justify-between">
-              <h3
-                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                style={{ fontWeight: 500 }}
-              >
-                Selected Employees
-              </h3>
-              <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                {selectedEmployees.length} of {employees.length}
-              </span>
-            </div>
-
-            <div className="flex min-h-[36px] flex-wrap gap-2">
-              <AnimatePresence>
-                {selectedEmployees.map((employee) => (
-                  <motion.div
-                    key={employee.id}
-                    layout
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    className={`flex items-center gap-2 rounded-lg border py-1.5 pl-2.5 pr-2 ${chipClass}`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        router.push(
-                          buildLocationEmployeeEditPathFromAny(location, employee.id),
-                          { scroll: false },
-                        )
-                      }
-                      className="flex min-w-0 items-center gap-2 text-left"
-                    >
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
-                        {employeeInitials(employeeDisplayName(employee))}
-                      </span>
-                      <span
-                        className={`truncate text-[12px] ${textPrimary}`}
-                        style={{ fontWeight: 480 }}
+              <div className="flex min-h-[36px] flex-wrap gap-2">
+                <AnimatePresence>
+                  {selectedEmployees.map((employee) => {
+                    const isReady = employeeHasAssignedRoles(employee);
+                    return (
+                      <motion.div
+                        key={employee.id}
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        className={`group flex items-center gap-2 rounded-lg border py-1.5 pl-2.5 pr-2 ${
+                          isReady
+                            ? chipClass
+                            : isDark
+                              ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1]"
+                              : "border-[#FFB800]/20 bg-[#FFB800]/[0.06]"
+                        }`}
                       >
-                        {employeeDisplayName(employee)}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeEmployee(employee.id)}
-                      disabled={loading || isPending}
-                      className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10 disabled:opacity-50"
-                    >
-                      <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-                    </button>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              {loading ? (
-                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  Loading business employees...
-                </p>
-              ) : selectedEmployees.length === 0 ? (
-                <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  No employees selected yet. Add from the list below.
-                </p>
-              ) : null}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(
+                              buildLocationEmployeeEditPathFromAny(location, employee.id),
+                              { scroll: false },
+                            )
+                          }
+                          className="flex min-w-0 items-center gap-2 text-left"
+                        >
+                          <span
+                            className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
+                              isReady
+                                ? "bg-[#635BFF]/10 text-[#635BFF]"
+                                : "bg-[#FFB800]/10 text-[#FFB800]"
+                            }`}
+                          >
+                            {employeeInitials(employeeDisplayName(employee))}
+                          </span>
+                          <span
+                            className={`truncate text-[12px] ${textPrimary}`}
+                            style={{ fontWeight: 480 }}
+                          >
+                            {employeeDisplayName(employee)}
+                          </span>
+                        </button>
+                        {!isReady ? (
+                          <div className="relative ml-0.5">
+                            <Info size={12} className="cursor-default text-[#FFB800]" />
+                            <div
+                              className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                                isDark
+                                  ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
+                                  : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"
+                              }`}
+                              style={{ fontWeight: 440 }}
+                            >
+                              {employeeEligibilityReason(employee)}
+                            </div>
+                          </div>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => removeEmployee(employee.id)}
+                          disabled={loading || isPending}
+                          className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10 disabled:opacity-50"
+                        >
+                          <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
+                        </button>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+                {loading ? (
+                  <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    Loading business employees...
+                  </p>
+                ) : selectedEmployees.length === 0 ? (
+                  <p className={`py-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    No employees assigned yet. Add from the list below.
+                  </p>
+                ) : null}
+              </div>
             </div>
 
-            {availableEmployees.length > 0 ? (
-              <div>
-                <div className="mb-2.5 flex items-center justify-between">
-                  <h4
-                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                    style={{ fontWeight: 500 }}
+            <div className={`border-t pt-6 ${borderClass}`}>
+              <div className="mb-3 flex items-center justify-between">
+                <h3
+                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                  style={{ fontWeight: 500 }}
+                >
+                  Available Employees
+                </h3>
+                {availableReadyEmployees.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={addAllEmployees}
+                    disabled={loading || isPending}
+                    className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9] disabled:opacity-50"
+                    style={{ fontWeight: 520 }}
                   >
-                    Available Employees
-                  </h4>
-                  {availableEmployees.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={addAllEmployees}
-                      disabled={loading || isPending}
-                      className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9] disabled:opacity-50"
-                      style={{ fontWeight: 520 }}
-                    >
-                      + Add all
-                    </button>
-                  ) : null}
-                </div>
+                    + Add all
+                  </button>
+                ) : null}
+              </div>
+
+              {availableReadyEmployees.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
-                  {availableEmployees.map((employee) => (
+                  {availableReadyEmployees.map((employee) => (
                     <button
                       key={employee.id}
                       type="button"
@@ -1062,22 +693,24 @@ export default function Location({
                     </button>
                   ))}
                 </div>
-              </div>
-            ) : null}
+              ) : !loading ? (
+                <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  All schedule-ready employees are already assigned to this location.
+                </p>
+              ) : null}
 
-            {ineligibleEmployees.length > 0 ? (
-              <div>
-                <div className="mb-2.5">
-                  <h4
-                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                    style={{ fontWeight: 500 }}
-                  >
-                    Unavailable Employees
-                  </h4>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {ineligibleEmployees.map((employee) => {
-                    return (
+              {availableUnavailableEmployees.length > 0 ? (
+                <div className="mt-5">
+                  <div className="mb-2.5">
+                    <h4
+                      className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                      style={{ fontWeight: 500 }}
+                    >
+                      Needs role assignment
+                    </h4>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {availableUnavailableEmployees.map((employee) => (
                       <div
                         key={employee.id}
                         className={`group relative z-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 hover:z-20 ${
@@ -1096,15 +729,15 @@ export default function Location({
                           }
                           className="flex min-w-0 items-center gap-2 text-left"
                         >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
-                          {employeeInitials(employeeDisplayName(employee))}
-                        </span>
-                        <span
-                          className={`text-[12px] ${textPrimary}`}
-                          style={{ fontWeight: 480 }}
-                        >
-                          {employeeDisplayName(employee)}
-                        </span>
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
+                            {employeeInitials(employeeDisplayName(employee))}
+                          </span>
+                          <span
+                            className={`text-[12px] ${textPrimary}`}
+                            style={{ fontWeight: 480 }}
+                          >
+                            {employeeDisplayName(employee)}
+                          </span>
                         </button>
                         <div className="relative ml-0.5">
                           <Info size={12} className="cursor-default text-[#FFB800]" />
@@ -1120,48 +753,48 @@ export default function Location({
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                  <p className={`mt-3 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                    Click any employee to edit their profile.
+                  </p>
                 </div>
-                <p className={`mt-3 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                  Click any employee to edit their profile.
-                </p>
-              </div>
-            ) : null}
+              ) : null}
 
-            {!loading && employees.length === 0 ? (
-              <div className={`rounded-xl border px-4 py-3 ${subtleSurfaceClass} ${subtleBorderClass}`}>
-                <p className={`text-[12px] ${textTertiary}`} style={{ fontWeight: 440 }}>
-                  This business does not have any employees yet. Add at least one employee with a role before opening the scheduler for this location.
-                </p>
-              </div>
-            ) : null}
+              {!loading && employees.length === 0 ? (
+                <div className={`mt-5 rounded-xl border px-4 py-3 ${subtleSurfaceClass} ${subtleBorderClass}`}>
+                  <p className={`text-[12px] ${textTertiary}`} style={{ fontWeight: 440 }}>
+                    This business does not have any employees yet. Add at least one employee with a role before opening the scheduler for this location.
+                  </p>
+                </div>
+              ) : null}
 
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setShowBulkUploadModal(true)}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] transition-all ${
-                  isDark
-                    ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8] hover:bg-white/[0.06]"
-                    : "border-[#E5E7EB] bg-white text-[#5E6D7A] hover:bg-[#F7F8FA]"
-                }`}
-                style={{ fontWeight: 500 }}
-              >
-                <Upload size={13} /> Bulk Upload
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowAddEmployeeModal(true)}
-                disabled={roles.length === 0}
-                className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  fontWeight: 520,
-                  background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-                }}
-              >
-                <Plus size={13} /> Add Employee
-              </button>
+              <div className="mt-5 flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkUploadModal(true)}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] transition-all ${
+                    isDark
+                      ? "border-white/[0.08] bg-white/[0.04] text-[#C1CED8] hover:bg-white/[0.06]"
+                      : "border-[#E5E7EB] bg-white text-[#5E6D7A] hover:bg-[#F7F8FA]"
+                  }`}
+                  style={{ fontWeight: 500 }}
+                >
+                  <Upload size={13} /> Bulk Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddEmployeeModal(true)}
+                  disabled={!roles.length}
+                  className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12px] text-white transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{
+                    fontWeight: 520,
+                    background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
+                  }}
+                >
+                  <Plus size={13} /> Add Employee
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1170,7 +803,7 @@ export default function Location({
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex-1">
               <AnimatePresence mode="wait">
-                {selectedRoles.length === 0 || selectedEmployees.length === 0 ? (
+                {selectedEmployeeIds.length === 0 ? (
                   <motion.p
                     key="requirements"
                     initial={{ opacity: 0 }}
@@ -1179,7 +812,18 @@ export default function Location({
                     className={`text-[12px] ${textSecondary}`}
                     style={{ fontWeight: 420 }}
                   >
-                    Select at least one role and one employee to continue.
+                    Assign at least one employee to continue.
+                  </motion.p>
+                ) : inheritedRoleIds.length === 0 ? (
+                  <motion.p
+                    key="needs-role"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className={`text-[12px] ${textSecondary}`}
+                    style={{ fontWeight: 420 }}
+                  >
+                    Assigned employees need at least one role before scheduling can start.
                   </motion.p>
                 ) : (
                   <motion.p
@@ -1191,13 +835,13 @@ export default function Location({
                     style={{ fontWeight: 460 }}
                   >
                     <span style={{ fontWeight: 580, color: locationReference.color }}>
-                      {selectedRoles.length}
+                      {selectedEmployeeIds.length}
                     </span>{" "}
-                    {selectedRoles.length === 1 ? "role" : "roles"} and{" "}
+                    {selectedEmployeeIds.length === 1 ? "employee" : "employees"} assigned —{" "}
                     <span style={{ fontWeight: 580, color: locationReference.color }}>
-                      {selectedEmployees.length}
+                      {inheritedRoleIds.length}
                     </span>{" "}
-                    {selectedEmployees.length === 1 ? "employee" : "employees"} selected — ready to build your schedule
+                    {inheritedRoleIds.length === 1 ? "role" : "roles"} ready for scheduling
                   </motion.p>
                 )}
               </AnimatePresence>
@@ -1205,10 +849,10 @@ export default function Location({
             <motion.button
               type="button"
               onClick={handleContinue}
-              disabled={selectedRoles.length === 0 || selectedEmployees.length === 0 || isPending || loading}
-              whileTap={selectedRoles.length > 0 && selectedEmployees.length > 0 && !isPending ? { scale: 0.97 } : undefined}
+              disabled={selectedEmployeeIds.length === 0 || inheritedRoleIds.length === 0 || isPending || loading}
+              whileTap={selectedEmployeeIds.length > 0 && inheritedRoleIds.length > 0 && !isPending ? { scale: 0.97 } : undefined}
               className={`flex items-center justify-center gap-2 px-6 py-3 rounded-full text-[13px] text-white transition-all duration-300 ${
-                selectedRoles.length > 0 && selectedEmployees.length > 0 && !loading && !isPending
+                selectedEmployeeIds.length > 0 && inheritedRoleIds.length > 0 && !loading && !isPending
                   ? "hover:shadow-[0_0_24px_rgba(99,91,255,0.3)] cursor-pointer"
                   : "opacity-30 cursor-not-allowed"
               }`}

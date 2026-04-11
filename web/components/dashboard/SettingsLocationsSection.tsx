@@ -8,18 +8,19 @@ import { useAppWorkspaceRefresh } from "@/components/app-workspace";
 import { useAppWorkspace } from "@/components/app-workspace";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import {
-  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
   listBusinessLocations,
-  listBusinessRoles,
   replaceLocationRoles,
   type BusinessLocation,
-  type BusinessRole,
   type LocationRoleAssignment,
 } from "@/lib/api/businesses";
-import { listEmployees } from "@/lib/api/workforce";
+import {
+  listEmployees,
+  updateEmployee,
+  type EmployeeSummary,
+} from "@/lib/api/workforce";
 import {
   getLocationBoard,
   deleteLocation as deleteWorkspaceLocation,
@@ -40,9 +41,14 @@ import {
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
+import {
+  buildEmployeeLocationAssignments,
+  buildInheritedLocationRoleIds,
+  employeeAssignedHere,
+  mergeUpdatedEmployees,
+} from "./location-employee-utils";
 
 const locationsCache = new Map<string, BusinessLocation[]>();
-const rolesCache = new Map<string, BusinessRole[]>();
 const roleCountCache = new Map<string, Record<string, number>>();
 
 function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
@@ -98,14 +104,12 @@ export default function SettingsLocationsSection({
   const [locations, setLocations] = useState<BusinessLocation[]>(
     () => locationsCache.get(businessId) ?? workspaceLocations,
   );
-  const [roles, setRoles] = useState<BusinessRole[]>(
-    () => rolesCache.get(businessId) ?? [],
-  );
   const [roleCounts, setRoleCounts] = useState<Record<string, number>>(
     () => roleCountCache.get(businessId) ?? {},
   );
   const [selectedLocation, setSelectedLocation] = useState<BusinessLocation | null>(null);
   const [assignments, setAssignments] = useState<LocationRoleAssignment[]>([]);
+  const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
   const [loading, setLoading] = useState(
     () => (locationsCache.get(businessId) ?? workspaceLocations).length === 0,
   );
@@ -131,15 +135,14 @@ export default function SettingsLocationsSection({
 
   useEffect(() => {
     const cachedLocations = locationsCache.get(businessId);
-    const cachedRoles = rolesCache.get(businessId);
     const cachedRoleCounts = roleCountCache.get(businessId);
 
     setLocations(cachedLocations ?? workspaceLocations);
-    setRoles(cachedRoles ?? []);
     setRoleCounts(cachedRoleCounts ?? {});
     setLoading((cachedLocations ?? workspaceLocations).length === 0);
     setSelectedLocation(null);
     setAssignments([]);
+    setEditorEmployees([]);
     setShiftDefaults(null);
     setSelectedLocationStaffCount(null);
     setEditorFeedback(null);
@@ -188,18 +191,13 @@ export default function SettingsLocationsSection({
     async function load() {
       try {
         setFeedback(null);
-        const [nextLocations, nextRoles] = await Promise.all([
-          listBusinessLocations(businessId),
-          listBusinessRoles(businessId),
-        ]);
+        const nextLocations = await listBusinessLocations(businessId);
         if (cancelled) {
           return;
         }
         const activeLocations = nextLocations.filter((location) => location.is_active);
         setLocations(activeLocations);
-        setRoles(nextRoles);
         locationsCache.set(businessId, activeLocations);
-        rolesCache.set(businessId, nextRoles);
         setLoading(false);
         void Promise.allSettled(
           activeLocations.map(async (location) => {
@@ -279,6 +277,7 @@ export default function SettingsLocationsSection({
         }
         setSelectedLocation(nextLocation);
         setAssignments(nextAssignments);
+        setEditorEmployees(employees);
         setShiftDefaults(nextShiftDefaults);
         setSelectedLocationStaffCount(
           employees.filter((employee) => employee.location_ids.includes(activeLocationId)).length,
@@ -298,7 +297,7 @@ export default function SettingsLocationsSection({
             message:
               error instanceof Error
                 ? error.message
-                : "Could not load location roles.",
+                : "Could not load location setup.",
           });
           setDeleteState({
             canDelete: false,
@@ -326,7 +325,7 @@ export default function SettingsLocationsSection({
   );
 
   const handleSave = (
-    roleIds: string[],
+    employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
@@ -338,7 +337,17 @@ export default function SettingsLocationsSection({
 
     startTransition(async () => {
       try {
-        const [nextAssignments, nextShiftDefaults] = await Promise.all([
+        const roleIds = buildInheritedLocationRoleIds(
+          assignments,
+          editorEmployees,
+          employeeIds,
+        );
+        const changedEmployees = editorEmployees.filter((employee) => {
+          const currentlyAssigned = employeeAssignedHere(employee, activeLocation.id);
+          const shouldBeAssigned = employeeIds.includes(employee.id);
+          return currentlyAssigned !== shouldBeAssigned;
+        });
+        const [nextAssignments, nextShiftDefaults, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             businessId,
             activeLocation.id,
@@ -360,8 +369,20 @@ export default function SettingsLocationsSection({
             activeLocation.id,
             locationShiftPresets,
           ),
+          Promise.all(
+            changedEmployees.map((employee) =>
+              updateEmployee(businessId, employee.id, {
+                locations: buildEmployeeLocationAssignments(
+                  employee,
+                  activeLocation.id,
+                  employeeIds.includes(employee.id),
+                ),
+              }),
+            ),
+          ),
         ]);
         setAssignments(nextAssignments);
+        setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setShiftDefaults(nextShiftDefaults);
         setRoleCounts((current) => ({
           ...current,
@@ -389,29 +410,6 @@ export default function SettingsLocationsSection({
         });
       }
     });
-  };
-
-  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
-    if (!selectedLocation) {
-      throw new Error("No location selected.");
-    }
-
-    try {
-      setEditorFeedback(null);
-      const created = await createBusinessRole(businessId, { name });
-      setRoles((current) =>
-        current.some((role) => role.id === created.id)
-          ? current
-          : [...current, created],
-      );
-      return created;
-    } catch (error) {
-      setEditorFeedback({
-        tone: "error",
-        message: error instanceof Error ? error.message : "Could not create role.",
-      });
-      throw error;
-    }
   };
 
   const handleDeleteLocation = async () => {
@@ -476,7 +474,7 @@ export default function SettingsLocationsSection({
               No locations yet
             </p>
             <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-              Add at least one business location before assigning roles here.
+              Add at least one business location before assigning employees here.
             </p>
           </div>
         </div>
@@ -594,14 +592,13 @@ export default function SettingsLocationsSection({
               }
               setSelectedLocation(null);
             }}
-            onCreateRole={handleCreateRole}
             onDelete={() => {
               void handleDeleteLocation();
             }}
             onSave={handleSave}
+            employees={editorEmployees}
             shiftDefaults={shiftDefaults}
             staffCount={selectedLocationStaffCount}
-            roles={roles}
             saving={isPending}
           />
         ) : null}
