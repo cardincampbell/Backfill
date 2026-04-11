@@ -29,14 +29,11 @@ import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
-  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
-  listBusinessRoles,
   replaceLocationRoles,
   type BusinessLocation,
-  type BusinessRole,
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
@@ -49,7 +46,11 @@ import {
   type LocationShiftDefaults,
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
-import { listEmployees } from '@/lib/api/workforce';
+import {
+  listEmployees,
+  updateEmployee,
+  type EmployeeSummary,
+} from '@/lib/api/workforce';
 import {
   buildDashboardLocationBasePathFromAny,
   buildSchedulerBasePathFromAny,
@@ -64,6 +65,12 @@ import {
   type LocationRoleEditorFeedback,
   type LocationRoleEditorSaveSummary,
 } from './LocationRoleEditor';
+import {
+  buildEmployeeLocationAssignments,
+  buildInheritedLocationRoleIds,
+  employeeAssignedHere,
+  mergeUpdatedEmployees,
+} from './location-employee-utils';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import {
@@ -507,7 +514,7 @@ function SchedulerContent({
   const [showLocationMenu, setShowLocationMenu] = useState(false);
   const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
-  const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
+  const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
   const [editorStaffCount, setEditorStaffCount] = useState<number | null>(null);
@@ -530,6 +537,10 @@ function SchedulerContent({
     setEditorLocation(null);
     setEditorFeedback(null);
     setEditorStaffCount(null);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
+    setEditorShiftDefaults(null);
+    setEditorDeleteState(undefined);
     router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
   }, [location, router]);
 
@@ -688,6 +699,8 @@ function SchedulerContent({
   const openLocationEditor = useCallback(async () => {
     const editableLocation = adaptWorkspaceLocation(location);
     setEditorLocation(editableLocation);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
     setEditorShiftDefaults(null);
     setEditorStaffCount(null);
     setEditorDeleteState({ canDelete: false, checking: true });
@@ -697,7 +710,6 @@ function SchedulerContent({
     try {
       const [
         nextLocation,
-        nextRoles,
         nextAssignments,
         nextShiftDefaults,
         nextDeleteReadiness,
@@ -705,14 +717,13 @@ function SchedulerContent({
       ] =
         await Promise.all([
           getBusinessLocation(location.business_id, location.location_id),
-          listBusinessRoles(location.business_id),
           getLocationRoles(location.business_id, location.location_id),
           getLocationShiftDefaults(location.business_id, location.location_id),
           getLocationDeleteReadiness(location.business_id, location.location_id),
           listEmployees(location.business_id),
         ]);
       setEditorLocation(nextLocation);
-      setEditorRoles(nextRoles);
+      setEditorEmployees(employees);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
       setEditorStaffCount(
@@ -756,7 +767,7 @@ function SchedulerContent({
   }, [editingLocation, editorLoading, editorLocation, openLocationEditor]);
 
   const handleSaveEditor = (
-    roleIds: string[],
+    employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
@@ -769,7 +780,17 @@ function SchedulerContent({
 
     void (async () => {
       try {
-        const [replacedAssignments, updatedShiftDefaults] = await Promise.all([
+        const roleIds = buildInheritedLocationRoleIds(
+          editorAssignments,
+          editorEmployees,
+          employeeIds,
+        );
+        const changedEmployees = editorEmployees.filter((employee) => {
+          const currentlyAssigned = employeeAssignedHere(employee, editorLocation.id);
+          const shouldBeAssigned = employeeIds.includes(employee.id);
+          return currentlyAssigned !== shouldBeAssigned;
+        });
+        const [replacedAssignments, updatedShiftDefaults, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             editorLocation.business_id,
             editorLocation.id,
@@ -791,8 +812,20 @@ function SchedulerContent({
             editorLocation.id,
             locationShiftPresets,
           ),
+          Promise.all(
+            changedEmployees.map((employee) =>
+              updateEmployee(editorLocation.business_id, employee.id, {
+                locations: buildEmployeeLocationAssignments(
+                  employee,
+                  editorLocation.id,
+                  employeeIds.includes(employee.id),
+                ),
+              }),
+            ),
+          ),
         ]);
         setEditorAssignments(replacedAssignments);
+        setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setEditorShiftDefaults(updatedShiftDefaults);
         setShiftDefaults(normalizeShiftDefaults(updatedShiftDefaults.presets));
         const board = await getLocationBoard(editorLocation.business_id, editorLocation.id);
@@ -820,29 +853,6 @@ function SchedulerContent({
         setIsSavingEditor(false);
       }
     })();
-  };
-
-  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
-    if (!editorLocation) {
-      throw new Error('No location selected.');
-    }
-
-    try {
-      setEditorFeedback(null);
-      const created = await createBusinessRole(editorLocation.business_id, { name });
-      setEditorRoles((current) =>
-        current.some((role) => role.id === created.id)
-          ? current
-          : [...current, created],
-      );
-      return created;
-    } catch (error) {
-      setEditorFeedback({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not create role.',
-      });
-      throw error;
-    }
   };
 
   const handleDeleteLocation = async () => {
@@ -1422,11 +1432,11 @@ function SchedulerContent({
         </AnimatePresence>
 
         <AnimatePresence>
-          {editorLocation ? (
+        {editorLocation ? (
             <LocationRoleEditor
               dark={isDark}
               location={editorLocation}
-              roles={editorRoles}
+              employees={editorEmployees}
               assignments={editorAssignments}
               shiftDefaults={editorShiftDefaults}
               staffCount={editorStaffCount}
@@ -1442,7 +1452,6 @@ function SchedulerContent({
                 void handleDeleteLocation();
               }}
               onSave={handleSaveEditor}
-              onCreateRole={handleCreateRole}
             />
           ) : null}
         </AnimatePresence>
