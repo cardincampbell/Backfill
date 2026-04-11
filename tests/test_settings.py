@@ -557,3 +557,84 @@ def test_create_and_assign_location_role_creates_role_assignment_and_audits(monk
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_create_role_route_returns_conflict_for_duplicate_role(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_role(_session, incoming_business_id, payload):
+        assert incoming_business_id == business_id
+        assert payload.name == "Server"
+        raise ValueError("role_already_exists")
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_role",
+        fake_create_role,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/roles",
+            json={"name": "Server"},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "role_already_exists"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_create_location_route_returns_conflict_for_duplicate_location(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_location(_session, incoming_business_id, payload):
+        assert incoming_business_id == business_id
+        assert payload.google_place_id == "place_pasadena"
+        raise ValueError("location_already_exists")
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_location",
+        fake_create_location,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/locations",
+            json={
+                "name": "Pasadena",
+                "display_name": "Pasadena",
+                "timezone": "America/Los_Angeles",
+                "google_place_id": "place_pasadena",
+            },
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "location_already_exists"
+    finally:
+        app.dependency_overrides.clear()

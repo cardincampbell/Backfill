@@ -30,12 +30,10 @@ export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, o
     .filter(Boolean) as Employee[];
 
   const totalShifts = shifts.length;
-  const totalHours = shifts.reduce((sum, s) => sum + shiftDuration(s), 0);
   const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
   const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
   const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
-  const metricCardClass = dark ? 'bg-white/[0.04] border border-white/[0.08]' : 'bg-[#F7F8FA] border border-[#E5E7EB]';
   const subtleSurfaceClass = dark ? 'bg-white/[0.03]' : 'bg-[#F7F8FA]/50';
   const rowSurfaceClass = dark ? 'bg-white/[0.03] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
   const closeButtonClass = dark ? 'p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors' : 'p-1.5 rounded-lg hover:bg-[#F7F8FA] transition-colors';
@@ -106,7 +104,7 @@ export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, o
                 {stage === 'success' && 'Schedule Published!'}
               </h3>
               <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>
-                {stage === 'confirm' && `${weekLabel}`}
+                {stage === 'confirm' && `${weekLabel} · ${totalShifts} Shifts | ${affectedEmployees.length} Employees`}
                 {stage === 'publishing' && `Notifying ${affectedEmployees.length} staff members`}
                 {stage === 'success' && 'All notifications sent successfully'}
               </p>
@@ -122,21 +120,6 @@ export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, o
         <div className="px-6 py-5">
           {stage === 'confirm' && (
             <>
-              <div className="grid grid-cols-3 gap-3 mb-5">
-                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
-                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Shifts</p>
-                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{totalShifts}</p>
-                </div>
-                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
-                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Staff</p>
-                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{affectedEmployees.length}</p>
-                </div>
-                <div className={`px-4 py-3 rounded-xl ${metricCardClass}`}>
-                  <p className={`text-[10px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>Hours</p>
-                  <p className={`text-[20px] mt-1 ${textPrimary}`} style={{ fontWeight: 620 }}>{totalHours}</p>
-                </div>
-              </div>
-
               <div className="space-y-3 mb-5">
                 <p className={`text-[11px] uppercase tracking-[0.05em] ${textSecondary}`} style={{ fontWeight: 500 }}>What will happen</p>
                 <div className="space-y-2">

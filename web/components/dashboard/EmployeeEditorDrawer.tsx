@@ -940,6 +940,7 @@ export function EmployeeEditorDrawer({
                     }
                   }}
                   placeholder="Type a new role name..."
+                  spellCheck
                   style={{ fontWeight: 440 }}
                   type="text"
                   value={customRole}

@@ -123,6 +123,67 @@ def _employee_query():
     )
 
 
+def _normalize_employee_phone(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    digits = re.sub(r"\D", "", normalized)
+    if normalized.startswith("+") and 10 <= len(digits) <= 15:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    return normalized
+
+
+def _normalize_employee_email(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized or None
+
+
+def _normalize_employee_external_ref(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+async def _find_duplicate_employee(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    external_ref: str | None,
+    phone_e164: str | None,
+    email: str | None,
+    exclude_employee_id: UUID | None = None,
+) -> tuple[str, Employee] | None:
+    normalized_external_ref = _normalize_employee_external_ref(external_ref)
+    normalized_phone = _normalize_employee_phone(phone_e164)
+    normalized_email = _normalize_employee_email(email)
+
+    stmt = select(Employee).where(Employee.business_id == business_id)
+    if exclude_employee_id is not None:
+        stmt = stmt.where(Employee.id != exclude_employee_id)
+    result = await session.execute(stmt)
+    employees = list(result.scalars().all())
+
+    if normalized_external_ref:
+        for employee in employees:
+            if _normalize_employee_external_ref(employee.external_ref) == normalized_external_ref:
+                return ("external_ref", employee)
+
+    if normalized_phone:
+        for employee in employees:
+            if _normalize_employee_phone(employee.phone_e164) == normalized_phone:
+                return ("phone_e164", employee)
+
+    if normalized_email:
+        for employee in employees:
+            if _normalize_employee_email(employee.email) == normalized_email:
+                return ("email", employee)
+
+    return None
+
+
 EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES = (
     ShiftStatus.scheduled,
     ShiftStatus.open,
@@ -461,18 +522,26 @@ def parse_employee_import_file(
             continue
 
         try:
+            normalized_phone = _normalize_employee_phone(
+                str(canonical.get("phone_e164") or "").strip() or None,
+            )
             employee = EmployeeCreate(
                 full_name=str(canonical.get("full_name") or "").strip(),
                 preferred_name=str(canonical.get("preferred_name") or "").strip() or None,
-                email=str(canonical.get("email") or "").strip() or None,
-                phone_e164=str(canonical.get("phone_e164") or "").strip() or None,
+                email=_normalize_employee_email(
+                    str(canonical.get("email") or "").strip() or None,
+                ),
+                phone_e164=normalized_phone,
                 employee_number=str(canonical.get("employee_number") or "").strip() or None,
                 external_ref=str(canonical.get("external_ref") or "").strip() or None,
                 employment_type=str(canonical.get("employment_type") or "").strip() or None,
                 primary_location_id=default_location_id,
                 hire_date=_parse_hire_date(canonical.get("hire_date")),
                 notes=str(canonical.get("notes") or "").strip() or None,
-                employee_metadata={"source": "bulk_import"},
+                employee_metadata={
+                    "source": "bulk_import",
+                    "source_row_number": row_number,
+                },
             )
         except ValueError as exc:
             errors.append(
@@ -703,6 +772,19 @@ async def create_employee(
     linked_user_id: UUID | None = None,
 ) -> Employee:
     await _require_business(session, business_id)
+    normalized_external_ref = _normalize_employee_external_ref(payload.external_ref)
+    normalized_phone = _normalize_employee_phone(payload.phone_e164)
+    normalized_email = _normalize_employee_email(payload.email)
+    duplicate = await _find_duplicate_employee(
+        session,
+        business_id,
+        external_ref=normalized_external_ref,
+        phone_e164=normalized_phone,
+        email=normalized_email,
+    )
+    if duplicate is not None:
+        duplicate_field, _ = duplicate
+        raise ValueError(f"employee_duplicate_{duplicate_field}")
     primary_business_location: Location | None = None
     if payload.primary_location_id is not None:
         primary_business_location = await session.get(Location, payload.primary_location_id)
@@ -712,12 +794,12 @@ async def create_employee(
     employee = Employee(
         business_id=business_id,
         user_id=linked_user_id,
-        external_ref=payload.external_ref,
+        external_ref=normalized_external_ref,
         employee_number=payload.employee_number,
         full_name=payload.full_name,
         preferred_name=payload.preferred_name,
-        phone_e164=payload.phone_e164,
-        email=payload.email,
+        phone_e164=normalized_phone,
+        email=normalized_email,
         employment_type=payload.employment_type,
         hire_date=payload.hire_date,
         notes=payload.notes,
@@ -779,7 +861,20 @@ async def bulk_import_employees(
 
     created_employees: list[Employee] = []
     for row in parsed_rows:
-        created_employees.append(await create_employee(session, business_id, row))
+        try:
+            created_employees.append(await create_employee(session, business_id, row))
+        except ValueError as exc:
+            detail = str(exc)
+            if detail.startswith("employee_duplicate_"):
+                source_row_number = (row.employee_metadata or {}).get("source_row_number")
+                errors.append(
+                    EmployeeImportErrorRead(
+                        row_number=source_row_number if isinstance(source_row_number, int) else None,
+                        message=detail,
+                    )
+                )
+                continue
+            raise
 
     return EmployeeBulkImportRead(
         created_count=len(created_employees),
@@ -943,13 +1038,45 @@ async def update_employee(
     payload: EmployeeUpdate,
 ) -> Employee:
     employee = await _require_employee(session, business_id, employee_id)
+    normalized_external_ref = (
+        _normalize_employee_external_ref(payload.external_ref)
+        if "external_ref" in payload.model_fields_set
+        else employee.external_ref
+    )
+    normalized_phone = (
+        _normalize_employee_phone(payload.phone_e164)
+        if "phone_e164" in payload.model_fields_set
+        else employee.phone_e164
+    )
+    normalized_email = (
+        _normalize_employee_email(payload.email)
+        if "email" in payload.model_fields_set
+        else employee.email
+    )
+
+    if {
+        "external_ref",
+        "phone_e164",
+        "email",
+    }.intersection(payload.model_fields_set):
+        duplicate = await _find_duplicate_employee(
+            session,
+            business_id,
+            external_ref=normalized_external_ref,
+            phone_e164=normalized_phone,
+            email=normalized_email,
+            exclude_employee_id=employee_id,
+        )
+        if duplicate is not None:
+            duplicate_field, _ = duplicate
+            raise ValueError(f"employee_duplicate_{duplicate_field}")
 
     field_updates = {
         "full_name": payload.full_name,
         "preferred_name": payload.preferred_name,
-        "phone_e164": payload.phone_e164,
-        "email": payload.email,
-        "external_ref": payload.external_ref,
+        "phone_e164": normalized_phone,
+        "email": normalized_email,
+        "external_ref": normalized_external_ref,
         "employee_number": payload.employee_number,
         "employment_type": payload.employment_type,
         "status": payload.status,

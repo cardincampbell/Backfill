@@ -979,6 +979,45 @@ def test_create_employee_route_records_audit(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_create_employee_route_returns_conflict_for_duplicate_identity(monkeypatch):
+    fake_session = DummyWorkforceSession()
+    business_id = uuid4()
+    location_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_create(_session, _incoming_business_id, _payload):
+        raise ValueError("employee_duplicate_phone_e164")
+
+    monkeypatch.setattr(
+        "app.api.routes.workforce.workforce.create_employee",
+        fake_create,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/employees",
+            json={
+                "full_name": "Jamie Rivera",
+                "phone_e164": "+15555550123",
+                "email": "jamie@example.com",
+                "primary_location_id": str(location_id),
+            },
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "employee_duplicate_phone_e164"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_bulk_import_route_records_audit(monkeypatch):
     fake_session = DummyWorkforceSession()
     business_id = uuid4()
@@ -1067,6 +1106,75 @@ def test_bulk_import_route_records_audit(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_bulk_import_employees_skips_duplicate_phone_rows(monkeypatch):
+    business_id = uuid4()
+    first_employee_id = uuid4()
+    now = datetime.now(timezone.utc)
+    created_payloads: list[object] = []
+
+    class DummyImportSession:
+        async def execute(self, _stmt):
+            class _ScalarResult:
+                def __init__(self):
+                    self._values: list[object] = []
+
+                def all(self):
+                    return self._values
+
+            class _Result:
+                def scalars(self):
+                    return _ScalarResult()
+
+            return _Result()
+
+    async def fake_require_business(_session, incoming_business_id):
+        assert incoming_business_id == business_id
+        return object()
+
+    async def fake_create_employee(_session, incoming_business_id, payload, *, linked_user_id=None):
+        assert incoming_business_id == business_id
+        assert linked_user_id is None
+        created_payloads.append(payload)
+        if len(created_payloads) == 1:
+                return Employee(
+                    id=first_employee_id,
+                    business_id=business_id,
+                    full_name=payload.full_name,
+                    phone_e164=payload.phone_e164,
+                    email=payload.email,
+                    status="active",
+                    employee_metadata=payload.employee_metadata,
+                    created_at=now,
+                    updated_at=now,
+                )
+        raise ValueError("employee_duplicate_phone_e164")
+
+    monkeypatch.setattr("app.services.workforce._require_business", fake_require_business)
+    monkeypatch.setattr("app.services.workforce.create_employee", fake_create_employee)
+
+    result = await workforce.bulk_import_employees(
+        DummyImportSession(),
+        business_id,
+        filename="employees.csv",
+        content=(
+            b"first_name,last_name,email_address,phone_number\n"
+            b"Jamie,Rivera,jamie@example.com,+15555550123\n"
+            b"Jamie,Rivera,jamie.duplicate@example.com,+15555550123\n"
+        ),
+    )
+
+    assert result.created_count == 1
+    assert result.skipped_count == 1
+    assert len(result.employees) == 1
+    assert result.errors == [
+        EmployeeImportErrorRead(
+            row_number=3,
+            message="employee_duplicate_phone_e164",
+        )
+    ]
 
 
 def test_parse_employee_import_file_skips_rows_missing_required_fields():

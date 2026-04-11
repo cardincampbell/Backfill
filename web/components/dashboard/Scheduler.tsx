@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
+import { useState, useRef, useMemo, useCallback, useEffect, type TouchEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -21,6 +21,9 @@ import {
   ClipboardCopy,
   Edit3,
   Settings,
+  UserMinus,
+  UserPlus,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -481,6 +484,7 @@ function SchedulerContent({
   };
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [schedulerEmployees] = useState<Employee[]>(employees);
   const [shifts, setShifts] = useState<Shift[]>(generateInitialShifts);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [creatingAt, setCreatingAt] = useState<{ employeeId: string; day: number; role: string } | null>(null);
@@ -490,6 +494,13 @@ function SchedulerContent({
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
+  const [activeEmployeeIds, setActiveEmployeeIds] = useState<Set<string>>(
+    () => new Set(employees.map((employee) => employee.id)),
+  );
+  const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
+  const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [hoveredEmployeeId, setHoveredEmployeeId] = useState<string | null>(null);
+  const [swipedEmployeeId, setSwipedEmployeeId] = useState<string | null>(null);
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS),
   );
@@ -584,7 +595,45 @@ function SchedulerContent({
 
   const weekDates = useMemo(() => getWeekDates(weekOffset), [weekOffset]);
 
-  const filteredRoles = roleOrder.filter(r => employees.some(e => e.role === r));
+  const activeEmployees = useMemo(
+    () => schedulerEmployees.filter((employee) => activeEmployeeIds.has(employee.id)),
+    [activeEmployeeIds, schedulerEmployees],
+  );
+
+  const filteredRoles = roleOrder.filter((role) =>
+    activeEmployees.some((employee) => employee.role === role),
+  );
+
+  const removeEmployee = useCallback((employeeId: string) => {
+    const employee = schedulerEmployees.find((item) => item.id === employeeId);
+    if (!employee) {
+      return;
+    }
+    setRemovingEmployee({
+      id: employeeId,
+      name: employee.name,
+      hasShifts: shifts.some((shift) => shift.employeeId === employeeId),
+    });
+  }, [schedulerEmployees, shifts]);
+
+  const confirmRemoveEmployee = useCallback(() => {
+    if (!removingEmployee) {
+      return;
+    }
+    setShifts((current) => current.filter((shift) => shift.employeeId !== removingEmployee.id));
+    setActiveEmployeeIds((current) => {
+      const next = new Set(current);
+      next.delete(removingEmployee.id);
+      return next;
+    });
+    setRemovingEmployee(null);
+    setSwipedEmployeeId(null);
+  }, [removingEmployee]);
+
+  const addEmployeeToLocation = useCallback((employeeId: string) => {
+    setActiveEmployeeIds((current) => new Set([...current, employeeId]));
+    setShowAddEmployee(false);
+  }, []);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
     shifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
@@ -608,7 +657,7 @@ function SchedulerContent({
   const moveShift = useCallback((shiftId: string, newEmpId: string, newDay: number) => {
     setShifts(prev => prev.map(s => {
       if (s.id !== shiftId) return s;
-      const newEmp = employees.find(e => e.id === newEmpId);
+      const newEmp = schedulerEmployees.find(e => e.id === newEmpId);
       return {
         ...s,
         employeeId: newEmpId,
@@ -617,7 +666,7 @@ function SchedulerContent({
         color: roleColors[newEmp?.role || s.role] || s.color,
       };
     }));
-  }, []);
+  }, [schedulerEmployees]);
 
   const copySchedule = (targetWeekOffset: number) => {
     const copied = shifts.map(s => ({ ...s, id: uid() }));
@@ -990,7 +1039,7 @@ function SchedulerContent({
             {/* Copy Schedule + Publish Week */}
             <div className="flex items-center gap-2">
               <button onClick={() => setShowCopyModal(true)}
-                className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border hover:border-[#635BFF]/30 transition-all cursor-pointer ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border hover:border-[#635BFF]/30 transition-all cursor-pointer ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
                 style={{ fontWeight: 500 }}>
                 <ClipboardCopy size={13} />
                 <span className="hidden lg:inline">Copy Schedule</span>
@@ -1067,7 +1116,7 @@ function SchedulerContent({
 
             {/* Role Groups */}
             {filteredRoles.map(role => {
-              const roleEmps = employees.filter(e => e.role === role);
+              const roleEmps = activeEmployees.filter(e => e.role === role);
               const isCollapsed = collapsedRoles.has(role);
               const roleColor = roleColors[role] || '#635BFF';
 
@@ -1098,16 +1147,19 @@ function SchedulerContent({
                   <AnimatePresence>
                     {!isCollapsed && roleEmps.map(emp => {
                       const empWeekHours = getEmployeeWeekHours(emp.id);
+                      const isHovered = hoveredEmployeeId === emp.id;
                       return (
                         <motion.div key={emp.id}
                           initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
                           transition={{ duration: 0.2 }}
+                          onMouseEnter={() => setHoveredEmployeeId(emp.id)}
+                          onMouseLeave={() => setHoveredEmployeeId(null)}
                           className={`flex border-b transition-colors ${theme.rowClass}`}>
                           {/* Employee Info */}
                           <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-center gap-2.5`}>
                             <img src={emp.avatar} alt={emp.name}
                               className={`w-7 h-7 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
                                 {emp.name}
                               </p>
@@ -1115,6 +1167,22 @@ function SchedulerContent({
                                 {empWeekHours}h this week
                               </p>
                             </div>
+                            <AnimatePresence>
+                              {isHovered ? (
+                                <motion.button
+                                  initial={{ opacity: 0, scale: 0.9 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  exit={{ opacity: 0, scale: 0.9 }}
+                                  transition={{ duration: 0.15 }}
+                                  onClick={() => removeEmployee(emp.id)}
+                                  className="p-1 rounded-md hover:bg-red-50 border border-red-200/60 transition-colors shrink-0"
+                                  title="Remove from scheduler"
+                                  type="button"
+                                >
+                                  <UserMinus size={11} className="text-red-500" />
+                                </motion.button>
+                              ) : null}
+                            </AnimatePresence>
                           </div>
 
                           {/* Day cells */}
@@ -1141,6 +1209,31 @@ function SchedulerContent({
                         </motion.div>
                       );
                     })}
+                    {!isCollapsed ? (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className={`flex border-b ${theme.cellBorderClass}`}
+                      >
+                        <div className={`${EMP_COL} shrink-0 px-4 py-2`}>
+                          <button
+                            onClick={() => setShowAddEmployee(true)}
+                            className={`flex items-center gap-1.5 text-[11px] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#635BFF]'} group/add`}
+                            style={{ fontWeight: 460 }}
+                            type="button"
+                          >
+                            <div className={`p-0.5 rounded-md border border-dashed ${isDark ? 'border-white/[0.08] group-hover/add:border-[#635BFF]/40 group-hover/add:bg-white/[0.04]' : 'border-[#E5E7EB] group-hover/add:border-[#635BFF]/30 group-hover/add:bg-[#635BFF]/[0.02]'} transition-all`}>
+                              <UserPlus size={11} />
+                            </div>
+                            <span>Add employee</span>
+                          </button>
+                        </div>
+                        {DAYS.map((day, i) => (
+                          <div key={day} className={`flex-1 border-l ${theme.cellBorderClass} ${isToday(weekDates[i]) ? theme.todayRoleBandClass : ''}`} />
+                        ))}
+                      </motion.div>
+                    ) : null}
                   </AnimatePresence>
                 </div>
               );
@@ -1161,7 +1254,7 @@ function SchedulerContent({
               </div>
 
             {filteredRoles.map(role => {
-              const roleEmps = employees.filter(e => e.role === role);
+              const roleEmps = activeEmployees.filter(e => e.role === role);
               const roleColor = roleColors[role] || '#635BFF';
 
               return (
@@ -1176,42 +1269,36 @@ function SchedulerContent({
                     {roleEmps.map(emp => {
                       const cellShifts = getShiftsForCell(emp.id, mobileDay);
                       const empWeekHours = getEmployeeWeekHours(emp.id);
+                      const isSwiped = swipedEmployeeId === emp.id;
 
                       return (
-                        <div key={emp.id} className={`flex items-center gap-3 p-2.5 rounded-xl border ${theme.cardClass}`}>
-                          <img src={emp.avatar} alt={emp.name}
-                            className={`w-8 h-8 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>{emp.name}</p>
-                            <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
-                          </div>
-                          {cellShifts.length > 0 ? (
-                            <div className="flex flex-col gap-1">
-                              {cellShifts.map(shift => {
-                                const desc = getShiftDescriptor(shift.startHour, shift.endHour);
-                                const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
-                                const shiftLabel = shift.presetLabel?.trim() || desc.label;
-                                const dur = shiftDuration(shift);
-                                return (
-                                  <button key={shift.id} onClick={() => setEditingShift(shift)}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all"
-                                    style={{ background: `${shift.color}10` }}>
-                                    <DescIcon size={10} style={{ color: shift.color }} />
-                                    <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
-                                    <span className={`text-[9px] ${theme.textSecondary}`} style={{ fontWeight: 400 }}>{dur}h</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <button onClick={() => setCreatingAt({ employeeId: emp.id, day: mobileDay, role: emp.role })}
-                              className={`p-1.5 rounded-lg transition-colors border border-dashed ${isDark ? 'border-white/[0.08] hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}>
-                              <Plus size={14} className="text-[#C1CED8]" />
-                            </button>
-                          )}
-                        </div>
+                        <MobileEmployeeCard
+                          key={emp.id}
+                          dark={isDark}
+                          employee={emp}
+                          empWeekHours={empWeekHours}
+                          cellShifts={cellShifts}
+                          isSwiped={isSwiped}
+                          onSwipe={(id) => setSwipedEmployeeId(id === swipedEmployeeId ? null : id || null)}
+                          onRemove={() => removeEmployee(emp.id)}
+                          onEditShift={(shift) => setEditingShift(shift)}
+                          onCreateShift={() => setCreatingAt({ employeeId: emp.id, day: mobileDay, role: emp.role })}
+                        />
                       );
                     })}
+                    <button
+                      onClick={() => setShowAddEmployee(true)}
+                      className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-xl border border-dashed text-[11px] transition-colors ${
+                        isDark
+                          ? 'border-white/[0.08] text-[#C1CED8] hover:text-white hover:border-[#635BFF]/40'
+                          : 'border-[#E5E7EB] text-[#8898AA] hover:text-[#635BFF] hover:border-[#635BFF]/30'
+                      }`}
+                      style={{ fontWeight: 460 }}
+                      type="button"
+                    >
+                      <UserPlus size={12} />
+                      Add employee
+                    </button>
                   </div>
                 </div>
               );
@@ -1224,7 +1311,7 @@ function SchedulerContent({
           {creatingAt && (
             <QuickCreateModal
               dark={isDark}
-              employeeName={employees.find(e => e.id === creatingAt.employeeId)?.name || ''}
+              employeeName={schedulerEmployees.find(e => e.id === creatingAt.employeeId)?.name || ''}
               dayLabel={`${FULL_DAYS[creatingAt.day]}, ${weekDates[creatingAt.day]?.toLocaleString('default', { month: 'short' })} ${weekDates[creatingAt.day]?.getDate()}`}
               shiftDefaults={shiftDefaults}
               role={creatingAt.role}
@@ -1250,7 +1337,7 @@ function SchedulerContent({
               dark={isDark}
               shiftDefaults={shiftDefaults}
               shift={editingShift}
-              employeeName={employees.find(e => e.id === editingShift.employeeId)?.name || 'Unassigned'}
+              employeeName={schedulerEmployees.find(e => e.id === editingShift.employeeId)?.name || 'Unassigned'}
               onClose={() => setEditingShift(null)}
               onSave={updateShift}
               onDelete={() => { deleteShift(editingShift.id); setEditingShift(null); }}
@@ -1279,7 +1366,7 @@ function SchedulerContent({
               dark={isDark}
               weekLabel={weekLabel}
               shifts={shifts}
-              employees={employees}
+              employees={activeEmployees}
               onClose={() => setShowPublishModal(false)}
               onComplete={() => {
                 setShowPublishModal(false);
@@ -1288,6 +1375,31 @@ function SchedulerContent({
               }}
             />
           )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {removingEmployee ? (
+            <RemoveEmployeeModal
+              dark={isDark}
+              employeeName={removingEmployee.name}
+              hasShifts={removingEmployee.hasShifts}
+              shiftCount={shifts.filter((shift) => shift.employeeId === removingEmployee.id).length}
+              onClose={() => setRemovingEmployee(null)}
+              onConfirm={confirmRemoveEmployee}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showAddEmployee ? (
+            <AddEmployeeModal
+              dark={isDark}
+              employees={schedulerEmployees}
+              activeEmployeeIds={activeEmployeeIds}
+              onClose={() => setShowAddEmployee(false)}
+              onAdd={addEmployeeToLocation}
+            />
+          ) : null}
         </AnimatePresence>
 
         {/* ─── Toasts ─── */}
@@ -1370,6 +1482,387 @@ export default function Scheduler(props: SchedulerProps) {
     <DndProvider backend={HTML5Backend}>
       <SchedulerContent {...props} />
     </DndProvider>
+  );
+}
+
+function MobileEmployeeCard({
+  dark = false,
+  employee,
+  empWeekHours,
+  cellShifts,
+  isSwiped,
+  onSwipe,
+  onRemove,
+  onEditShift,
+  onCreateShift,
+}: {
+  dark?: boolean;
+  employee: Employee;
+  empWeekHours: number;
+  cellShifts: Shift[];
+  isSwiped: boolean;
+  onSwipe: (id: string) => void;
+  onRemove: () => void;
+  onEditShift: (shift: Shift) => void;
+  onCreateShift: () => void;
+}) {
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const minSwipeDistance = 50;
+
+  const onTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    setTouchEnd(null);
+    setTouchStart(event.targetTouches[0].clientX);
+    setIsDragging(false);
+  };
+
+  const onTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    setTouchEnd(event.targetTouches[0].clientX);
+    setIsDragging(true);
+  };
+
+  const onTouchEnd = () => {
+    if (touchStart === null || touchEnd === null) {
+      return;
+    }
+
+    const distance = touchStart - touchEnd;
+    if (distance > minSwipeDistance) {
+      onSwipe(employee.id);
+    } else if (distance < -minSwipeDistance) {
+      onSwipe('');
+    } else if (!isSwiped) {
+      onSwipe('');
+    }
+
+    setIsDragging(false);
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-xl">
+      <div className="absolute inset-y-0 right-0 w-20 bg-red-500 flex items-center justify-center rounded-xl">
+        <UserMinus size={18} className="text-white" />
+      </div>
+
+      <motion.div
+        className={`flex items-center gap-3 p-2.5 rounded-xl border relative touch-pan-y ${dark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'}`}
+        animate={{ x: isSwiped ? -80 : 0 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        <img src={employee.avatar} alt={employee.name}
+          className={`w-8 h-8 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
+        <div className="flex-1 min-w-0">
+          <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
+          <p className={`text-[10px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
+        </div>
+        {cellShifts.length > 0 ? (
+          <div className="flex flex-col gap-1">
+            {cellShifts.map((shift) => {
+              const desc = getShiftDescriptor(shift.startHour, shift.endHour);
+              const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
+              const shiftLabel = shift.presetLabel?.trim() || desc.label;
+              const dur = shiftDuration(shift);
+              return (
+                <button
+                  key={shift.id}
+                  onClick={() => {
+                    if (!isDragging) {
+                      onEditShift(shift);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all"
+                  style={{ background: `${shift.color}10` }}
+                  type="button"
+                >
+                  <DescIcon size={10} style={{ color: shift.color }} />
+                  <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
+                  <span className={`text-[9px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400 }}>{dur}h</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <button onClick={() => {
+            if (!isDragging) {
+              onCreateShift();
+            }
+          }}
+            className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}
+            type="button">
+            <Plus size={14} className="text-[#C1CED8]" />
+          </button>
+        )}
+      </motion.div>
+
+      <AnimatePresence>
+        {isSwiped ? (
+          <motion.button
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onRemove}
+            className="absolute inset-y-0 right-0 w-20 bg-red-500 flex items-center justify-center active:bg-red-600 rounded-xl"
+            type="button"
+          >
+            <UserMinus size={18} className="text-white" />
+          </motion.button>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function RemoveEmployeeModal({
+  dark = false,
+  employeeName,
+  hasShifts,
+  shiftCount,
+  onClose,
+  onConfirm,
+}: {
+  dark?: boolean;
+  employeeName: string;
+  hasShifts: boolean;
+  shiftCount: number;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[420px] rounded-2xl shadow-2xl border overflow-hidden ${panelClass}`}>
+        <div className={`px-6 py-5 border-b flex items-start justify-between ${borderClass}`}>
+          <div className="flex items-start gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${hasShifts ? 'bg-orange-50' : 'bg-red-50'}`}>
+              {hasShifts ? (
+                <AlertTriangle size={18} className="text-orange-500" />
+              ) : (
+                <UserMinus size={18} className="text-red-500" />
+              )}
+            </div>
+            <div>
+              <h3 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                Remove {employeeName}?
+              </h3>
+              <p className={`text-[12px] mt-1 ${dark ? 'text-[#8898AA]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>
+                {hasShifts
+                  ? `This person has ${shiftCount} scheduled shift${shiftCount !== 1 ? 's' : ''}`
+                  : 'Remove this person from the scheduler'}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`} type="button">
+            <X size={16} className="text-[#8898AA]" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          {hasShifts ? (
+            <div className="space-y-3">
+              <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
+                Removing <span className={`font-medium ${textPrimary}`}>{employeeName}</span> will:
+              </p>
+              <ul className="space-y-2 ml-4">
+                <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
+                  <span className="text-orange-500 mt-0.5">•</span>
+                  <span>Delete all {shiftCount} scheduled shift{shiftCount !== 1 ? 's' : ''}</span>
+                </li>
+                <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
+                  <span className="text-orange-500 mt-0.5">•</span>
+                  <span>Remove them from this location&apos;s roster</span>
+                </li>
+                <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
+                  <span className="text-orange-500 mt-0.5">•</span>
+                  <span>You can add them back anytime</span>
+                </li>
+              </ul>
+            </div>
+          ) : (
+            <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
+              <span className={`font-medium ${textPrimary}`}>{employeeName}</span> will be removed from this location&apos;s scheduler. You can add them back anytime.
+            </p>
+          )}
+        </div>
+
+        <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>
+          <button onClick={onClose}
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}
+            type="button">
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onConfirm}
+            className={`flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all flex items-center justify-center gap-2 ${
+              hasShifts ? 'bg-orange-500 hover:bg-orange-600' : 'bg-red-500 hover:bg-red-600'
+            }`}
+            style={{ fontWeight: 540 }}
+            type="button">
+            <UserMinus size={13} />
+            {hasShifts ? 'Remove & Delete Shifts' : 'Remove'}
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function AddEmployeeModal({
+  dark = false,
+  employees,
+  activeEmployeeIds,
+  onClose,
+  onAdd,
+}: {
+  dark?: boolean;
+  employees: Employee[];
+  activeEmployeeIds: Set<string>;
+  onClose: () => void;
+  onAdd: (employeeId: string) => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const availableEmployees = employees.filter((employee) => !activeEmployeeIds.has(employee.id));
+  const filteredEmployees = availableEmployees.filter((employee) =>
+    employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    employee.role.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+  const employeesByRole = useMemo(() => {
+    const grouped: Record<string, Employee[]> = {};
+    filteredEmployees.forEach((employee) => {
+      if (!grouped[employee.role]) {
+        grouped[employee.role] = [];
+      }
+      grouped[employee.role].push(employee);
+    });
+    return grouped;
+  }, [filteredEmployees]);
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl border overflow-hidden ${panelClass}`}>
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div>
+            <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h3>
+            <p className={`text-[11px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>
+              {availableEmployees.length} available
+            </p>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`} type="button">
+            <X size={18} className="text-[#8898AA]" />
+          </button>
+        </div>
+
+        {availableEmployees.length > 0 ? (
+          <div className="px-6 pt-4 pb-3">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search by name or role..."
+              className={`w-full px-3.5 py-2.5 border rounded-xl text-[13px] placeholder:text-[#8898AA] focus:border-[#635BFF]/40 focus:outline-none focus:ring-2 focus:ring-[#635BFF]/10 transition-all ${
+                dark
+                  ? 'border-white/[0.08] bg-white/[0.04] text-white'
+                  : 'border-[#E5E7EB] bg-white text-[#0A2540]'
+              }`}
+              style={{ fontWeight: 440 }}
+            />
+          </div>
+        ) : null}
+
+        <div className="px-6 pb-5 max-h-[400px] overflow-y-auto">
+          {availableEmployees.length === 0 ? (
+            <div className="py-8 text-center">
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
+                <UserPlus size={20} className="text-[#8898AA]" />
+              </div>
+              <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
+                All employees are already added
+              </p>
+            </div>
+          ) : filteredEmployees.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-[13px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+                No employees match &quot;{searchQuery}&quot;
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {roleOrder.filter((role) => employeesByRole[role]).map((role) => {
+                const roleColor = roleColors[role] || '#635BFF';
+                const roleEmployees = employeesByRole[role];
+                return (
+                  <div key={role}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
+                      <span className={`text-[11px] uppercase tracking-[0.03em] ${textPrimary}`} style={{ fontWeight: 580 }}>
+                        {role}
+                      </span>
+                      <span className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                        {roleEmployees.length}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {roleEmployees.map((employee) => (
+                        <button
+                          key={employee.id}
+                          onClick={() => onAdd(employee.id)}
+                          className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all group ${
+                            dark
+                              ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]'
+                              : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'
+                          }`}
+                          type="button"
+                        >
+                          <img src={employee.avatar} alt={employee.name}
+                            className={`w-9 h-9 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
+                          <div className="flex-1 text-left min-w-0">
+                            <p className={`text-[13px] truncate ${textPrimary}`} style={{ fontWeight: 500 }}>
+                              {employee.name}
+                            </p>
+                            <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                              {employee.role}
+                            </p>
+                          </div>
+                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                            dark ? 'bg-white/[0.06] group-hover:bg-[#635BFF]/[0.16]' : 'bg-[#635BFF]/[0.06] group-hover:bg-[#635BFF]/[0.10]'
+                          }`}>
+                            <Plus size={14} className="text-[#635BFF]" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </>
   );
 }
 
