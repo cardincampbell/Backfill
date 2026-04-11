@@ -224,6 +224,9 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
     assert offers[0].offer_metadata["operating_mode"] == CoverageOperatingMode.standard_queue
     assert len(outbox) == 1
     assert outbox[0].status == OutboxStatus.pending
+    assert len(result.outreach_attempts) == 1
+    assert result.outreach_attempts[0].id == offers[0].id
+    assert result.outreach_attempts[0].status == "queued"
     assert result.coverage_case.status == CoverageCaseStatus.running
     assert runs
 
@@ -310,6 +313,8 @@ async def test_respond_to_offer_accepts_and_assigns_shift():
     assert case.status == CoverageCaseStatus.filled
     assert result.assignment_id == assignments[0].id
     assert result.assignment_status == AssignmentStatus.accepted
+    assert result.outreach_attempt.coverage_offer_id == offer.id
+    assert result.outreach_attempt.status == "accepted"
 
 
 @pytest.mark.asyncio
@@ -428,6 +433,8 @@ async def test_respond_to_offer_decline_dispatches_next_blast_batch():
     assert len(outbox) == 2
     assert case.status == CoverageCaseStatus.running
     assert offer.offer_metadata["next_offer_ids"] == [str(item.id) for item in offers]
+    assert result.outreach_attempt.coverage_offer_id == offer.id
+    assert result.outreach_attempt.status == "declined"
     assert result.coverage_case.status == CoverageCaseStatus.running
 
 

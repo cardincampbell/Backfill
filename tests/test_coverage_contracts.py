@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -15,6 +15,7 @@ from app.schemas.coverage import (
     CoverageCampaignExecutionDecision,
     CoverageCampaignRead,
     CoverageExecutionPlan,
+    CoverageOutreachAttemptRead,
 )
 from app.services import platform_events
 from app.services.auth import AuthContext
@@ -218,3 +219,68 @@ def test_legacy_execute_route_returns_campaign_aliases(monkeypatch):
     assert body["coverage_case"]["id"] == str(campaign.id)
     assert body["decision"]["campaign_id"] == str(campaign.id)
     assert body["decision"]["coverage_case_id"] == str(campaign.id)
+    assert body["outreach_attempts"] == []
+
+
+def test_campaign_outreach_attempts_route_returns_unified_attempts(monkeypatch):
+    business_id = uuid4()
+    fake_session = _FakeSession()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    campaign = _make_campaign()
+    now = datetime.now(timezone.utc)
+    outreach_attempt = CoverageOutreachAttemptRead(
+        id=uuid4(),
+        campaign_id=campaign.id,
+        campaign_run_id=None,
+        coverage_candidate_id=None,
+        employee_id=uuid4(),
+        channel="sms",
+        status="queued",
+        offer_status="pending",
+        attempt_status=None,
+        attempt_no=0,
+        outbox_event_id=None,
+        delivery_provider=None,
+        provider_message_id=None,
+        idempotency_key="campaign:1:employee:sms",
+        requested_at=now,
+        sent_at=None,
+        delivered_at=None,
+        responded_at=None,
+        expires_at=None,
+        accepted_at=None,
+        declined_at=None,
+        offer_metadata={"phase_no": 1},
+        attempt_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return auth_ctx
+
+    async def fake_list_outreach_attempts(session, *, business_id: UUID, campaign_id: UUID):
+        assert session is fake_session
+        assert business_id == auth_ctx.memberships[0].business_id
+        assert campaign_id == campaign.id
+        return [outreach_attempt]
+
+    monkeypatch.setattr("app.api.routes.coverage.outreach_service.list_campaign_outreach_attempts", fake_list_outreach_attempts)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.get(f"/api/businesses/{business_id}/coverage-campaigns/{campaign.id}/outreach-attempts")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["id"] == str(outreach_attempt.id)
+    assert body[0]["coverage_case_id"] == str(campaign.id)
+    assert body[0]["coverage_offer_id"] == str(outreach_attempt.id)
+    assert body[0]["status"] == "queued"

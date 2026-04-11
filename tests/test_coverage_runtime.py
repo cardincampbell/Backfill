@@ -266,7 +266,7 @@ async def test_reconcile_running_coverage_cases_marks_filled_and_cancels_active_
     assert coverage_case.status == CoverageCaseStatus.filled
     assert session.commits == 1
     assert appended_events == [
-        "coverage.offer.cancelled",
+        "coverage.outreach_attempt.cancelled",
         "coverage.campaign.filled",
     ]
 
@@ -391,7 +391,7 @@ async def test_reconcile_running_coverage_cases_marks_cancelled_when_shift_not_a
     assert coverage_case.status == CoverageCaseStatus.cancelled
     assert session.commits == 1
     assert appended_events == [
-        "coverage.offer.cancelled",
+        "coverage.outreach_attempt.cancelled",
         "coverage.campaign.cancelled",
     ]
 

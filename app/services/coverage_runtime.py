@@ -13,7 +13,7 @@ from app.models.common import CoverageCaseStatus, CoverageAttemptStatus, OfferSt
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.scheduling import Shift
 from app.schemas.coverage import CoverageExecutionDispatchRequest
-from app.services import coverage, delivery, platform_events, worker_runtime
+from app.services import coverage, delivery, outreach as outreach_service, platform_events, worker_runtime
 
 _EVENT_COVERAGE_CAMPAIGN_FILLED = "coverage.campaign.filled"
 _EVENT_COVERAGE_CASE_FILLED = "coverage.case.filled"
@@ -123,21 +123,19 @@ async def _append_offer_cancelled_event(
     reason: str,
     occurred_at: datetime,
 ) -> None:
-    await platform_events.append(
+    await outreach_service.append_outreach_attempt_event(
         session,
-        event_type=_EVENT_COVERAGE_OFFER_CANCELLED,
-        target_type="coverage_offer",
-        target_id=offer.id,
+        event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_CANCELLED,
+        compatibility_event_name=_EVENT_COVERAGE_OFFER_CANCELLED,
+        offer=offer,
         business_id=business_id,
         location_id=coverage_case.location_id,
-        payload={
-            "coverage_case_id": str(coverage_case.id),
-            "employee_id": str(offer.employee_id),
-            "shift_id": str(coverage_case.shift_id),
+        shift_id=coverage_case.shift_id,
+        metadata={
+            "channel": "worker_runtime",
             "reason": reason,
             "occurred_at": occurred_at.isoformat(),
         },
-        metadata={"channel": "worker_runtime"},
     )
 
 
