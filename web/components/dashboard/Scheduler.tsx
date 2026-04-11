@@ -29,7 +29,7 @@ import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
-  createAndAssignLocationRole,
+  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
@@ -827,36 +827,15 @@ function SchedulerContent({
       throw new Error('No location selected.');
     }
 
-    const existing = editorRoles.find(
-      (role) => role.name.trim().toLowerCase() === name.trim().toLowerCase(),
-    );
-
     try {
       setEditorFeedback(null);
-      const created = await createAndAssignLocationRole(
-        editorLocation.business_id,
-        editorLocation.id,
-        { name },
-      );
+      const created = await createBusinessRole(editorLocation.business_id, { name });
       setEditorRoles((current) =>
-        current.some((role) => role.id === created.role.id)
+        current.some((role) => role.id === created.id)
           ? current
-          : [...current, created.role],
+          : [...current, created],
       );
-      setEditorAssignments((current) => {
-        const next = current.filter(
-          (assignment) => assignment.role_id !== created.location_role.role_id,
-        );
-        next.push(created.location_role);
-        return next;
-      });
-      setEditorFeedback({
-        tone: 'success',
-        message: existing
-          ? `${created.role.name} was assigned to ${editorLocation.display_name ?? editorLocation.name}.`
-          : `${created.role.name} was added to Roles and assigned to ${editorLocation.display_name ?? editorLocation.name}.`,
-      });
-      return created.role;
+      return created;
     } catch (error) {
       setEditorFeedback({
         tone: 'error',

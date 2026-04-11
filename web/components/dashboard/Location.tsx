@@ -24,7 +24,7 @@ import {
   buildSchedulerBasePathFromAny,
 } from "@/lib/dashboard-paths";
 import {
-  createAndAssignLocationRole,
+  createBusinessRole,
   getLocationRoles,
   listBusinessLocations,
   listBusinessRoles,
@@ -50,6 +50,7 @@ import {
   formatLocationMeta,
   getLocationReference,
 } from "./location-role-reference";
+import { validateCustomRoleName } from "@/lib/role-name-validation";
 
 type Feedback = {
   tone: "success" | "error";
@@ -463,9 +464,17 @@ export default function Location({
     if (existing) {
       addRole(existing.id);
       setCustomRole("");
+      return;
+    }
+
+    const validation = validateCustomRoleName(
+      trimmed,
+      roles.map((role) => role.name),
+    );
+    if (!validation.ok) {
       setFeedback({
-        tone: "success",
-        message: `${existing.name} is already in Roles and has been selected for ${locationDisplayName}.`,
+        tone: "error",
+        message: validation.message,
       });
       return;
     }
@@ -473,33 +482,18 @@ export default function Location({
     try {
       setIsCreatingRole(true);
       setFeedback(null);
-      const created = await createAndAssignLocationRole(
-        location.business_id,
-        location.location_id,
-        { name: trimmed },
-      );
-      setRoles((current) =>
-        current.some((role) => role.id === created.role.id)
-          ? current
-          : [...current, created.role],
-      );
-      setAssignments((current) => {
-        const next = current.filter(
-          (assignment) => assignment.role_id !== created.location_role.role_id,
-        );
-        next.push(created.location_role);
-        return next;
+      const created = await createBusinessRole(location.business_id, {
+        name: validation.roleName,
       });
+      setRoles((current) =>
+        current.some((role) => role.id === created.id)
+          ? current
+          : [...current, created],
+      );
       setSelectedRoleIds((current) =>
-        current.includes(created.role.id) ? current : [...current, created.role.id],
+        current.includes(created.id) ? current : [...current, created.id],
       );
       setCustomRole("");
-      setFeedback({
-        tone: "success",
-        message: existing
-          ? `${created.role.name} was assigned to ${locationDisplayName}.`
-          : `${created.role.name} was added to Roles and assigned to ${locationDisplayName}.`,
-      });
     } catch (error) {
       setFeedback({
         tone: "error",

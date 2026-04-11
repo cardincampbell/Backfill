@@ -19,7 +19,7 @@ import {
   buildDashboardOverviewLocationEditPathFromAny,
 } from '@/lib/dashboard-paths';
 import {
-  createAndAssignLocationRole,
+  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
@@ -972,37 +972,16 @@ function MultiLocationView({
       throw new Error('No location selected.');
     }
 
-    const activeLocation = editorLocation;
-    const existing = editorRoles.find(
-      (role) => role.name.trim().toLowerCase() === name.trim().toLowerCase(),
-    );
-
     try {
       setEditorFeedback(null);
-      const created = await createAndAssignLocationRole(
-        activeLocation.business_id,
-        activeLocation.id,
-        { name },
-      );
+      const activeLocation = editorLocation;
+      const created = await createBusinessRole(activeLocation.business_id, { name });
       setEditorRoles((current) =>
-        current.some((role) => role.id === created.role.id)
+        current.some((role) => role.id === created.id)
           ? current
-          : [...current, created.role],
+          : [...current, created],
       );
-      setEditorAssignments((current) => {
-        const next = current.filter(
-          (assignment) => assignment.role_id !== created.location_role.role_id,
-        );
-        next.push(created.location_role);
-        return next;
-      });
-      setEditorFeedback({
-        tone: 'success',
-        message: existing
-          ? `${created.role.name} was assigned to ${activeLocation.display_name ?? activeLocation.name}.`
-          : `${created.role.name} was added to Roles and assigned to ${activeLocation.display_name ?? activeLocation.name}.`,
-      });
-      return created.role;
+      return created;
     } catch (error) {
       setEditorFeedback({
         tone: 'error',

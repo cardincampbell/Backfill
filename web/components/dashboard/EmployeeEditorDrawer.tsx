@@ -24,6 +24,7 @@ import {
   updateEmployee,
   type EmployeeProfile,
 } from "@/lib/api/workforce";
+import { validateCustomRoleName } from "@/lib/role-name-validation";
 
 import { getLocationReference } from "./location-role-reference";
 
@@ -501,9 +502,23 @@ export function EmployeeEditorDrawer({
       return;
     }
 
+    const validation = validateCustomRoleName(
+      trimmed,
+      roleCatalog.map((role) => role.name),
+    );
+    if (!validation.ok) {
+      setFeedback({
+        tone: "error",
+        message: validation.message,
+      });
+      return;
+    }
+
     try {
       setFeedback(null);
-      const createdRole = await createBusinessRole(businessId, { name: trimmed });
+      const createdRole = await createBusinessRole(businessId, {
+        name: validation.roleName,
+      });
       setRoleCatalog((current) => [...current, createdRole]);
       onRoleCreated?.(createdRole);
       setFormData((current) => ({
