@@ -584,17 +584,11 @@ async def expire_due_offers(
     limit: int = 100,
 ) -> dict:
     reference_time = now or datetime.now(timezone.utc)
-    result = await session.execute(
-        select(CoverageOffer)
-        .where(
-            CoverageOffer.status.in_([OfferStatus.pending, OfferStatus.delivered]),
-            CoverageOffer.expires_at.is_not(None),
-            CoverageOffer.expires_at <= reference_time,
-        )
-        .order_by(CoverageOffer.expires_at.asc())
-        .limit(limit)
+    offers = await worker_runtime.claim_expiring_coverage_offers(
+        session,
+        now=reference_time,
+        limit=limit,
     )
-    offers = list(result.scalars().all())
 
     exhausted_case_ids: list[str] = []
     advanced_offer_ids: list[str] = []
