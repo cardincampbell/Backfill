@@ -372,6 +372,11 @@ export default function DashboardShell({
                     preferredBusiness?.business_id ??
                     null
                   }
+                  locationHref={
+                    activeWorkspaceLocation
+                      ? getLocationEntryHref(activeWorkspaceLocation)
+                      : null
+                  }
                   locationId={activeWorkspaceLocation?.location_id ?? null}
                   locationName={
                     activeWorkspaceLocation?.location_display_name ??
