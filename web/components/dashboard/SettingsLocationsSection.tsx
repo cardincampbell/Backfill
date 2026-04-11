@@ -146,7 +146,7 @@ export default function SettingsLocationsSection({
     setShiftDefaults(null);
     setSelectedLocationStaffCount(null);
     setEditorFeedback(null);
-  }, [businessId, workspaceLocations]);
+  }, [businessId]);
 
   useEffect(() => {
     if (!routeControlled) {
