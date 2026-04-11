@@ -13,6 +13,7 @@ import type {
   LocationShiftDefaults,
   ShiftDefault,
 } from "@/lib/api/workspace";
+import { validateCustomRoleName } from "@/lib/role-name-validation";
 
 import {
   formatDisplayLabel,
@@ -386,9 +387,21 @@ export function LocationRoleEditor({
       return;
     }
 
+    const validation = validateCustomRoleName(
+      trimmed,
+      roles.map((role) => role.name),
+    );
+    if (!validation.ok) {
+      setVisibleFeedback({
+        tone: "error",
+        message: validation.message,
+      });
+      return;
+    }
+
     try {
       setIsCreatingRole(true);
-      const createdRole = await onCreateRole(trimmed);
+      const createdRole = await onCreateRole(validation.roleName);
       addRole(createdRole.id);
       setCustomRole("");
     } finally {

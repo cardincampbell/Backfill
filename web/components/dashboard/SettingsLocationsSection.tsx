@@ -8,7 +8,7 @@ import { useAppWorkspaceRefresh } from "@/components/app-workspace";
 import { useAppWorkspace } from "@/components/app-workspace";
 import { useSetLocationEntryMode } from "@/components/location-entry-provider";
 import {
-  createAndAssignLocationRole,
+  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
@@ -396,46 +396,15 @@ export default function SettingsLocationsSection({
       throw new Error("No location selected.");
     }
 
-    const activeLocation = selectedLocation;
-    const existing = roles.find(
-      (role) => role.name.trim().toLowerCase() === name.trim().toLowerCase(),
-    );
-
     try {
       setEditorFeedback(null);
-      const created = await createAndAssignLocationRole(
-        businessId,
-        activeLocation.id,
-        { name },
-      );
+      const created = await createBusinessRole(businessId, { name });
       setRoles((current) =>
-        current.some((role) => role.id === created.role.id)
+        current.some((role) => role.id === created.id)
           ? current
-          : [...current, created.role],
+          : [...current, created],
       );
-      setAssignments((current) => {
-        const next = current.filter(
-          (assignment) => assignment.role_id !== created.location_role.role_id,
-        );
-        next.push(created.location_role);
-        return next;
-      });
-      setRoleCounts((current) => ({
-        ...current,
-        [activeLocation.id]:
-          assignments.some(
-            (assignment) => assignment.role_id === created.location_role.role_id,
-          )
-            ? current[activeLocation.id] ?? assignments.length
-            : (current[activeLocation.id] ?? assignments.length) + 1,
-      }));
-      setEditorFeedback({
-        tone: "success",
-        message: existing
-          ? `${created.role.name} was assigned to ${activeLocation.display_name ?? activeLocation.name}.`
-          : `${created.role.name} was added to Roles and assigned to ${activeLocation.display_name ?? activeLocation.name}.`,
-      });
-      return created.role;
+      return created;
     } catch (error) {
       setEditorFeedback({
         tone: "error",

@@ -24,7 +24,6 @@ import {
   Shield as ShieldCheck,
   Info,
 } from 'lucide-react';
-import { AppLoader } from '@/components/app-loader';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { useAppWorkspace, useAppWorkspaceReady } from '@/components/app-workspace';
 import { FloatingDropdown } from '@/components/floating-dropdown';
@@ -76,6 +75,41 @@ interface Employee {
   statusReason?: string;
   reliability: number;
   avatar: string;
+}
+
+function TeamLoadingSkeleton({ dark }: { dark: boolean }) {
+  return (
+    <div
+      className={`overflow-hidden rounded-2xl border ${
+        dark ? 'border-white/[0.06] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'
+      }`}
+    >
+      <div
+        className={`border-b px-5 py-4 ${
+          dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-[#F0F0F5] bg-[#FAFBFC]'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <div className="skeleton" style={{ width: 18, height: 18, borderRadius: 6 }} />
+          <div className="skeleton skeleton-text" style={{ width: 132, marginBottom: 0 }} />
+        </div>
+      </div>
+      <div className="px-5 py-5">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="skeleton skeleton-card" />
+          <div className="skeleton skeleton-card" />
+          <div className="skeleton skeleton-card" />
+        </div>
+        <div className="mt-5 space-y-3">
+          <div className="skeleton" style={{ width: '100%', height: 44, borderRadius: 14 }} />
+          <div className="skeleton" style={{ width: '100%', height: 44, borderRadius: 14 }} />
+          <div className="skeleton" style={{ width: '100%', height: 44, borderRadius: 14 }} />
+          <div className="skeleton" style={{ width: '100%', height: 44, borderRadius: 14 }} />
+          <div className="skeleton skeleton-table" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type AddEmployeeFormState = {
@@ -2471,9 +2505,8 @@ export default function Team({
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
-          className={`overflow-hidden rounded-2xl border ${theme.panelClass}`}
         >
-          <AppLoader appearance={isDark ? 'dark' : 'light'} />
+          <TeamLoadingSkeleton dark={isDark} />
         </motion.div>
       ) : (
       /* Employee Table */
