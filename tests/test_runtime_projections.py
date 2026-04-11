@@ -119,6 +119,37 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
 
 
 @pytest.mark.asyncio
+async def test_monitor_runtime_projection_freshness_blocks_when_stale_ratio_is_too_high():
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [(business_id,)],
+        [
+            (business_id, {"updated_at": (now - timedelta(minutes=2)).isoformat()}),
+            (business_id, {"updated_at": (now - timedelta(minutes=45)).isoformat()}),
+            (business_id, {}),
+            (business_id, {"updated_at": (now - timedelta(minutes=50)).isoformat()}),
+            (business_id, {}),
+        ],
+    ]
+
+    result = await runtime_projections.monitor_runtime_projection_freshness(
+        session,
+        now=now,
+        business_limit=10,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["blocked_reason"] == "runtime_projections_too_stale"
+    assert result["blocked_business_count"] == 1
+    assert result["blocked_business_ids"] == [str(business_id)]
+    assert result["fresh_employee_count"] == 1
+    assert result["stale_employee_count"] == 2
+    assert result["missing_employee_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_build_outreach_guardrail_snapshots_marks_hard_cooldown_and_burden():
     now = datetime.now(timezone.utc)
     business_id = uuid4()

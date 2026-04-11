@@ -5,9 +5,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.common import CoverageCaseStatus, OutboxChannel, OutboxStatus, SchedulerProvider, SchedulerSyncJobStatus
-from app.models.coverage import CoverageCase, OutboxEvent
-from app.models.integrations import SchedulerSyncJob
+from app.models.common import CoverageCaseStatus, OfferStatus, OutboxChannel, OutboxStatus, SchedulerProvider, SchedulerSyncJobStatus
+from app.models.coverage import CoverageCase, CoverageOffer, OutboxEvent
+from app.models.integrations import ProviderCallbackLog, SchedulerSyncJob
 from app.services import worker_runtime
 
 
@@ -287,3 +287,125 @@ async def test_claim_running_coverage_cases_enforces_business_isolation() -> Non
     claimed = await worker_runtime.claim_running_coverage_cases(session, limit=3)
 
     assert claimed == [(first, business_a), (third, business_b)]
+
+
+@pytest.mark.asyncio
+async def test_claim_provider_callback_logs_enforces_business_isolation() -> None:
+    now = datetime.now(timezone.utc)
+    business_a = uuid4()
+    business_b = uuid4()
+    first = ProviderCallbackLog(
+        id=uuid4(),
+        provider="retell",
+        route_key="retell_webhook",
+        event_type="call_started",
+        provider_event_id="call_1",
+        dedupe_key="retell:call_1",
+        status="received",
+        headers={},
+        payload={},
+        result_payload={},
+        received_at=now,
+    )
+    second = ProviderCallbackLog(
+        id=uuid4(),
+        provider="retell",
+        route_key="retell_webhook",
+        event_type="call_started",
+        provider_event_id="call_2",
+        dedupe_key="retell:call_2",
+        status="received",
+        headers={},
+        payload={},
+        result_payload={},
+        received_at=now + timedelta(seconds=1),
+    )
+    third = ProviderCallbackLog(
+        id=uuid4(),
+        provider="retell",
+        route_key="retell_webhook",
+        event_type="call_started",
+        provider_event_id="call_3",
+        dedupe_key="retell:call_3",
+        status="received",
+        headers={},
+        payload={},
+        result_payload={},
+        received_at=now + timedelta(seconds=2),
+    )
+    session = FakeWorkerSession()
+    session.execute_queue = [[first, second, third]]
+
+    async def fake_business_resolver(_session, entries):
+        return {
+            first.id: business_a,
+            second.id: business_a,
+            third.id: business_b,
+        }
+
+    claimed = await worker_runtime.claim_provider_callback_logs(
+        session,
+        limit=3,
+        now=now,
+        business_resolver=fake_business_resolver,
+    )
+
+    assert claimed == [first, third]
+    assert first.status == "processing"
+    assert first.processed_at == now
+    assert second.status == "received"
+    assert third.status == "processing"
+
+
+@pytest.mark.asyncio
+async def test_claim_expiring_coverage_offers_enforces_business_isolation() -> None:
+    now = datetime.now(timezone.utc)
+    business_a = uuid4()
+    business_b = uuid4()
+    first_case_id = uuid4()
+    second_case_id = uuid4()
+    third_case_id = uuid4()
+    first = CoverageOffer(
+        id=uuid4(),
+        coverage_case_id=first_case_id,
+        employee_id=uuid4(),
+        channel=OutboxChannel.sms,
+        status=OfferStatus.pending,
+        idempotency_key="offer_1",
+        expires_at=now,
+        offer_metadata={},
+    )
+    second = CoverageOffer(
+        id=uuid4(),
+        coverage_case_id=second_case_id,
+        employee_id=uuid4(),
+        channel=OutboxChannel.sms,
+        status=OfferStatus.pending,
+        idempotency_key="offer_2",
+        expires_at=now + timedelta(seconds=1),
+        offer_metadata={},
+    )
+    third = CoverageOffer(
+        id=uuid4(),
+        coverage_case_id=third_case_id,
+        employee_id=uuid4(),
+        channel=OutboxChannel.sms,
+        status=OfferStatus.pending,
+        idempotency_key="offer_3",
+        expires_at=now + timedelta(seconds=2),
+        offer_metadata={},
+    )
+    session = FakeWorkerSession()
+    session.execute_queue = [[
+        (first, first_case_id, business_a),
+        (second, second_case_id, business_a),
+        (third, third_case_id, business_b),
+    ]]
+
+    claimed = await worker_runtime.claim_expiring_coverage_offers(
+        session,
+        now=now,
+        limit=3,
+    )
+
+    assert claimed == [first, third]

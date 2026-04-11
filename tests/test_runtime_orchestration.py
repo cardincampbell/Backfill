@@ -24,7 +24,23 @@ async def test_process_runtime_tick_runs_callback_and_coverage_batches_in_order(
             "claimed_count": 2,
             "processed_count": 2,
             "failed_count": 0,
+            "dead_lettered_count": 0,
             "processed_callback_ids": ["cb_1", "cb_2"],
+        }
+
+    async def fake_projection_health(_session, *, business_limit):
+        calls.append(("runtime_projections", business_limit))
+        return {
+            "status": "ready",
+            "checked_at": "2026-04-10T20:00:00+00:00",
+            "freshness_target_seconds": 900,
+            "monitored_business_count": 2,
+            "candidate_employee_count": 8,
+            "fresh_employee_count": 7,
+            "stale_employee_count": 1,
+            "missing_employee_count": 0,
+            "blocked_business_count": 0,
+            "blocked_business_ids": [],
         }
 
     async def fake_runtime(_session, *, limit):
@@ -62,12 +78,14 @@ async def test_process_runtime_tick_runs_callback_and_coverage_batches_in_order(
         }
 
     monkeypatch.setattr(runtime_orchestration.provider_callbacks, "process_callback_batch", fake_callbacks)
+    monkeypatch.setattr(runtime_orchestration.runtime_projections, "monitor_runtime_projection_freshness", fake_projection_health)
     monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fake_runtime)
 
     result = await runtime_orchestration.process_runtime_tick(session, limit=7)
 
     assert calls == [
         ("callbacks", 7),
+        ("runtime_projections", 7),
         ("coverage_runtime", 7),
     ]
     assert result == {
@@ -76,19 +94,37 @@ async def test_process_runtime_tick_runs_callback_and_coverage_batches_in_order(
             "callback_claimed_count": 2,
             "callback_processed_count": 2,
             "callback_failed_count": 0,
+            "callback_dead_lettered_count": 0,
             "coverage_claimed_case_count": 2,
             "coverage_processed_case_count": 3,
             "offer_expiry_expired_count": 1,
             "offer_expiry_advanced_offer_count": 1,
             "offer_expiry_exhausted_case_count": 1,
             "delivery_claimed_count": 1,
+            "projection_monitored_business_count": 2,
+            "projection_blocked_business_count": 0,
+            "projection_stale_employee_count": 1,
+            "projection_missing_employee_count": 0,
             "total_failed_count": 0,
         },
         "callbacks": {
             "claimed_count": 2,
             "processed_count": 2,
             "failed_count": 0,
+            "dead_lettered_count": 0,
             "processed_callback_ids": ["cb_1", "cb_2"],
+        },
+        "runtime_projections": {
+            "status": "ready",
+            "checked_at": "2026-04-10T20:00:00+00:00",
+            "freshness_target_seconds": 900,
+            "monitored_business_count": 2,
+            "candidate_employee_count": 8,
+            "fresh_employee_count": 7,
+            "stale_employee_count": 1,
+            "missing_employee_count": 0,
+            "blocked_business_count": 0,
+            "blocked_business_ids": [],
         },
         "coverage_runtime": {
             "reconcile": {
@@ -133,12 +169,14 @@ async def test_process_runtime_tick_is_duplicate_safe_on_repeated_ticks(monkeypa
                 "claimed_count": 1,
                 "processed_count": 1,
                 "failed_count": 0,
+                "dead_lettered_count": 0,
                 "processed_callback_ids": ["cb_1"],
             },
             {
                 "claimed_count": 0,
                 "processed_count": 0,
                 "failed_count": 0,
+                "dead_lettered_count": 0,
                 "processed_callback_ids": [],
             },
         ],
@@ -219,7 +257,22 @@ async def test_process_runtime_tick_is_duplicate_safe_on_repeated_ticks(monkeypa
         processed_ids.extend(result["processed_case_ids"])
         return result
 
+    async def fake_projection_health(_session, *, business_limit):
+        return {
+            "status": "ready",
+            "checked_at": "2026-04-10T20:00:00+00:00",
+            "freshness_target_seconds": 900,
+            "monitored_business_count": 1,
+            "candidate_employee_count": 3,
+            "fresh_employee_count": 3,
+            "stale_employee_count": 0,
+            "missing_employee_count": 0,
+            "blocked_business_count": 0,
+            "blocked_business_ids": [],
+        }
+
     monkeypatch.setattr(runtime_orchestration.provider_callbacks, "process_callback_batch", fake_callbacks)
+    monkeypatch.setattr(runtime_orchestration.runtime_projections, "monitor_runtime_projection_freshness", fake_projection_health)
     monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fake_runtime)
 
     first_result = await runtime_orchestration.process_runtime_tick(session, limit=5)
@@ -244,6 +297,7 @@ async def test_process_runtime_tick_reports_processed_when_only_offer_expiry_did
             "claimed_count": 0,
             "processed_count": 0,
             "failed_count": 0,
+            "dead_lettered_count": 0,
             "processed_callback_ids": [],
         }
 
@@ -280,7 +334,22 @@ async def test_process_runtime_tick_reports_processed_when_only_offer_expiry_did
             "processed_case_ids": ["case_expired"],
         }
 
+    async def fake_projection_health(_session, *, business_limit):
+        return {
+            "status": "ready",
+            "checked_at": "2026-04-10T20:00:00+00:00",
+            "freshness_target_seconds": 900,
+            "monitored_business_count": 1,
+            "candidate_employee_count": 2,
+            "fresh_employee_count": 2,
+            "stale_employee_count": 0,
+            "missing_employee_count": 0,
+            "blocked_business_count": 0,
+            "blocked_business_ids": [],
+        }
+
     monkeypatch.setattr(runtime_orchestration.provider_callbacks, "process_callback_batch", fake_callbacks)
+    monkeypatch.setattr(runtime_orchestration.runtime_projections, "monitor_runtime_projection_freshness", fake_projection_health)
     monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fake_runtime)
 
     result = await runtime_orchestration.process_runtime_tick(session, limit=5)
@@ -289,3 +358,47 @@ async def test_process_runtime_tick_reports_processed_when_only_offer_expiry_did
     assert result["summary"]["offer_expiry_expired_count"] == 2
     assert result["summary"]["offer_expiry_advanced_offer_count"] == 1
     assert result["summary"]["offer_expiry_exhausted_case_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_process_runtime_tick_blocks_coverage_runtime_when_projection_health_is_too_stale(monkeypatch):
+    session = DummyRuntimeSession()
+
+    async def fake_callbacks(_session, *, limit):
+        return {
+            "claimed_count": 1,
+            "processed_count": 1,
+            "failed_count": 0,
+            "dead_lettered_count": 0,
+            "processed_callback_ids": ["cb_1"],
+        }
+
+    async def fake_projection_health(_session, *, business_limit):
+        return {
+            "status": "blocked",
+            "checked_at": "2026-04-10T20:00:00+00:00",
+            "freshness_target_seconds": 900,
+            "monitored_business_count": 2,
+            "candidate_employee_count": 10,
+            "fresh_employee_count": 4,
+            "stale_employee_count": 4,
+            "missing_employee_count": 2,
+            "blocked_business_count": 1,
+            "blocked_business_ids": ["biz_1"],
+            "blocked_reason": "runtime_projections_too_stale",
+        }
+
+    async def fail_if_called(_session, *, limit):
+        raise AssertionError("coverage runtime should not run when projections are blocked")
+
+    monkeypatch.setattr(runtime_orchestration.provider_callbacks, "process_callback_batch", fake_callbacks)
+    monkeypatch.setattr(runtime_orchestration.runtime_projections, "monitor_runtime_projection_freshness", fake_projection_health)
+    monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fail_if_called)
+
+    result = await runtime_orchestration.process_runtime_tick(session, limit=4)
+
+    assert result["status"] == "blocked"
+    assert result["runtime_projections"]["blocked_reason"] == "runtime_projections_too_stale"
+    assert result["coverage_runtime"]["status"] == "blocked"
+    assert result["summary"]["projection_blocked_business_count"] == 1
+    assert result["summary"]["callback_processed_count"] == 1

@@ -7,8 +7,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.common import AssignmentStatus, CoverageAttemptStatus
-from app.models.coverage import CoverageContactAttempt
+from app.models.common import AssignmentStatus, CoverageAttemptStatus, CoverageCaseStatus, EmployeeStatus
+from app.models.coverage import CoverageCase, CoverageContactAttempt
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
@@ -21,6 +21,8 @@ RECENT_BURDEN_WINDOW = timedelta(days=7)
 OVERTIME_LOOKBACK_WINDOW = timedelta(days=7)
 _ENGINE_RUNTIME_SOURCE = "authoring_tables"
 _SCORE_SNAPSHOT_SOURCE = "employee.response_profile"
+_PROJECTION_BLOCK_MIN_EMPLOYEE_COUNT = 5
+_PROJECTION_BLOCK_STALE_RATIO = 0.5
 
 
 def _normalize_datetime(value: object | None) -> datetime | None:
@@ -35,12 +37,11 @@ def _normalize_datetime(value: object | None) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def score_snapshot_state(
-    employee: Employee,
+def _score_snapshot_state_from_profile(
+    profile: dict[str, object] | None,
     *,
     now: datetime,
 ) -> dict[str, object]:
-    profile = employee.response_profile if isinstance(employee.response_profile, dict) else {}
     updated_at = _normalize_datetime(profile.get("updated_at"))
     if updated_at is None:
         return {
@@ -60,6 +61,15 @@ def score_snapshot_state(
         "age_seconds": age_seconds,
         "freshness_target_seconds": int(SCORE_SNAPSHOT_STALE_AFTER.total_seconds()),
     }
+
+
+def score_snapshot_state(
+    employee: Employee,
+    *,
+    now: datetime,
+) -> dict[str, object]:
+    profile = employee.response_profile if isinstance(employee.response_profile, dict) else {}
+    return _score_snapshot_state_from_profile(profile, now=now)
 
 
 async def refresh_employee_score_snapshots(
@@ -94,6 +104,102 @@ async def refresh_employee_score_snapshots(
         states[employee.id] = refreshed_state
 
     return states
+
+
+async def monitor_runtime_projection_freshness(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    business_limit: int = 25,
+) -> dict[str, object]:
+    reference_time = now or datetime.now(timezone.utc)
+    active_business_result = await session.execute(
+        select(Shift.business_id)
+        .join(CoverageCase, CoverageCase.shift_id == Shift.id)
+        .where(CoverageCase.status.in_([CoverageCaseStatus.queued, CoverageCaseStatus.running]))
+        .distinct()
+        .limit(max(1, business_limit))
+    )
+    business_ids: list[object] = []
+    for row in active_business_result.all():
+        business_id = row[0] if isinstance(row, tuple) else row
+        if business_id is not None:
+            business_ids.append(business_id)
+    if not business_ids:
+        return {
+            "status": "ready",
+            "checked_at": reference_time.isoformat(),
+            "freshness_target_seconds": int(SCORE_SNAPSHOT_STALE_AFTER.total_seconds()),
+            "monitored_business_count": 0,
+            "candidate_employee_count": 0,
+            "fresh_employee_count": 0,
+            "stale_employee_count": 0,
+            "missing_employee_count": 0,
+            "blocked_business_count": 0,
+            "blocked_business_ids": [],
+        }
+
+    employee_result = await session.execute(
+        select(Employee.business_id, Employee.response_profile)
+        .where(
+            Employee.business_id.in_(business_ids),
+            Employee.status == EmployeeStatus.active,
+        )
+    )
+
+    fresh_employee_count = 0
+    stale_employee_count = 0
+    missing_employee_count = 0
+    business_counts: dict[str, dict[str, int]] = {
+        str(business_id): {"candidate_employee_count": 0, "stale_or_missing_count": 0}
+        for business_id in business_ids
+    }
+
+    for business_id, response_profile in employee_result.all():
+        if business_id is None:
+            continue
+        state = _score_snapshot_state_from_profile(
+            response_profile if isinstance(response_profile, dict) else {},
+            now=reference_time,
+        )
+        business_bucket = business_counts.setdefault(
+            str(business_id),
+            {"candidate_employee_count": 0, "stale_or_missing_count": 0},
+        )
+        business_bucket["candidate_employee_count"] += 1
+
+        if state["status"] == "fresh":
+            fresh_employee_count += 1
+        elif state["status"] == "stale":
+            stale_employee_count += 1
+            business_bucket["stale_or_missing_count"] += 1
+        else:
+            missing_employee_count += 1
+            business_bucket["stale_or_missing_count"] += 1
+
+    blocked_business_ids = [
+        business_id
+        for business_id, counts in business_counts.items()
+        if counts["candidate_employee_count"] >= _PROJECTION_BLOCK_MIN_EMPLOYEE_COUNT
+        and counts["stale_or_missing_count"] / counts["candidate_employee_count"] >= _PROJECTION_BLOCK_STALE_RATIO
+    ]
+
+    status = "blocked" if blocked_business_ids else "ready"
+    result: dict[str, object] = {
+        "status": status,
+        "checked_at": reference_time.isoformat(),
+        "freshness_target_seconds": int(SCORE_SNAPSHOT_STALE_AFTER.total_seconds()),
+        "monitored_business_count": len(business_counts),
+        "candidate_employee_count": fresh_employee_count + stale_employee_count + missing_employee_count,
+        "fresh_employee_count": fresh_employee_count,
+        "stale_employee_count": stale_employee_count,
+        "missing_employee_count": missing_employee_count,
+        "blocked_business_count": len(blocked_business_ids),
+        "blocked_business_ids": blocked_business_ids,
+    }
+    if blocked_business_ids:
+        result["blocked_reason"] = "runtime_projections_too_stale"
+    return result
 
 
 def build_runtime_projection_metadata(

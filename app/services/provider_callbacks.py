@@ -10,8 +10,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.integrations import ProviderCallbackLog
+from app.models.business import Location
+from app.models.coverage import CoverageCase, CoverageOffer
+from app.models.integrations import ProviderCallbackLog, RetellConversation
+from app.models.scheduling import Shift
 from app.services import delivery, retell_workflow, worker_runtime
+
+_CALLBACK_MAX_ATTEMPTS = 3
+_NON_RETRYABLE_STATUS_CODES = {400, 404, 422}
 
 
 def _normalized_mapping(mapping: dict[str, Any] | None) -> dict[str, Any]:
@@ -37,6 +43,16 @@ def _normalized_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalized_uuid(value: Any) -> UUID | None:
+    text = _normalized_text(value)
+    if text is None:
+        return None
+    try:
+        return UUID(text)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -192,11 +208,29 @@ async def mark_failed(
     *,
     error_message: str,
     result_payload: dict[str, Any] | None = None,
+    status_code: int | None = None,
+    terminal: bool = False,
+    failure_count: int | None = None,
 ) -> ProviderCallbackLog:
-    entry.status = "failed"
-    entry.processed_at = datetime.now(timezone.utc)
+    reference_time = datetime.now(timezone.utc)
+    payload = {
+        **_normalized_mapping(entry.result_payload),
+        **_normalized_mapping(result_payload),
+    }
+    if failure_count is not None:
+        payload["failure_count"] = failure_count
+    if status_code is not None:
+        payload["last_status_code"] = status_code
+    if terminal:
+        payload["terminal_state"] = "dead_lettered"
+        payload["dead_lettered_at"] = reference_time.isoformat()
+        if status_code is not None:
+            payload["terminal_status_code"] = status_code
+
+    entry.status = "dead_lettered" if terminal else "failed"
+    entry.processed_at = reference_time
     entry.error_message = error_message.strip() or "callback_processing_failed"
-    entry.result_payload = _normalized_mapping(result_payload)
+    entry.result_payload = payload
     await session.flush()
     return entry
 
@@ -227,6 +261,40 @@ def _existing_result(entry: ProviderCallbackLog) -> CallbackProcessingResult:
     )
 
 
+def _callback_failure_count(entry: ProviderCallbackLog) -> int:
+    payload = _normalized_mapping(entry.result_payload)
+    try:
+        return int(payload.get("failure_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _should_dead_letter_callback(
+    *,
+    failure_count: int,
+    status_code: int | None,
+) -> bool:
+    if status_code in _NON_RETRYABLE_STATUS_CODES:
+        return True
+    return failure_count >= _CALLBACK_MAX_ATTEMPTS
+
+
+def _dead_letter_error(entry: ProviderCallbackLog) -> CallbackProcessingError:
+    payload = _normalized_mapping(entry.result_payload)
+    status_code = payload.get("terminal_status_code") or payload.get("last_status_code") or 422
+    try:
+        normalized_status = int(status_code)
+    except (TypeError, ValueError):
+        normalized_status = 422
+    detail = _normalized_text(payload.get("terminal_detail")) or entry.error_message or "callback_dead_lettered"
+    return CallbackProcessingError(
+        entry.error_message or "callback_dead_lettered",
+        status_code=normalized_status,
+        detail=detail,
+        result_payload=payload,
+    )
+
+
 def _resolve_processor(entry: ProviderCallbackLog) -> CallbackProcessor:
     normalized_key = (entry.provider.strip().lower(), entry.route_key.strip())
     processor = _PROCESSOR_REGISTRY.get(normalized_key)
@@ -254,6 +322,8 @@ async def process_callback_entry(
 ) -> CallbackProcessingResult:
     if entry.status == "processed":
         return _existing_result(entry)
+    if entry.status == "dead_lettered":
+        raise _dead_letter_error(entry)
 
     processor = _resolve_processor(entry)
     try:
@@ -262,11 +332,22 @@ async def process_callback_entry(
         if hasattr(session, "rollback"):
             await session.rollback()
         failed_entry = await _reload_callback_entry(session, entry.id, entry)
+        failure_count = _callback_failure_count(failed_entry) + 1
+        terminal = _should_dead_letter_callback(
+            failure_count=failure_count,
+            status_code=exc.status_code,
+        )
         await mark_failed(
             session,
             failed_entry,
             error_message=exc.error_message,
-            result_payload=exc.result_payload,
+            result_payload={
+                **exc.result_payload,
+                "terminal_detail": exc.detail,
+            },
+            status_code=exc.status_code,
+            terminal=terminal,
+            failure_count=failure_count,
         )
         await session.commit()
         raise
@@ -274,10 +355,17 @@ async def process_callback_entry(
         if hasattr(session, "rollback"):
             await session.rollback()
         failed_entry = await _reload_callback_entry(session, entry.id, entry)
+        failure_count = _callback_failure_count(failed_entry) + 1
+        terminal = _should_dead_letter_callback(
+            failure_count=failure_count,
+            status_code=None,
+        )
         await mark_failed(
             session,
             failed_entry,
             error_message=str(exc),
+            terminal=terminal,
+            failure_count=failure_count,
         )
         await session.commit()
         raise
@@ -316,6 +404,10 @@ async def process_callback_entry_synchronously(
         await session.commit()
         return _existing_result(locked_entry)
 
+    if locked_entry.status == "dead_lettered":
+        await session.commit()
+        raise _dead_letter_error(locked_entry)
+
     if locked_entry.status == "processing":
         await session.commit()
         raise CallbackProcessingError(
@@ -341,9 +433,11 @@ async def process_callback_batch(
         session,
         limit=limit,
         now=datetime.now(timezone.utc),
+        business_resolver=_callback_business_keys,
     )
     processed_count = 0
     failed_count = 0
+    dead_lettered_count = 0
     processed_callback_ids: list[str] = []
 
     for entry in entries:
@@ -352,14 +446,157 @@ async def process_callback_batch(
             processed_count += 1
         except Exception:
             failed_count += 1
+            refreshed_entry = await _reload_callback_entry(session, entry.id, entry)
+            if refreshed_entry.status == "dead_lettered":
+                dead_lettered_count += 1
         processed_callback_ids.append(str(entry.id))
 
     return {
         "claimed_count": len(entries),
         "processed_count": processed_count,
         "failed_count": failed_count,
+        "dead_lettered_count": dead_lettered_count,
         "processed_callback_ids": processed_callback_ids,
     }
+
+
+async def _business_id_for_offer(
+    session: AsyncSession,
+    offer_id: UUID,
+) -> UUID | None:
+    offer = await session.get(CoverageOffer, offer_id)
+    if offer is None:
+        return None
+    coverage_case = await session.get(CoverageCase, offer.coverage_case_id)
+    if coverage_case is None:
+        return None
+    shift = await session.get(Shift, coverage_case.shift_id)
+    return shift.business_id if shift is not None else None
+
+
+async def _business_id_for_shift(
+    session: AsyncSession,
+    shift_id: UUID,
+) -> UUID | None:
+    shift = await session.get(Shift, shift_id)
+    return shift.business_id if shift is not None else None
+
+
+async def _business_id_for_location(
+    session: AsyncSession,
+    location_id: UUID,
+) -> UUID | None:
+    location = await session.get(Location, location_id)
+    return location.business_id if location is not None else None
+
+
+async def _business_id_for_twilio_status_entry(
+    session: AsyncSession,
+    entry: ProviderCallbackLog,
+) -> UUID | None:
+    payload = _normalized_mapping(entry.payload)
+    message_sid = (
+        _normalized_text(payload.get("MessageSid"))
+        or _normalized_text(payload.get("SmsSid"))
+        or _normalized_text(entry.provider_event_id)
+    )
+    if message_sid is None:
+        return None
+    result = await session.execute(
+        select(Shift.business_id)
+        .join(CoverageCase, CoverageCase.shift_id == Shift.id)
+        .join(CoverageOffer, CoverageOffer.coverage_case_id == CoverageCase.id)
+        .where(CoverageOffer.provider_message_id == message_sid)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _business_id_for_twilio_inbound_entry(
+    session: AsyncSession,
+    entry: ProviderCallbackLog,
+) -> UUID | None:
+    payload = _normalized_mapping(entry.payload)
+    from_phone = _normalized_text(payload.get("From"))
+    if from_phone is None:
+        return None
+    context = await delivery.find_latest_actionable_offer_for_phone(session, from_phone)
+    return context.business_id if context is not None else None
+
+
+async def _business_id_for_retell_entry(
+    session: AsyncSession,
+    entry: ProviderCallbackLog,
+) -> UUID | None:
+    payload = _normalized_mapping(entry.payload)
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+
+    business_id = _normalized_uuid(metadata.get("business_id")) or _normalized_uuid(payload.get("business_id"))
+    if business_id is not None:
+        return business_id
+
+    location_id = _normalized_uuid(metadata.get("location_id")) or _normalized_uuid(payload.get("location_id"))
+    if location_id is not None:
+        return await _business_id_for_location(session, location_id)
+
+    shift_id = _normalized_uuid(metadata.get("shift_id")) or _normalized_uuid(payload.get("shift_id"))
+    if shift_id is not None:
+        return await _business_id_for_shift(session, shift_id)
+
+    offer_id = (
+        _normalized_uuid(metadata.get("offer_id"))
+        or _normalized_uuid(metadata.get("coverage_offer_id"))
+        or _normalized_uuid(payload.get("offer_id"))
+        or _normalized_uuid(payload.get("coverage_offer_id"))
+    )
+    if offer_id is not None:
+        return await _business_id_for_offer(session, offer_id)
+
+    event = _normalized_text(payload.get("event")) or _normalized_text(entry.event_type) or ""
+    if event == "function_call":
+        args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+        offer_id = _normalized_uuid(args.get("offer_id")) or _normalized_uuid(args.get("coverage_offer_id"))
+        if offer_id is not None:
+            return await _business_id_for_offer(session, offer_id)
+
+        shift_id = _normalized_uuid(args.get("shift_id"))
+        if shift_id is not None:
+            return await _business_id_for_shift(session, shift_id)
+
+        location_id = _normalized_uuid(args.get("location_id"))
+        if location_id is not None:
+            return await _business_id_for_location(session, location_id)
+
+    provider_event_id = _normalized_text(entry.provider_event_id)
+    if provider_event_id is None:
+        return None
+    result = await session.execute(
+        select(RetellConversation.business_id)
+        .where(RetellConversation.external_id == provider_event_id)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _callback_business_keys(
+    session: AsyncSession,
+    entries: list[ProviderCallbackLog],
+) -> dict[object, UUID | None]:
+    business_keys: dict[object, UUID | None] = {}
+
+    for entry in entries:
+        if entry.provider == "twilio" and entry.route_key == "twilio_sms_status":
+            business_keys[entry.id] = await _business_id_for_twilio_status_entry(session, entry)
+            continue
+        if entry.provider == "twilio" and entry.route_key == "twilio_sms_inbound":
+            business_keys[entry.id] = await _business_id_for_twilio_inbound_entry(session, entry)
+            continue
+        if entry.provider == "retell" and entry.route_key == "retell_webhook":
+            business_keys[entry.id] = await _business_id_for_retell_entry(session, entry)
+            continue
+        business_keys[entry.id] = None
+
+    return business_keys
 
 
 @callback_processor("twilio", "twilio_sms_status")

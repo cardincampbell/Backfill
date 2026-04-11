@@ -174,7 +174,7 @@ async def test_process_callback_entry_marks_failed_and_raises_typed_error(monkey
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "offer_not_found"
-    assert entry.status == "failed"
+    assert entry.status == "dead_lettered"
     assert entry.error_message == "offer_not_found"
     assert session.rollbacks == 1
     assert session.commits == 1
@@ -186,9 +186,10 @@ async def test_process_callback_batch_counts_processed_and_failed(monkeypatch) -
     first = _callback_entry()
     second = _callback_entry(id=uuid4(), provider_event_id="evt_456", dedupe_key="twilio:evt_456")
 
-    async def fake_claim(_session, *, limit, now):
+    async def fake_claim(_session, *, limit, now, business_resolver=None):
         assert limit == 10
         assert now.tzinfo is not None
+        assert business_resolver is not None
         return [first, second]
 
     async def fake_process(_session, entry):
@@ -209,6 +210,7 @@ async def test_process_callback_batch_counts_processed_and_failed(monkeypatch) -
         "claimed_count": 2,
         "processed_count": 1,
         "failed_count": 1,
+        "dead_lettered_count": 0,
         "processed_callback_ids": [str(first.id), str(second.id)],
     }
 
@@ -255,6 +257,84 @@ async def test_process_callback_entry_synchronously_returns_processed_duplicate_
 
     assert result.duplicate is True
     assert result.response_text == "Already handled."
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_marks_non_retryable_error_as_dead_letter(monkeypatch) -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(
+        provider="retell",
+        route_key="retell_webhook",
+        event_type="function_call",
+        provider_event_id="call_123",
+        dedupe_key="retell:call_123",
+        payload={
+            "event": "function_call",
+            "name": "claim_shift",
+            "args": {"offer_id": "offer_123"},
+        },
+    )
+    session.get_map[(ProviderCallbackLog, entry.id)] = entry
+
+    async def fake_dispatch(_session, _name, _args):
+        raise LookupError("offer_not_found")
+
+    monkeypatch.setattr(provider_callbacks.retell_workflow, "dispatch_function_call", fake_dispatch)
+
+    with pytest.raises(provider_callbacks.CallbackProcessingError):
+        await provider_callbacks.process_callback_entry(session, entry)
+
+    assert entry.status == "dead_lettered"
+    assert entry.result_payload["failure_count"] == 1
+    assert entry.result_payload["terminal_state"] == "dead_lettered"
+    assert entry.result_payload["terminal_status_code"] == 404
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_dead_letters_after_retry_budget(monkeypatch) -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(
+        status="failed",
+        result_payload={"failure_count": 2},
+        payload={
+            "MessageSid": "SM123",
+            "MessageStatus": "delivered",
+        },
+    )
+    session.get_map[(ProviderCallbackLog, entry.id)] = entry
+
+    async def fake_apply(*args, **kwargs):
+        raise RuntimeError("provider_unavailable")
+
+    monkeypatch.setattr(provider_callbacks.delivery, "apply_twilio_status_callback", fake_apply)
+
+    with pytest.raises(RuntimeError):
+        await provider_callbacks.process_callback_entry(session, entry)
+
+    assert entry.status == "dead_lettered"
+    assert entry.result_payload["failure_count"] == 3
+    assert entry.result_payload["terminal_state"] == "dead_lettered"
+
+
+@pytest.mark.asyncio
+async def test_process_callback_entry_synchronously_returns_dead_letter_error() -> None:
+    session = DummyCallbackSession()
+    entry = _callback_entry(
+        status="dead_lettered",
+        error_message="offer_not_found",
+        result_payload={
+            "terminal_status_code": 404,
+            "terminal_detail": "offer_not_found",
+        },
+    )
+    session.execute_queue = [[entry]]
+
+    with pytest.raises(provider_callbacks.CallbackProcessingError) as exc_info:
+        await provider_callbacks.process_callback_entry_synchronously(session, entry)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "offer_not_found"
     assert session.commits == 1
 
 
