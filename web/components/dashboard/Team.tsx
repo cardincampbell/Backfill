@@ -7,13 +7,14 @@ import {
   Plus,
   Upload,
   Search,
-  Filter,
+  Check,
   ChevronDown,
   X,
   CheckCircle2,
   AlertCircle,
   FileSpreadsheet,
   UserPlus,
+  UserMinus,
   ArrowUpDown,
   Download,
   Eye,
@@ -35,7 +36,9 @@ import {
 } from '@/lib/api/businesses';
 import {
   createEmployee,
+  deleteEmployee,
   downloadEmployeeImportTemplate,
+  getEmployeeDeleteReadiness,
   importEmployees,
   listEmployees,
   updateEmployee,
@@ -1356,6 +1359,426 @@ function EmployeeDetail({
   );
 }
 
+function SelectedAssignmentTag({
+  dark,
+  label,
+  leading,
+  onRemove,
+}: {
+  dark: boolean;
+  label: string;
+  leading: ReactNode;
+  onRemove(): void;
+}) {
+  return (
+    <motion.div
+      layout
+      animate={{ opacity: 1, scale: 1 }}
+      className={`flex items-center gap-1.5 rounded-lg border py-1.5 pl-2.5 pr-2 ${
+        dark
+          ? 'border-[#635BFF]/25 bg-[#635BFF]/[0.12]'
+          : 'border-[#635BFF]/15 bg-[#635BFF]/[0.06]'
+      }`}
+      exit={{ opacity: 0, scale: 0.9 }}
+      initial={{ opacity: 0, scale: 0.9 }}
+    >
+      <span className="shrink-0">{leading}</span>
+      <span className={`${dark ? 'text-white' : 'text-[#0A2540]'} text-[12px]`} style={{ fontWeight: 480 }}>
+        {label}
+      </span>
+      <button
+        className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
+        onClick={onRemove}
+        type="button"
+      >
+        <X className="text-[#8898AA] hover:text-[#E5484D]" size={12} />
+      </button>
+    </motion.div>
+  );
+}
+
+function BulkActionModalShell({
+  dark,
+  title,
+  subtitle,
+  children,
+  footerNote,
+  confirmLabel,
+  confirmDisabled = false,
+  onClose,
+  onConfirm,
+}: {
+  dark: boolean;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+  footerNote: string;
+  confirmLabel: string;
+  confirmDisabled?: boolean;
+  onClose(): void;
+  onConfirm(): void | Promise<void>;
+}) {
+  const theme = getTeamTheme(dark);
+
+  return (
+    <motion.div
+      animate={{ opacity: 1 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      exit={{ opacity: 0 }}
+      initial={{ opacity: 0 }}
+      onClick={onClose}
+    >
+      <motion.div
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className={`mx-4 w-full max-w-3xl overflow-hidden rounded-[28px] border ${theme.overlayPanelClass}`}
+        exit={{ opacity: 0, scale: 0.96, y: 16 }}
+        initial={{ opacity: 0, scale: 0.96, y: 16 }}
+        onClick={(event) => event.stopPropagation()}
+        transition={{ duration: 0.22 }}
+      >
+        <div className={`border-b px-6 py-5 ${theme.borderClass}`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className={`text-[18px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
+                {title}
+              </h2>
+              <p className={`mt-1 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
+                {subtitle}
+              </p>
+            </div>
+            <button
+              className={`rounded-full p-2 ${theme.closeButtonClass}`}
+              onClick={onClose}
+              type="button"
+            >
+              <X className="text-[#8898AA]" size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+          {children}
+        </div>
+
+        <div className={`flex items-center justify-between gap-3 border-t px-6 py-4 ${theme.borderClass}`}>
+          <p className={`max-w-[420px] text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
+            {footerNote}
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              className={`rounded-full border px-4 py-2.5 text-[13px] ${theme.secondaryButtonClass}`}
+              onClick={onClose}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="rounded-full px-4 py-2.5 text-[13px] text-white disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={confirmDisabled}
+              onClick={() => {
+                void onConfirm();
+              }}
+              style={{
+                fontWeight: 540,
+                background: 'linear-gradient(135deg, #635BFF, #8B5CF6)',
+              }}
+              type="button"
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function BulkAssignLocationsModal({
+  count,
+  dark,
+  locations,
+  onClose,
+  onConfirm,
+}: {
+  count: number;
+  dark: boolean;
+  locations: BusinessLocation[];
+  onClose(): void;
+  onConfirm(locationIds: string[]): Promise<void>;
+}) {
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const selectedLocations = locations.filter((location) => selectedLocationIds.includes(location.id));
+  const availableLocations = locations.filter((location) => !selectedLocationIds.includes(location.id));
+
+  const toggleLocation = (locationId: string) => {
+    setSelectedLocationIds((current) =>
+      current.includes(locationId)
+        ? current.filter((item) => item !== locationId)
+        : [...current, locationId],
+    );
+  };
+
+  return (
+    <BulkActionModalShell
+      dark={dark}
+      title="Add Locations"
+      subtitle={`Assign additional locations to ${count} selected employee${count === 1 ? '' : 's'}.`}
+      footerNote="Selected locations will be added to the current employee assignments."
+      confirmLabel={selectedLocationIds.length ? `Add ${selectedLocationIds.length} Location${selectedLocationIds.length === 1 ? '' : 's'}` : 'Add Locations'}
+      confirmDisabled={!selectedLocationIds.length}
+      onClose={onClose}
+      onConfirm={() => onConfirm(selectedLocationIds)}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+          Locations
+        </h3>
+        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+          {selectedLocations.length} selected
+        </span>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <AnimatePresence>
+          {selectedLocations.map((location) => {
+            const reference = getLocationReference({
+              name: locationDisplayName(location),
+              slug: location.slug,
+            });
+            return (
+              <SelectedAssignmentTag
+                dark={dark}
+                key={location.id}
+                label={locationDisplayName(location)}
+                leading={<span className="text-[13px]">{reference.logo}</span>}
+                onRemove={() => toggleLocation(location.id)}
+              />
+            );
+          })}
+        </AnimatePresence>
+        {!selectedLocations.length ? (
+          <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            No locations selected yet. Add from the business catalog below.
+          </p>
+        ) : null}
+      </div>
+
+      {availableLocations.length ? (
+        <div>
+          <div className="mb-2.5 flex items-center justify-between">
+            <h4 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+              Available Locations
+            </h4>
+            {availableLocations.length > 1 ? (
+              <button
+                className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                onClick={() => setSelectedLocationIds(availableLocations.map((location) => location.id))}
+                style={{ fontWeight: 520 }}
+                type="button"
+              >
+                + Add All
+              </button>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availableLocations.map((location) => {
+              const reference = getLocationReference({
+                name: locationDisplayName(location),
+                slug: location.slug,
+              });
+              return (
+                <AvailableAssignmentButton
+                  dark={dark}
+                  key={location.id}
+                  label={locationDisplayName(location)}
+                  leading={<span className="text-[13px]">{reference.logo}</span>}
+                  onClick={() => toggleLocation(location.id)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </BulkActionModalShell>
+  );
+}
+
+function BulkAssignRolesModal({
+  count,
+  dark,
+  roles,
+  onClose,
+  onConfirm,
+}: {
+  count: number;
+  dark: boolean;
+  roles: BusinessRole[];
+  onClose(): void;
+  onConfirm(roleIds: string[]): Promise<void>;
+}) {
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
+  const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
+
+  const toggleRole = (roleId: string) => {
+    setSelectedRoleIds((current) =>
+      current.includes(roleId)
+        ? current.filter((item) => item !== roleId)
+        : [...current, roleId],
+    );
+  };
+
+  return (
+    <BulkActionModalShell
+      dark={dark}
+      title="Add Roles"
+      subtitle={`Assign additional roles to ${count} selected employee${count === 1 ? '' : 's'}.`}
+      footerNote="Selected roles will be added to the current employee assignments."
+      confirmLabel={selectedRoleIds.length ? `Add ${selectedRoleIds.length} Role${selectedRoleIds.length === 1 ? '' : 's'}` : 'Add Roles'}
+      confirmDisabled={!selectedRoleIds.length}
+      onClose={onClose}
+      onConfirm={() => onConfirm(selectedRoleIds)}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+          Roles
+        </h3>
+        <span className="text-[11px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+          {selectedRoles.length} selected
+        </span>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <AnimatePresence>
+          {selectedRoles.map((role) => (
+            <SelectedAssignmentTag
+              dark={dark}
+              key={role.id}
+              label={role.name}
+              leading={<Tag className="text-[#635BFF]" size={11} />}
+              onRemove={() => toggleRole(role.id)}
+            />
+          ))}
+        </AnimatePresence>
+        {!selectedRoles.length ? (
+          <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+            No roles selected yet. Add from the business role catalog below.
+          </p>
+        ) : null}
+      </div>
+
+      {availableRoles.length ? (
+        <div>
+          <div className="mb-2.5 flex items-center justify-between">
+            <h4 className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+              Available Roles
+            </h4>
+            {availableRoles.length > 1 ? (
+              <button
+                className="text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                onClick={() => setSelectedRoleIds(availableRoles.map((role) => role.id))}
+                style={{ fontWeight: 520 }}
+                type="button"
+              >
+                + Add All
+              </button>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {availableRoles.map((role) => (
+              <AvailableAssignmentButton
+                dark={dark}
+                key={role.id}
+                label={role.name}
+                leading={<Tag className="text-[#635BFF]" size={11} />}
+                onClick={() => toggleRole(role.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </BulkActionModalShell>
+  );
+}
+
+function BulkExportModal({
+  count,
+  dark,
+  onClose,
+  onConfirm,
+}: {
+  count: number;
+  dark: boolean;
+  onClose(): void;
+  onConfirm(): void;
+}) {
+  return (
+    <BulkActionModalShell
+      dark={dark}
+      title="Export Employees"
+      subtitle={`Download a CSV export for ${count} selected employee${count === 1 ? '' : 's'}.`}
+      footerNote="The export includes employee name, contact info, roles, locations, status, and reliability."
+      confirmLabel="Export CSV"
+      onClose={onClose}
+      onConfirm={onConfirm}
+    >
+      <div className={`rounded-2xl border px-4 py-4 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-[#E5E7EB] bg-[#F7F8FA]'}`}>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#635BFF]/10">
+            <Download className="text-[#635BFF]" size={18} />
+          </div>
+          <div>
+            <p className={`${dark ? 'text-white' : 'text-[#0A2540]'} text-[13px]`} style={{ fontWeight: 520 }}>
+              Ready to export
+            </p>
+            <p className="text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+              {count} selected employee{count === 1 ? '' : 's'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </BulkActionModalShell>
+  );
+}
+
+function BulkRemoveModal({
+  count,
+  dark,
+  onClose,
+  onConfirm,
+}: {
+  count: number;
+  dark: boolean;
+  onClose(): void;
+  onConfirm(): Promise<void>;
+}) {
+  return (
+    <BulkActionModalShell
+      dark={dark}
+      title="Remove Employees"
+      subtitle={`Remove ${count} selected employee${count === 1 ? '' : 's'} from this business.`}
+      footerNote="Backfill will respect existing scheduling constraints and skip any employee who cannot be deleted."
+      confirmLabel="Remove Selected"
+      onClose={onClose}
+      onConfirm={onConfirm}
+    >
+      <div className={`rounded-2xl border px-4 py-4 ${dark ? 'border-[#E5484D]/30 bg-[#E5484D]/10' : 'border-red-200 bg-red-50'}`}>
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#E5484D]/10">
+            <UserMinus className="text-[#E5484D]" size={18} />
+          </div>
+          <div>
+            <p className={`${dark ? 'text-white' : 'text-[#0A2540]'} text-[13px]`} style={{ fontWeight: 520 }}>
+              This action removes roster records
+            </p>
+            <p className="mt-1 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+              Employees that are tied to published scheduling data will be skipped automatically.
+            </p>
+          </div>
+        </div>
+      </div>
+    </BulkActionModalShell>
+  );
+}
+
 /* ─── Main Team Page ─── */
 export default function Team({
   embeddedInShell = false,
@@ -1381,20 +1804,32 @@ export default function Team({
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [locationFilter, setLocationFilter] = useState('All Locations');
-  const [statusFilter, setStatusFilter] = useState('All Status');
+  const [locationFilters, setLocationFilters] = useState<Set<string>>(new Set());
+  const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const [roleFilters, setRoleFilters] = useState<Set<string>>(new Set());
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBulkModal, setShowBulkModal] = useState(false);
+  const [showBulkAssignLocation, setShowBulkAssignLocation] = useState(false);
+  const [showBulkAssignRole, setShowBulkAssignRole] = useState(false);
+  const [showBulkExport, setShowBulkExport] = useState(false);
+  const [showBulkRemove, setShowBulkRemove] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [selectedEmployees, setSelectedEmployees] = useState<Set<string>>(new Set());
   const [employeesData, setEmployeesData] = useState<Employee[]>([]);
   const [sortField, setSortField] = useState<'name' | 'reliability'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [isTableHovered, setIsTableHovered] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const locationFilterRef = useRef<HTMLButtonElement>(null);
   const statusFilterRef = useRef<HTMLButtonElement>(null);
+  const roleFilterRef = useRef<HTMLButtonElement>(null);
   const activeEditingEmployeeId =
     editingEmployeeId ?? (routeSegments[0] === 'employee' ? routeSegments[1] ?? null : null);
+  const defaultBusinessLocation =
+    businessLocations.length === 1 ? businessLocations[0] : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -1455,9 +1890,13 @@ export default function Team({
     };
   }, [businessId, workspaceReady]);
 
-  const availableLocationOptions = useMemo(
+  const locationOptions = useMemo(
     () => ['All Locations', ...businessLocations.map((location) => locationDisplayName(location))],
     [businessLocations],
+  );
+  const roleOptions = useMemo(
+    () => ['All Roles', ...uniqueOrdered([...businessRoles.map((role) => role.name), ...employeesData.flatMap((employee) => employee.roles)])],
+    [businessRoles, employeesData],
   );
 
   const closeEmployeeEditor = useCallback(() => {
@@ -1466,10 +1905,22 @@ export default function Team({
   }, [router]);
 
   useEffect(() => {
-    if (!availableLocationOptions.includes(locationFilter)) {
-      setLocationFilter('All Locations');
-    }
-  }, [availableLocationOptions, locationFilter]);
+    setLocationFilters((current) => {
+      const next = new Set(
+        Array.from(current).filter((location) => locationOptions.includes(location)),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [locationOptions]);
+
+  useEffect(() => {
+    setRoleFilters((current) => {
+      const next = new Set(
+        Array.from(current).filter((role) => roleOptions.includes(role)),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [roleOptions]);
 
   useEffect(() => {
     if (!activeEditingEmployeeId) {
@@ -1504,9 +1955,10 @@ export default function Team({
     .filter((e) => {
       const q = searchQuery.toLowerCase();
       const matchesSearch = !q || e.name.toLowerCase().includes(q) || e.roles.some((r) => r.toLowerCase().includes(q)) || e.email.toLowerCase().includes(q);
-      const matchesLocation = locationFilter === 'All Locations' || e.locations.some((l) => l.name === locationFilter);
-      const matchesStatus = statusFilter === 'All Status' || statusConfig[e.status].label === statusFilter;
-      return matchesSearch && matchesLocation && matchesStatus;
+      const matchesLocation = locationFilters.size === 0 || e.locations.some((l) => locationFilters.has(l.name));
+      const matchesStatus = statusFilters.size === 0 || statusFilters.has(statusConfig[e.status].label);
+      const matchesRole = roleFilters.size === 0 || e.roles.some((role) => roleFilters.has(role));
+      return matchesSearch && matchesLocation && matchesStatus && matchesRole;
     })
     .sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
@@ -1518,6 +1970,68 @@ export default function Team({
     if (sortField === field) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
     else { setSortField(field); setSortDir('asc'); }
   };
+
+  const toggleLocationFilter = (locationName: string) => {
+    setLocationFilters((current) => {
+      const next = new Set(current);
+      if (next.has(locationName)) next.delete(locationName);
+      else next.add(locationName);
+      return next;
+    });
+  };
+
+  const toggleStatusFilter = (statusLabel: string) => {
+    setStatusFilters((current) => {
+      const next = new Set(current);
+      if (next.has(statusLabel)) next.delete(statusLabel);
+      else next.add(statusLabel);
+      return next;
+    });
+  };
+
+  const toggleRoleFilter = (roleName: string) => {
+    setRoleFilters((current) => {
+      const next = new Set(current);
+      if (next.has(roleName)) next.delete(roleName);
+      else next.add(roleName);
+      return next;
+    });
+  };
+
+  const toggleEmployee = useCallback((employeeId: string) => {
+    setSelectedEmployees((current) => {
+      const next = new Set(current);
+      if (next.has(employeeId)) next.delete(employeeId);
+      else next.add(employeeId);
+      return next;
+    });
+  }, []);
+
+  const toggleAll = useCallback(() => {
+    const filteredIds = filtered.map((employee) => employee.id);
+    setSelectedEmployees((current) => {
+      const allVisibleSelected =
+        filteredIds.length > 0 && filteredIds.every((employeeId) => current.has(employeeId));
+      if (allVisibleSelected) {
+        const next = new Set(current);
+        filteredIds.forEach((employeeId) => next.delete(employeeId));
+        return next;
+      }
+      return new Set(filteredIds);
+    });
+  }, [filtered]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedEmployees(new Set());
+  }, []);
+
+  useEffect(() => {
+    setSelectedEmployees((current) => {
+      const validIds = new Set(employeesData.map((employee) => employee.id));
+      const next = new Set(Array.from(current).filter((employeeId) => validIds.has(employeeId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [employeesData]);
 
   const handleAddEmployee = useCallback(async (employee: EmployeeSummary) => {
     const nextEmployee = buildLiveEmployee(employee, businessLocations);
@@ -1561,7 +2075,176 @@ export default function Team({
     });
   }, [businessId, businessLocations]);
 
+  const selectedEmployeeRecords = useMemo(
+    () => employeesData.filter((employee) => selectedEmployees.has(employee.id)),
+    [employeesData, selectedEmployees],
+  );
+
+  const handleBulkAction = useCallback((action: 'assign-location' | 'assign-role' | 'export' | 'remove') => {
+    switch (action) {
+      case 'assign-location':
+        setShowBulkAssignLocation(true);
+        break;
+      case 'assign-role':
+        setShowBulkAssignRole(true);
+        break;
+      case 'export':
+        setShowBulkExport(true);
+        break;
+      case 'remove':
+        setShowBulkRemove(true);
+        break;
+    }
+  }, []);
+
+  const handleBulkAssignLocations = useCallback(async (locationIds: string[]) => {
+    if (!businessId || !locationIds.length || !selectedEmployeeRecords.length) {
+      return;
+    }
+
+    const updatedEmployees = await Promise.all(
+      selectedEmployeeRecords.map(async (employee) => {
+        const seed = buildEmployeeEditorSeed(employee, businessRoles, businessLocations);
+        const nextLocationIds = uniqueOrdered([...seed.location_ids, ...locationIds]);
+        const primaryLocationId =
+          seed.primary_location_id && nextLocationIds.includes(seed.primary_location_id)
+            ? seed.primary_location_id
+            : nextLocationIds[0] ?? null;
+        return updateEmployee(businessId, employee.id, {
+          locations: nextLocationIds.map((locationId) => ({
+            location_id: locationId,
+            is_primary: locationId === primaryLocationId,
+          })),
+        });
+      }),
+    );
+
+    const updatedById = new Map(
+      updatedEmployees.map((employee) => [employee.id, buildLiveEmployee(employee, businessLocations)]),
+    );
+    setEmployeesData((current) =>
+      current.map((employee) => updatedById.get(employee.id) ?? employee),
+    );
+    clearSelection();
+    setFeedback({
+      tone: 'success',
+      message: `Added ${locationIds.length} location${locationIds.length === 1 ? '' : 's'} to ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
+    });
+  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
+
+  const handleBulkAssignRoles = useCallback(async (roleIds: string[]) => {
+    if (!businessId || !roleIds.length || !selectedEmployeeRecords.length) {
+      return;
+    }
+
+    const updatedEmployees = await Promise.all(
+      selectedEmployeeRecords.map(async (employee) => {
+        const seed = buildEmployeeEditorSeed(employee, businessRoles, businessLocations);
+        const nextRoleIds = uniqueOrdered([...seed.role_ids, ...roleIds]);
+        const primaryRoleId =
+          seed.primary_role_id && nextRoleIds.includes(seed.primary_role_id)
+            ? seed.primary_role_id
+            : nextRoleIds[0] ?? null;
+        return updateEmployee(businessId, employee.id, {
+          roles: nextRoleIds.map((roleId) => ({
+            role_id: roleId,
+            is_primary: roleId === primaryRoleId,
+          })),
+        });
+      }),
+    );
+
+    const updatedById = new Map(
+      updatedEmployees.map((employee) => [employee.id, buildLiveEmployee(employee, businessLocations)]),
+    );
+    setEmployeesData((current) =>
+      current.map((employee) => updatedById.get(employee.id) ?? employee),
+    );
+    clearSelection();
+    setFeedback({
+      tone: 'success',
+      message: `Added ${roleIds.length} role${roleIds.length === 1 ? '' : 's'} to ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
+    });
+  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
+
+  const handleBulkExport = useCallback(() => {
+    if (!selectedEmployeeRecords.length) {
+      return;
+    }
+
+    const header = ['Full Name', 'Email', 'Phone', 'Roles', 'Locations', 'Status', 'Reliability'];
+    const rows = selectedEmployeeRecords.map((employee) => [
+      employee.name,
+      employee.email,
+      employee.phone,
+      employee.roles.join('; '),
+      employee.locations.map((location) => location.name).join('; '),
+      statusConfig[employee.status].label,
+      `${employee.reliability}%`,
+    ]);
+    const csv = [header, ...rows]
+      .map((row) =>
+        row
+          .map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`)
+          .join(','),
+      )
+      .join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `backfill-team-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    setShowBulkExport(false);
+    clearSelection();
+    setFeedback({
+      tone: 'success',
+      message: `Exported ${selectedEmployeeRecords.length} employee${selectedEmployeeRecords.length === 1 ? '' : 's'}.`,
+    });
+  }, [clearSelection, selectedEmployeeRecords]);
+
+  const handleBulkRemove = useCallback(async () => {
+    if (!businessId || !selectedEmployeeRecords.length) {
+      return;
+    }
+
+    const readiness = await Promise.all(
+      selectedEmployeeRecords.map(async (employee) => ({
+        employee,
+        state: await getEmployeeDeleteReadiness(businessId, employee.id),
+      })),
+    );
+
+    const removable = readiness.filter(({ state }) => state.can_delete);
+    const blocked = readiness.filter(({ state }) => !state.can_delete);
+
+    if (removable.length) {
+      await Promise.all(removable.map(({ employee }) => deleteEmployee(businessId, employee.id)));
+      const removableIds = new Set(removable.map(({ employee }) => employee.id));
+      setEmployeesData((current) =>
+        current.filter((employee) => !removableIds.has(employee.id)),
+      );
+    }
+
+    clearSelection();
+    setShowBulkRemove(false);
+    setFeedback({
+      tone: blocked.length ? 'error' : 'success',
+      message: blocked.length
+        ? `Removed ${removable.length} employee${removable.length === 1 ? '' : 's'}, skipped ${blocked.length} due to active scheduling constraints.`
+        : `Removed ${removable.length} employee${removable.length === 1 ? '' : 's'}.`,
+    });
+  }, [businessId, clearSelection, selectedEmployeeRecords]);
+
   const showBlockingLoader = loading && employeesData.length === 0;
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((employee) => selectedEmployees.has(employee.id));
+  const selectedCount = selectedEmployees.size;
 
   const content = (
     <>
@@ -1578,10 +2261,10 @@ export default function Team({
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => setShowBulkModal(true)}
-              className={`hidden sm:flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${theme.secondaryButtonClass}`}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2.5 rounded-lg text-[12px] sm:text-[13px] border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${theme.secondaryButtonClass}`}
               disabled={!businessId || loading}
               style={{ fontWeight: 480 }}>
-              <Upload size={15} /> Bulk Upload
+              <Upload size={15} /> <span className="hidden sm:inline">Import Employees</span><span className="sm:hidden">Import</span>
             </button>
             <button onClick={() => setShowAddModal(true)}
               className="flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-full text-[12px] sm:text-[13px] text-white transition-all duration-300 hover:shadow-[0_0_24px_rgba(99,91,255,0.25)] disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1608,23 +2291,88 @@ export default function Team({
 
         {/* Filters + Search */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-4">
-          <div className="relative flex-1 max-w-sm">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
-            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name, role, email..."
-              className={`w-full pl-9 pr-4 py-2.5 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${isDark ? theme.inputClass : 'border-[#E5E7EB] bg-white text-[#0A2540] placeholder-[#8898AA]/60'}`}
-              style={{ fontWeight: 420 }} />
-          </div>
+          <motion.div
+            animate={{ width: searchFocused || searchQuery ? '100%' : '140px' }}
+            transition={{ duration: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
+            className="relative w-full sm:w-auto sm:max-w-sm"
+          >
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8898AA]" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              placeholder="Search..."
+              className={`w-full pl-9 pr-3 py-2.5 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
+              style={{ fontWeight: 420 }}
+            />
+          </motion.div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Role filter */}
+            <div className="relative">
+              <button onClick={() => { setShowRoleDropdown(!showRoleDropdown); setShowLocationDropdown(false); setShowStatusDropdown(false); }}
+                ref={roleFilterRef}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${
+                  roleFilters.size > 0 ? 'border-[#635BFF]/40 text-[#635BFF]' : theme.filterButtonClass
+                }`}
+                style={{ fontWeight: 440 }}>
+                <Tag size={13} />
+                <span>Role</span>
+                {roleFilters.size > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#635BFF] text-white text-[10px]" style={{ fontWeight: 540 }}>
+                    {roleFilters.size}
+                  </span>
+                )}
+                <ChevronDown size={13} />
+              </button>
+              <AnimatePresence>
+                {showRoleDropdown && (
+                  <FloatingDropdown
+                    open={showRoleDropdown}
+                    anchorRef={roleFilterRef}
+                    className={`rounded-xl border overflow-hidden ${theme.dropdownClass}`}
+                    onClose={() => setShowRoleDropdown(false)}
+                    width={224}
+                    zIndex={10010}
+                  >
+                    {roleOptions.slice(1).map((opt) => (
+                      <button key={opt} onClick={() => toggleRoleFilter(opt)}
+                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[12px] transition-colors text-left ${
+                          roleFilters.has(opt)
+                            ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                            : `${theme.rowText} ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`
+                        }`}
+                        style={{ fontWeight: roleFilters.has(opt) ? 500 : 420 }}>
+                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
+                          roleFilters.has(opt) ? 'bg-[#635BFF] border-[#635BFF]' : 'border-[#D1D5DB]'
+                        }`}>
+                          {roleFilters.has(opt) ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                        </div>
+                        <span>{opt}</span>
+                      </button>
+                    ))}
+                  </FloatingDropdown>
+                )}
+              </AnimatePresence>
+            </div>
+
             {/* Location filter */}
             <div className="relative">
-              <button onClick={() => { setShowLocationDropdown(!showLocationDropdown); setShowStatusDropdown(false); }}
+              <button onClick={() => { setShowLocationDropdown(!showLocationDropdown); setShowStatusDropdown(false); setShowRoleDropdown(false); }}
                 ref={locationFilterRef}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${theme.filterButtonClass}`}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${
+                  locationFilters.size > 0 ? 'border-[#635BFF]/40 text-[#635BFF]' : theme.filterButtonClass
+                }`}
                 style={{ fontWeight: 440 }}>
                 <MapPin size={13} />
-                <span className="max-w-[140px] truncate">{locationFilter}</span>
+                <span>Location</span>
+                {locationFilters.size > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#635BFF] text-white text-[10px]" style={{ fontWeight: 540 }}>
+                    {locationFilters.size}
+                  </span>
+                )}
                 <ChevronDown size={13} />
               </button>
               <AnimatePresence>
@@ -1637,15 +2385,20 @@ export default function Team({
                     width={256}
                     zIndex={10010}
                   >
-                    {availableLocationOptions.map((opt) => (
-                      <button key={opt} onClick={() => { setLocationFilter(opt); setShowLocationDropdown(false); }}
-                        className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
-                          locationFilter === opt
-                            ? 'text-[#635BFF] bg-[#635BFF]/[0.08]'
+                    {locationOptions.slice(1).map((opt) => (
+                      <button key={opt} onClick={() => toggleLocationFilter(opt)}
+                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[12px] transition-colors text-left ${
+                          locationFilters.has(opt)
+                            ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                             : `${theme.rowText} ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`
                         }`}
-                        style={{ fontWeight: locationFilter === opt ? 520 : 420 }}>
-                        {opt}
+                        style={{ fontWeight: locationFilters.has(opt) ? 500 : 420 }}>
+                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
+                          locationFilters.has(opt) ? 'bg-[#635BFF] border-[#635BFF]' : 'border-[#D1D5DB]'
+                        }`}>
+                          {locationFilters.has(opt) ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                        </div>
+                        <span>{opt}</span>
                       </button>
                     ))}
                   </FloatingDropdown>
@@ -1655,12 +2408,19 @@ export default function Team({
 
             {/* Status filter */}
             <div className="relative">
-              <button onClick={() => { setShowStatusDropdown(!showStatusDropdown); setShowLocationDropdown(false); }}
+              <button onClick={() => { setShowStatusDropdown(!showStatusDropdown); setShowLocationDropdown(false); setShowRoleDropdown(false); }}
                 ref={statusFilterRef}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${theme.filterButtonClass}`}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-[12px] transition-all ${
+                  statusFilters.size > 0 ? 'border-[#635BFF]/40 text-[#635BFF]' : theme.filterButtonClass
+                }`}
                 style={{ fontWeight: 440 }}>
-                <Filter size={13} />
-                <span>{statusFilter}</span>
+                <Activity size={13} />
+                <span>Status</span>
+                {statusFilters.size > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-[#635BFF] text-white text-[10px]" style={{ fontWeight: 540 }}>
+                    {statusFilters.size}
+                  </span>
+                )}
                 <ChevronDown size={13} />
               </button>
               <AnimatePresence>
@@ -1673,15 +2433,20 @@ export default function Team({
                     width={192}
                     zIndex={10010}
                   >
-                    {statusOptions.map((opt) => (
-                      <button key={opt} onClick={() => { setStatusFilter(opt); setShowStatusDropdown(false); }}
-                        className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors ${
-                          statusFilter === opt
-                            ? 'text-[#635BFF] bg-[#635BFF]/[0.08]'
+                    {statusOptions.slice(1).map((opt) => (
+                      <button key={opt} onClick={() => toggleStatusFilter(opt)}
+                        className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[12px] transition-colors text-left ${
+                          statusFilters.has(opt)
+                            ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                             : `${theme.rowText} ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`
                         }`}
-                        style={{ fontWeight: statusFilter === opt ? 520 : 420 }}>
-                        {opt}
+                        style={{ fontWeight: statusFilters.has(opt) ? 500 : 420 }}>
+                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all shrink-0 ${
+                          statusFilters.has(opt) ? 'bg-[#635BFF] border-[#635BFF]' : 'border-[#D1D5DB]'
+                        }`}>
+                          {statusFilters.has(opt) ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                        </div>
+                        <span>{opt}</span>
                       </button>
                     ))}
                   </FloatingDropdown>
@@ -1713,32 +2478,178 @@ export default function Team({
       ) : (
       /* Employee Table */
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}
-        className={`rounded-2xl border overflow-hidden ${theme.panelClass}`}>
-        {/* Table Header - Desktop only */}
-        <div className={`hidden md:grid grid-cols-[2fr_1fr_1fr_1fr_0.8fr_44px] gap-4 px-5 py-3 border-b ${theme.borderClass} ${theme.softSurfaceClass}`}>
-          <button onClick={() => toggleSort('name')} className={`flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`} style={{ fontWeight: 500 }}>
-            Employee <ArrowUpDown size={11} />
-          </button>
-          <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Roles</span>
-          <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Location</span>
-          <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Status</span>
-          <button onClick={() => toggleSort('reliability')} className={`flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`} style={{ fontWeight: 500 }}>
-            Reliability <ArrowUpDown size={11} />
-          </button>
-          <span />
-        </div>
+        className={`rounded-2xl border overflow-hidden ${theme.panelClass}`}
+        onMouseEnter={() => setIsTableHovered(true)}
+        onMouseLeave={() => setIsTableHovered(false)}>
+        {/* Desktop header / bulk actions */}
+        <AnimatePresence mode="wait">
+          {selectedCount > 0 ? (
+            <motion.div
+              key="bulk-header"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2 }}
+              className={`hidden md:flex items-center justify-between px-5 py-3 border-b ${theme.borderClass} ${isDark ? 'bg-[#635BFF]/[0.12]' : 'bg-[#635BFF]/[0.04]'}`}>
+              <div className="flex items-center gap-4">
+                <button onClick={clearSelection} className={`p-1 rounded-lg transition-colors ${theme.closeButtonClass}`}>
+                  <X size={14} className={theme.textTertiary} />
+                </button>
+                <span className={`text-[13px] ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
+                  {selectedCount} selected
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleBulkAction('assign-location')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <MapPin size={12} />
+                  Assign Location
+                </button>
+                <button
+                  onClick={() => handleBulkAction('assign-role')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <Tag size={12} />
+                  Assign Role
+                </button>
+                <button
+                  onClick={() => handleBulkAction('export')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[12px] transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <Download size={12} />
+                  Export
+                </button>
+                <div className={`h-5 w-px ${isDark ? 'bg-white/[0.08]' : 'bg-[#E5E7EB]'}`} />
+                <button
+                  onClick={() => handleBulkAction('remove')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-red-200 hover:bg-red-50 transition-all text-[12px] text-red-500"
+                  style={{ fontWeight: 480 }}>
+                  <UserMinus size={12} />
+                  Remove
+                </button>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="table-header"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2 }}
+              style={{
+                gridTemplateColumns:
+                  isTableHovered || selectedCount > 0
+                    ? '44px 2fr 1fr 1fr 1fr 0.8fr 44px'
+                    : '0px 2fr 1fr 1fr 1fr 0.8fr 44px',
+              }}
+              className={`hidden md:grid gap-4 px-5 py-3 border-b transition-all duration-200 ${theme.borderClass} ${theme.softSurfaceClass}`}>
+              <motion.div
+                animate={{ opacity: isTableHovered || selectedCount > 0 ? 1 : 0 }}
+                transition={{ duration: 0.2 }}
+                className="flex items-center justify-center overflow-hidden">
+                <button
+                  onClick={toggleAll}
+                  className="w-4 h-4 rounded border-2 flex items-center justify-center transition-all border-[#D1D5DB] hover:border-[#635BFF]/40"
+                >
+                  {allVisibleSelected ? <Check size={10} className="text-[#635BFF]" strokeWidth={3} /> : null}
+                </button>
+              </motion.div>
+              <button onClick={() => toggleSort('name')} className={`flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`} style={{ fontWeight: 500 }}>
+                Employee <ArrowUpDown size={11} />
+              </button>
+              <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Roles</span>
+              <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Location</span>
+              <span className={`text-[11px] uppercase tracking-[0.04em] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Status</span>
+              <button onClick={() => toggleSort('reliability')} className={`flex items-center gap-1.5 text-[11px] uppercase tracking-[0.04em] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`} style={{ fontWeight: 500 }}>
+                Reliability <ArrowUpDown size={11} />
+              </button>
+              <span />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Mobile sort bar */}
-        <div className={`md:hidden flex items-center gap-2 px-4 py-3 border-b overflow-x-auto ${theme.borderClass} ${theme.softSurfaceClass}`}>
-          <span className={`text-[10px] uppercase tracking-[0.04em] shrink-0 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Sort:</span>
-          {(['name', 'reliability'] as const).map((field) => (
-            <button key={field} onClick={() => toggleSort(field)}
-              className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] transition-colors ${sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : `${theme.textSecondary} ${theme.subtleSurfaceClass}`}`}
-              style={{ fontWeight: sortField === field ? 520 : 420 }}>
-              {field.charAt(0).toUpperCase() + field.slice(1)} {sortField === field && (sortDir === 'asc' ? '\u2191' : '\u2193')}
-            </button>
-          ))}
-        </div>
+        {/* Mobile sort bar / bulk actions */}
+        <AnimatePresence mode="wait">
+          {selectedCount > 0 ? (
+            <motion.div
+              key="mobile-bulk"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2 }}
+              className={`md:hidden px-4 py-3 border-b ${theme.borderClass} ${isDark ? 'bg-[#635BFF]/[0.12]' : 'bg-[#635BFF]/[0.04]'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <button onClick={clearSelection} className={`p-1 rounded-lg transition-colors ${theme.closeButtonClass}`}>
+                    <X size={14} className={theme.textTertiary} />
+                  </button>
+                  <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
+                    {selectedCount} selected
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <button
+                  onClick={() => handleBulkAction('assign-location')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] whitespace-nowrap transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <MapPin size={11} />
+                  Location
+                </button>
+                <button
+                  onClick={() => handleBulkAction('assign-role')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] whitespace-nowrap transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <Tag size={11} />
+                  Role
+                </button>
+                <button
+                  onClick={() => handleBulkAction('export')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] whitespace-nowrap transition-all ${theme.secondaryButtonClass}`}
+                  style={{ fontWeight: 480 }}>
+                  <Download size={11} />
+                  Export
+                </button>
+                <button
+                  onClick={() => handleBulkAction('remove')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-red-200 text-[11px] text-red-500 whitespace-nowrap"
+                  style={{ fontWeight: 480 }}>
+                  <UserMinus size={11} />
+                  Remove
+                </button>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="mobile-sort"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.2 }}
+              className={`md:hidden flex items-center gap-2 px-4 py-3 border-b overflow-x-auto ${theme.borderClass} ${theme.softSurfaceClass}`}>
+              <button onClick={toggleAll} className="shrink-0">
+                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                  allVisibleSelected ? 'bg-[#635BFF] border-[#635BFF]' : 'border-[#D1D5DB]'
+                }`}>
+                  {allVisibleSelected ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                </div>
+              </button>
+              <div className={`h-4 w-px ${isDark ? 'bg-white/[0.08]' : 'bg-[#E5E7EB]'}`} />
+              <span className={`text-[10px] uppercase tracking-[0.04em] shrink-0 ${theme.textSecondary}`} style={{ fontWeight: 500 }}>Sort:</span>
+              {(['name', 'reliability'] as const).map((field) => (
+                <button key={field} onClick={() => toggleSort(field)}
+                  className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] transition-colors ${
+                    sortField === field ? 'bg-[#635BFF]/10 text-[#635BFF]' : `${theme.textSecondary} ${theme.subtleSurfaceClass}`
+                  }`}
+                  style={{ fontWeight: sortField === field ? 520 : 420 }}>
+                  {field.charAt(0).toUpperCase() + field.slice(1)} {sortField === field && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Rows - Desktop Table */}
         <div className="hidden md:block">
@@ -1748,10 +2659,41 @@ export default function Team({
             const primaryLoc = getPrimaryLocation(emp);
             const reliabilityColor = getReliabilityColor(emp.reliability);
             return (
-              <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
-                onClick={() => openEmployeeEditor(emp)}
-                className={`grid grid-cols-[2fr_1fr_1fr_1fr_0.8fr_44px] gap-4 px-5 py-3.5 border-b last:border-0 cursor-pointer transition-colors group ${theme.rowBorderClass} ${theme.rowHoverClass}`}>
-                <div className="flex items-center gap-3 min-w-0">
+              <motion.div
+                key={emp.id}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.25, delay: i * 0.02 }}
+                style={{
+                  gridTemplateColumns:
+                    isTableHovered || selectedCount > 0
+                      ? '44px 2fr 1fr 1fr 1fr 0.8fr 44px'
+                      : '0px 2fr 1fr 1fr 1fr 0.8fr 44px',
+                }}
+                className={`grid gap-4 px-5 py-3.5 border-b last:border-0 transition-all duration-200 group ${
+                  selectedEmployees.has(emp.id) ? 'bg-[#635BFF]/[0.02]' : ''
+                } ${theme.rowBorderClass} ${theme.rowHoverClass}`}
+              >
+                <motion.div
+                  animate={{ opacity: isTableHovered || selectedCount > 0 ? 1 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex items-center justify-center overflow-hidden"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleEmployee(emp.id);
+                  }}
+                >
+                  <button
+                    className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                      selectedEmployees.has(emp.id)
+                        ? 'bg-[#635BFF] border-[#635BFF]'
+                        : 'border-[#D1D5DB] hover:border-[#635BFF]/40'
+                    }`}
+                  >
+                    {selectedEmployees.has(emp.id) ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                  </button>
+                </motion.div>
+                <div className="flex items-center gap-3 min-w-0 cursor-pointer" onClick={() => openEmployeeEditor(emp)}>
                   <div className="w-9 h-9 rounded-full flex items-center justify-center text-[11px] text-white shrink-0"
                     style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
                     {emp.avatar}
@@ -1761,33 +2703,33 @@ export default function Team({
                     <p className={`text-[11px] truncate ${theme.textSecondary}`} style={{ fontWeight: 400 }}>{emp.email}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap cursor-pointer" onClick={() => openEmployeeEditor(emp)}>
                   <span className="text-[11px] px-2.5 py-1 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{primaryRole}</span>
-                  {emp.roles.length > 1 && (
+                  {emp.roles.length > 1 ? (
                     <RolesTooltip dark={isDark} roleColors={roleColors} roles={emp.roles.slice(1)} />
-                  )}
+                  ) : null}
                 </div>
-                <div className="flex items-center gap-1.5 min-w-0">
-                  {primaryLoc && (
+                <div className="flex items-center gap-1.5 min-w-0 cursor-pointer" onClick={() => openEmployeeEditor(emp)}>
+                  {primaryLoc ? (
                     <>
                       <span className="text-[13px]">{primaryLoc.emoji}</span>
                       <span className={`text-[12px] truncate ${theme.textTertiary}`} style={{ fontWeight: 440 }}>{primaryLoc.name.split(' ')[0]}</span>
-                      {emp.locations.length > 1 && (
+                      {emp.locations.length > 1 ? (
                         <LocationsTooltip dark={isDark} locations={emp.locations.slice(1)} />
-                      )}
+                      ) : null}
                     </>
-                  )}
+                  ) : null}
                 </div>
-                <div className="flex items-center">
+                <div className="flex items-center cursor-pointer" onClick={() => openEmployeeEditor(emp)}>
                   <StatusWithInfo dark={isDark} descriptionOverride={emp.statusReason} status={emp.status} />
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 cursor-pointer" onClick={() => openEmployeeEditor(emp)}>
                   <ShieldCheck size={13} style={{ color: reliabilityColor }} />
                   <span className="text-[13px] tabular-nums" style={{ fontWeight: 520, color: reliabilityColor }}>{emp.reliability}%</span>
                 </div>
                 <div className="flex items-center justify-center">
                   <button onClick={(e) => { e.stopPropagation(); openEmployeeEditor(emp); }}
-                    className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F0F0F5]'}`}>
+                    className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${theme.closeButtonClass}`}>
                     <Eye size={14} className="text-[#8898AA]" />
                   </button>
                 </div>
@@ -1805,27 +2747,39 @@ export default function Team({
             const reliabilityColor = getReliabilityColor(emp.reliability);
             return (
               <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
-                onClick={() => openEmployeeEditor(emp)}
-                className={`px-4 py-3.5 cursor-pointer transition-colors ${isDark ? 'active:bg-white/[0.03]' : 'active:bg-[#FAFBFC]'}`}>
+                className={`px-4 py-3.5 transition-colors ${selectedEmployees.has(emp.id) ? 'bg-[#635BFF]/[0.02]' : ''} ${isDark ? 'active:bg-white/[0.03]' : 'active:bg-[#FAFBFC]'}`}>
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center text-[12px] text-white shrink-0"
-                    style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
-                    {emp.avatar}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className={`text-[14px] truncate ${theme.textPrimary}`} style={{ fontWeight: 520 }}>{emp.name}</p>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <ShieldCheck size={12} style={{ color: reliabilityColor }} />
-                        <span className="text-[11px] tabular-nums" style={{ fontWeight: 520, color: reliabilityColor }}>{emp.reliability}%</span>
-                      </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleEmployee(emp.id); }}
+                    className={`shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center transition-all ${
+                      selectedEmployees.has(emp.id) ? 'bg-[#635BFF] border-[#635BFF]' : 'border-[#D1D5DB]'
+                    }`}
+                  >
+                    {selectedEmployees.has(emp.id) ? <Check size={10} className="text-white" strokeWidth={3} /> : null}
+                  </button>
+                  <div
+                    onClick={() => (selectedCount > 0 ? toggleEmployee(emp.id) : openEmployeeEditor(emp))}
+                    className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                  >
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-[12px] text-white shrink-0"
+                      style={{ fontWeight: 600, background: `linear-gradient(135deg, ${color}, ${color}CC)` }}>
+                      {emp.avatar}
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{primaryRole}</span>
-                      {primaryLoc && <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{primaryLoc.emoji} {primaryLoc.name.split(' ')[0]}</span>}
-                      <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: statusConfig[emp.status].color }} />
-                        <span className="text-[11px]" style={{ fontWeight: 460, color: statusConfig[emp.status].color }}>{statusConfig[emp.status].label}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={`text-[14px] truncate ${theme.textPrimary}`} style={{ fontWeight: 520 }}>{emp.name}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <ShieldCheck size={12} style={{ color: reliabilityColor }} />
+                          <span className="text-[11px] tabular-nums" style={{ fontWeight: 520, color: reliabilityColor }}>{emp.reliability}%</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ fontWeight: 500, color, background: `${color}10` }}>{primaryRole}</span>
+                        {primaryLoc ? <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{primaryLoc.emoji} {primaryLoc.name.split(' ')[0]}</span> : null}
+                        <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ background: statusConfig[emp.status].color }} />
+                          <span className="text-[11px]" style={{ fontWeight: 460, color: statusConfig[emp.status].color }}>{statusConfig[emp.status].label}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1851,6 +2805,8 @@ export default function Team({
           <EmployeeEnrollmentModal
             businessId={businessId}
             businessLocations={businessLocations}
+            defaultLocationId={defaultBusinessLocation?.id ?? null}
+            defaultLocationName={defaultBusinessLocation ? locationDisplayName(defaultBusinessLocation) : null}
             dark={isDark}
             onClose={() => setShowAddModal(false)}
             onCreated={handleAddEmployee}
@@ -1860,6 +2816,8 @@ export default function Team({
         {showBulkModal && businessId && (
           <EmployeeBulkUploadModal
             businessId={businessId}
+            defaultLocationId={defaultBusinessLocation?.id ?? null}
+            defaultLocationName={defaultBusinessLocation ? locationDisplayName(defaultBusinessLocation) : null}
             dark={isDark}
             onClose={() => setShowBulkModal(false)}
             onImported={async (result) => {
@@ -1867,6 +2825,48 @@ export default function Team({
             }}
           />
         )}
+        {showBulkAssignLocation && businessId ? (
+          <BulkAssignLocationsModal
+            count={selectedCount}
+            dark={isDark}
+            locations={businessLocations}
+            onClose={() => setShowBulkAssignLocation(false)}
+            onConfirm={async (locationIds) => {
+              await handleBulkAssignLocations(locationIds);
+              setShowBulkAssignLocation(false);
+            }}
+          />
+        ) : null}
+        {showBulkAssignRole && businessId ? (
+          <BulkAssignRolesModal
+            count={selectedCount}
+            dark={isDark}
+            roles={businessRoles}
+            onClose={() => setShowBulkAssignRole(false)}
+            onConfirm={async (roleIds) => {
+              await handleBulkAssignRoles(roleIds);
+              setShowBulkAssignRole(false);
+            }}
+          />
+        ) : null}
+        {showBulkExport ? (
+          <BulkExportModal
+            count={selectedCount}
+            dark={isDark}
+            onClose={() => setShowBulkExport(false)}
+            onConfirm={handleBulkExport}
+          />
+        ) : null}
+        {showBulkRemove ? (
+          <BulkRemoveModal
+            count={selectedCount}
+            dark={isDark}
+            onClose={() => setShowBulkRemove(false)}
+            onConfirm={async () => {
+              await handleBulkRemove();
+            }}
+          />
+        ) : null}
         {selectedEmployee && businessId && (
           <EmployeeDetail
             businessId={businessId}

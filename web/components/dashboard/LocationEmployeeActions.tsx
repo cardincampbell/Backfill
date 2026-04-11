@@ -185,14 +185,20 @@ export function EmployeeEnrollmentModal({
   onCreated,
   roles,
 }: EnrollmentModalProps) {
+  const fallbackDefaultLocation =
+    defaultLocationId == null && businessLocations.length === 1 ? businessLocations[0] : null;
+  const effectiveDefaultLocationId = defaultLocationId ?? fallbackDefaultLocation?.id ?? null;
+  const effectiveDefaultLocationName =
+    defaultLocationName ??
+    (fallbackDefaultLocation ? locationDisplayName(fallbackDefaultLocation) : null);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>(
-    defaultLocationId ? [defaultLocationId] : [],
+    effectiveDefaultLocationId ? [effectiveDefaultLocationId] : [],
   );
-  const [primaryLocationId, setPrimaryLocationId] = useState(defaultLocationId ?? "");
+  const [primaryLocationId, setPrimaryLocationId] = useState(effectiveDefaultLocationId ?? "");
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -240,7 +246,7 @@ export function EmployeeEnrollmentModal({
     : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#8898AA]";
 
   const hasRequiredLocation =
-    !defaultLocationId || selectedLocationIds.includes(defaultLocationId);
+    !effectiveDefaultLocationId || selectedLocationIds.includes(effectiveDefaultLocationId);
   const canSubmit =
     Boolean(fullName.trim()) &&
     Boolean(email.trim()) &&
@@ -300,7 +306,7 @@ export function EmployeeEnrollmentModal({
                 })),
                 locations: buildLocationAssignments(
                   selectedLocationIds,
-                  defaultLocationId || primaryLocationId,
+                  effectiveDefaultLocationId || primaryLocationId,
                 ),
               })
             : createdEmployee;
@@ -348,8 +354,8 @@ export function EmployeeEnrollmentModal({
                   Add Employee
                 </h2>
                 <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  {defaultLocationName
-                    ? `This employee will be added to ${defaultLocationName} automatically.`
+                  {effectiveDefaultLocationName
+                    ? `This employee will be added to ${effectiveDefaultLocationName} automatically.`
                     : "Add a new team member using this business's live roles and locations."}
                 </p>
               </div>
@@ -778,7 +784,7 @@ export function EmployeeBulkUploadModal({
             </div>
             <div>
               <h2 className={`text-[16px] ${textPrimary}`} style={{ fontWeight: 600 }}>
-                Bulk Upload
+                Import Employees
               </h2>
               <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {defaultLocationName

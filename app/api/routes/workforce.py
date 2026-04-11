@@ -85,6 +85,11 @@ async def create_employee(business_id: UUID, payload: EmployeeCreate, session: S
         employee = await workforce.create_employee(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if detail.startswith("employee_duplicate_"):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
     await audit_service.append(
         session,
@@ -191,7 +196,10 @@ async def update_employee(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        detail = str(exc)
+        if detail.startswith("employee_duplicate_"):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
 
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
     await audit_service.append(

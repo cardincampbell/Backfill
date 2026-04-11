@@ -236,6 +236,11 @@ async def create_location(
         location = await businesses.create_location(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "location_already_exists":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
     await audit_service.append(
         session,
@@ -492,6 +497,11 @@ async def create_role(
         role = await businesses.create_role(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "role_already_exists":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
     await audit_service.append(
         session,

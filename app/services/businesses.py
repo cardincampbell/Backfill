@@ -70,6 +70,87 @@ async def _next_unique_role_code(session: AsyncSession, business_id: UUID, reque
     return code
 
 
+def _normalize_location_identity_value(value: str | None) -> str | None:
+    normalized = _normalize_optional(value)
+    return normalized.lower() if normalized else None
+
+
+def _location_identity_key_from_payload(payload: LocationCreate) -> tuple[str, str] | None:
+    place_id = _normalize_optional(payload.google_place_id)
+    if place_id:
+        return ("google_place_id", place_id)
+
+    address_parts = [
+        _normalize_location_identity_value(payload.address_line_1),
+        _normalize_location_identity_value(payload.locality),
+        _normalize_location_identity_value(payload.region),
+        _normalize_location_identity_value(payload.postal_code),
+        _normalize_location_identity_value(payload.country_code or "US"),
+    ]
+    if address_parts[0] and address_parts[1] and address_parts[2]:
+        return ("normalized_address", "|".join(part or "" for part in address_parts))
+    return None
+
+
+def _location_identity_key_from_record(location: Location) -> tuple[str, str] | None:
+    place_id = _normalize_optional(location.google_place_id)
+    if place_id:
+        return ("google_place_id", place_id)
+
+    address_parts = [
+        _normalize_location_identity_value(location.address_line_1),
+        _normalize_location_identity_value(location.locality),
+        _normalize_location_identity_value(location.region),
+        _normalize_location_identity_value(location.postal_code),
+        _normalize_location_identity_value(location.country_code or "US"),
+    ]
+    if address_parts[0] and address_parts[1] and address_parts[2]:
+        return ("normalized_address", "|".join(part or "" for part in address_parts))
+    return None
+
+
+async def _find_duplicate_location(
+    session: AsyncSession,
+    business_id: UUID,
+    payload: LocationCreate,
+) -> Location | None:
+    requested_key = _location_identity_key_from_payload(payload)
+    if requested_key is None:
+        return None
+
+    result = await session.execute(
+        select(Location).where(Location.business_id == business_id)
+    )
+    for location in result.scalars().all():
+        if _location_identity_key_from_record(location) == requested_key:
+            return location
+    return None
+
+
+async def _find_existing_business_role(
+    session: AsyncSession,
+    business_id: UUID,
+    *,
+    name: str,
+    code: str | None = None,
+) -> Role | None:
+    normalized_name = name.strip()
+    normalized_code = role_code_from_name(code or normalized_name)
+
+    existing_by_code = await session.scalar(
+        select(Role).where(Role.business_id == business_id, Role.code == normalized_code)
+    )
+    if existing_by_code is not None:
+        return existing_by_code
+
+    return await session.scalar(
+        select(Role).where(
+            Role.business_id == business_id,
+            func.lower(Role.name) == normalized_name.lower(),
+        )
+    )
+
+
 def _initial_business_display_name(payload: BusinessCreate) -> str:
     return (
         _normalize_optional(payload.display_name)
@@ -312,6 +393,9 @@ async def create_location_record(
     business = await get_business(session, business_id)
     if business is None:
         raise LookupError("business_not_found")
+    duplicate_location = await _find_duplicate_location(session, business_id, payload)
+    if duplicate_location is not None:
+        raise ValueError("location_already_exists")
 
     location_name = payload.name.strip()
     location_display_name = _initial_location_display_name(payload)
@@ -492,11 +576,20 @@ async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCre
     if business is None:
         raise LookupError("business_not_found")
 
+    existing_role = await _find_existing_business_role(
+        session,
+        business_id,
+        name=payload.name,
+        code=payload.code,
+    )
+    if existing_role is not None:
+        raise ValueError("role_already_exists")
+
     code = await _next_unique_role_code(session, business_id, payload.code or payload.name)
     role = Role(
         business_id=business_id,
         code=code,
-        name=payload.name,
+        name=payload.name.strip(),
         category=payload.category,
         description=payload.description,
         min_notice_minutes=payload.min_notice_minutes,

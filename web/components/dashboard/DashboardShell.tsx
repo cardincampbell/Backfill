@@ -55,7 +55,6 @@ const navItems = [
   { label: 'Overview', icon: LayoutGrid, path: '/dashboard' },
   { label: 'Team', icon: Users, path: '/team' },
   { label: 'Activity', icon: Activity, path: '/activity' },
-  { label: 'Settings', icon: Settings, path: '/settings' },
 ];
 
 interface DashboardShellProps {
@@ -391,7 +390,7 @@ export default function DashboardShell({
       </aside>
 
       <div className="flex-1 min-h-screen lg:ml-[280px]">
-        <header className={`sticky top-0 z-20 border-b backdrop-blur-xl ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'}`}>
+        <header className={`sticky top-0 z-40 border-b backdrop-blur-xl ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'}`}>
           <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
             <div className="flex items-center gap-3">
               <button
@@ -435,7 +434,7 @@ export default function DashboardShell({
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 8, scale: 0.96 }}
                       transition={{ duration: 0.2 }}
-                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 overflow-hidden border shadow-xl z-50 ${panelBgClass} ${panelBorderClass} rounded-xl`}
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-80 overflow-hidden border shadow-xl z-[60] ${panelBgClass} ${panelBorderClass} rounded-xl`}
                     >
                       <div className={`px-4 py-3 border-b ${sectionBorderClass}`}>
                         <span className={`text-[13px] ${textPrimaryClass}`} style={{ fontWeight: 560 }}>
@@ -493,7 +492,7 @@ export default function DashboardShell({
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 8, scale: 0.96 }}
                       transition={{ duration: 0.2 }}
-                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-64 max-w-64 overflow-hidden border shadow-xl z-50 ${panelBgClass} ${panelBorderClass} rounded-xl`}
+                      className={`absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-64 max-w-64 overflow-hidden border shadow-xl z-[60] ${panelBgClass} ${panelBorderClass} rounded-xl`}
                     >
                       <div className={`px-4 py-3.5 border-b ${sectionBorderClass}`}>
                         <div className="flex items-center gap-3">

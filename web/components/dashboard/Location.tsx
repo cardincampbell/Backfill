@@ -460,6 +460,15 @@ export default function Location({
     const existing = roles.find(
       (role) => role.name.trim().toLowerCase() === trimmed.toLowerCase(),
     );
+    if (existing) {
+      addRole(existing.id);
+      setCustomRole("");
+      setFeedback({
+        tone: "success",
+        message: `${existing.name} is already in Roles and has been selected for ${locationDisplayName}.`,
+      });
+      return;
+    }
 
     try {
       setIsCreatingRole(true);
@@ -916,6 +925,7 @@ export default function Location({
                   }
                 }}
                 placeholder="Type a new role name..."
+                spellCheck
                 className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
                   isDark
                     ? "border-white/[0.08] bg-white/[0.04] text-white"
