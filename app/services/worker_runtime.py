@@ -15,6 +15,7 @@ _CLAIM_SCAN_MULTIPLIER = 5
 _OUTBOX_STALE_LOCK_AFTER = timedelta(minutes=5)
 _CALLBACK_STALE_LOCK_AFTER = timedelta(minutes=5)
 _SCHEDULER_JOB_STALE_AFTER = timedelta(minutes=15)
+_MAX_CLAIMS_PER_BUSINESS = 1
 _DEFAULT_OUTBOX_RETRY_DELAYS = (
     timedelta(minutes=1),
     timedelta(minutes=5),
@@ -41,6 +42,7 @@ async def _apply_business_isolation(
     limit: int,
     key_fn: Callable[[T], object],
     resolver: BusinessResolver[T] | None = None,
+    max_per_business: int = _MAX_CLAIMS_PER_BUSINESS,
 ) -> list[T]:
     if not entries:
         return []
@@ -49,14 +51,15 @@ async def _apply_business_isolation(
 
     resolved = await resolver(session, entries)
     selected: list[T] = []
-    seen_business_keys: set[str] = set()
+    business_counts: dict[str, int] = {}
 
     for entry in entries:
         business_key = resolved.get(key_fn(entry))
         dedupe_key = str(business_key) if business_key is not None else f"row:{key_fn(entry)}"
-        if business_key is not None and dedupe_key in seen_business_keys:
+        current_count = business_counts.get(dedupe_key, 0)
+        if business_key is not None and current_count >= max(1, max_per_business):
             continue
-        seen_business_keys.add(dedupe_key)
+        business_counts[dedupe_key] = current_count + 1
         selected.append(entry)
         if len(selected) >= limit:
             break
@@ -155,6 +158,7 @@ async def claim_provider_callback_logs(
     *,
     limit: int,
     now: datetime,
+    business_resolver: BusinessResolver[ProviderCallbackLog] | None = None,
 ) -> list[ProviderCallbackLog]:
     stale_filter = and_(
         ProviderCallbackLog.status == "processing",
@@ -173,12 +177,19 @@ async def claim_provider_callback_logs(
         .limit(max(limit, 1) * _CLAIM_SCAN_MULTIPLIER)
         .with_for_update(skip_locked=True)
     )
-    entries = list(result.scalars().all())[:limit]
-    for entry in entries:
+    entries = list(result.scalars().all())
+    selected = await _apply_business_isolation(
+        session,
+        entries,
+        limit=limit,
+        key_fn=lambda entry: entry.id,
+        resolver=business_resolver,
+    )
+    for entry in selected:
         entry.status = "processing"
         entry.processed_at = now
     await session.flush()
-    return entries
+    return selected
 
 
 async def claim_scheduler_jobs(
@@ -288,8 +299,9 @@ async def claim_expiring_coverage_offers(
     limit: int,
 ) -> list[CoverageOffer]:
     result = await session.execute(
-        select(CoverageOffer, CoverageCase.id)
+        select(CoverageOffer, CoverageCase.id, Shift.business_id)
         .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
+        .join(Shift, CoverageCase.shift_id == Shift.id)
         .where(
             CoverageOffer.status.in_([OfferStatus.pending, OfferStatus.delivered]),
             CoverageOffer.expires_at.is_not(None),
@@ -302,12 +314,17 @@ async def claim_expiring_coverage_offers(
     rows = list(result.all())
     selected: list[CoverageOffer] = []
     seen_case_ids: set[str] = set()
+    seen_business_ids: set[str] = set()
 
-    for offer, coverage_case_id in rows:
+    for offer, coverage_case_id, business_id in rows:
         dedupe_key = str(coverage_case_id)
         if dedupe_key in seen_case_ids:
             continue
+        business_key = str(business_id) if business_id is not None else f"offer:{offer.id}"
+        if business_id is not None and business_key in seen_business_ids:
+            continue
         seen_case_ids.add(dedupe_key)
+        seen_business_ids.add(business_key)
         selected.append(offer)
         if len(selected) >= limit:
             break
