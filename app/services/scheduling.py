@@ -17,7 +17,8 @@ from app.models.common import (
     EmployeeStatus,
     OfferStatus,
     OutboxStatus,
-    ShiftStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
 )
 from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOffer, OutboxEvent
 from app.models.scheduling import Shift, ShiftAssignment
@@ -35,6 +36,7 @@ _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
 _ACTIVE_OFFER_STATUSES = {OfferStatus.pending, OfferStatus.delivered}
 _ACTIVE_RUN_STATUSES = {CoverageRunStatus.queued, CoverageRunStatus.running}
 _USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
+_TERMINAL_SHIFT_LIFECYCLE_STATUSES = {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}
 
 
 class ShiftAssignmentConflictError(Exception):
@@ -98,6 +100,16 @@ def build_shift_assignment_response(
 ) -> ShiftAssignmentMutationResponse:
     return ShiftAssignmentMutationResponse(
         shift_id=result.shift.id,
+        lifecycle_status=(
+            result.shift.lifecycle_status.value
+            if hasattr(result.shift.lifecycle_status, "value")
+            else str(result.shift.lifecycle_status)
+        ),
+        staffing_status=(
+            result.shift.staffing_status.value
+            if hasattr(result.shift.staffing_status, "value")
+            else str(result.shift.staffing_status)
+        ),
         status=result.shift.status.value if hasattr(result.shift.status, "value") else str(result.shift.status),
         current_assignment=_assignment_read(result.current_assignment),
     )
@@ -208,12 +220,7 @@ async def update_shift(
     if payload.shift_metadata is not None:
         shift.shift_metadata = payload.shift_metadata
 
-    if shift.seats_filled >= shift.seats_requested and shift.seats_requested > 0:
-        shift.status = ShiftStatus.covered
-    elif shift.seats_filled > 0:
-        shift.status = ShiftStatus.filling
-    else:
-        shift.status = ShiftStatus.open
+    _recompute_shift_ownership_state(shift)
 
     await session.flush()
     await session.refresh(shift)
@@ -437,13 +444,22 @@ def _recompute_shift_ownership_state(shift: Shift) -> None:
     current = shift_assignments.current_assignment(shift.assignments or [])
     shift.seats_filled = 1 if current is not None else 0
     if current is not None:
-        shift.status = ShiftStatus.covered
+        _ensure_operational_lifecycle(shift)
+        shift.staffing_status = ShiftStaffingStatus.covered
         return
     has_active_automation = any(
         coverage_case.status in _ACTIVE_CASE_STATUSES
         for coverage_case in (shift.coverage_cases or [])
     )
-    shift.status = ShiftStatus.filling if has_active_automation else ShiftStatus.open
+    _ensure_operational_lifecycle(shift)
+    shift.staffing_status = (
+        ShiftStaffingStatus.filling if has_active_automation else ShiftStaffingStatus.open
+    )
+
+
+def _ensure_operational_lifecycle(shift: Shift) -> None:
+    if shift.lifecycle_status not in _TERMINAL_SHIFT_LIFECYCLE_STATUSES and shift.lifecycle_status == ShiftLifecycleStatus.draft:
+        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
 
 
 async def _cancel_active_automation(

@@ -46,6 +46,8 @@ class ShiftRead(BaseSchema):
     timezone: str
     starts_at: datetime
     ends_at: datetime
+    lifecycle_status: str
+    staffing_status: str
     status: str
     seats_requested: int
     seats_filled: int
@@ -75,6 +77,8 @@ class ShiftAssignmentRead(BaseSchema):
 
 class ShiftAssignmentMutationResponse(BaseSchema):
     shift_id: UUID
+    lifecycle_status: str
+    staffing_status: str
     status: str
     current_assignment: Optional[ShiftAssignmentRead] = None
 

@@ -46,6 +46,8 @@ class WorkspaceBoardShiftRead(BaseSchema):
     role_name: str
     starts_at: datetime
     ends_at: datetime
+    lifecycle_status: str
+    staffing_status: str
     status: str
     seats_requested: int
     seats_filled: int

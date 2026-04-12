@@ -9,7 +9,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, VersionedMixin
-from app.models.common import AssignmentStatus, ShiftStatus
+from app.models.common import (
+    AssignmentStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+    ShiftStatus,
+    compatibility_shift_status,
+    shift_axes_from_compatibility_status,
+)
 
 
 class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -17,7 +24,8 @@ class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("source_system", "source_shift_id", name="uq_shifts_source_system_source_shift_id"),
         Index("ix_shifts_location_id_starts_at", "location_id", "starts_at"),
-        Index("ix_shifts_status_starts_at", "status", "starts_at"),
+        Index("ix_shifts_lifecycle_status_starts_at", "lifecycle_status", "starts_at"),
+        Index("ix_shifts_staffing_status_starts_at", "staffing_status", "starts_at"),
     )
 
     business_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
@@ -28,10 +36,15 @@ class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[ShiftStatus] = mapped_column(
-        Enum(ShiftStatus, name="shift_status"),
+    lifecycle_status: Mapped[ShiftLifecycleStatus] = mapped_column(
+        Enum(ShiftLifecycleStatus, name="shift_lifecycle_status"),
         nullable=False,
-        server_default=ShiftStatus.draft.value,
+        server_default=ShiftLifecycleStatus.draft.value,
+    )
+    staffing_status: Mapped[ShiftStaffingStatus] = mapped_column(
+        Enum(ShiftStaffingStatus, name="shift_staffing_status"),
+        nullable=False,
+        server_default=ShiftStaffingStatus.open.value,
     )
     seats_requested: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     seats_filled: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -45,6 +58,16 @@ class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     role: Mapped["Role"] = relationship(back_populates="shifts")
     assignments: Mapped[list["ShiftAssignment"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
     coverage_cases: Mapped[list["CoverageCase"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
+
+    @property
+    def status(self) -> ShiftStatus:
+        return compatibility_shift_status(self.lifecycle_status, self.staffing_status)
+
+    @status.setter
+    def status(self, value: ShiftStatus | str) -> None:
+        lifecycle_status, staffing_status = shift_axes_from_compatibility_status(value)
+        self.lifecycle_status = lifecycle_status
+        self.staffing_status = staffing_status
 
 
 class ShiftAssignment(UUIDPrimaryKeyMixin, TimestampMixin, VersionedMixin, Base):

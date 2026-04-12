@@ -278,6 +278,16 @@ async def get_location_board(
                 role_name=shift.role.name if shift.role is not None else "Role",
                 starts_at=shift.starts_at,
                 ends_at=shift.ends_at,
+                lifecycle_status=(
+                    shift.lifecycle_status.value
+                    if hasattr(shift.lifecycle_status, "value")
+                    else str(shift.lifecycle_status)
+                ),
+                staffing_status=(
+                    shift.staffing_status.value
+                    if hasattr(shift.staffing_status, "value")
+                    else str(shift.staffing_status)
+                ),
                 status=shift.status.value,
                 seats_requested=shift.seats_requested,
                 seats_filled=shift.seats_filled,

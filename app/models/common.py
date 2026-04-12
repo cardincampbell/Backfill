@@ -57,6 +57,21 @@ class EmployeeStatus(str, Enum):
     archived = "archived"
 
 
+class ShiftLifecycleStatus(str, Enum):
+    draft = "draft"
+    scheduled = "scheduled"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+
+
+class ShiftStaffingStatus(str, Enum):
+    open = "open"
+    filling = "filling"
+    covered = "covered"
+    no_fill = "no_fill"
+
+
 class ShiftStatus(str, Enum):
     draft = "draft"
     scheduled = "scheduled"
@@ -207,3 +222,56 @@ class SchedulerSyncRunStatus(str, Enum):
 class RetellConversationType(str, Enum):
     call = "call"
     chat = "chat"
+
+
+_STAFFING_TO_COMPATIBILITY_SHIFT_STATUS = {
+    ShiftStaffingStatus.open: ShiftStatus.open,
+    ShiftStaffingStatus.filling: ShiftStatus.filling,
+    ShiftStaffingStatus.covered: ShiftStatus.covered,
+    ShiftStaffingStatus.no_fill: ShiftStatus.no_fill,
+}
+
+
+def compatibility_shift_status(
+    lifecycle_status: ShiftLifecycleStatus | str,
+    staffing_status: ShiftStaffingStatus | str,
+) -> ShiftStatus:
+    lifecycle = (
+        lifecycle_status
+        if isinstance(lifecycle_status, ShiftLifecycleStatus)
+        else ShiftLifecycleStatus(str(lifecycle_status))
+    )
+    staffing = (
+        staffing_status
+        if isinstance(staffing_status, ShiftStaffingStatus)
+        else ShiftStaffingStatus(str(staffing_status))
+    )
+
+    if lifecycle == ShiftLifecycleStatus.draft:
+        return ShiftStatus.draft
+    if lifecycle == ShiftLifecycleStatus.cancelled:
+        return ShiftStatus.cancelled
+    if lifecycle == ShiftLifecycleStatus.completed:
+        return ShiftStatus.completed
+    return _STAFFING_TO_COMPATIBILITY_SHIFT_STATUS[staffing]
+
+
+def shift_axes_from_compatibility_status(
+    status: ShiftStatus | str,
+) -> tuple[ShiftLifecycleStatus, ShiftStaffingStatus]:
+    normalized = status if isinstance(status, ShiftStatus) else ShiftStatus(str(status))
+    if normalized == ShiftStatus.draft:
+        return ShiftLifecycleStatus.draft, ShiftStaffingStatus.open
+    if normalized == ShiftStatus.scheduled:
+        return ShiftLifecycleStatus.scheduled, ShiftStaffingStatus.open
+    if normalized == ShiftStatus.open:
+        return ShiftLifecycleStatus.scheduled, ShiftStaffingStatus.open
+    if normalized == ShiftStatus.filling:
+        return ShiftLifecycleStatus.scheduled, ShiftStaffingStatus.filling
+    if normalized == ShiftStatus.covered:
+        return ShiftLifecycleStatus.scheduled, ShiftStaffingStatus.covered
+    if normalized == ShiftStatus.no_fill:
+        return ShiftLifecycleStatus.scheduled, ShiftStaffingStatus.no_fill
+    if normalized == ShiftStatus.cancelled:
+        return ShiftLifecycleStatus.cancelled, ShiftStaffingStatus.open
+    return ShiftLifecycleStatus.completed, ShiftStaffingStatus.covered

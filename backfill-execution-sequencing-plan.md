@@ -161,6 +161,14 @@ Deliverables:
 - freeze eligibility/availability rule:
   eligibility = allowed to be considered
   availability = able to work the exact interval
+- freeze shift state rule:
+  shift lifecycle state and staffing state are conceptually separate
+  the physical schema now stores `lifecycle_status` and `staffing_status` separately on `shifts`
+- freeze assignment state rule:
+  `called_out` is not a canonical assignment status
+  `checked_in` and `checked_out` are timestamps, not assignment statuses
+- freeze campaign/outreach state rule:
+  campaign state and outreach attempt state stay separate; do not collapse them into one flattened backfill state machine
 - freeze worker rule: locking/retries/idempotency are shared platform behavior
 - freeze shift rule: one shift is one fillable unit of work for one person in one role at one location over one time window
 - freeze projection rule: projections are rebuildable read models and never the source of truth
@@ -177,6 +185,18 @@ Phase 0 contracts to write down explicitly:
   one shift row represents exactly one fill opportunity
   if the business needs three people for the same role, location, and interval, model that as three shifts
   `seats_requested` is compatibility baggage from the current schema, not a canonical coverage primitive
+- shift state semantics:
+  target conceptual model is `lifecycle_status` plus `staffing_status`
+  compatibility reads may still expose a derived legacy `status` summary during cutover
+  do not let compatibility reads blur the domain model in services or UI language
+- assignment state semantics:
+  use canonical assignment status for ownership history
+  treat callouts as triggers or reasons, not assignment statuses
+  treat check-in and check-out as timestamps or milestones, not assignment statuses
+- campaign vs outreach semantics:
+  `CoverageCaseStatus` governs the campaign
+  `OfferStatus` and `CoverageAttemptStatus` govern outreach execution
+  do not introduce one flattened replacement state machine for all backfill behavior
 - aggregate versioning:
   `coverage_campaigns.version` increments on every mutable transition
   `shift_assignments.version` increments on every mutable transition

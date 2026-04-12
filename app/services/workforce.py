@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.business import Business, Location, Role
-from app.models.common import AssignmentStatus, ShiftStatus
+from app.models.common import AssignmentStatus, ShiftLifecycleStatus
 from app.models.workforce import (
     Employee,
     EmployeeAvailabilityRule,
@@ -214,15 +214,6 @@ async def _find_duplicate_employee(
 
     return None
 
-
-EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES = (
-    ShiftStatus.scheduled,
-    ShiftStatus.open,
-    ShiftStatus.filling,
-    ShiftStatus.covered,
-    ShiftStatus.no_fill,
-    ShiftStatus.completed,
-)
 
 EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES = (
     AssignmentStatus.assigned,
@@ -1022,7 +1013,9 @@ async def _blocking_employee_assignment_count(
         .where(
             Shift.business_id == business_id,
             ShiftAssignment.employee_id == employee_id,
-            Shift.status.in_(EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES),
+            Shift.lifecycle_status.not_in(
+                [ShiftLifecycleStatus.draft, ShiftLifecycleStatus.cancelled]
+            ),
             ShiftAssignment.status.in_(EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES),
         )
     )

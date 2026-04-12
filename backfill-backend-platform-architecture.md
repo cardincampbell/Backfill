@@ -37,6 +37,68 @@ Current codebase note:
 - `CopilotSession`: persisted working state around one operational objective across turns and channels.
 - `ToolAction`: a validated internal command that application code authorizes and executes.
 
+### 2.1 Canonical State Axes
+
+#### Shift state
+
+- A shift has two conceptually different state axes:
+  - lifecycle state
+  - staffing state
+- Lifecycle state:
+  - `draft`
+  - `scheduled`
+  - `in_progress`
+  - `completed`
+  - `cancelled`
+- Staffing state:
+  - `open`
+  - `filling`
+  - `covered`
+  - `no_fill`
+- Current repo note:
+  - the physical `shifts` schema now stores `lifecycle_status` and `staffing_status` separately
+  - some compatibility reads may still expose a derived legacy `status` summary during the cutover period
+- UI note:
+  - product copy may say `published` if desired
+  - storage and backend semantics remain `scheduled` until a deliberate migration says otherwise
+
+#### Assignment state
+
+- `ShiftAssignment` is ownership history, not a generic activity log.
+- Canonical assignment status at launch:
+  - `proposed`
+  - `assigned`
+  - `accepted`
+  - `declined`
+  - `replaced`
+  - `cancelled`
+  - `no_show`
+  - `completed`
+- Do not model `called_out` as a top-level assignment status.
+  - a callout is a trigger or reason that invalidates the current assignment
+- Do not model `checked_in` or `checked_out` as assignment statuses.
+  - those are milestone timestamps on the assignment row
+
+#### Campaign state vs outreach state
+
+- Do not collapse campaign state and outreach state into one flattened "backfill event" state machine.
+- `CoverageCampaign` state governs the recovery workflow for the shift:
+  - `queued`
+  - `running`
+  - `filled`
+  - `exhausted`
+  - `cancelled`
+  - `failed`
+- `OutreachAttempt` state governs one contact to one employee through one channel/provider:
+  - `pending`
+  - `delivered`
+  - `accepted`
+  - `declined`
+  - `expired`
+  - `cancelled`
+  - `failed`
+- If product wants friendlier copy like `searching`, use it as a UI alias over the current campaign `running` state until an explicit migration changes the enum.
+
 ## 3. Architectural Decisions
 
 ### 3.1 Launch shape

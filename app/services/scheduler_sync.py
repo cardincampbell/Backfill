@@ -20,7 +20,8 @@ from app.models.common import (
     SchedulerSyncEventStatus,
     SchedulerSyncJobStatus,
     SchedulerSyncRunStatus,
-    ShiftStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
 )
 from app.models.coverage import CoverageCase
 from app.models.integrations import (
@@ -595,15 +596,20 @@ async def _active_scheduler_assignments(session: AsyncSession, shift_id: UUID) -
     return list(result.scalars().all())
 
 
-def _normalized_shift_status(status: str, seats_filled: int, seats_requested: int) -> ShiftStatus:
+def _normalized_shift_lifecycle_status(status: str) -> ShiftLifecycleStatus:
     normalized = status.strip().lower()
     if normalized in {"cancelled", "deleted"}:
-        return ShiftStatus.cancelled
+        return ShiftLifecycleStatus.cancelled
+    return ShiftLifecycleStatus.scheduled
+
+
+def _normalized_shift_staffing_status(status: str, seats_filled: int, seats_requested: int) -> ShiftStaffingStatus:
+    normalized = status.strip().lower()
     if normalized in {"open", "vacant", "unassigned", "open_shift"} or seats_filled == 0:
-        return ShiftStatus.open
+        return ShiftStaffingStatus.open
     if seats_filled < max(1, seats_requested):
-        return ShiftStatus.filling
-    return ShiftStatus.scheduled
+        return ShiftStaffingStatus.filling
+    return ShiftStaffingStatus.covered
 
 
 async def sync_connection_schedule(
@@ -715,9 +721,14 @@ async def sync_connection_schedule(
             assignment.cancelled_at = datetime.now(timezone.utc)
 
         shift.seats_filled = len(desired_ids)
-        shift.status = _normalized_shift_status(record.status, shift.seats_filled, shift.seats_requested)
+        shift.lifecycle_status = _normalized_shift_lifecycle_status(record.status)
+        shift.staffing_status = _normalized_shift_staffing_status(
+            record.status,
+            shift.seats_filled,
+            shift.seats_requested,
+        )
         await session.flush()
-        if is_created and shift.status == ShiftStatus.cancelled:
+        if is_created and shift.lifecycle_status == ShiftLifecycleStatus.cancelled:
             skipped += 1
 
     connection.status = SchedulerConnectionStatus.active
@@ -880,11 +891,15 @@ async def create_vacancy_for_shift(
     )
     shift.seats_filled = int(remaining_active or 0)
     if shift.seats_filled >= shift.seats_requested:
-        shift.status = ShiftStatus.scheduled
+        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+        shift.staffing_status = ShiftStaffingStatus.covered
         await session.flush()
         return {"shift_id": shift.id, "coverage_case_id": None, "offers": []}
 
-    shift.status = ShiftStatus.filling if shift.seats_filled > 0 else ShiftStatus.open
+    shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+    shift.staffing_status = (
+        ShiftStaffingStatus.filling if shift.seats_filled > 0 else ShiftStaffingStatus.open
+    )
 
     coverage_case = await session.scalar(
         select(CoverageCase)

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import ShiftStatus
+from app.models.common import ShiftLifecycleStatus, ShiftStaffingStatus
 from app.models.role_taxonomy import BusinessPlaceType
 from app.models.scheduling import Shift
 from app.schemas.business import (
@@ -21,17 +21,6 @@ from app.schemas.business import (
 )
 from app.services import business_identity_derivation, role_derivation, shift_defaults
 from app.services.utils import role_code_from_name, slugify
-
-NON_DRAFT_SHIFT_STATUSES = (
-    ShiftStatus.scheduled,
-    ShiftStatus.open,
-    ShiftStatus.filling,
-    ShiftStatus.covered,
-    ShiftStatus.no_fill,
-    ShiftStatus.cancelled,
-    ShiftStatus.completed,
-)
-
 
 async def _next_unique_business_slug(session: AsyncSession, requested: str) -> str:
     base = slugify(requested)
@@ -464,11 +453,15 @@ async def delete_location(
         select(func.count(Shift.id)).where(
             Shift.location_id == location_id,
             (Shift.starts_at < func.now())
-            | Shift.status.in_(
+            | Shift.staffing_status.in_(
                 (
-                    ShiftStatus.no_fill,
-                    ShiftStatus.cancelled,
-                    ShiftStatus.completed,
+                    ShiftStaffingStatus.no_fill,
+                )
+            )
+            | Shift.lifecycle_status.in_(
+                (
+                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.completed,
                 )
             ),
         )
@@ -494,11 +487,15 @@ async def get_location_delete_readiness(
         select(func.count(Shift.id)).where(
             Shift.location_id == location_id,
             (Shift.starts_at < func.now())
-            | Shift.status.in_(
+            | Shift.staffing_status.in_(
                 (
-                    ShiftStatus.no_fill,
-                    ShiftStatus.cancelled,
-                    ShiftStatus.completed,
+                    ShiftStaffingStatus.no_fill,
+                )
+            )
+            | Shift.lifecycle_status.in_(
+                (
+                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.completed,
                 )
             ),
         )
@@ -874,7 +871,7 @@ async def _locked_shift_counts_by_role_id(
         select(Shift.role_id, func.count(Shift.id))
         .where(
             Shift.location_id == location_id,
-            Shift.status.in_(NON_DRAFT_SHIFT_STATUSES),
+            Shift.lifecycle_status != ShiftLifecycleStatus.draft,
         )
         .group_by(Shift.role_id)
     )

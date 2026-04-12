@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Location
-from app.models.common import OfferStatus, RetellConversationType, ShiftStatus
+from app.models.common import OfferStatus, RetellConversationType, ShiftLifecycleStatus, ShiftStaffingStatus, ShiftStatus
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.identity import User
 from app.models.integrations import RetellConversation
@@ -298,7 +298,10 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
 
 
 async def get_open_shifts(session: AsyncSession, location_id: UUID | None = None) -> dict:
-    stmt = select(Shift).where(Shift.status.in_([ShiftStatus.open, ShiftStatus.filling]))
+    stmt = select(Shift).where(
+        Shift.lifecycle_status.in_([ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress]),
+        Shift.staffing_status.in_([ShiftStaffingStatus.open, ShiftStaffingStatus.filling]),
+    )
     if location_id is not None:
         stmt = stmt.where(Shift.location_id == location_id)
     result = await session.execute(stmt.order_by(Shift.starts_at.asc()).limit(10))
@@ -312,6 +315,8 @@ async def get_open_shifts(session: AsyncSession, location_id: UUID | None = None
                 "starts_at": shift.starts_at.isoformat(),
                 "ends_at": shift.ends_at.isoformat(),
                 "status": shift.status,
+                "lifecycle_status": shift.lifecycle_status,
+                "staffing_status": shift.staffing_status,
             }
             for shift in shifts
         ]
@@ -331,6 +336,8 @@ async def get_shift_status(session: AsyncSession, shift_id: UUID) -> dict:
     return {
         "shift_id": str(shift.id),
         "status": shift.status,
+        "lifecycle_status": shift.lifecycle_status,
+        "staffing_status": shift.staffing_status,
         "seats_requested": shift.seats_requested,
         "seats_filled": shift.seats_filled,
         "coverage_case_id": str(active_case.id) if active_case is not None else None,
