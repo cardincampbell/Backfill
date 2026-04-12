@@ -19,6 +19,7 @@ from app.api.routes.retell_provider import router as retell_provider_router
 from app.api.routes.scheduler_integrations import router as scheduler_integrations_router
 from app.api.routes.scheduler_provider_webhooks import router as scheduler_provider_webhooks_router
 from app.api.routes.scheduling import router as scheduling_router
+from app.api.routes.weather import router as weather_router
 from app.api.routes.workspace import router as workspace_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.api.routes.workforce import router as workforce_router
@@ -45,6 +46,7 @@ __all__ = [
     "scheduler_integrations_router",
     "scheduler_provider_webhooks_router",
     "scheduling_router",
+    "weather_router",
     "workspace_router",
     "webhooks_router",
     "workforce_router",
