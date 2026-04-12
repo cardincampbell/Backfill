@@ -48,6 +48,11 @@ from app.schemas.invites import (
 from app.schemas.internal import OfferExpiryResponse, OutboxProcessResponse, WebhookProcessResponse, WorkerBatchRequest
 from app.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
 from app.schemas.scheduling import ShiftCreate, ShiftRead
+from app.schemas.weather import (
+    LocationWeatherForecastPointRead,
+    LocationWeatherForecastRead,
+    LocationWeatherForecastSummaryRead,
+)
 from app.schemas.webhooks import (
     WebhookDeliveryRead,
     WebhookEventCatalogResponse,
@@ -148,6 +153,9 @@ __all__ = [
     "SessionRead",
     "ShiftCreate",
     "ShiftRead",
+    "LocationWeatherForecastPointRead",
+    "LocationWeatherForecastRead",
+    "LocationWeatherForecastSummaryRead",
     "UserRead",
     "UserUpsert",
     "WorkerBatchRequest",

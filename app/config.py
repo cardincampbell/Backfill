@@ -140,6 +140,9 @@ class Settings:
     billing_location_monthly_cap_cents: int = int(
         os.environ.get("BACKFILL_BILLING_LOCATION_MONTHLY_CAP_CENTS", "20000")
     )
+    weather_provider: str = os.environ.get("BACKFILL_WEATHER_PROVIDER", "open_meteo").strip().lower()
+    weather_timeout_seconds: float = float(os.environ.get("BACKFILL_WEATHER_TIMEOUT_SECONDS", "6"))
+    weather_forecast_max_hours: int = int(os.environ.get("BACKFILL_WEATHER_FORECAST_MAX_HOURS", "168"))
     sevenshifts_client_id: str = os.environ.get("SEVENSHIFTS_CLIENT_ID", "")
     sevenshifts_client_secret: str = os.environ.get("SEVENSHIFTS_CLIENT_SECRET", "")
     sevenshifts_webhook_secret: str = os.environ.get("SEVENSHIFTS_WEBHOOK_SECRET", "")

@@ -25,6 +25,7 @@ from app.api.routes import (
     scheduler_integrations_router,
     scheduler_provider_webhooks_router,
     scheduling_router,
+    weather_router,
     workspace_router,
     webhooks_router,
     workforce_router,
@@ -68,6 +69,7 @@ router.include_router(copilot_router)
 router.include_router(webhooks_router)
 router.include_router(workforce_router)
 router.include_router(scheduling_router)
+router.include_router(weather_router)
 router.include_router(coverage_router)
 router.include_router(finance_router)
 router.include_router(ops_router)
