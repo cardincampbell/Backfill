@@ -55,16 +55,38 @@ class ShiftAssignmentMutationResult:
     no_op: bool = False
 
 
+def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    metadata = getattr(assignment, "assignment_metadata", None) or {}
+    if isinstance(metadata, dict):
+        raw_name = metadata.get("employee_name")
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    employee = getattr(assignment, "__dict__", {}).get("employee")
+    if employee is not None:
+        raw_name = getattr(employee, "full_name", None)
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    raw_name = getattr(assignment, "employee_name", None)
+    if isinstance(raw_name, str):
+        name = raw_name.strip()
+        if name:
+            return name
+    return None
+
+
 def _assignment_read(assignment: ShiftAssignment | None) -> ShiftAssignmentRead | None:
     if assignment is None:
         return None
-    employee_name = None
-    if getattr(assignment, "employee", None) is not None:
-        employee_name = assignment.employee.full_name
     return ShiftAssignmentRead(
         assignment_id=assignment.id,
         employee_id=assignment.employee_id,
-        employee_name=employee_name,
+        employee_name=_assignment_employee_name(assignment),
         status=assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
         assigned_via=assignment.assigned_via,
         accepted_at=assignment.accepted_at,
@@ -332,6 +354,7 @@ async def set_shift_assignment(
         assignment_metadata={
             "note": payload.note,
             "source": payload.source,
+            "employee_name": employee.full_name,
         },
     )
     assignment.employee = employee

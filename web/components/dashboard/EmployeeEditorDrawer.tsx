@@ -297,6 +297,7 @@ export function EmployeeEditorDrawer({
   onSaved(employee: EmployeeProfile): Promise<void> | void;
   roles: BusinessRole[];
 }) {
+  const [fullName, setFullName] = useState(employee.full_name);
   const [email, setEmail] = useState(employee.email ?? "");
   const [phone, setPhone] = useState(employee.phone_e164 ?? "");
   const [formData, setFormData] = useState<EmployeeAssignmentState>(() =>
@@ -337,6 +338,7 @@ export function EmployeeEditorDrawer({
 
     setEmail(employee.email ?? "");
     setPhone(employee.phone_e164 ?? "");
+    setFullName(employee.full_name);
     setFormData(buildAssignmentStateFromSeed(employee, roles, locations));
     setProfile(null);
     setAvailabilityStatus("loading");
@@ -367,6 +369,7 @@ export function EmployeeEditorDrawer({
         }
         if (nextProfile) {
           setProfile(nextProfile);
+          setFullName(nextProfile.full_name);
           setEmail(nextProfile.email ?? "");
           setPhone(nextProfile.phone_e164 ?? "");
           setFormData(buildAssignmentStateFromProfile(nextProfile));
@@ -436,6 +439,7 @@ export function EmployeeEditorDrawer({
         : buildAssignmentStateFromSeed(employee, roles, locations),
     [employee, locations, profile, roles],
   );
+  const baselineFullName = profile?.full_name ?? employee.full_name;
   const baselineEmail = profile?.email ?? employee.email ?? "";
   const baselinePhone = profile?.phone_e164 ?? employee.phone_e164 ?? "";
 
@@ -463,7 +467,10 @@ export function EmployeeEditorDrawer({
       ? ((profile?.status ?? employee.status) as keyof typeof statusConfig)
       : "active";
   const status = statusConfig[statusKey];
-  const name = employeeDisplayName(employee);
+  const name =
+    profile?.preferred_name?.trim() ||
+    profile?.full_name ||
+    employeeDisplayName(employee);
   const theme = {
     textPrimary: dark ? "text-white" : "text-[#0A2540]",
     textSecondary: dark ? "text-[#C1CED8]" : "text-[#8898AA]",
@@ -481,6 +488,9 @@ export function EmployeeEditorDrawer({
   const profileDirtyCount = useMemo(() => {
     let count = 0;
 
+    if (fullName.trim() !== baselineFullName.trim()) {
+      count += 1;
+    }
     if (email.trim() !== baselineEmail.trim()) {
       count += 1;
     }
@@ -509,6 +519,7 @@ export function EmployeeEditorDrawer({
 
     return count;
   }, [
+    baselineFullName,
     baselineEmail,
     baselinePhone,
     baselineState.primaryLocationId,
@@ -516,6 +527,7 @@ export function EmployeeEditorDrawer({
     baselineState.selectedLocationIds,
     baselineState.selectedRoleIds,
     email,
+    fullName,
     formData.primaryLocationId,
     formData.primaryRoleId,
     formData.selectedLocationIds,
@@ -536,6 +548,7 @@ export function EmployeeEditorDrawer({
   const dirtyCount = profileDirtyCount + availabilityDirtyCount;
 
   const canSave =
+    Boolean(fullName.trim()) &&
     Boolean(formData.primaryRoleId) &&
     Boolean(formData.primaryLocationId) &&
     dirtyCount > 0;
@@ -738,6 +751,7 @@ export function EmployeeEditorDrawer({
 
       if (hasProfileChanges) {
         nextProfile = await updateEmployee(businessId, employee.id, {
+          full_name: fullName.trim(),
           email: email.trim() || null,
           phone_e164: phone.trim() || null,
           roles: formData.selectedRoleIds.map((roleId) => ({
@@ -750,6 +764,7 @@ export function EmployeeEditorDrawer({
           })),
         });
         setProfile(nextProfile);
+        setFullName(nextProfile.full_name);
         setFormData(buildAssignmentStateFromProfile(nextProfile));
         setEmail(nextProfile.email ?? "");
         setPhone(nextProfile.phone_e164 ?? "");
@@ -953,9 +968,24 @@ export function EmployeeEditorDrawer({
               className="mb-3 text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
               style={{ fontWeight: 500 }}
             >
-              Contact
+              Profile
             </h3>
             <div className="space-y-3">
+              <div>
+                <label
+                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
+                  style={{ fontWeight: 500 }}
+                >
+                  Full Name
+                </label>
+                <input
+                  className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                  onChange={(event) => setFullName(event.target.value)}
+                  style={{ fontWeight: 440 }}
+                  type="text"
+                  value={fullName}
+                />
+              </div>
               <div>
                 <label
                   className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"

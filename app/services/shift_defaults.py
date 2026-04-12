@@ -42,37 +42,40 @@ def _normalize_label(key: str, value: object) -> str:
         normalized = value.strip()
         if normalized:
             return normalized
-    return SHIFT_PRESET_LABELS[key]
+    return SHIFT_PRESET_LABELS.get(key, key.replace("_", " ").strip().title() or "Shift")
 
 
 def normalize_shift_presets(raw: object) -> list[dict[str, object]] | None:
     if not isinstance(raw, list):
         return None
 
-    normalized: dict[str, dict[str, object]] = {}
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
     for item in raw:
         if not isinstance(item, dict):
             return None
         key = item.get("key")
-        if not isinstance(key, str) or key not in SHIFT_PRESET_LABELS:
+        if not isinstance(key, str):
             return None
-        if key in normalized:
+        key = key.strip()
+        if not key or key in seen_keys:
             return None
         start_hour = _normalize_hour(item.get("start_hour"))
         end_hour = _normalize_hour(item.get("end_hour"))
         if start_hour is None or end_hour is None:
             return None
-        normalized[key] = {
+        seen_keys.add(key)
+        normalized.append({
             "key": key,
             "label": _normalize_label(key, item.get("label")),
             "start_hour": start_hour,
             "end_hour": end_hour,
-        }
+        })
 
-    if any(key not in normalized for key in SHIFT_PRESET_ORDER):
+    if not normalized:
         return None
 
-    return [normalized[key] for key in SHIFT_PRESET_ORDER]
+    return normalized
 
 
 def _parse_google_time(info: object) -> tuple[int, int] | None:

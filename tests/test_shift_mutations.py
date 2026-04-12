@@ -93,6 +93,31 @@ class FakeSchedulingSession:
         self.get_map.pop((type(obj), obj.id), None)
 
 
+class ExplodingEmployeeRelationshipAssignment:
+    def __init__(
+        self,
+        *,
+        assignment_id,
+        shift_id,
+        employee_id,
+        assigned_via,
+        status,
+        accepted_at=None,
+        assignment_metadata=None,
+    ):
+        self.id = assignment_id
+        self.shift_id = shift_id
+        self.employee_id = employee_id
+        self.assigned_via = assigned_via
+        self.status = status
+        self.accepted_at = accepted_at
+        self.assignment_metadata = assignment_metadata or {}
+
+    @property
+    def employee(self):
+        raise RuntimeError("lazy employee load attempted")
+
+
 def _make_auth_context(*, business_id, location_id=None) -> AuthContext:
     now = datetime.now(timezone.utc)
     user = User(
@@ -518,6 +543,132 @@ def test_update_shift_assignment_route_returns_conflict_snapshot():
         payload = response.json()
         assert payload["detail"]["code"] == "stale_assignment_conflict"
         assert payload["detail"]["current_assignment"]["assignment_id"] == str(assignment_id)
+    finally:
+        scheduling.set_shift_assignment = original
+        app.dependency_overrides.clear()
+
+
+def test_update_shift_assignment_route_tolerates_unloaded_employee_relation():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    assignment_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=uuid4(),
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ExplodingEmployeeRelationshipAssignment(
+        assignment_id=assignment_id,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        assignment_metadata={"employee_name": "Casey Server"},
+    )
+
+    async def fake_set_shift_assignment(*_args, **_kwargs):
+        return scheduling.ShiftAssignmentMutationResult(
+            shift=shift,
+            action="assigned",
+            source="scheduler_ui",
+            previous_assignment=None,
+            current_assignment=assignment,
+            cancelled_cases=[],
+            cancelled_offers=[],
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.set_shift_assignment
+    scheduling.set_shift_assignment = fake_set_shift_assignment
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/assignment",
+            json={
+                "employee_id": str(employee_id),
+                "source": "scheduler_ui",
+                "expected_assignment_id": None,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["current_assignment"]["employee_name"] == "Casey Server"
+    finally:
+        scheduling.set_shift_assignment = original
+        app.dependency_overrides.clear()
+
+
+def test_update_shift_assignment_conflict_tolerates_unloaded_employee_relation():
+    fake_session = FakeSchedulingSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    assignment_id = uuid4()
+
+    assignment = ExplodingEmployeeRelationshipAssignment(
+        assignment_id=assignment_id,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        assignment_metadata={"employee_name": "Current Owner"},
+    )
+
+    async def fake_set_shift_assignment(*_args, **_kwargs):
+        raise scheduling.ShiftAssignmentConflictError(assignment)
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.set_shift_assignment
+    scheduling.set_shift_assignment = fake_set_shift_assignment
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/assignment",
+            json={
+                "employee_id": str(uuid4()),
+                "source": "scheduler_ui",
+                "expected_assignment_id": str(uuid4()),
+            },
+        )
+        assert response.status_code == 409
+        payload = response.json()
+        assert payload["detail"]["current_assignment"]["employee_name"] == "Current Owner"
     finally:
         scheduling.set_shift_assignment = original
         app.dependency_overrides.clear()

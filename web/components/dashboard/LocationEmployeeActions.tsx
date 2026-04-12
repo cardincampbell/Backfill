@@ -37,6 +37,10 @@ type EnrollmentModalProps = {
   dark: boolean;
   defaultLocationId?: string | null;
   defaultLocationName?: string | null;
+  defaultRoleId?: string | null;
+  defaultRoleName?: string | null;
+  lockDefaultLocation?: boolean;
+  lockDefaultRole?: boolean;
   onClose(): void;
   onCreated(employee: EmployeeSummary): Promise<void> | void;
   roles: BusinessRole[];
@@ -181,6 +185,10 @@ export function EmployeeEnrollmentModal({
   dark,
   defaultLocationId = null,
   defaultLocationName = null,
+  defaultRoleId = null,
+  defaultRoleName = null,
+  lockDefaultLocation = false,
+  lockDefaultRole = false,
   onClose,
   onCreated,
   roles,
@@ -191,10 +199,18 @@ export function EmployeeEnrollmentModal({
   const effectiveDefaultLocationName =
     defaultLocationName ??
     (fallbackDefaultLocation ? locationDisplayName(fallbackDefaultLocation) : null);
-  const [fullName, setFullName] = useState("");
+  const effectiveDefaultRoleId = defaultRoleId ?? null;
+  const effectiveDefaultRoleName =
+    defaultRoleName ??
+    roles.find((role) => role.id === effectiveDefaultRoleId)?.name ??
+    null;
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>(
+    effectiveDefaultRoleId ? [effectiveDefaultRoleId] : [],
+  );
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>(
     effectiveDefaultLocationId ? [effectiveDefaultLocationId] : [],
   );
@@ -247,16 +263,23 @@ export function EmployeeEnrollmentModal({
 
   const hasRequiredLocation =
     !effectiveDefaultLocationId || selectedLocationIds.includes(effectiveDefaultLocationId);
+  const hasRequiredRole =
+    !effectiveDefaultRoleId || selectedRoleIds.includes(effectiveDefaultRoleId);
   const canSubmit =
-    Boolean(fullName.trim()) &&
+    Boolean(firstName.trim()) &&
+    Boolean(lastName.trim()) &&
     Boolean(email.trim()) &&
     Boolean(phone.trim()) &&
     selectedRoleIds.length > 0 &&
     selectedLocationIds.length > 0 &&
     Boolean(primaryLocationId) &&
-    hasRequiredLocation;
+    hasRequiredLocation &&
+    hasRequiredRole;
 
   const toggleRole = (roleId: string) => {
+    if (lockDefaultRole && roleId === effectiveDefaultRoleId) {
+      return;
+    }
     setSelectedRoleIds((current) =>
       current.includes(roleId)
         ? current.filter((item) => item !== roleId)
@@ -265,6 +288,9 @@ export function EmployeeEnrollmentModal({
   };
 
   const toggleLocation = (locationIdToToggle: string) => {
+    if (lockDefaultLocation && locationIdToToggle === effectiveDefaultLocationId) {
+      return;
+    }
     setSelectedLocationIds((current) => {
       const nextLocationIds = current.includes(locationIdToToggle)
         ? current.filter((item) => item !== locationIdToToggle)
@@ -286,8 +312,9 @@ export function EmployeeEnrollmentModal({
     startTransition(async () => {
       try {
         setFeedback(null);
+        const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
         const createdEmployee = await createEmployee(businessId, {
-          full_name: fullName.trim(),
+          full_name: fullName,
           email: normalizeOptional(email),
           phone_e164: normalizeOptional(phone),
           primary_location_id: primaryLocationId || null,
@@ -354,9 +381,11 @@ export function EmployeeEnrollmentModal({
                   Add Employee
                 </h2>
                 <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  {effectiveDefaultLocationName
-                    ? `This employee will be added to ${effectiveDefaultLocationName} automatically.`
-                    : "Add a new team member using this business's live roles and locations."}
+                  {effectiveDefaultLocationName && effectiveDefaultRoleName
+                    ? `This employee will be added to ${effectiveDefaultLocationName} as ${effectiveDefaultRoleName}.`
+                    : effectiveDefaultLocationName
+                      ? `This employee will be added to ${effectiveDefaultLocationName} automatically.`
+                      : "Add a new team member using this business's live roles and locations."}
                 </p>
               </div>
             </div>
@@ -391,20 +420,36 @@ export function EmployeeEnrollmentModal({
           ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
+            <div>
               <label
                 className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
                 style={{ fontWeight: 500 }}
               >
-                Full Name
+                First Name
               </label>
               <input
                 className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${inputClass}`}
-                onChange={(event) => setFullName(event.target.value)}
-                placeholder="Sarah Martinez"
+                onChange={(event) => setFirstName(event.target.value)}
+                placeholder="Sarah"
                 style={{ fontWeight: 440 }}
                 type="text"
-                value={fullName}
+                value={firstName}
+              />
+            </div>
+            <div>
+              <label
+                className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
+                style={{ fontWeight: 500 }}
+              >
+                Last Name
+              </label>
+              <input
+                className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${inputClass}`}
+                onChange={(event) => setLastName(event.target.value)}
+                placeholder="Martinez"
+                style={{ fontWeight: 440 }}
+                type="text"
+                value={lastName}
               />
             </div>
             <div>
@@ -461,6 +506,24 @@ export function EmployeeEnrollmentModal({
                     slug: location.slug,
                   });
 
+                  if (lockDefaultLocation) {
+                    return (
+                      <div
+                        key={location.id}
+                        className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 ${
+                          dark
+                            ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]"
+                            : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"
+                        }`}
+                      >
+                        <span className="text-[13px]">{reference.logo}</span>
+                        <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                          {locationDisplayName(location)}
+                        </span>
+                      </div>
+                    );
+                  }
+
                   return (
                     <AssignmentPill
                       dark={dark}
@@ -497,7 +560,7 @@ export function EmployeeEnrollmentModal({
               >
                 Add at least one business location first. Employee location assignment should only use locations from this business.
               </div>
-            ) : availableLocations.length ? (
+            ) : !lockDefaultLocation && availableLocations.length ? (
               <div>
                 <div className="mb-2.5 flex items-center justify-between">
                   <h4
@@ -555,41 +618,63 @@ export function EmployeeEnrollmentModal({
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
               <AnimatePresence>
-                {selectedRoles.map((role) => (
-                  <motion.div
-                    key={role.id}
-                    layout
-                    animate={{ opacity: 1, scale: 1 }}
-                    className={`flex items-center gap-1.5 rounded-lg border py-1.5 pl-2.5 pr-2 ${
-                      dark
-                        ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]"
-                        : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"
-                    }`}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                  >
-                    <Tag className="text-[#635BFF]" size={11} />
-                    <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
-                      {role.name}
-                    </span>
-                    <button
-                      className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
-                      onClick={() => toggleRole(role.id)}
-                      type="button"
+                {selectedRoles.map((role) =>
+                  lockDefaultRole ? (
+                    <div
+                      key={role.id}
+                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 ${
+                        dark
+                          ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]"
+                          : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"
+                      }`}
                     >
-                      <X className="text-[#8898AA] hover:text-[#E5484D]" size={12} />
-                    </button>
-                  </motion.div>
-                ))}
+                      <Tag className="text-[#635BFF]" size={11} />
+                      <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                        {role.name}
+                      </span>
+                    </div>
+                  ) : (
+                    <motion.div
+                      key={role.id}
+                      layout
+                      animate={{ opacity: 1, scale: 1 }}
+                      className={`flex items-center gap-1.5 rounded-lg border py-1.5 pl-2.5 pr-2 ${
+                        dark
+                          ? "border-[#635BFF]/25 bg-[#635BFF]/[0.12]"
+                          : "border-[#635BFF]/15 bg-[#635BFF]/[0.06]"
+                      }`}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                    >
+                      <Tag className="text-[#635BFF]" size={11} />
+                      <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                        {role.name}
+                      </span>
+                      <button
+                        className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
+                        onClick={() => toggleRole(role.id)}
+                        type="button"
+                      >
+                        <X className="text-[#8898AA] hover:text-[#E5484D]" size={12} />
+                      </button>
+                    </motion.div>
+                  ),
+                )}
               </AnimatePresence>
-              {!selectedRoles.length ? (
-                <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
-                  No roles selected yet. Add from the list below.
-                </p>
-              ) : null}
-            </div>
+            {!selectedRoles.length ? (
+              <p className="py-2 text-[12px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                No roles selected yet. Add from the list below.
+              </p>
+            ) : null}
+          </div>
 
-            {availableRoles.length ? (
+            {!hasRequiredRole && effectiveDefaultRoleName ? (
+              <p className="mb-3 text-[12px] text-[#E5484D]" style={{ fontWeight: 460 }}>
+                {effectiveDefaultRoleName} must stay selected to add an employee from this screen.
+              </p>
+            ) : null}
+
+            {!lockDefaultRole && availableRoles.length ? (
               <div>
                 <div className="mb-2.5 flex items-center justify-between">
                   <h4
@@ -628,10 +713,12 @@ export function EmployeeEnrollmentModal({
         <div className={`flex items-center justify-between gap-3 border-t px-6 py-4 ${borderClass}`}>
           <p className={`max-w-[420px] text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
             {!canSubmit
-              ? "Name, phone, email, at least one role, and at least one location are required to add an employee from this form."
-              : defaultLocationName
-                ? `${defaultLocationName} stays selected automatically when you add an employee from this screen.`
-                : "Add at least one role and one location to finish creating this employee."}
+              ? "First name, last name, phone, email, at least one role, and at least one location are required."
+              : effectiveDefaultLocationName && effectiveDefaultRoleName
+                ? `${effectiveDefaultLocationName} and ${effectiveDefaultRoleName} stay selected automatically from this scheduler context.`
+                : defaultLocationName
+                  ? `${defaultLocationName} stays selected automatically when you add an employee from this screen.`
+                  : "Add at least one role and one location to finish creating this employee."}
           </p>
           <div className="flex items-center gap-3">
             <button
@@ -1042,6 +1129,34 @@ export function LocationEmployeeEnrollmentModal(
       {...props}
       defaultLocationId={props.locationId}
       defaultLocationName={props.locationName}
+      lockDefaultLocation
+    />
+  );
+}
+
+export function SchedulerEmployeeEnrollmentModal(
+  props: Omit<
+    EnrollmentModalProps,
+    | "defaultLocationId"
+    | "defaultLocationName"
+    | "defaultRoleId"
+    | "defaultRoleName"
+  > & {
+    locationId: string;
+    locationName: string;
+    roleId: string;
+    roleName: string;
+  },
+) {
+  return (
+    <EmployeeEnrollmentModal
+      {...props}
+      defaultLocationId={props.locationId}
+      defaultLocationName={props.locationName}
+      defaultRoleId={props.roleId}
+      defaultRoleName={props.roleName}
+      lockDefaultLocation
+      lockDefaultRole
     />
   );
 }

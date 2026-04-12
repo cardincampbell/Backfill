@@ -81,7 +81,7 @@ export type BusinessProfileUpdatePayload = {
   week_start_day?: string | null;
 };
 
-export type ShiftDefaultKey = "morning" | "afternoon" | "evening" | "night";
+export type ShiftDefaultKey = string;
 
 export type ShiftDefault = {
   key: ShiftDefaultKey;
