@@ -26,11 +26,10 @@ MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.mana
 def _assignment_conflict_payload(assignment: ShiftAssignment | None) -> dict | None:
     if assignment is None:
         return None
-    employee_name = assignment.employee.full_name if assignment.employee is not None else None
     return {
         "assignment_id": str(assignment.id),
         "employee_id": str(assignment.employee_id) if assignment.employee_id is not None else None,
-        "employee_name": employee_name,
+        "employee_name": scheduling._assignment_employee_name(assignment),
         "status": assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
         "assigned_via": assignment.assigned_via,
         "accepted_at": assignment.accepted_at.isoformat() if assignment.accepted_at is not None else None,

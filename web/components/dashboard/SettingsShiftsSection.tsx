@@ -34,10 +34,11 @@ function presetsMatch(left: ShiftDefault[], right: ShiftDefault[]): boolean {
 function countPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
   const normalizedLeft = normalizeShiftDefaults(left);
   const normalizedRight = normalizeShiftDefaults(right);
+  const rightByKey = new Map(normalizedRight.map((preset) => [preset.key, preset]));
   let count = 0;
 
-  normalizedLeft.forEach((preset, index) => {
-    const baselinePreset = normalizedRight[index];
+  normalizedLeft.forEach((preset) => {
+    const baselinePreset = rightByKey.get(preset.key);
     if (!baselinePreset) {
       count += 1;
       return;
@@ -47,6 +48,12 @@ function countPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
       preset.start_hour !== baselinePreset.start_hour ||
       preset.end_hour !== baselinePreset.end_hour
     ) {
+      count += 1;
+    }
+  });
+
+  normalizedRight.forEach((preset) => {
+    if (!normalizedLeft.some((item) => item.key === preset.key)) {
       count += 1;
     }
   });
@@ -232,7 +239,7 @@ export default function SettingsShiftsSection({
         <ShiftCoverageTimeline dark={dark} presets={presets} />
       </div>
 
-      <ShiftDefaultsEditor dark={dark} onChange={setPresets} presets={presets} />
+      <ShiftDefaultsEditor allowManage dark={dark} onChange={setPresets} presets={presets} />
     </div>
   );
 }

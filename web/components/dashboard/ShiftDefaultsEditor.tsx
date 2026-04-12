@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, PenLine } from "lucide-react";
+import { ChevronDown, PenLine, Plus, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 
 import { FloatingDropdown } from "@/components/floating-dropdown";
@@ -30,6 +30,17 @@ function getDefaultShiftLabel(key: ShiftDefaultKey): string {
     default:
       return key;
   }
+}
+
+function createShiftDefaultKey(presets: ShiftDefault[]): string {
+  let index = presets.length + 1;
+  let nextKey = `custom_${index}`;
+  const existing = new Set(presets.map((preset) => preset.key));
+  while (existing.has(nextKey)) {
+    index += 1;
+    nextKey = `custom_${index}`;
+  }
+  return nextKey;
 }
 
 function formatShiftHourWithMinutes(hour: number): string {
@@ -122,14 +133,18 @@ function TimeSelect({
 }
 
 function ShiftDefaultCard({
+  allowDelete = false,
   compact = false,
   dark,
   onChange,
+  onDelete,
   preset,
 }: {
+  allowDelete?: boolean;
   compact?: boolean;
   dark: boolean;
   onChange(nextPreset: ShiftDefault): void;
+  onDelete?(): void;
   preset: ShiftDefault;
 }) {
   const [editing, setEditing] = useState(false);
@@ -255,6 +270,19 @@ function ShiftDefaultCard({
                   value={preset.end_hour}
                 />
               </div>
+              {allowDelete ? (
+                <button
+                  className={`rounded-lg border p-2 transition-colors ${
+                    dark
+                      ? "border-white/[0.08] text-[#C1CED8] hover:border-[#E5484D]/30 hover:bg-[#E5484D]/[0.08] hover:text-[#FF8A8A]"
+                      : "border-[#E5E7EB] text-[#8898AA] hover:border-[#E5484D]/20 hover:bg-[#E5484D]/[0.04] hover:text-[#E5484D]"
+                  }`}
+                  onClick={onDelete}
+                  type="button"
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="hidden shrink-0 items-center gap-2 sm:flex">
@@ -282,6 +310,19 @@ function ShiftDefaultCard({
                   value={preset.end_hour}
                 />
               </div>
+              {allowDelete ? (
+                <button
+                  className={`rounded-lg border p-2 transition-colors ${
+                    dark
+                      ? "border-white/[0.08] text-[#C1CED8] hover:border-[#E5484D]/30 hover:bg-[#E5484D]/[0.08] hover:text-[#FF8A8A]"
+                      : "border-[#E5E7EB] text-[#8898AA] hover:border-[#E5484D]/20 hover:bg-[#E5484D]/[0.04] hover:text-[#E5484D]"
+                  }`}
+                  onClick={onDelete}
+                  type="button"
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : null}
             </div>
           )}
         </div>
@@ -412,11 +453,13 @@ export function ShiftCoverageTimeline({
 }
 
 export function ShiftDefaultsEditor({
+  allowManage = false,
   compact = false,
   dark,
   onChange,
   presets,
 }: {
+  allowManage?: boolean;
   compact?: boolean;
   dark: boolean;
   onChange(presets: ShiftDefault[]): void;
@@ -435,17 +478,53 @@ export function ShiftDefaultsEditor({
     );
   }
 
+  function deletePreset(key: ShiftDefaultKey) {
+    if (normalizedPresets.length <= 1) {
+      return;
+    }
+    onChange(normalizedPresets.filter((preset) => preset.key !== key));
+  }
+
+  function addPreset() {
+    onChange([
+      ...normalizedPresets,
+      {
+        key: createShiftDefaultKey(normalizedPresets),
+        label: "New Shift",
+        start_hour: 9,
+        end_hour: 17,
+      },
+    ]);
+  }
+
   return (
     <div className="space-y-2.5">
       {normalizedPresets.map((preset) => (
         <ShiftDefaultCard
+          allowDelete={allowManage && normalizedPresets.length > 1}
           key={preset.key}
           compact={compact}
           dark={dark}
           onChange={(nextPreset) => updatePreset(preset.key, () => nextPreset)}
+          onDelete={() => deletePreset(preset.key)}
           preset={preset}
         />
       ))}
+      {allowManage ? (
+        <button
+          className={`group flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed p-3 text-[13px] transition-all ${
+            dark
+              ? "border-white/[0.08] text-[#C1CED8] hover:border-[#635BFF]/30 hover:bg-white/[0.04] hover:text-white"
+              : "border-[#E5E7EB] text-[#8898AA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02] hover:text-[#635BFF]"
+          }`}
+          onClick={addPreset}
+          style={{ fontWeight: 480 }}
+          type="button"
+        >
+          <Plus size={14} className="transition-colors group-hover:text-[#635BFF]" />
+          Add Shift
+        </button>
+      ) : null}
     </div>
   );
 }

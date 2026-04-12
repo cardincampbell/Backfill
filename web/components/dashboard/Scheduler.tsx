@@ -86,8 +86,7 @@ import {
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import {
-  LocationEmployeeBulkUploadModal,
-  LocationEmployeeEnrollmentModal,
+  SchedulerEmployeeEnrollmentModal,
 } from './LocationEmployeeActions';
 import {
   getShiftDefaultColor,
@@ -120,6 +119,8 @@ const roleColors: Record<string, string> = {
   'RN': '#635BFF', 'LPN': '#8B5CF6', 'CNA': '#00B893', 'NP': '#3B82F6', 'Medical Assistant': '#EC4899',
 };
 const roleOrder = ['RN', 'LPN', 'CNA', 'NP', 'Medical Assistant'];
+const ROLE_COLOR_PALETTE = ['#635BFF', '#8B5CF6', '#00B893', '#3B82F6', '#EC4899', '#F59E0B', '#14B8A6'];
+const OPEN_SHIFT_COLOR = '#E5484D';
 
 function employeeInitials(name: string) {
   return name
@@ -294,9 +295,8 @@ function roleColor(roleName: string) {
   if (roleColors[roleName]) {
     return roleColors[roleName];
   }
-  const palette = ['#635BFF', '#8B5CF6', '#00B893', '#3B82F6', '#EC4899', '#F59E0B', '#14B8A6'];
   const hash = Array.from(roleName).reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return palette[hash % palette.length];
+  return ROLE_COLOR_PALETTE[hash % ROLE_COLOR_PALETTE.length];
 }
 
 function roleSortValue(roleName: string) {
@@ -703,16 +703,17 @@ function SchedulerContent({
     title: string;
     detail?: string;
   } | null>(null);
-  const [showPublishToast, setShowPublishToast] = useState(false);
-  const [showCopyToast, setShowCopyToast] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
   const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
   const [isRemovingEmployee, setIsRemovingEmployee] = useState(false);
-  const [showAddEmployee, setShowAddEmployee] = useState(false);
-  const [addEmployeeTab, setAddEmployeeTab] = useState<'existing' | 'new' | 'import'>('existing');
+  const [addEmployeeContext, setAddEmployeeContext] = useState<{
+    roleId: string;
+    roleName: string;
+  } | null>(null);
+  const [addEmployeeTab, setAddEmployeeTab] = useState<'existing' | 'new'>('existing');
   const [hoveredEmployeeId, setHoveredEmployeeId] = useState<string | null>(null);
   const [swipedEmployeeId, setSwipedEmployeeId] = useState<string | null>(null);
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
@@ -940,12 +941,11 @@ function SchedulerContent({
   const activeEmployees = schedulerEmployees;
 
   const filteredRoles = useMemo(() => {
-    const rolesById = new Map<string, { id: string; name: string; color: string }>();
+    const rolesById = new Map<string, { id: string; name: string }>();
     (board?.roles ?? []).forEach((role) => {
       rolesById.set(role.role_id, {
         id: role.role_id,
         name: role.role_name,
-        color: roleColor(role.role_name),
       });
     });
     shifts.forEach((shift) => {
@@ -953,7 +953,6 @@ function SchedulerContent({
         rolesById.set(shift.roleId, {
           id: shift.roleId,
           name: shift.role,
-          color: roleColor(shift.role),
         });
       }
     });
@@ -966,6 +965,34 @@ function SchedulerContent({
         return left.name.localeCompare(right.name);
       });
   }, [activeEmployees, board?.roles, shifts]);
+
+  const roleColorById = useMemo(() => {
+    const next = new Map<string, string>();
+    let previousColor: string | null = null;
+
+    filteredRoles.forEach((roleEntry, index) => {
+      const preferredColor = roleColors[roleEntry.name] ?? ROLE_COLOR_PALETTE[index % ROLE_COLOR_PALETTE.length];
+      let color = preferredColor;
+      if (color === previousColor) {
+        color =
+          ROLE_COLOR_PALETTE.find((candidate) => candidate !== previousColor) ??
+          preferredColor;
+      }
+      next.set(roleEntry.id, color);
+      previousColor = color;
+    });
+
+    return next;
+  }, [filteredRoles]);
+
+  const displayShifts = useMemo(
+    () =>
+      shifts.map((shift) => ({
+        ...shift,
+        color: shift.employeeId ? roleColorById.get(shift.roleId) ?? shift.color : OPEN_SHIFT_COLOR,
+      })),
+    [roleColorById, shifts],
+  );
 
   const removeEmployee = useCallback((employeeId: string) => {
     const employee = schedulerEmployees.find((item) => item.id === employeeId);
@@ -1038,7 +1065,7 @@ function SchedulerContent({
           detail: `${employee.full_name} is now available on this scheduler.`,
         });
         setAddEmployeeTab('existing');
-        setShowAddEmployee(false);
+        setAddEmployeeContext(null);
       } catch (error) {
         setSchedulerNotice({
           tone: 'error',
@@ -1049,27 +1076,32 @@ function SchedulerContent({
     })();
   }, [location.business_id, location.location_id, refreshSchedulerData]);
 
+  const openAddEmployeeModal = useCallback((roleId: string, roleName: string) => {
+    setAddEmployeeTab('existing');
+    setAddEmployeeContext({ roleId, roleName });
+  }, []);
+
   const getEmployeeWeekHours = useCallback((empId: string) =>
-    shifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const getDayTotalHours = useCallback((day: number) =>
-    shifts.filter(s => s.day === day).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.filter(s => s.day === day).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const weekTotalHours = useMemo(() =>
-    shifts.reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const getShiftsForCell = useCallback((empId: string, day: number) =>
-    shifts.filter(s => s.employeeId === empId && s.day === day), [shifts]);
+    displayShifts.filter(s => s.employeeId === empId && s.day === day), [displayShifts]);
 
   const getOpenShiftsForCell = useCallback((roleId: string, day: number) =>
-    shifts.filter((shift) => shift.employeeId === null && shift.roleId === roleId && shift.day === day), [shifts]);
+    displayShifts.filter((shift) => shift.employeeId === null && shift.roleId === roleId && shift.day === day), [displayShifts]);
 
   const assignedShiftsForPublishing = useMemo(
     () =>
-      shifts
+      displayShifts
         .filter((shift): shift is Shift & { employeeId: string } => shift.employeeId !== null)
         .map((shift) => ({ ...shift, employeeId: shift.employeeId })),
-    [shifts],
+    [displayShifts],
   );
 
   const deleteShift = useCallback((id: string) => {
@@ -1222,13 +1254,73 @@ function SchedulerContent({
   }, [applyShiftAssignment, businessEmployees, moveShiftToDay, refreshSchedulerData, shifts]);
 
   const copySchedule = (targetWeekOffset: number) => {
-    setWeekOffset(targetWeekOffset);
-    setShowCopyModal(false);
-    setSchedulerNotice({
-      tone: 'info',
-      title: 'Copy schedule is not wired yet',
-      detail: 'This scheduler is now using real data, but week copy still needs its backend path.',
-    });
+    const targetWeekStart = mondayDateKeyFor(location.timezone, targetWeekOffset);
+    const targetWeekDates = buildWeekDatesFromWeekStart(targetWeekStart);
+    const targetWeekLabel = (() => {
+      const start = targetWeekDates[0];
+      const end = targetWeekDates[6];
+      const startMonth = start.toLocaleString('default', { month: 'short' });
+      const endMonth = end.toLocaleString('default', { month: 'short' });
+      if (startMonth === endMonth) {
+        return `${startMonth} ${start.getDate()} – ${end.getDate()}, ${start.getFullYear()}`;
+      }
+      return `${startMonth} ${start.getDate()} – ${endMonth} ${end.getDate()}, ${start.getFullYear()}`;
+    })();
+
+    void (async () => {
+      let createdCount = 0;
+      let openedCount = 0;
+      let assignmentFailureCount = 0;
+
+      try {
+        for (const shift of shifts) {
+          const targetDateKey = addDaysToDateKey(targetWeekStart, shift.day);
+          const createdShift = await createWorkspaceShift(
+            location.business_id,
+            buildShiftPayload(
+              location,
+              shift.roleId,
+              targetDateKey,
+              shift.startHour,
+              shift.endHour,
+            ),
+          );
+          createdCount += 1;
+
+          if (shift.employeeId) {
+            try {
+              await assignWorkspaceShift(location.business_id, createdShift.id, {
+                employee_id: shift.employeeId,
+                source: 'scheduler_ui',
+                expected_assignment_id: null,
+              });
+            } catch {
+              assignmentFailureCount += 1;
+              openedCount += 1;
+            }
+          } else {
+            openedCount += 1;
+          }
+        }
+
+        setWeekOffset(targetWeekOffset);
+        setShowCopyModal(false);
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: assignmentFailureCount ? 'info' : 'success',
+          title: 'Schedule copied',
+          detail: assignmentFailureCount
+            ? `${createdCount} shifts copied. ${assignmentFailureCount} assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied and ${openedCount} shift${openedCount === 1 ? ' is' : 's are'} open.`
+            : `${createdCount} shifts copied into ${targetWeekLabel}.`,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not copy schedule',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
   };
 
   const toggleRoleCollapse = (role: string) => {
@@ -1556,6 +1648,11 @@ function SchedulerContent({
               <span className={`text-[12px] hidden md:inline ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
                 {weekLabel}
               </span>
+              {loadingSchedulerData ? (
+                <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                  Refreshing…
+                </span>
+              ) : null}
               <button onClick={() => setWeekOffset(w => w + 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
                 <ChevronRight size={15} className={theme.textMuted} />
               </button>
@@ -1564,9 +1661,8 @@ function SchedulerContent({
             {/* Copy Schedule + Publish Week */}
             <div className="flex items-center gap-2">
               <button
-                disabled
-                title="Copy schedule is not wired yet"
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all cursor-not-allowed opacity-50 ${theme.cardClass} ${theme.textMuted}`}
+                onClick={() => setShowCopyModal(true)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
                 style={{ fontWeight: 500 }}>
                 <ClipboardCopy size={13} />
                 <span className="hidden lg:inline">Copy Schedule</span>
@@ -1601,18 +1697,7 @@ function SchedulerContent({
           ))}
         </div>
 
-        {loadingSchedulerData && !board ? (
-          <div className="flex-1 flex items-center justify-center px-6">
-            <div className={`rounded-2xl border px-6 py-5 text-center ${theme.cardClass}`}>
-              <p className={`text-[14px] ${theme.textPrimary}`} style={{ fontWeight: 560 }}>
-                Loading scheduler
-              </p>
-              <p className={`mt-1 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                Pulling live employees and shifts from this location.
-              </p>
-            </div>
-          </div>
-        ) : schedulerError && !board ? (
+        {schedulerError && !board ? (
           <div className="flex-1 flex items-center justify-center px-6">
             <div className={`max-w-md rounded-2xl border px-6 py-5 text-center ${theme.cardClass}`}>
               <p className={`text-[14px] ${theme.textPrimary}`} style={{ fontWeight: 560 }}>
@@ -1679,7 +1764,8 @@ function SchedulerContent({
             {filteredRoles.map((roleEntry) => {
               const roleEmps = activeEmployees.filter((employee) => employee.role === roleEntry.name);
               const isCollapsed = collapsedRoles.has(roleEntry.name);
-              const openRoleShifts = shifts.filter(
+              const roleAccent = roleColorById.get(roleEntry.id) ?? roleColor(roleEntry.name);
+              const openRoleShifts = displayShifts.filter(
                 (shift) => shift.employeeId === null && shift.roleId === roleEntry.id,
               );
 
@@ -1692,7 +1778,7 @@ function SchedulerContent({
                         <motion.div animate={{ rotate: isCollapsed ? -90 : 0 }} transition={{ duration: 0.2 }}>
                           <ChevronDown size={12} className={`${theme.textSecondary} transition-colors ${isDark ? 'group-hover:text-white' : 'group-hover:text-[#5E6D7A]'}`} />
                         </motion.div>
-                        <div className="w-2 h-2 rounded-full" style={{ background: roleEntry.color }} />
+                        <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
                         <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
                           {roleEntry.name}
                         </span>
@@ -1706,9 +1792,41 @@ function SchedulerContent({
                         ) : null}
                       </button>
                     </div>
-                    {DAYS.map((day, i) => (
-                      <div key={day} className={`flex-1 border-l ${theme.cellBorderClass} ${isToday(weekDates[i]) ? theme.todayRoleBandClass : ''}`} />
-                    ))}
+                    {DAYS.map((day, i) => {
+                      const cellShifts = getOpenShiftsForCell(roleEntry.id, i);
+                      const isMulti = cellShifts.length > 1;
+                      return (
+                        <DroppableCell
+                          key={`open-band-${roleEntry.id}-${day}`}
+                          employeeId={`${OPEN_SHIFT_ROW_PREFIX}${roleEntry.id}`}
+                          day={i}
+                          onDrop={handleShiftDrop}
+                          onClickEmpty={() =>
+                            setCreatingAt({
+                              day: i,
+                              roleId: roleEntry.id,
+                              roleName: roleEntry.name,
+                            })
+                          }
+                          isToday={isToday(weekDates[i])}
+                          dark={isDark}
+                        >
+                          {cellShifts.length > 0 ? (
+                            cellShifts.map((shift) => (
+                              <DraggableShiftChip
+                                key={shift.id}
+                                shift={shift}
+                                isMulti={isMulti}
+                                dark={isDark}
+                                draggable
+                                onEdit={() => setEditingShift(shift)}
+                                onDelete={() => deleteShift(shift.id)}
+                              />
+                            ))
+                          ) : null}
+                        </DroppableCell>
+                      );
+                    })}
                   </div>
 
                   {/* Employee Rows */}
@@ -1795,70 +1913,12 @@ function SchedulerContent({
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className={`flex border-b transition-colors ${theme.rowClass}`}
-                      >
-                        <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-center gap-2.5`}>
-                          <div className="flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-[#635BFF]/30 bg-[#635BFF]/[0.06]">
-                            <Plus size={12} className="text-[#635BFF]" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
-                              Open Shifts
-                            </p>
-                            <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                              {openRoleShifts.length > 0 ? `${openRoleShifts.length} unassigned` : 'Create draft shifts for this role'}
-                            </p>
-                          </div>
-                        </div>
-                        {DAYS.map((_day, dayIdx) => {
-                          const cellShifts = getOpenShiftsForCell(roleEntry.id, dayIdx);
-                          const isMulti = cellShifts.length > 1;
-                          return (
-                            <DroppableCell
-                              key={`open-${roleEntry.id}-${dayIdx}`}
-                              employeeId={`${OPEN_SHIFT_ROW_PREFIX}${roleEntry.id}`}
-                              day={dayIdx}
-                              onDrop={handleShiftDrop}
-                              onClickEmpty={() =>
-                                setCreatingAt({
-                                  day: dayIdx,
-                                  roleId: roleEntry.id,
-                                  roleName: roleEntry.name,
-                                })
-                              }
-                              isToday={isToday(weekDates[dayIdx])}
-                              dark={isDark}
-                            >
-                              {cellShifts.length > 0
-                                ? cellShifts.map((shift) => (
-                                  <DraggableShiftChip
-                                    key={shift.id}
-                                    shift={shift}
-                                    isMulti={isMulti}
-                                    dark={isDark}
-                                    draggable
-                                    onEdit={() => setEditingShift(shift)}
-                                    onDelete={() => deleteShift(shift.id)}
-                                  />
-                                ))
-                                : null}
-                            </DroppableCell>
-                          );
-                        })}
-                      </motion.div>
-                    ) : null}
-                    {!isCollapsed ? (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
                         className={`flex border-b ${theme.cellBorderClass}`}
                       >
                         <div className={`${EMP_COL} shrink-0 px-4 py-2`}>
                           <button
                             onClick={() => {
-                              setAddEmployeeTab('existing');
-                              setShowAddEmployee(true);
+                              openAddEmployeeModal(roleEntry.id, roleEntry.name);
                             }}
                             className={`flex items-center gap-1.5 text-[11px] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#635BFF]'} group/add`}
                             style={{ fontWeight: 460 }}
@@ -1896,14 +1956,15 @@ function SchedulerContent({
 
             {filteredRoles.map((roleEntry) => {
               const roleEmps = activeEmployees.filter((employee) => employee.role === roleEntry.name);
-              const openRoleShifts = shifts.filter(
+              const roleAccent = roleColorById.get(roleEntry.id) ?? roleColor(roleEntry.name);
+              const openRoleShifts = displayShifts.filter(
                 (shift) => shift.employeeId === null && shift.roleId === roleEntry.id && shift.day === mobileDay,
               );
 
               return (
                 <div key={roleEntry.id} className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full" style={{ background: roleEntry.color }} />
+                    <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
                     <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{roleEntry.name}</span>
                     <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{roleEmps.length}</span>
                     {openRoleShifts.length > 0 ? (
@@ -1914,6 +1975,59 @@ function SchedulerContent({
                   </div>
 
                   <div className="space-y-1.5">
+                    <div className={`rounded-xl border border-dashed p-2.5 ${isDark ? 'border-[#E5484D]/25 bg-[#E5484D]/[0.08]' : 'border-[#E5484D]/20 bg-[#E5484D]/[0.05]'}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className={`${theme.textPrimary} text-[12px]`} style={{ fontWeight: 520 }}>
+                            Open shifts
+                          </p>
+                          <p className={`${theme.textSecondary} text-[10px]`} style={{ fontWeight: 420 }}>
+                            {openRoleShifts.length > 0 ? `${openRoleShifts.length} need reassignment` : `Create an open ${roleEntry.name} shift`}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() =>
+                            setCreatingAt({
+                              day: mobileDay,
+                              roleId: roleEntry.id,
+                              roleName: roleEntry.name,
+                            })
+                          }
+                          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#E5484D] text-white"
+                          type="button"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                      {openRoleShifts.length > 0 ? (
+                        <div className="mt-2 flex flex-col gap-1.5">
+                          {openRoleShifts.map((shift) => {
+                            const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
+                            const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : descriptor.icon;
+                            const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
+                            return (
+                              <button
+                                key={shift.id}
+                                onClick={() => setEditingShift(shift)}
+                                className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left"
+                                style={{ background: `${OPEN_SHIFT_COLOR}12` }}
+                                type="button"
+                              >
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <DescIcon size={11} style={{ color: OPEN_SHIFT_COLOR }} />
+                                  <span className="truncate text-[11px]" style={{ color: OPEN_SHIFT_COLOR, fontWeight: 540 }}>
+                                    {shiftLabel}
+                                  </span>
+                                </div>
+                                <span className={`${theme.textMuted} text-[10px]`} style={{ fontWeight: 420 }}>
+                                  {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
                     {roleEmps.map(emp => {
                       const cellShifts = getShiftsForCell(emp.id, mobileDay);
                       const empWeekHours = getEmployeeWeekHours(emp.id);
@@ -1942,24 +2056,9 @@ function SchedulerContent({
                         />
                       );
                     })}
-                    <MobileOpenShiftCard
-                      dark={isDark}
-                      roleColor={roleEntry.color}
-                      roleName={roleEntry.name}
-                      cellShifts={openRoleShifts}
-                      onEditShift={(shift) => setEditingShift(shift)}
-                      onCreateShift={() =>
-                        setCreatingAt({
-                          day: mobileDay,
-                          roleId: roleEntry.id,
-                          roleName: roleEntry.name,
-                        })
-                      }
-                    />
                     <button
                       onClick={() => {
-                        setAddEmployeeTab('existing');
-                        setShowAddEmployee(true);
+                        openAddEmployeeModal(roleEntry.id, roleEntry.name);
                       }}
                       className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-xl border border-dashed text-[11px] transition-colors ${
                         isDark
@@ -1986,7 +2085,7 @@ function SchedulerContent({
           {creatingAt && (
             <QuickCreateModal
               dark={isDark}
-              employeeName={creatingAt.employeeName ?? "Open Shifts"}
+              employeeName={creatingAt.employeeName ?? "Open Shift"}
               dayLabel={`${FULL_DAYS[creatingAt.day]}, ${weekDates[creatingAt.day]?.toLocaleString('default', { month: 'short' })} ${weekDates[creatingAt.day]?.getDate()}`}
               shiftDefaults={shiftDefaults}
               role={creatingAt.roleName}
@@ -2022,7 +2121,7 @@ function SchedulerContent({
                       title: creatingAt.employeeId ? 'Shift created' : 'Open shift created',
                       detail: creatingAt.employeeId
                         ? `${creatingAt.roleName} shift added for ${creatingAt.employeeName ?? 'this employee'}.`
-                        : `${creatingAt.roleName} shift added to this week.`,
+                        : `${creatingAt.roleName} shift is open and ready for reassignment.`,
                     });
                   } catch (error) {
                     setSchedulerNotice({
@@ -2046,7 +2145,7 @@ function SchedulerContent({
               shift={editingShift}
               employeeName={editingShift.employeeId
                 ? schedulerEmployees.find((employee) => employee.id === editingShift.employeeId)?.name || 'Assigned Employee'
-                : 'Open Shift'}
+                : 'Needs Reassignment'}
               onClose={() => setEditingShift(null)}
               onSave={updateShift}
               onDelete={() => { deleteShift(editingShift.id); setEditingShift(null); }}
@@ -2061,7 +2160,7 @@ function SchedulerContent({
               dark={isDark}
               currentWeek={weekLabel}
               shiftsCount={shifts.length}
-              employeesCount={new Set(shifts.map(s => s.employeeId)).size}
+              employeesCount={new Set(shifts.map((s) => s.employeeId).filter(Boolean)).size}
               onClose={() => setShowCopyModal(false)}
               onCopy={copySchedule}
               currentWeekOffset={weekOffset}
@@ -2079,8 +2178,10 @@ function SchedulerContent({
               onClose={() => setShowPublishModal(false)}
               onComplete={() => {
                 setShowPublishModal(false);
-                setShowPublishToast(true);
-                setTimeout(() => setShowPublishToast(false), 3000);
+                setSchedulerNotice({
+                  tone: 'success',
+                  title: 'Schedule published',
+                });
               }}
             />
           )}
@@ -2101,7 +2202,7 @@ function SchedulerContent({
         </AnimatePresence>
 
         <AnimatePresence>
-          {showAddEmployee ? (
+          {addEmployeeContext ? (
             <AddEmployeeModal
               activeTab={addEmployeeTab}
               businessEmployees={businessEmployees}
@@ -2112,12 +2213,14 @@ function SchedulerContent({
               loadingBusinessEmployees={loadingSchedulerData}
               locationId={location.location_id}
               locationName={locationDisplayName}
+              roleId={addEmployeeContext?.roleId ?? ''}
+              roleName={addEmployeeContext?.roleName ?? ''}
               activeEmployeeIds={locationEmployeeIds}
               onActiveTabChange={setAddEmployeeTab}
               onAttach={addEmployeeToLocation}
               onClose={() => {
                 setAddEmployeeTab('existing');
-                setShowAddEmployee(false);
+                setAddEmployeeContext(null);
               }}
               onAdd={addEmployeeToLocation}
             />
@@ -2327,72 +2430,6 @@ function MobileEmployeeCard({
   );
 }
 
-function MobileOpenShiftCard({
-  dark = false,
-  roleColor,
-  roleName,
-  cellShifts,
-  onEditShift,
-  onCreateShift,
-}: {
-  dark?: boolean;
-  roleColor: string;
-  roleName: string;
-  cellShifts: Shift[];
-  onEditShift: (shift: Shift) => void;
-  onCreateShift: () => void;
-}) {
-  return (
-    <div className={`rounded-xl border border-dashed p-2.5 ${dark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'}`}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className={`${dark ? 'text-white' : 'text-[#0A2540]'} text-[12px]`} style={{ fontWeight: 520 }}>
-            Open Shifts
-          </p>
-          <p className={`${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'} text-[10px]`} style={{ fontWeight: 420 }}>
-            {cellShifts.length > 0 ? `${cellShifts.length} unassigned ${roleName} shift${cellShifts.length !== 1 ? 's' : ''}` : `Create an open ${roleName} shift`}
-          </p>
-        </div>
-        <button
-          onClick={onCreateShift}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#635BFF] text-white"
-          type="button"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
-      {cellShifts.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-1.5">
-          {cellShifts.map((shift) => {
-            const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
-            const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : descriptor.icon;
-            const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
-            return (
-              <button
-                key={shift.id}
-                onClick={() => onEditShift(shift)}
-                className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left"
-                style={{ background: `${roleColor}12` }}
-                type="button"
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <DescIcon size={11} style={{ color: roleColor }} />
-                  <span className="truncate text-[11px]" style={{ color: roleColor, fontWeight: 540 }}>
-                    {shiftLabel}
-                  </span>
-                </div>
-                <span className={`${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'} text-[10px]`} style={{ fontWeight: 420 }}>
-                  {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function RemoveEmployeeModal({
   dark = false,
   employeeName,
@@ -2508,13 +2545,15 @@ function AddEmployeeModal({
   loadingBusinessEmployees,
   locationId,
   locationName,
+  roleId,
+  roleName,
   activeEmployeeIds,
   onActiveTabChange,
   onAttach,
   onClose,
   onAdd,
 }: {
-  activeTab: 'existing' | 'new' | 'import';
+  activeTab: 'existing' | 'new';
   businessEmployees: EmployeeSummary[];
   businessId: string;
   businessLocations: BusinessLocation[];
@@ -2523,8 +2562,10 @@ function AddEmployeeModal({
   loadingBusinessEmployees: boolean;
   locationId: string;
   locationName: string;
+  roleId: string;
+  roleName: string;
   activeEmployeeIds: Set<string>;
-  onActiveTabChange: (tab: 'existing' | 'new' | 'import') => void;
+  onActiveTabChange: (tab: 'existing' | 'new') => void;
   onAttach: (employee: EmployeeSummary) => void;
   onClose: () => void;
   onAdd: (employee: EmployeeSummary) => void;
@@ -2535,9 +2576,17 @@ function AddEmployeeModal({
       businessEmployees.filter((employee) => !activeEmployeeIds.has(employee.id)),
     [activeEmployeeIds, businessEmployees],
   );
+  const scopedEmployees = useMemo(
+    () =>
+      searchableEmployees.filter(
+        (employee) =>
+          employee.role_ids.includes(roleId) || employee.role_ids.length === 0,
+      ),
+    [roleId, searchableEmployees],
+  );
   const filteredEmployees = useMemo(
     () =>
-      searchableEmployees.filter((employee) => {
+      scopedEmployees.filter((employee) => {
         const normalizedQuery = searchQuery.trim().toLowerCase();
         if (!normalizedQuery) {
           return true;
@@ -2547,11 +2596,11 @@ function AddEmployeeModal({
           employee.role_names.some((role) => role.toLowerCase().includes(normalizedQuery))
         );
       }),
-    [searchQuery, searchableEmployees],
+    [scopedEmployees, searchQuery],
   );
   const availableReadyEmployees = useMemo(
-    () => filteredEmployees.filter((employee) => employee.role_names.length > 0),
-    [filteredEmployees],
+    () => filteredEmployees.filter((employee) => employee.role_ids.includes(roleId)),
+    [filteredEmployees, roleId],
   );
   const availableUnavailableEmployees = useMemo(
     () => filteredEmployees.filter((employee) => employee.role_names.length === 0),
@@ -2560,8 +2609,7 @@ function AddEmployeeModal({
   const canOpenNewTab =
     !loadingBusinessEmployees &&
     businessLocations.length > 0 &&
-    businessRoles.length > 0;
-  const canOpenImportTab = !loadingBusinessEmployees;
+    businessRoles.some((role) => role.id === roleId);
   const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
   const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
@@ -2579,7 +2627,7 @@ function AddEmployeeModal({
           <div>
             <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h3>
             <p className={`text-[11px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>
-              Choose from existing, add new, or import multiple
+              Add someone to {roleName} at {locationName}
             </p>
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`} type="button">
@@ -2592,21 +2640,15 @@ function AddEmployeeModal({
             {[
               { value: 'existing', label: 'Existing' },
               { value: 'new', label: 'New Employee' },
-              { value: 'import', label: 'Import' },
             ].map((tab) => {
               const selected = activeTab === tab.value;
-              const disabled =
-                tab.value === 'new'
-                  ? !canOpenNewTab
-                  : tab.value === 'import'
-                    ? !canOpenImportTab
-                    : false;
+              const disabled = tab.value === 'new' ? !canOpenNewTab : false;
               return (
                 <button
                   key={tab.value}
                   onClick={() => {
                     if (!disabled) {
-                      onActiveTabChange(tab.value as 'existing' | 'new' | 'import');
+                      onActiveTabChange(tab.value as 'existing' | 'new');
                     }
                   }}
                   className={`flex-1 rounded-md py-2 text-[12px] transition-all duration-200 ${
@@ -2629,7 +2671,7 @@ function AddEmployeeModal({
 
         {activeTab === 'existing' ? (
           <div className="px-6 py-4 max-h-[420px] overflow-y-auto">
-            {searchableEmployees.length > 0 ? (
+            {scopedEmployees.length > 0 ? (
               <div className="pb-3">
                 <input
                   type="text"
@@ -2652,7 +2694,7 @@ function AddEmployeeModal({
                   Loading business employees...
                 </p>
               </div>
-            ) : searchableEmployees.length === 0 ? (
+            ) : scopedEmployees.length === 0 ? (
               <div className="py-8 text-center">
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
                   <UserPlus size={20} className="text-[#8898AA]" />
@@ -2660,11 +2702,11 @@ function AddEmployeeModal({
                 <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
                   {businessEmployees.length === 0
                     ? 'No employees found yet'
-                    : 'All employees are already added'}
+                    : `All ${roleName} employees are already added`}
                 </p>
                 {businessEmployees.length === 0 ? (
                   <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                    Use New Employee or Import to add someone to this scheduler.
+                    Use New Employee to add someone to this scheduler.
                   </p>
                 ) : null}
               </div>
@@ -2678,7 +2720,7 @@ function AddEmployeeModal({
               <div>
                 <div className="mb-3 flex items-center justify-between">
                   <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
-                    Available Employees
+                    Available {roleName}
                   </h4>
                   <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
                     {availableReadyEmployees.length} of {filteredEmployees.length}
@@ -2719,7 +2761,7 @@ function AddEmployeeModal({
                   </div>
                 ) : (
                   <p className={`py-2 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                    All schedule-ready employees are already added to this scheduler.
+                    All employees with the {roleName} role are already added to this scheduler.
                   </p>
                 )}
 
@@ -2775,19 +2817,14 @@ function AddEmployeeModal({
                 : 'border-[#E5E7EB] bg-[#FAFBFC]'
             }`}>
               <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                {activeTab === 'new' ? 'Open the employee enrollment flow' : 'Open the employee import flow'}
+                Open the employee enrollment flow
               </p>
               <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                {activeTab === 'new'
-                  ? 'Use the same Add Employee experience from Team. This employee will be assigned to this location automatically.'
-                  : 'Use the same Import Employees flow from Team. Imported employees will be assigned to this location automatically.'}
+                This employee will be created directly inside {locationName} with the {roleName} role already assigned.
               </p>
-              {((activeTab === 'new' && !canOpenNewTab) ||
-                (activeTab === 'import' && !canOpenImportTab)) ? (
+              {!canOpenNewTab ? (
                 <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  {activeTab === 'new'
-                    ? 'Loading live roles and locations for this business...'
-                    : 'Loading employee import tools...'}
+                  Loading live roles and locations for this business...
                 </p>
               ) : null}
             </div>
@@ -2797,34 +2834,20 @@ function AddEmployeeModal({
 
       <AnimatePresence>
         {activeTab === 'new' && canOpenNewTab ? (
-          <LocationEmployeeEnrollmentModal
+          <SchedulerEmployeeEnrollmentModal
             businessId={businessId}
             businessLocations={businessLocations}
             dark={dark}
             locationId={locationId}
             locationName={locationName}
+            roleId={roleId}
+            roleName={roleName}
             onClose={() => onActiveTabChange('existing')}
             onCreated={(employee) => {
               onAttach(employee);
               onClose();
             }}
             roles={businessRoles}
-          />
-        ) : null}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activeTab === 'import' && canOpenImportTab ? (
-          <LocationEmployeeBulkUploadModal
-            businessId={businessId}
-            dark={dark}
-            locationId={locationId}
-            locationName={locationName}
-            onClose={() => onActiveTabChange('existing')}
-            onImported={async (importedEmployees) => {
-              importedEmployees.forEach((employee) => onAttach(employee));
-              onClose();
-            }}
           />
         ) : null}
       </AnimatePresence>
@@ -2847,7 +2870,7 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
   const [selectedPresetKey, setSelectedPresetKey] = useState<ShiftDefaultKey>(initialPreset.key);
   const [startHour, setStartHour] = useState(initialPreset.start_hour);
   const [endHour, setEndHour] = useState(initialPreset.end_hour);
-  const roleColor = roleColors[role] || '#635BFF';
+  const accentColor = roleColor(role);
   const hourOptions = TIME_VALUES.map(h => ({ label: formatHour(h), value: String(h) }));
   const theme = getSchedulerTheme(dark);
 
@@ -2883,9 +2906,9 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
           </button>
         </div>
         <div className="px-5 pt-4 pb-1">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit" style={{ background: `${roleColor}10` }}>
-            <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-            <span className="text-[11px]" style={{ fontWeight: 520, color: roleColor }}>{role}</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit" style={{ background: `${accentColor}10` }}>
+            <div className="w-2 h-2 rounded-full" style={{ background: accentColor }} />
+            <span className="text-[11px]" style={{ fontWeight: 520, color: accentColor }}>{role}</span>
           </div>
         </div>
         <div className="px-5 pt-3 pb-2">
@@ -2969,7 +2992,7 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
   );
   const [startHour, setStartHour] = useState(shift.startHour);
   const [endHour, setEndHour] = useState(shift.endHour);
-  const roleColor = roleColors[shift.role] || shift.color;
+  const accentColor = shift.color || roleColor(shift.role);
   const descriptor = getShiftDescriptor(startHour, endHour);
   const hourOptions = TIME_VALUES.map(h => ({ label: formatHour(h), value: String(h) }));
   const theme = getSchedulerTheme(dark);
@@ -2985,7 +3008,7 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
         <div className={`px-5 py-4 border-b flex items-center justify-between ${theme.modalBorderClass}`}>
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full" style={{ background: roleColor }} />
+              <div className="w-3 h-3 rounded-full" style={{ background: accentColor }} />
               <h3 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Edit Shift</h3>
             </div>
             <p className={`text-[11px] mt-1 ml-5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -3003,15 +3026,15 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
               const shiftLabel = resolveShiftLabel(normalizedDefaults, selectedPresetKey, startHour, endHour) || descriptor.label;
               return (
                 <>
-                  <Icon size={14} style={{ color: roleColor }} />
-                  <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{shiftLabel} Shift</span>
+                  <Icon size={14} style={{ color: accentColor }} />
+                  <span className="text-[12px]" style={{ fontWeight: 520, color: accentColor }}>{shiftLabel} Shift</span>
                 </>
               );
             })()
           ) : (
             <>
-              <descriptor.icon size={14} style={{ color: roleColor }} />
-              <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{descriptor.label} Shift</span>
+              <descriptor.icon size={14} style={{ color: accentColor }} />
+              <span className="text-[12px]" style={{ fontWeight: 520, color: accentColor }}>{descriptor.label} Shift</span>
             </>
           )}
           <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
