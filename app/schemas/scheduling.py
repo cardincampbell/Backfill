@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import Field
@@ -55,6 +55,28 @@ class ShiftRead(BaseSchema):
     shift_metadata: dict
     created_at: datetime
     updated_at: datetime
+
+
+class ShiftAssignmentWrite(BaseSchema):
+    employee_id: Optional[UUID] = None
+    source: Literal["scheduler_ui", "copilot"]
+    note: Optional[str] = None
+    expected_assignment_id: Optional[UUID] = None
+
+
+class ShiftAssignmentRead(BaseSchema):
+    assignment_id: UUID
+    employee_id: Optional[UUID] = None
+    employee_name: Optional[str] = None
+    status: str
+    assigned_via: str
+    accepted_at: Optional[datetime] = None
+
+
+class ShiftAssignmentMutationResponse(BaseSchema):
+    shift_id: UUID
+    status: str
+    current_assignment: Optional[ShiftAssignmentRead] = None
 
 
 class ShiftDeleteResponse(BaseSchema):

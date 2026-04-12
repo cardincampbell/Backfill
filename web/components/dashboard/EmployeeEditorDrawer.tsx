@@ -1240,6 +1240,7 @@ export function EmployeeEditorDrawer({
               onSetEndTime={setAvailabilityEndTime}
               onSetStartTime={setAvailabilityStartTime}
               savedPulse={availabilitySavedPulse}
+              showDaySummary={false}
               status={availabilityStatus}
             />
           </div>

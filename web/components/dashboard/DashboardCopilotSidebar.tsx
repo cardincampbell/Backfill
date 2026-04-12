@@ -151,12 +151,14 @@ function sendButtonClass(dark: boolean) {
 }
 
 export default function DashboardCopilotSidebar({
+  autoStartSignal = 0,
   dark,
   businessId,
   locationId,
   locationHref: _locationHref,
   locationName,
 }: {
+  autoStartSignal?: number;
   dark: boolean;
   businessId?: string | null;
   locationId?: string | null;
@@ -268,6 +270,16 @@ export default function DashboardCopilotSidebar({
     return request;
   }, [businessId, locationId, sessionContextKey]);
 
+  useEffect(() => {
+    if (!autoStartSignal || !businessId) {
+      return;
+    }
+    if (sessionDetailRef.current || sessionRequestRef.current) {
+      return;
+    }
+    void ensureSession();
+  }, [autoStartSignal, businessId, ensureSession]);
+
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -340,52 +352,6 @@ export default function DashboardCopilotSidebar({
             >
               <Loader2 size={14} className="animate-spin" />
               Loading Copilot…
-            </div>
-          ) : null}
-
-          {!error && !isLoadingSession && !sessionDetail ? (
-            <div
-              className={`rounded-2xl border px-4 py-4 ${
-                dark
-                  ? "border-white/[0.06] bg-white/[0.03]"
-                  : "border-[#E5E7EB] bg-white"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
-                  <Sparkles size={14} className="text-white" />
-                </div>
-                <div className="min-w-0">
-                  <p
-                    className={`text-[13px] ${
-                      dark ? "text-white" : "text-[#0A2540]"
-                    }`}
-                    style={{ fontWeight: 560 }}
-                  >
-                    Copilot is ready when you are
-                  </p>
-                  <p
-                    className={`mt-1 text-[12px] ${
-                      dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
-                    }`}
-                    style={{ fontWeight: 420 }}
-                  >
-                    Start a session only when you want to ask about open shifts,
-                    active campaigns, or manager actions.
-                  </p>
-                  <button
-                    className="mt-3 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] px-3.5 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.22)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
-                    disabled={isLoadingSession}
-                    onClick={() => {
-                      void ensureSession();
-                    }}
-                    style={{ fontWeight: 540 }}
-                    type="button"
-                  >
-                    Start Copilot
-                  </button>
-                </div>
-              </div>
             </div>
           ) : null}
 

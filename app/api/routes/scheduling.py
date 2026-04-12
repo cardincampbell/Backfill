@@ -7,12 +7,34 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
-from app.schemas.scheduling import ShiftCreate, ShiftDeleteResponse, ShiftRead, ShiftUpdate
+from app.models.scheduling import ShiftAssignment
+from app.schemas.scheduling import (
+    ShiftAssignmentMutationResponse,
+    ShiftAssignmentWrite,
+    ShiftCreate,
+    ShiftDeleteResponse,
+    ShiftRead,
+    ShiftUpdate,
+)
 from app.services import audit as audit_service
-from app.services import auth as auth_service, scheduling
+from app.services import auth as auth_service, outreach as outreach_service, platform_events, scheduling
 
 router = APIRouter(prefix="/businesses/{business_id}/shifts", tags=["scheduling"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
+
+
+def _assignment_conflict_payload(assignment: ShiftAssignment | None) -> dict | None:
+    if assignment is None:
+        return None
+    employee_name = assignment.employee.full_name if assignment.employee is not None else None
+    return {
+        "assignment_id": str(assignment.id),
+        "employee_id": str(assignment.employee_id) if assignment.employee_id is not None else None,
+        "employee_name": employee_name,
+        "status": assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
+        "assigned_via": assignment.assigned_via,
+        "accepted_at": assignment.accepted_at.isoformat() if assignment.accepted_at is not None else None,
+    }
 
 
 @router.get("", response_model=list[ShiftRead])
@@ -72,6 +94,125 @@ async def create_shift(
     )
     await session.commit()
     return shift
+
+
+@router.patch("/{shift_id}/assignment", response_model=ShiftAssignmentMutationResponse)
+async def update_shift_assignment(
+    business_id: UUID,
+    shift_id: UUID,
+    payload: ShiftAssignmentWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        result = await scheduling.set_shift_assignment(
+            session,
+            business_id,
+            shift_id,
+            payload,
+            assigned_by_user_id=auth_ctx.user.id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except scheduling.ShiftAssignmentConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "stale_assignment_conflict",
+                "current_assignment": _assignment_conflict_payload(exc.current_assignment),
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=result.shift.location_id)
+    response = scheduling.build_shift_assignment_response(result)
+    client_ip = audit_service.request_client_ip(request)
+    user_agent = audit_service.request_user_agent(request)
+
+    for coverage_case in result.cancelled_cases:
+        cancelled_offer_ids = [
+            str(offer.id)
+            for offer in result.cancelled_offers
+            if offer.coverage_case_id == coverage_case.id
+        ]
+        await platform_events.append(
+            session,
+            event_type="coverage.campaign.cancelled",
+            compatibility_event_name="coverage.case.cancelled",
+            target_type="coverage_case",
+            target_id=coverage_case.id,
+            business_id=business_id,
+            location_id=result.shift.location_id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            payload={
+                "shift_id": str(result.shift.id),
+                "reason": "manual_assignment_override",
+                "cancelled_offer_ids": cancelled_offer_ids,
+            },
+            metadata={
+                "source": payload.source,
+            },
+        )
+
+    for offer in result.cancelled_offers:
+        await outreach_service.append_outreach_attempt_event(
+            session,
+            event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_CANCELLED,
+            compatibility_event_name="coverage.offer.cancelled",
+            offer=offer,
+            business_id=business_id,
+            location_id=result.shift.location_id,
+            shift_id=result.shift.id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            metadata={
+                "source": payload.source,
+                "reason": "manual_assignment_override",
+            },
+        )
+
+    if not result.no_op:
+        event_type = {
+            "assigned": platform_events.PlatformEventType.SCHEDULE_SHIFT_ASSIGNED,
+            "reassigned": platform_events.PlatformEventType.SCHEDULE_SHIFT_REASSIGNED,
+            "unassigned": platform_events.PlatformEventType.SCHEDULE_SHIFT_UNASSIGNED,
+        }[result.action]
+        await platform_events.append(
+            session,
+            event_type=event_type,
+            target_type="shift",
+            target_id=result.shift.id,
+            business_id=business_id,
+            location_id=result.shift.location_id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            payload=response.model_dump(mode="json"),
+            metadata={
+                "old_assignment_id": str(result.previous_assignment.id) if result.previous_assignment is not None else None,
+                "new_assignment_id": str(result.current_assignment.id) if result.current_assignment is not None else None,
+                "old_employee_id": str(result.previous_assignment.employee_id) if result.previous_assignment and result.previous_assignment.employee_id else None,
+                "new_employee_id": str(result.current_assignment.employee_id) if result.current_assignment and result.current_assignment.employee_id else None,
+                "source": payload.source,
+                "note": payload.note,
+            },
+        )
+
+    await session.commit()
+    return response
 
 
 @router.patch("/{shift_id}", response_model=ShiftRead)

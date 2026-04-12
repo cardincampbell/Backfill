@@ -96,12 +96,12 @@ describe("DashboardCopilotSidebar", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps session creation lazy until the user explicitly starts Copilot", async () => {
-    const user = userEvent.setup();
+  it("keeps session creation lazy until the user explicitly opens Copilot", async () => {
     createCopilotSessionMock.mockResolvedValue(buildSessionDetail());
 
-    render(
+    const { rerender } = render(
       <DashboardCopilotSidebar
+        autoStartSignal={0}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -111,7 +111,15 @@ describe("DashboardCopilotSidebar", () => {
 
     expect(createCopilotSessionMock).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Start Copilot" }));
+    rerender(
+      <DashboardCopilotSidebar
+        autoStartSignal={1}
+        businessId="business-1"
+        dark={false}
+        locationId="location-1"
+        locationName="Santa Monica"
+      />,
+    );
 
     await waitFor(() => {
       expect(createCopilotSessionMock).toHaveBeenCalledTimes(1);
@@ -122,8 +130,9 @@ describe("DashboardCopilotSidebar", () => {
     const pending = deferredPromise<CopilotSessionDetail>();
     createCopilotSessionMock.mockReturnValue(pending.promise);
 
-    render(
+    const { rerender } = render(
       <DashboardCopilotSidebar
+        autoStartSignal={1}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -131,9 +140,15 @@ describe("DashboardCopilotSidebar", () => {
       />,
     );
 
-    const startButton = screen.getByRole("button", { name: "Start Copilot" });
-    fireEvent.click(startButton);
-    fireEvent.click(startButton);
+    rerender(
+      <DashboardCopilotSidebar
+        autoStartSignal={2}
+        businessId="business-1"
+        dark={false}
+        locationId="location-1"
+        locationName="Santa Monica"
+      />,
+    );
 
     expect(createCopilotSessionMock).toHaveBeenCalledTimes(1);
 
@@ -144,7 +159,7 @@ describe("DashboardCopilotSidebar", () => {
     pending.resolve(buildSessionDetail());
 
     await waitFor(() => {
-      expect(startButton).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading Copilot…")).not.toBeInTheDocument();
     });
   });
 
@@ -155,6 +170,7 @@ describe("DashboardCopilotSidebar", () => {
 
     render(
       <DashboardCopilotSidebar
+        autoStartSignal={1}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -163,9 +179,9 @@ describe("DashboardCopilotSidebar", () => {
     );
 
     expect(screen.queryByRole("button", { name: /Feed/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Copilot" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Start Copilot" }));
-    const input = screen.getByPlaceholderText(/Ask Copilot/i);
+    const input = await screen.findByPlaceholderText(/Ask Copilot/i);
     await user.type(input, "Show me open shifts");
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 

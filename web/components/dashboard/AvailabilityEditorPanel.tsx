@@ -354,6 +354,7 @@ function DayRow({
   onSetEnabled,
   onSetEndTime,
   onSetStartTime,
+  showDaySummary,
   state,
 }: {
   copySuccess: boolean;
@@ -363,6 +364,7 @@ function DayRow({
   onSetEnabled(enabled: boolean): void;
   onSetEndTime(nextValue: string): void;
   onSetStartTime(nextValue: string): void;
+  showDaySummary?: boolean;
   state: DayState;
 }) {
   const rowSurfaceClass = state.enabled
@@ -414,26 +416,30 @@ function DayRow({
           </div>
         </button>
 
-        <div className="hidden min-w-0 flex-1 sm:block">
-          <p
-            className="text-[13px]"
-            style={{
-              fontWeight: 500,
-              color: state.enabled ? (dark ? "#FFFFFF" : "#0A2540") : dark ? "#8898AA" : "#C1CED8",
-            }}
-          >
-            {day.label}
-          </p>
-          {state.enabled ? (
-            <p className={`mt-0.5 text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
-              {state.startTime} – {state.endTime}
+        {showDaySummary !== false ? (
+          <div className="hidden min-w-0 flex-1 sm:block">
+            <p
+              className="text-[13px]"
+              style={{
+                fontWeight: 500,
+                color: state.enabled ? (dark ? "#FFFFFF" : "#0A2540") : dark ? "#8898AA" : "#C1CED8",
+              }}
+            >
+              {day.label}
             </p>
-          ) : (
-            <p className={`text-[11px] ${dark ? "text-[#8898AA]" : "text-[#C1CED8]"}`} style={{ fontWeight: 420 }}>
-              Unavailable
-            </p>
-          )}
-        </div>
+            {state.enabled ? (
+              <p className={`mt-0.5 text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
+                {state.startTime} – {state.endTime}
+              </p>
+            ) : (
+              <p className={`text-[11px] ${dark ? "text-[#8898AA]" : "text-[#C1CED8]"}`} style={{ fontWeight: 420 }}>
+                Unavailable
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
 
         <AnimatePresence>
           {state.enabled ? (
@@ -484,6 +490,7 @@ export function AvailabilityEditorPanel({
   onSetStartTime,
   savedPulse = false,
   showProvisioningHint = false,
+  showDaySummary = true,
   status,
 }: {
   dark: boolean;
@@ -496,6 +503,7 @@ export function AvailabilityEditorPanel({
   onSetEndTime(dayIndex: number, nextValue: string): void;
   onSetStartTime(dayIndex: number, nextValue: string): void;
   savedPulse?: boolean;
+  showDaySummary?: boolean;
   showProvisioningHint?: boolean;
   status: "loading" | "ready" | "error";
 }) {
@@ -616,6 +624,7 @@ export function AvailabilityEditorPanel({
             onSetEnabled={(enabled) => onSetDayEnabled(day.index, enabled)}
             onSetEndTime={(nextValue) => onSetEndTime(day.index, nextValue)}
             onSetStartTime={(nextValue) => onSetStartTime(day.index, nextValue)}
+            showDaySummary={showDaySummary}
             state={dayStates[day.index]}
           />
         ))}

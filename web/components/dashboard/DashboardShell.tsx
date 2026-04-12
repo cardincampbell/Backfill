@@ -86,6 +86,7 @@ export default function DashboardShell({
   const [showNotifications, setShowNotifications] = useState(false);
   const [showAddLocation, setShowAddLocation] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<AppShellSidebarTab>(initialSidebarTab);
+  const [copilotActivationCount, setCopilotActivationCount] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const navigate = useNavigate();
@@ -194,6 +195,9 @@ export default function DashboardShell({
     );
   }, [pathname, workspaceLocations]);
 
+  const primaryNavItems = navItems.filter((item) => item.label !== 'Schedule');
+  const scheduleNavItem = navItems.find((item) => item.label === 'Schedule') ?? null;
+
   const handleNav = (path: string) => {
     if (path === '/schedule') {
       const schedulerTarget =
@@ -249,7 +253,10 @@ export default function DashboardShell({
         <div className="px-3 pt-3 pb-1">
           <div className={`flex items-center rounded-lg p-0.5 ${subtleSurfaceClass}`}>
             <button
-              onClick={() => setSidebarTab('copilot')}
+              onClick={() => {
+                setSidebarTab('copilot');
+                setCopilotActivationCount((current) => current + 1);
+              }}
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[12px] transition-all duration-200 ${
                 sidebarTab === 'copilot'
                   ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm'
@@ -289,7 +296,7 @@ export default function DashboardShell({
                 className="flex-1 flex flex-col"
               >
                 <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
-                  {navItems.map((item) => {
+                  {primaryNavItems.map((item) => {
                     const isActiveSchedule =
                       item.label === 'Schedule' &&
                       Boolean(pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')));
@@ -313,25 +320,46 @@ export default function DashboardShell({
                     );
                   })}
 
-                  <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
-                    <div className="mb-2 flex items-center justify-between px-3">
-                      <span className={`text-[10px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
-                        Locations
-                      </span>
-                      <button
-                        onClick={() => setShowAddLocation(true)}
-                        className={`rounded p-0.5 transition-colors ${hoverSurfaceClass}`}
-                        title="Add location"
-                        type="button"
-                      >
-                        <Plus
-                          size={13}
-                          className="text-[#8898AA] transition-colors hover:text-[#635BFF]"
-                        />
-                      </button>
-                    </div>
-                    {!workspaceLocationsLoaded ? (
-                      <div className="space-y-2 px-3 py-1">
+                  {scheduleNavItem ? (() => {
+                    const isActiveSchedule = Boolean(
+                      pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')),
+                    );
+                    return (
+                      <div className="pt-1">
+                        <button
+                          onClick={() => handleNav(scheduleNavItem.path)}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                            isActiveSchedule
+                              ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
+                              : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
+                          }`}
+                          type="button"
+                        >
+                          <scheduleNavItem.icon size={18} className="shrink-0" />
+                          <span className="text-[13px]" style={{ fontWeight: isActiveSchedule ? 540 : 440 }}>
+                            {scheduleNavItem.label}
+                          </span>
+                        </button>
+
+                        <div className={`mt-3 border-t pt-3 ${sectionBorderClass}`}>
+                          <div className="mb-2 flex items-center justify-between px-3">
+                            <span className={`text-[10px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
+                              Locations
+                            </span>
+                            <button
+                              onClick={() => setShowAddLocation(true)}
+                              className={`rounded p-0.5 transition-colors ${hoverSurfaceClass}`}
+                              title="Add location"
+                              type="button"
+                            >
+                              <Plus
+                                size={13}
+                                className="text-[#8898AA] transition-colors hover:text-[#635BFF]"
+                              />
+                            </button>
+                          </div>
+                          {!workspaceLocationsLoaded ? (
+                      <div className="space-y-2 px-7 py-1">
                         {Array.from({ length: 3 }).map((_, index) => (
                           <div
                             key={index}
@@ -347,7 +375,7 @@ export default function DashboardShell({
                           <button
                             key={location.id}
                             onClick={() => handleNav(location.entryPath)}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
+                            className={`w-full flex items-center gap-2.5 rounded-lg py-2 pl-7 pr-3 transition-all duration-200 ${
                               isActiveLocation
                                 ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                                 : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -369,7 +397,7 @@ export default function DashboardShell({
                     ) : (
                       <button
                         onClick={() => handleNav('/onboarding')}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
+                        className={`w-full flex items-center gap-2.5 rounded-lg py-2 pl-7 pr-3 transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
                         type="button"
                       >
                         <span className="text-[14px]">+</span>
@@ -378,7 +406,10 @@ export default function DashboardShell({
                         </span>
                       </button>
                     )}
-                  </div>
+                        </div>
+                      </div>
+                    );
+                  })() : null}
                 </nav>
               </motion.div>
             ) : (
@@ -408,6 +439,7 @@ export default function DashboardShell({
                     activeWorkspaceLocation?.location_name ??
                     null
                   }
+                  autoStartSignal={copilotActivationCount}
                 />
               </motion.div>
             )}
