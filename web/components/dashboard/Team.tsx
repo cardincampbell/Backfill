@@ -1555,6 +1555,11 @@ function BulkAssignLocationsModal({
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>(initialSelectedLocationIds);
   const selectedLocations = locations.filter((location) => selectedLocationIds.includes(location.id));
   const availableLocations = locations.filter((location) => !selectedLocationIds.includes(location.id));
+  const hasLocationChanges = useMemo(() => {
+    const initial = [...initialSelectedLocationIds].sort();
+    const current = [...selectedLocationIds].sort();
+    return initial.length !== current.length || initial.some((value, index) => value !== current[index]);
+  }, [initialSelectedLocationIds, selectedLocationIds]);
 
   const toggleLocation = (locationId: string) => {
     setSelectedLocationIds((current) =>
@@ -1571,7 +1576,7 @@ function BulkAssignLocationsModal({
       subtitle={`Update the shared location assignments for ${count} selected employee${count === 1 ? '' : 's'}.`}
       footerNote="Shared locations can be added or removed here. Employee-specific locations stay intact."
       confirmLabel="Update Locations"
-      confirmDisabled={selectedLocationIds.length === 0 && initialSelectedLocationIds.length === 0}
+      confirmDisabled={!hasLocationChanges}
       onClose={onClose}
       onConfirm={() => onConfirm(selectedLocationIds)}
     >

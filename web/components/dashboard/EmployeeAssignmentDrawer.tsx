@@ -464,6 +464,10 @@ export function EmployeeAssignmentDrawer({
     () => locations.find((location) => location.id === state.primaryLocationId) ?? null,
     [locations, state.primaryLocationId],
   );
+  const baselineState = useMemo(
+    () => (profile ? buildAssignmentState(profile) : buildAssignmentStateFromSummary(employee, roles, locations)),
+    [employee, locations, profile, roles],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -520,11 +524,39 @@ export function EmployeeAssignmentDrawer({
     });
   };
 
+  const hasAssignmentChanges = useMemo(() => {
+    const baselineRoleIds = [...baselineState.selectedRoleIds].sort();
+    const currentRoleIds = [...state.selectedRoleIds].sort();
+    const baselineLocationIds = [...baselineState.selectedLocationIds].sort();
+    const currentLocationIds = [...state.selectedLocationIds].sort();
+
+    if (baselineState.primaryRoleId !== state.primaryRoleId) {
+      return true;
+    }
+    if (baselineState.primaryLocationId !== state.primaryLocationId) {
+      return true;
+    }
+    if (
+      baselineRoleIds.length !== currentRoleIds.length ||
+      baselineRoleIds.some((value, index) => value !== currentRoleIds[index])
+    ) {
+      return true;
+    }
+    if (
+      baselineLocationIds.length !== currentLocationIds.length ||
+      baselineLocationIds.some((value, index) => value !== currentLocationIds[index])
+    ) {
+      return true;
+    }
+    return false;
+  }, [baselineState, state]);
+
   const canSave =
     Boolean(state.selectedRoleIds.length) &&
     Boolean(state.primaryRoleId) &&
     Boolean(state.selectedLocationIds.length) &&
-    Boolean(state.primaryLocationId);
+    Boolean(state.primaryLocationId) &&
+    hasAssignmentChanges;
 
   const handleSave = () => {
     if (!canSave || isPending) {

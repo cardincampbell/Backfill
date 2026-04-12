@@ -420,7 +420,7 @@ function getSchedulerTheme(isDark: boolean) {
       : 'border-[#F0F0F5] bg-white/80 backdrop-blur-sm',
     mobileDayBorderClass: isDark ? 'border-white/[0.08]' : 'border-[#F0F0F5]',
     stickyHeaderClass: isDark ? 'bg-[#0B2239] border-white/[0.08]' : 'bg-white border-[#E5E7EB]',
-    roleBandClass: isDark ? 'bg-white/[0.04] border-white/[0.08]' : 'bg-[#F5F6F8] border-[#F0F0F5]',
+    roleBandClass: isDark ? 'bg-white/[0.08] border-white/[0.12]' : 'bg-[#E8EBF0] border-[#DADDE3]',
     rowClass: isDark ? 'border-white/[0.06] hover:bg-white/[0.02]' : 'border-[#F0F0F5] hover:bg-[#FAFBFC]/50',
     cellBorderClass: isDark ? 'border-white/[0.06]' : 'border-[#F0F0F5]',
     todayCellClass: isDark ? 'bg-[#635BFF]/[0.08]' : 'bg-[#635BFF]/[0.015]',
@@ -625,7 +625,7 @@ function DraggableShiftChip({
           <AnimatePresence>
             {hovered && !isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="flex flex-col gap-0.5 shrink-0">
+                className="mr-1 flex flex-col gap-0.5 shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
                   <Copy size={9} className={theme.textMuted} />
@@ -692,7 +692,7 @@ function DraggableShiftChip({
             <AnimatePresence>
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="flex gap-0.5">
+                className="mr-1 flex gap-0.5">
                   <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
                     <Copy size={7} className={theme.textMuted} />
