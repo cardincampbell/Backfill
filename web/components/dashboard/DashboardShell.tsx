@@ -305,15 +305,15 @@ export default function DashboardShell({
                     <button
                       key={item.label}
                       onClick={() => handleNav(item.path)}
-                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-[22px] transition-all duration-200 ${
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                         isActive
                           ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                           : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                       }`}
                       type="button"
                     >
-                      <item.icon size={20} className="shrink-0" />
-                      <span className="text-[16px]" style={{ fontWeight: isActive ? 540 : 440 }}>
+                      <item.icon size={18} className="shrink-0" />
+                      <span className="text-[13px]" style={{ fontWeight: isActive ? 540 : 440 }}>
                         {item.label}
                       </span>
                     </button>
@@ -325,24 +325,24 @@ export default function DashboardShell({
                       pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')),
                     );
                     return (
-                      <div className="pt-1">
+                      <div className="pt-2 mt-1">
                         <button
                           onClick={() => handleNav(scheduleNavItem.path)}
-                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-[22px] transition-all duration-200 ${
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                             isActiveSchedule
                               ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                               : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                           }`}
                           type="button"
                         >
-                          <scheduleNavItem.icon size={20} className="shrink-0" />
-                          <span className="text-[16px]" style={{ fontWeight: isActiveSchedule ? 540 : 440 }}>
+                          <scheduleNavItem.icon size={18} className="shrink-0" />
+                          <span className="text-[13px]" style={{ fontWeight: isActiveSchedule ? 540 : 440 }}>
                             {scheduleNavItem.label}
                           </span>
                         </button>
 
-                        <div className={`mt-3 border-t pt-3 ${sectionBorderClass}`}>
-                          <div className="mb-2 flex items-center justify-between px-4">
+                        <div className="mt-1 pt-1">
+                          <div className="mb-2 flex items-center justify-between px-3">
                             <span className={`text-[10px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
                               Locations
                             </span>
@@ -359,7 +359,7 @@ export default function DashboardShell({
                             </button>
                           </div>
                           {!workspaceLocationsLoaded ? (
-                      <div className="space-y-2 px-10 py-1">
+                      <div className="space-y-2 px-3 py-1">
                         {Array.from({ length: 3 }).map((_, index) => (
                           <div
                             key={index}
@@ -368,14 +368,15 @@ export default function DashboardShell({
                         ))}
                       </div>
                     ) : locationShortcuts.length > 0 ? (
-                      locationShortcuts.map((location) => {
+                      <div className="pl-3 space-y-1">
+                      {locationShortcuts.map((location) => {
                         const isActiveLocation =
                           pathname === location.setupPath || pathname === location.schedulerPath;
                         return (
                           <button
                             key={location.id}
                             onClick={() => handleNav(location.entryPath)}
-                            className={`w-full flex items-center gap-2.5 rounded-xl py-2.5 pl-10 pr-3 transition-all duration-200 ${
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
                               isActiveLocation
                                 ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                                 : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
@@ -383,7 +384,7 @@ export default function DashboardShell({
                             type="button"
                           >
                             <span className="text-[14px]">{location.logo}</span>
-                            <span className="text-[14px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
+                            <span className="text-[12px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
                               {location.name}
                             </span>
                             {typeof location.openShifts === 'number' && location.openShifts > 0 ? (
@@ -393,15 +394,16 @@ export default function DashboardShell({
                             ) : null}
                           </button>
                         );
-                      })
+                      })}
+                      </div>
                     ) : (
                       <button
                         onClick={() => handleNav('/onboarding')}
-                        className={`w-full flex items-center gap-2.5 rounded-xl py-2.5 pl-10 pr-3 transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
                         type="button"
                       >
                         <span className="text-[14px]">+</span>
-                        <span className="text-[14px]" style={{ fontWeight: 440 }}>
+                        <span className="text-[12px]" style={{ fontWeight: 440 }}>
                           Set up your first location
                         </span>
                       </button>

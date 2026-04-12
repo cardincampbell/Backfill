@@ -229,12 +229,6 @@ async def delete_shift(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
-    assignment_count = await session.scalar(
-        select(func.count(ShiftAssignment.id)).where(ShiftAssignment.shift_id == shift_id)
-    )
-    if int(assignment_count or 0) > 0:
-        raise ValueError("shift_has_assignments")
-
     active_case_count = await session.scalar(
         select(func.count(CoverageCase.id)).where(
             CoverageCase.shift_id == shift_id,

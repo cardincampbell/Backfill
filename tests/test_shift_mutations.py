@@ -384,7 +384,69 @@ def test_delete_shift_route_deletes_empty_shift():
           for entry in fake_session.added
       )
     finally:
-      app.dependency_overrides.clear()
+        app.dependency_overrides.clear()
+
+
+def test_delete_shift_route_allows_assigned_shift_without_coverage_history():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(ShiftAssignment, assignment.id)] = assignment
+    fake_session.scalar_queue = [0]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.delete(f"/api/businesses/{business_id}/shifts/{shift_id}")
+        assert response.status_code == 200
+        assert response.json() == {"deleted": True, "shift_id": str(shift_id)}
+        assert fake_session.deleted == [shift]
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_update_shift_assignment_route_emits_schedule_event():
