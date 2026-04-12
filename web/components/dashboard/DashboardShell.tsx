@@ -28,12 +28,14 @@ import { usePathname } from 'next/navigation';
 import {
   Users,
   Activity,
+  Calendar,
   Bell,
   Search,
   Settings,
   CheckCircle2,
   AlertCircle,
   LayoutGrid,
+  Navigation,
   HelpCircle,
   LifeBuoy,
   Sparkles,
@@ -49,12 +51,12 @@ import {
 } from './mock-data';
 import AddLocationModal from './AddLocationModal';
 import DashboardCopilotSidebar from './DashboardCopilotSidebar';
-import SegmentedControl from './SegmentedControl';
 
 const navItems = [
   { label: 'Overview', icon: LayoutGrid, path: '/dashboard' },
   { label: 'Team', icon: Users, path: '/team' },
   { label: 'Activity', icon: Activity, path: '/activity' },
+  { label: 'Schedule', icon: Calendar, path: '/schedule' },
 ];
 
 interface DashboardShellProps {
@@ -193,7 +195,15 @@ export default function DashboardShell({
   }, [pathname, workspaceLocations]);
 
   const handleNav = (path: string) => {
-    navigate(path);
+    if (path === '/schedule') {
+      const schedulerTarget =
+        activeWorkspaceLocation
+          ? buildSchedulerBasePathFromAny(activeWorkspaceLocation)
+          : locationShortcuts[0]?.schedulerPath ?? '/schedule';
+      navigate(schedulerTarget);
+    } else {
+      navigate(path);
+    }
     setSidebarOpen(false);
     setShowNotifications(false);
     setShowUserMenu(false);
@@ -217,7 +227,7 @@ export default function DashboardShell({
       </AnimatePresence>
 
       <aside
-        className={`fixed top-0 left-0 h-full z-50 w-[280px] flex flex-col border-r ${panelBorderClass} ${panelBgClass} transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${
+        className={`fixed top-0 left-0 h-full z-50 w-full lg:w-[300px] flex flex-col border-r ${panelBorderClass} ${panelBgClass} transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)] lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -237,24 +247,34 @@ export default function DashboardShell({
         </div>
 
         <div className="px-3 pt-3 pb-1">
-          <SegmentedControl
-            activeItemClassName={`${panelBgClass} ${textPrimaryClass} shadow-sm`}
-            className={`flex w-full ${subtleSurfaceClass}`}
-            iconSize={13}
-            inactiveItemClassName={`${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`}
-            itemClassName="flex-1 py-2 text-[12px]"
-            items={[
-              { value: 'nav', label: 'Navigate', icon: LayoutGrid },
-              {
-                value: 'copilot',
-                label: 'Copilot',
-                icon: Sparkles,
-                activeClassName: 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm',
-              },
-            ]}
-            onChange={setSidebarTab}
-            value={sidebarTab}
-          />
+          <div className={`flex items-center rounded-lg p-0.5 ${subtleSurfaceClass}`}>
+            <button
+              onClick={() => setSidebarTab('copilot')}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[12px] transition-all duration-200 ${
+                sidebarTab === 'copilot'
+                  ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm'
+                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+              }`}
+              style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}
+              type="button"
+            >
+              <Sparkles size={13} />
+              Copilot
+            </button>
+            <button
+              onClick={() => setSidebarTab('nav')}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[12px] transition-all duration-200 ${
+                sidebarTab === 'nav'
+                  ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
+                  : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+              }`}
+              style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}
+              type="button"
+            >
+              <Navigation size={13} />
+              Navigate
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -269,23 +289,29 @@ export default function DashboardShell({
                 className="flex-1 flex flex-col"
               >
                 <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
-                  {navItems.map((item) => (
+                  {navItems.map((item) => {
+                    const isActiveSchedule =
+                      item.label === 'Schedule' &&
+                      Boolean(pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')));
+                    const isActive = activeNav === item.label || isActiveSchedule;
+                    return (
                     <button
                       key={item.label}
                       onClick={() => handleNav(item.path)}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                        activeNav === item.label
+                        isActive
                           ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                           : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                       }`}
                       type="button"
                     >
                       <item.icon size={18} className="shrink-0" />
-                      <span className="text-[13px]" style={{ fontWeight: activeNav === item.label ? 540 : 440 }}>
+                      <span className="text-[13px]" style={{ fontWeight: isActive ? 540 : 440 }}>
                         {item.label}
                       </span>
                     </button>
-                  ))}
+                    );
+                  })}
 
                   <div className={`pt-4 mt-3 border-t ${sectionBorderClass}`}>
                     <div className="mb-2 flex items-center justify-between px-3">
@@ -389,7 +415,7 @@ export default function DashboardShell({
         </div>
       </aside>
 
-      <div className="flex-1 min-h-screen lg:ml-[280px]">
+      <div className="flex-1 min-h-screen lg:ml-[300px]">
         <header className={`sticky top-0 z-40 border-b backdrop-blur-xl ${panelBorderClass} ${isDark ? 'bg-[#0A2540]/80' : 'bg-white/80'}`}>
           <div className="flex items-center justify-between h-14 sm:h-16 px-4 sm:px-8">
             <div className="flex items-center gap-3">

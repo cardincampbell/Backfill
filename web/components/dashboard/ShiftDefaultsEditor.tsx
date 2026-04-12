@@ -60,8 +60,8 @@ function TimeSelect({
     <div className="relative">
       <button
         ref={buttonRef}
-        className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 transition-all ${
-          compact ? "h-9 text-[11px]" : "h-10 text-[12px]"
+        className={`flex w-full items-center justify-between rounded-lg border transition-all ${
+          compact ? "h-8 gap-1.5 px-2.5 text-[11px]" : "h-10 gap-2 px-3 text-[12px]"
         } ${
           dark
             ? "border-white/[0.08] bg-white/[0.05] text-white hover:border-[#635BFF]/40"
@@ -85,10 +85,10 @@ function TimeSelect({
             : "border border-[#E5E7EB] bg-white shadow-lg"
         }`}
         maxHeight={240}
-        minWidth={compact ? 168 : 180}
+        minWidth={compact ? 118 : 180}
         onClose={() => setOpen(false)}
         open={open}
-        width={compact ? 168 : 180}
+        width={compact ? 118 : 180}
         zIndex={10030}
       >
         {SHIFT_HOUR_OPTIONS.map((option) => {
@@ -160,7 +160,7 @@ function ShiftDefaultCard({
       }`}
     >
       <div className={compact ? "p-3" : "p-4"}>
-        <div className={compact ? "flex items-center gap-2.5" : "flex items-center gap-3"}>
+        <div className={compact ? "flex items-center gap-2" : "flex items-center gap-3"}>
           <div
             className={`flex shrink-0 items-center justify-center ${
               compact ? "h-8 w-8 rounded-lg" : "h-10 w-10 rounded-xl"
@@ -204,7 +204,7 @@ function ShiftDefaultCard({
                 type="button"
               >
                 <span
-                  className={compact ? "text-[13px] text-[#0A2540]" : "text-[14px] text-[#0A2540]"}
+                  className={compact ? "truncate text-[13px] text-[#0A2540]" : "text-[14px] text-[#0A2540]"}
                   style={{ fontWeight: 540, color: dark ? "#FFFFFF" : "#0A2540" }}
                 >
                   {preset.label}
@@ -230,7 +230,33 @@ function ShiftDefaultCard({
             ) : null}
           </div>
 
-          {!compact ? (
+          {compact ? (
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <div className="w-[102px]">
+                <TimeSelect
+                  compact
+                  dark={dark}
+                  onChange={(nextValue) =>
+                    onChange({ ...preset, start_hour: nextValue })
+                  }
+                  value={preset.start_hour}
+                />
+              </div>
+              <span className="text-[10px] text-[#C1CED8]" style={{ fontWeight: 420 }}>
+                to
+              </span>
+              <div className="w-[102px]">
+                <TimeSelect
+                  compact
+                  dark={dark}
+                  onChange={(nextValue) =>
+                    onChange({ ...preset, end_hour: nextValue })
+                  }
+                  value={preset.end_hour}
+                />
+              </div>
+            </div>
+          ) : (
             <div className="hidden shrink-0 items-center gap-2 sm:flex">
               <div className="w-[110px]">
                 <TimeSelect
@@ -257,36 +283,10 @@ function ShiftDefaultCard({
                 />
               </div>
             </div>
-          ) : null}
+          )}
         </div>
 
-        {compact ? (
-          <div className="ml-10 mt-2.5 flex items-center gap-2">
-            <div className="flex-1">
-              <TimeSelect
-                compact
-                dark={dark}
-                onChange={(nextValue) =>
-                  onChange({ ...preset, start_hour: nextValue })
-                }
-                value={preset.start_hour}
-              />
-            </div>
-            <span className="text-[10px] text-[#C1CED8]" style={{ fontWeight: 420 }}>
-              to
-            </span>
-            <div className="flex-1">
-              <TimeSelect
-                compact
-                dark={dark}
-                onChange={(nextValue) =>
-                  onChange({ ...preset, end_hour: nextValue })
-                }
-                value={preset.end_hour}
-              />
-            </div>
-          </div>
-        ) : (
+        {!compact ? (
           <div className="mt-3 ml-[52px] flex items-center gap-2 sm:hidden">
             <div className="flex-1">
               <TimeSelect
@@ -310,7 +310,7 @@ function ShiftDefaultCard({
               />
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </motion.div>
   );

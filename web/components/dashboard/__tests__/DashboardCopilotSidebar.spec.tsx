@@ -7,15 +7,10 @@ vi.mock("@/lib/api/copilot", () => ({
   createCopilotSession: vi.fn(),
 }));
 
-vi.mock("@/lib/api/events", () => ({
-  listPlatformEvents: vi.fn(),
-}));
-
 import {
   createCopilotMessage,
   createCopilotSession,
 } from "@/lib/api/copilot";
-import { listPlatformEvents } from "@/lib/api/events";
 import type { CopilotSessionDetail, CopilotTurn } from "@/lib/types/copilot";
 import DashboardCopilotSidebar from "../DashboardCopilotSidebar";
 
@@ -96,11 +91,9 @@ function deferredPromise<T>() {
 describe("DashboardCopilotSidebar", () => {
   const createCopilotSessionMock = vi.mocked(createCopilotSession);
   const createCopilotMessageMock = vi.mocked(createCopilotMessage);
-  const listPlatformEventsMock = vi.mocked(listPlatformEvents);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    listPlatformEventsMock.mockResolvedValue([]);
   });
 
   it("keeps session creation lazy until the user explicitly starts Copilot", async () => {
@@ -155,7 +148,7 @@ describe("DashboardCopilotSidebar", () => {
     });
   });
 
-  it("waits to load the feed until the feed tab is active", async () => {
+  it("renders a single copilot conversation surface without nested tabs", async () => {
     const user = userEvent.setup();
     createCopilotSessionMock.mockResolvedValue(buildSessionDetail());
     createCopilotMessageMock.mockResolvedValue(buildTurn());
@@ -169,12 +162,15 @@ describe("DashboardCopilotSidebar", () => {
       />,
     );
 
-    expect(listPlatformEventsMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Feed/i })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Feed/i }));
+    await user.click(screen.getByRole("button", { name: "Start Copilot" }));
+    const input = screen.getByPlaceholderText(/Ask Copilot/i);
+    await user.type(input, "Show me open shifts");
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
     await waitFor(() => {
-      expect(listPlatformEventsMock).toHaveBeenCalledTimes(1);
+      expect(createCopilotMessageMock).toHaveBeenCalledTimes(1);
     });
   });
 });

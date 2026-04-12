@@ -24,6 +24,7 @@ import {
   UserMinus,
   UserPlus,
   AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -32,8 +33,11 @@ import {
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
+  listBusinessLocations,
+  listBusinessRoles,
   replaceLocationRoles,
   type BusinessLocation,
+  type BusinessRole,
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
@@ -73,6 +77,10 @@ import {
 } from './location-employee-utils';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
+import {
+  LocationEmployeeBulkUploadModal,
+  LocationEmployeeEnrollmentModal,
+} from './LocationEmployeeActions';
 import {
   getShiftDefaultColor,
   getShiftDefaultIcon,
@@ -118,6 +126,30 @@ const employees: Employee[] = [
   { id: 'e10', name: 'Maria Santos', role: 'Medical Assistant', avatar: 'https://images.unsplash.com/photo-1731005116674-062a313bc7ab?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
   { id: 'e11', name: 'Ryan Murphy', role: 'Medical Assistant', avatar: 'https://images.unsplash.com/photo-1622253694238-3b22139576c6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
 ];
+
+function employeeInitials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'E';
+}
+
+function buildAvatarDataUri(name: string) {
+  const initials = employeeInitials(name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80"><rect width="80" height="80" rx="40" fill="#EEF0FF"/><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="600" fill="#635BFF">${initials}</text></svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function businessEmployeeToSchedulerEmployee(employee: EmployeeSummary): Employee {
+  return {
+    id: employee.id,
+    name: employee.full_name,
+    avatar: buildAvatarDataUri(employee.full_name),
+    role: employee.primary_role_name ?? employee.role_names[0] ?? 'Unassigned',
+  };
+}
 
 /* ─── Helpers ─── */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -491,7 +523,11 @@ function SchedulerContent({
   };
 
   const [weekOffset, setWeekOffset] = useState(0);
-  const [schedulerEmployees] = useState<Employee[]>(employees);
+  const [schedulerEmployees, setSchedulerEmployees] = useState<Employee[]>(employees);
+  const [businessEmployees, setBusinessEmployees] = useState<EmployeeSummary[]>([]);
+  const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
+  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
+  const [loadingBusinessEmployees, setLoadingBusinessEmployees] = useState(false);
   const [shifts, setShifts] = useState<Shift[]>(generateInitialShifts);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [creatingAt, setCreatingAt] = useState<{ employeeId: string; day: number; role: string } | null>(null);
@@ -506,6 +542,7 @@ function SchedulerContent({
   );
   const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
   const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [addEmployeeTab, setAddEmployeeTab] = useState<'existing' | 'new' | 'import'>('existing');
   const [hoveredEmployeeId, setHoveredEmployeeId] = useState<string | null>(null);
   const [swipedEmployeeId, setSwipedEmployeeId] = useState<string | null>(null);
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
@@ -543,6 +580,43 @@ function SchedulerContent({
     setEditorDeleteState(undefined);
     router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
   }, [location, router]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadEmployeeDirectory() {
+      try {
+        setLoadingBusinessEmployees(true);
+        const [employeeDirectory, roleDirectory, locationDirectory] = await Promise.all([
+          listEmployees(location.business_id),
+          listBusinessRoles(location.business_id),
+          listBusinessLocations(location.business_id),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setBusinessEmployees(employeeDirectory);
+        setBusinessRoles(roleDirectory);
+        setBusinessLocations(locationDirectory);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setBusinessEmployees([]);
+        setBusinessRoles([]);
+        setBusinessLocations([]);
+      } finally {
+        if (!cancelled) {
+          setLoadingBusinessEmployees(false);
+        }
+      }
+    }
+
+    void loadEmployeeDirectory();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.business_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -641,10 +715,27 @@ function SchedulerContent({
     setSwipedEmployeeId(null);
   }, [removingEmployee]);
 
-  const addEmployeeToLocation = useCallback((employeeId: string) => {
-    setActiveEmployeeIds((current) => new Set([...current, employeeId]));
-    setShowAddEmployee(false);
+  const attachEmployeeToScheduler = useCallback((employee: EmployeeSummary) => {
+    setSchedulerEmployees((current) => {
+      if (current.some((item) => item.id === employee.id)) {
+        return current;
+      }
+      return [...current, businessEmployeeToSchedulerEmployee(employee)];
+    });
+    setBusinessEmployees((current) => {
+      if (current.some((item) => item.id === employee.id)) {
+        return current;
+      }
+      return [...current, employee];
+    });
+    setActiveEmployeeIds((current) => new Set([...current, employee.id]));
   }, []);
+
+  const addEmployeeToLocation = useCallback((employee: EmployeeSummary) => {
+    attachEmployeeToScheduler(employee);
+    setAddEmployeeTab('existing');
+    setShowAddEmployee(false);
+  }, [attachEmployeeToScheduler]);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
     shifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
@@ -1207,7 +1298,10 @@ function SchedulerContent({
                       >
                         <div className={`${EMP_COL} shrink-0 px-4 py-2`}>
                           <button
-                            onClick={() => setShowAddEmployee(true)}
+                            onClick={() => {
+                              setAddEmployeeTab('existing');
+                              setShowAddEmployee(true);
+                            }}
                             className={`flex items-center gap-1.5 text-[11px] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#635BFF]'} group/add`}
                             style={{ fontWeight: 460 }}
                             type="button"
@@ -1276,7 +1370,10 @@ function SchedulerContent({
                       );
                     })}
                     <button
-                      onClick={() => setShowAddEmployee(true)}
+                      onClick={() => {
+                        setAddEmployeeTab('existing');
+                        setShowAddEmployee(true);
+                      }}
                       className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-xl border border-dashed text-[11px] transition-colors ${
                         isDark
                           ? 'border-white/[0.08] text-[#C1CED8] hover:text-white hover:border-[#635BFF]/40'
@@ -1382,10 +1479,22 @@ function SchedulerContent({
         <AnimatePresence>
           {showAddEmployee ? (
             <AddEmployeeModal
+              activeTab={addEmployeeTab}
+              businessEmployees={businessEmployees}
+              businessId={location.business_id}
+              businessLocations={businessLocations}
+              businessRoles={businessRoles}
               dark={isDark}
-              employees={schedulerEmployees}
+              loadingBusinessEmployees={loadingBusinessEmployees}
+              locationId={location.location_id}
+              locationName={locationDisplayName}
               activeEmployeeIds={activeEmployeeIds}
-              onClose={() => setShowAddEmployee(false)}
+              onActiveTabChange={setAddEmployeeTab}
+              onAttach={attachEmployeeToScheduler}
+              onClose={() => {
+                setAddEmployeeTab('existing');
+                setShowAddEmployee(false);
+              }}
               onAdd={addEmployeeToLocation}
             />
           ) : null}
@@ -1711,34 +1820,69 @@ function RemoveEmployeeModal({
 }
 
 function AddEmployeeModal({
+  activeTab,
+  businessEmployees,
+  businessId,
+  businessLocations,
+  businessRoles,
   dark = false,
-  employees,
+  loadingBusinessEmployees,
+  locationId,
+  locationName,
   activeEmployeeIds,
+  onActiveTabChange,
+  onAttach,
   onClose,
   onAdd,
 }: {
+  activeTab: 'existing' | 'new' | 'import';
+  businessEmployees: EmployeeSummary[];
+  businessId: string;
+  businessLocations: BusinessLocation[];
+  businessRoles: BusinessRole[];
   dark?: boolean;
-  employees: Employee[];
+  loadingBusinessEmployees: boolean;
+  locationId: string;
+  locationName: string;
   activeEmployeeIds: Set<string>;
+  onActiveTabChange: (tab: 'existing' | 'new' | 'import') => void;
+  onAttach: (employee: EmployeeSummary) => void;
   onClose: () => void;
-  onAdd: (employeeId: string) => void;
+  onAdd: (employee: EmployeeSummary) => void;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const availableEmployees = employees.filter((employee) => !activeEmployeeIds.has(employee.id));
-  const filteredEmployees = availableEmployees.filter((employee) =>
-    employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    employee.role.toLowerCase().includes(searchQuery.toLowerCase()),
+  const searchableEmployees = useMemo(
+    () =>
+      businessEmployees.filter((employee) => !activeEmployeeIds.has(employee.id)),
+    [activeEmployeeIds, businessEmployees],
   );
-  const employeesByRole = useMemo(() => {
-    const grouped: Record<string, Employee[]> = {};
-    filteredEmployees.forEach((employee) => {
-      if (!grouped[employee.role]) {
-        grouped[employee.role] = [];
-      }
-      grouped[employee.role].push(employee);
-    });
-    return grouped;
-  }, [filteredEmployees]);
+  const filteredEmployees = useMemo(
+    () =>
+      searchableEmployees.filter((employee) => {
+        const normalizedQuery = searchQuery.trim().toLowerCase();
+        if (!normalizedQuery) {
+          return true;
+        }
+        return (
+          employee.full_name.toLowerCase().includes(normalizedQuery) ||
+          employee.role_names.some((role) => role.toLowerCase().includes(normalizedQuery))
+        );
+      }),
+    [searchQuery, searchableEmployees],
+  );
+  const availableReadyEmployees = useMemo(
+    () => filteredEmployees.filter((employee) => employee.role_names.length > 0),
+    [filteredEmployees],
+  );
+  const availableUnavailableEmployees = useMemo(
+    () => filteredEmployees.filter((employee) => employee.role_names.length === 0),
+    [filteredEmployees],
+  );
+  const canOpenNewTab =
+    !loadingBusinessEmployees &&
+    businessLocations.length > 0 &&
+    businessRoles.length > 0;
+  const canOpenImportTab = !loadingBusinessEmployees;
   const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
   const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
@@ -1756,7 +1900,7 @@ function AddEmployeeModal({
           <div>
             <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h3>
             <p className={`text-[11px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>
-              {availableEmployees.length} available
+              Choose from existing, add new, or import multiple
             </p>
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`} type="button">
@@ -1764,92 +1908,247 @@ function AddEmployeeModal({
           </button>
         </div>
 
-        {availableEmployees.length > 0 ? (
-          <div className="px-6 pt-4 pb-3">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search by name or role..."
-              className={`w-full px-3.5 py-2.5 border rounded-xl text-[13px] placeholder:text-[#8898AA] focus:border-[#635BFF]/40 focus:outline-none focus:ring-2 focus:ring-[#635BFF]/10 transition-all ${
-                dark
-                  ? 'border-white/[0.08] bg-white/[0.04] text-white'
-                  : 'border-[#E5E7EB] bg-white text-[#0A2540]'
-              }`}
-              style={{ fontWeight: 440 }}
-            />
+        <div className={`px-6 py-4 border-b ${borderClass}`}>
+          <div className={`flex items-center gap-1 rounded-lg p-0.5 ${dark ? 'bg-white/[0.04]' : 'bg-[#F0F0F5]'}`}>
+            {[
+              { value: 'existing', label: 'Existing' },
+              { value: 'new', label: 'New Employee' },
+              { value: 'import', label: 'Import' },
+            ].map((tab) => {
+              const selected = activeTab === tab.value;
+              const disabled =
+                tab.value === 'new'
+                  ? !canOpenNewTab
+                  : tab.value === 'import'
+                    ? !canOpenImportTab
+                    : false;
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => {
+                    if (!disabled) {
+                      onActiveTabChange(tab.value as 'existing' | 'new' | 'import');
+                    }
+                  }}
+                  className={`flex-1 rounded-md py-2 text-[12px] transition-all duration-200 ${
+                    selected
+                      ? dark
+                        ? 'bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]'
+                        : 'bg-white text-[#0A2540] shadow-sm'
+                      : `${textSecondary} ${disabled ? 'opacity-50' : dark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+                  }`}
+                  disabled={disabled}
+                  style={{ fontWeight: selected ? 520 : 440 }}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
-        ) : null}
+        </div>
 
-        <div className="px-6 pb-5 max-h-[400px] overflow-y-auto">
-          {availableEmployees.length === 0 ? (
-            <div className="py-8 text-center">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
-                <UserPlus size={20} className="text-[#8898AA]" />
+        {activeTab === 'existing' ? (
+          <div className="px-6 py-4 max-h-[420px] overflow-y-auto">
+            {searchableEmployees.length > 0 ? (
+              <div className="pb-3">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search by name or role..."
+                  className={`w-full px-3.5 py-2.5 border rounded-xl text-[13px] placeholder:text-[#8898AA] focus:border-[#635BFF]/40 focus:outline-none focus:ring-2 focus:ring-[#635BFF]/10 transition-all ${
+                    dark
+                      ? 'border-white/[0.08] bg-white/[0.04] text-white'
+                      : 'border-[#E5E7EB] bg-white text-[#0A2540]'
+                  }`}
+                  style={{ fontWeight: 440 }}
+                />
               </div>
-              <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
-                All employees are already added
-              </p>
-            </div>
-          ) : filteredEmployees.length === 0 ? (
-            <div className="py-8 text-center">
-              <p className="text-[13px] text-[#8898AA]" style={{ fontWeight: 440 }}>
-                No employees match &quot;{searchQuery}&quot;
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {roleOrder.filter((role) => employeesByRole[role]).map((role) => {
-                const roleColor = roleColors[role] || '#635BFF';
-                const roleEmployees = employeesByRole[role];
-                return (
-                  <div key={role}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                      <span className={`text-[11px] uppercase tracking-[0.03em] ${textPrimary}`} style={{ fontWeight: 580 }}>
-                        {role}
-                      </span>
-                      <span className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                        {roleEmployees.length}
-                      </span>
-                    </div>
-                    <div className="space-y-1.5">
-                      {roleEmployees.map((employee) => (
-                        <button
-                          key={employee.id}
-                          onClick={() => onAdd(employee.id)}
-                          className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all group ${
+            ) : null}
+
+            {loadingBusinessEmployees ? (
+              <div className="py-8 text-center">
+                <p className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  Loading business employees...
+                </p>
+              </div>
+            ) : searchableEmployees.length === 0 ? (
+              <div className="py-8 text-center">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
+                  <UserPlus size={20} className="text-[#8898AA]" />
+                </div>
+                <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
+                  {businessEmployees.length === 0
+                    ? 'No employees found yet'
+                    : 'All employees are already added'}
+                </p>
+                {businessEmployees.length === 0 ? (
+                  <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    Use New Employee or Import to add someone to this scheduler.
+                  </p>
+                ) : null}
+              </div>
+            ) : filteredEmployees.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+                  No employees match &quot;{searchQuery}&quot;
+                </p>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
+                    Available Employees
+                  </h4>
+                  <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                    {availableReadyEmployees.length} of {filteredEmployees.length}
+                  </span>
+                </div>
+                {availableReadyEmployees.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {availableReadyEmployees.map((employee) => (
+                      <button
+                        key={employee.id}
+                        onClick={() => onAdd(employee)}
+                        className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${
+                          dark
+                            ? 'bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]'
+                            : 'bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]'
+                        }`}
+                        type="button"
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
+                          {employeeInitials(employee.full_name)}
+                        </span>
+                        <span
+                          className={`text-[12px] transition-colors ${
                             dark
-                              ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]'
-                              : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'
+                              ? 'text-[#C1CED8] group-hover:text-white'
+                              : 'text-[#5E6D7A] group-hover:text-[#0A2540]'
                           }`}
-                          type="button"
+                          style={{ fontWeight: 440 }}
                         >
-                          <img src={employee.avatar} alt={employee.name}
-                            className={`w-9 h-9 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
-                          <div className="flex-1 text-left min-w-0">
-                            <p className={`text-[13px] truncate ${textPrimary}`} style={{ fontWeight: 500 }}>
-                              {employee.name}
-                            </p>
-                            <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                              {employee.role}
-                            </p>
+                          {employee.full_name}
+                        </span>
+                        <Plus
+                          size={11}
+                          className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={`py-2 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    All schedule-ready employees are already added to this scheduler.
+                  </p>
+                )}
+
+                {availableUnavailableEmployees.length > 0 ? (
+                  <div className="mt-5">
+                    <div className="mb-2.5">
+                      <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
+                        Needs role assignment
+                      </h4>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {availableUnavailableEmployees.map((employee) => (
+                        <div
+                          key={employee.id}
+                          className={`group relative z-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 hover:z-20 ${
+                            dark
+                              ? 'border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]'
+                              : 'border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]'
+                          }`}
+                        >
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
+                            {employeeInitials(employee.full_name)}
+                          </span>
+                          <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                            {employee.full_name}
+                          </span>
+                          <div className="relative ml-0.5">
+                            <Info size={12} className="cursor-default text-[#FFB800]" />
+                            <div
+                              className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                                dark
+                                  ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
+                                  : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
+                              }`}
+                              style={{ fontWeight: 440 }}
+                            >
+                              Assign at least one role before adding this employee to the scheduler.
+                            </div>
                           </div>
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
-                            dark ? 'bg-white/[0.06] group-hover:bg-[#635BFF]/[0.16]' : 'bg-[#635BFF]/[0.06] group-hover:bg-[#635BFF]/[0.10]'
-                          }`}>
-                            <Plus size={14} className="text-[#635BFF]" />
-                          </div>
-                        </button>
+                        </div>
                       ))}
                     </div>
                   </div>
-                );
-              })}
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="px-6 py-6">
+            <div className={`rounded-2xl border px-4 py-4 ${
+              dark
+                ? 'border-white/[0.08] bg-white/[0.03]'
+                : 'border-[#E5E7EB] bg-[#FAFBFC]'
+            }`}>
+              <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+                {activeTab === 'new' ? 'Open the employee enrollment flow' : 'Open the employee import flow'}
+              </p>
+              <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                {activeTab === 'new'
+                  ? 'Use the same Add Employee experience from Team. This employee will be assigned to this location automatically.'
+                  : 'Use the same Import Employees flow from Team. Imported employees will be assigned to this location automatically.'}
+              </p>
+              {((activeTab === 'new' && !canOpenNewTab) ||
+                (activeTab === 'import' && !canOpenImportTab)) ? (
+                <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  {activeTab === 'new'
+                    ? 'Loading live roles and locations for this business...'
+                    : 'Loading employee import tools...'}
+                </p>
+              ) : null}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </motion.div>
+
+      <AnimatePresence>
+        {activeTab === 'new' && canOpenNewTab ? (
+          <LocationEmployeeEnrollmentModal
+            businessId={businessId}
+            businessLocations={businessLocations}
+            dark={dark}
+            locationId={locationId}
+            locationName={locationName}
+            onClose={() => onActiveTabChange('existing')}
+            onCreated={(employee) => {
+              onAttach(employee);
+              onClose();
+            }}
+            roles={businessRoles}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {activeTab === 'import' && canOpenImportTab ? (
+          <LocationEmployeeBulkUploadModal
+            businessId={businessId}
+            dark={dark}
+            locationId={locationId}
+            locationName={locationName}
+            onClose={() => onActiveTabChange('existing')}
+            onImported={async (importedEmployees) => {
+              importedEmployees.forEach((employee) => onAttach(employee));
+              onClose();
+            }}
+          />
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }
