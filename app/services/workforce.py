@@ -1275,6 +1275,18 @@ async def replace_employee_availability_rules(
     return await _list_employee_availability_rules(session, employee_id)
 
 
+async def get_employee_availability_rules(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> tuple[Employee, list[EmployeeAvailabilityRule]]:
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.business_id != business_id:
+        raise LookupError("employee_not_found")
+    rules = await _list_employee_availability_rules(session, employee_id)
+    return employee, rules
+
+
 async def get_self_employee_availability_rules(
     session: AsyncSession,
     business_id: UUID,

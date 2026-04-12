@@ -19,13 +19,26 @@ import {
 } from "@/lib/api/businesses";
 import {
   deleteEmployee,
+  getEmployeeAvailability,
   getEmployeeDeleteReadiness,
   getEmployeeProfile,
+  replaceEmployeeAvailability,
   updateEmployee,
   type EmployeeProfile,
 } from "@/lib/api/workforce";
 import { validateCustomRoleName } from "@/lib/role-name-validation";
 
+import {
+  AvailabilityEditorPanel,
+  type AvailabilityEditorFeedback,
+  buildStateFromRules,
+  countDayChanges,
+  createDefaultDayMap,
+  ensureTimeOrder,
+  serializeAvailability,
+  statesEqual,
+  type DayState,
+} from "./AvailabilityEditorPanel";
 import { getLocationReference } from "./location-role-reference";
 
 type Feedback =
@@ -34,6 +47,8 @@ type Feedback =
       message: string;
     }
   | null;
+
+type AvailabilityStatus = "loading" | "ready" | "error";
 
 export type EmployeeEditorSeed = {
   id: string;
@@ -146,6 +161,15 @@ function getReliabilityColor(reliability: number) {
     return "#F59E0B";
   }
   return "#E5484D";
+}
+
+function resolveAvailabilityTimezone(
+  timezone?: string | null,
+): string {
+  if (timezone && timezone.trim()) {
+    return timezone;
+  }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 const statusConfig = {
@@ -283,6 +307,19 @@ export function EmployeeEditorDrawer({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [profile, setProfile] = useState<EmployeeProfile | null>(null);
+  const [availabilityStatus, setAvailabilityStatus] = useState<AvailabilityStatus>("loading");
+  const [availabilityFeedback, setAvailabilityFeedback] =
+    useState<AvailabilityEditorFeedback>(null);
+  const [availabilityTimezone, setAvailabilityTimezone] = useState(() =>
+    resolveAvailabilityTimezone(),
+  );
+  const [availabilityDayStates, setAvailabilityDayStates] = useState<Record<number, DayState>>(
+    createDefaultDayMap,
+  );
+  const [availabilityBaseline, setAvailabilityBaseline] = useState<Record<number, DayState>>(
+    createDefaultDayMap,
+  );
+  const [availabilitySavedPulse, setAvailabilitySavedPulse] = useState(false);
   const [loading, setLoading] = useState(true);
   const [deleteState, setDeleteState] = useState<{
     canDelete: boolean;
@@ -302,13 +339,28 @@ export function EmployeeEditorDrawer({
     setPhone(employee.phone_e164 ?? "");
     setFormData(buildAssignmentStateFromSeed(employee, roles, locations));
     setProfile(null);
+    setAvailabilityStatus("loading");
+    setAvailabilityFeedback(null);
+    setAvailabilityTimezone(resolveAvailabilityTimezone());
+    setAvailabilityDayStates(createDefaultDayMap());
+    setAvailabilityBaseline(createDefaultDayMap());
+    setAvailabilitySavedPulse(false);
     setDeleteState({ canDelete: false, checking: true, reason: null });
 
     async function loadProfile() {
       try {
-        const [nextProfile, readiness] = await Promise.all([
+        const [nextProfile, readiness, availability] = await Promise.all([
           getEmployeeProfile(businessId, employee.id).catch(() => null),
           getEmployeeDeleteReadiness(businessId, employee.id).catch(() => null),
+          getEmployeeAvailability(businessId, employee.id)
+            .then((value) => ({ value, error: null }))
+            .catch((error: unknown) => ({
+              value: null,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not load this employee's availability.",
+            })),
         ]);
         if (cancelled) {
           return;
@@ -330,6 +382,24 @@ export function EmployeeEditorDrawer({
                 reason: "Could not determine whether this employee can be removed.",
               },
         );
+        if (availability.value) {
+          const nextAvailabilityState = buildStateFromRules(availability.value);
+          setAvailabilityTimezone(
+            availability.value.rules.length > 0
+              ? resolveAvailabilityTimezone(availability.value.timezone)
+              : resolveAvailabilityTimezone(),
+          );
+          setAvailabilityDayStates(nextAvailabilityState);
+          setAvailabilityBaseline(nextAvailabilityState);
+          setAvailabilityFeedback(null);
+          setAvailabilityStatus("ready");
+        } else {
+          setAvailabilityStatus("error");
+          setAvailabilityFeedback({
+            tone: "error",
+            message: availability.error ?? "Could not load this employee's availability.",
+          });
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -350,6 +420,14 @@ export function EmployeeEditorDrawer({
     const timeoutId = window.setTimeout(() => setFeedback(null), 4000);
     return () => window.clearTimeout(timeoutId);
   }, [feedback]);
+
+  useEffect(() => {
+    if (!availabilitySavedPulse) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setAvailabilitySavedPulse(false), 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [availabilitySavedPulse]);
 
   const baselineState = useMemo(
     () =>
@@ -400,7 +478,7 @@ export function EmployeeEditorDrawer({
     subtleSurfacePanelClass: dark ? "bg-white/[0.02]" : "bg-white",
   };
 
-  const dirtyCount = useMemo(() => {
+  const profileDirtyCount = useMemo(() => {
     let count = 0;
 
     if (email.trim() !== baselineEmail.trim()) {
@@ -445,6 +523,18 @@ export function EmployeeEditorDrawer({
     phone,
   ]);
 
+  const availabilityDirty =
+    availabilityStatus === "ready" &&
+    !statesEqual(availabilityDayStates, availabilityBaseline);
+  const availabilityDirtyCount = useMemo(
+    () =>
+      availabilityStatus === "ready"
+        ? countDayChanges(availabilityDayStates, availabilityBaseline)
+        : 0,
+    [availabilityBaseline, availabilityDayStates, availabilityStatus],
+  );
+  const dirtyCount = profileDirtyCount + availabilityDirtyCount;
+
   const canSave =
     Boolean(formData.primaryRoleId) &&
     Boolean(formData.primaryLocationId) &&
@@ -456,6 +546,103 @@ export function EmployeeEditorDrawer({
     }
     setFeedback(null);
   }, [dirtyCount, feedback]);
+
+  const setAvailabilityDayEnabled = (dayIndex: number, enabled: boolean) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: {
+        ...current[dayIndex],
+        enabled,
+      },
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const setAvailabilityStartTime = (dayIndex: number, startTime: string) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: ensureTimeOrder({
+        ...current[dayIndex],
+        enabled: true,
+        startTime,
+      }),
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const setAvailabilityEndTime = (dayIndex: number, endTime: string) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: ensureTimeOrder({
+        ...current[dayIndex],
+        enabled: true,
+        endTime,
+      }),
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const copyAvailabilityToAll = (sourceDayIndex: number) => {
+    setAvailabilityDayStates((current) => {
+      const source = current[sourceDayIndex];
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        const numericKey = Number(key);
+        if (numericKey !== sourceDayIndex) {
+          next[numericKey] = { ...source };
+        }
+      }
+      return next;
+    });
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const applyAvailabilityPreset = (
+    dayFilter: "all" | "weekdays" | "weekends",
+    timeFilter: "all" | "mornings" | "evenings",
+  ) => {
+    setAvailabilityDayStates((current) => {
+      const next = { ...current };
+      for (const [dayKey, value] of Object.entries(current)) {
+        const dayIndex = Number(dayKey);
+        const isWeekday = dayIndex <= 4;
+        const isWeekend = dayIndex >= 5;
+
+        let enabled = false;
+        if (dayFilter === "all") {
+          enabled = true;
+        } else if (dayFilter === "weekdays") {
+          enabled = isWeekday;
+        } else if (dayFilter === "weekends") {
+          enabled = isWeekend;
+        }
+
+        let startTime = "5:00 AM";
+        let endTime = "11:30 PM";
+        if (timeFilter === "mornings") {
+          startTime = "5:00 AM";
+          endTime = "2:00 PM";
+        } else if (timeFilter === "evenings") {
+          startTime = "4:00 PM";
+          endTime = "11:30 PM";
+        }
+
+        next[dayIndex] = {
+          ...value,
+          enabled,
+          startTime,
+          endTime,
+        };
+      }
+      return next;
+    });
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
 
   const toggleRole = (roleId: string) => {
     setFormData((current) => {
@@ -541,27 +728,77 @@ export function EmployeeEditorDrawer({
     }
 
     const pendingChangeCount = dirtyCount;
+    const hasProfileChanges = profileDirtyCount > 0;
+    const hasAvailabilityChanges = availabilityDirty;
 
     try {
       setIsSaving(true);
       setFeedback(null);
-      const nextProfile = await updateEmployee(businessId, employee.id, {
-        email: email.trim() || null,
-        phone_e164: phone.trim() || null,
-        roles: formData.selectedRoleIds.map((roleId) => ({
-          role_id: roleId,
-          is_primary: roleId === formData.primaryRoleId,
-        })),
-        locations: formData.selectedLocationIds.map((locationId) => ({
-          location_id: locationId,
-          is_primary: locationId === formData.primaryLocationId,
-        })),
-      });
-      setProfile(nextProfile);
-      setFormData(buildAssignmentStateFromProfile(nextProfile));
-      setEmail(nextProfile.email ?? "");
-      setPhone(nextProfile.phone_e164 ?? "");
-      await onSaved(nextProfile);
+      let nextProfile = profile;
+
+      if (hasProfileChanges) {
+        nextProfile = await updateEmployee(businessId, employee.id, {
+          email: email.trim() || null,
+          phone_e164: phone.trim() || null,
+          roles: formData.selectedRoleIds.map((roleId) => ({
+            role_id: roleId,
+            is_primary: roleId === formData.primaryRoleId,
+          })),
+          locations: formData.selectedLocationIds.map((locationId) => ({
+            location_id: locationId,
+            is_primary: locationId === formData.primaryLocationId,
+          })),
+        });
+        setProfile(nextProfile);
+        setFormData(buildAssignmentStateFromProfile(nextProfile));
+        setEmail(nextProfile.email ?? "");
+        setPhone(nextProfile.phone_e164 ?? "");
+        await onSaved(nextProfile);
+      }
+
+      if (hasAvailabilityChanges) {
+        try {
+          const payload = serializeAvailability(
+            availabilityDayStates,
+            availabilityTimezone,
+          );
+          const response = await replaceEmployeeAvailability(
+            businessId,
+            employee.id,
+            payload,
+          );
+          const nextAvailabilityState = buildStateFromRules(response);
+          setAvailabilityTimezone(
+            response.rules.length > 0
+              ? resolveAvailabilityTimezone(response.timezone)
+              : availabilityTimezone,
+          );
+          setAvailabilityDayStates(nextAvailabilityState);
+          setAvailabilityBaseline(nextAvailabilityState);
+          setAvailabilityFeedback(null);
+          setAvailabilitySavedPulse(true);
+        } catch (error) {
+          setAvailabilitySavedPulse(false);
+          setAvailabilityFeedback({
+            tone: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not update this employee's availability.",
+          });
+          setFeedback({
+            tone: "error",
+            message:
+              hasProfileChanges
+                ? "Saved employee details but could not update availability."
+                : error instanceof Error
+                  ? error.message
+                  : "Could not update this employee's availability.",
+          });
+          return;
+        }
+      }
+
       setFeedback({
         tone: "success",
         message: `Saved ${pendingChangeCount} change${pendingChangeCount === 1 ? "" : "s"} for ${name}.`,
@@ -569,7 +806,10 @@ export function EmployeeEditorDrawer({
     } catch (error) {
       setFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : "Could not update this employee.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Could not update this employee.",
       });
     } finally {
       setIsSaving(false);
@@ -973,6 +1213,35 @@ export function EmployeeEditorDrawer({
                 </button>
               </div>
             </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <h3
+                className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
+                style={{ fontWeight: 500 }}
+              >
+                Availability
+              </h3>
+              <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                {availabilityStatus === "ready"
+                  ? `${availabilityDirtyCount} change${availabilityDirtyCount === 1 ? "" : "s"}`
+                  : "Weekly hours"}
+              </span>
+            </div>
+            <AvailabilityEditorPanel
+              dark={dark}
+              dayStates={availabilityDayStates}
+              feedback={availabilityFeedback}
+              loadingMessage="Loading availability..."
+              onApplyPreset={applyAvailabilityPreset}
+              onCopyToAll={copyAvailabilityToAll}
+              onSetDayEnabled={setAvailabilityDayEnabled}
+              onSetEndTime={setAvailabilityEndTime}
+              onSetStartTime={setAvailabilityStartTime}
+              savedPulse={availabilitySavedPulse}
+              status={availabilityStatus}
+            />
           </div>
 
           {onDeleted ? (

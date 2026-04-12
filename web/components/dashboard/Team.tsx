@@ -2338,7 +2338,7 @@ export default function Team({
               onFocus={() => setSearchFocused(true)}
               onBlur={() => setSearchFocused(false)}
               placeholder="Search..."
-              className={`w-full pl-9 pr-3 py-2.5 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
+              className={`w-full rounded-lg border py-2.5 pl-9 pr-3 text-[16px] transition-all focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] focus:outline-none sm:text-[12px] ${theme.inputClass}`}
               style={{ fontWeight: 420 }}
             />
           </motion.div>
