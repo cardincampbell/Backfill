@@ -1844,7 +1844,7 @@ function SchedulerContent({
                           <ChevronDown size={12} className={`${theme.textSecondary} transition-colors ${isDark ? 'group-hover:text-white' : 'group-hover:text-[#5E6D7A]'}`} />
                         </motion.div>
                         <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
-                        <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
+                        <span className={`text-[11px] uppercase tracking-[0.03em] whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
                           {roleEntry.name}
                         </span>
                         <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -1993,7 +1993,7 @@ function SchedulerContent({
                 <div key={roleEntry.id} className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
-                    <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{roleEntry.name}</span>
+                    <span className={`text-[11px] uppercase tracking-[0.03em] whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{roleEntry.name}</span>
                     <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{roleEmps.length}</span>
                   </div>
 
