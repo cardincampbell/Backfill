@@ -286,6 +286,16 @@ function uniqueOrdered(values: Array<string | null | undefined>) {
   return ordered;
 }
 
+function intersectAll(values: string[][]) {
+  if (!values.length) {
+    return [];
+  }
+  return values.reduce<string[]>((shared, current) => {
+    const currentSet = new Set(current);
+    return shared.filter((value) => currentSet.has(value));
+  }, uniqueOrdered(values[0]));
+}
+
 function mapEmployeeStatus(status: string): Employee['status'] {
   if (status === 'on_leave') {
     return 'on_leave';
@@ -1216,7 +1226,7 @@ function BulkUploadModal({
               <Upload size={18} className="text-[#00B893]" />
             </div>
             <div>
-              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Bulk Upload</h2>
+              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Import Employees</h2>
               <p className={`text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Import employees from a CSV or Excel file</p>
             </div>
           </div>
@@ -1286,11 +1296,11 @@ function BulkUploadModal({
                       <motion.div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]"
                         initial={{ width: 0 }} animate={{ width: `${Math.min(uploadProgress, 100)}%` }} />
                     </div>
-                    <p className={`mt-1.5 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Processing...</p>
-                  </div>
-                ) : (
+                  <p className={`mt-1.5 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Processing...</p>
+                </div>
+              ) : (
                   <p className="text-[12px] text-[#00B893]" style={{ fontWeight: 480 }}>Ready to import this file</p>
-                )}
+              )}
               </div>
             ) : (
               <div>
@@ -1530,17 +1540,19 @@ function BulkActionModalShell({
 function BulkAssignLocationsModal({
   count,
   dark,
+  initialSelectedLocationIds = [],
   locations,
   onClose,
   onConfirm,
 }: {
   count: number;
   dark: boolean;
+  initialSelectedLocationIds?: string[];
   locations: BusinessLocation[];
   onClose(): void;
   onConfirm(locationIds: string[]): Promise<void>;
 }) {
-  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
+  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>(initialSelectedLocationIds);
   const selectedLocations = locations.filter((location) => selectedLocationIds.includes(location.id));
   const availableLocations = locations.filter((location) => !selectedLocationIds.includes(location.id));
 
@@ -1555,11 +1567,11 @@ function BulkAssignLocationsModal({
   return (
     <BulkActionModalShell
       dark={dark}
-      title="Add Locations"
-      subtitle={`Assign additional locations to ${count} selected employee${count === 1 ? '' : 's'}.`}
-      footerNote="Selected locations will be added to the current employee assignments."
-      confirmLabel={selectedLocationIds.length ? `Add ${selectedLocationIds.length} Location${selectedLocationIds.length === 1 ? '' : 's'}` : 'Add Locations'}
-      confirmDisabled={!selectedLocationIds.length}
+      title="Assign Locations"
+      subtitle={`Update the shared location assignments for ${count} selected employee${count === 1 ? '' : 's'}.`}
+      footerNote="Shared locations can be added or removed here. Employee-specific locations stay intact."
+      confirmLabel="Update Locations"
+      confirmDisabled={selectedLocationIds.length === 0 && initialSelectedLocationIds.length === 0}
       onClose={onClose}
       onConfirm={() => onConfirm(selectedLocationIds)}
     >
@@ -1639,17 +1651,19 @@ function BulkAssignLocationsModal({
 function BulkAssignRolesModal({
   count,
   dark,
+  initialSelectedRoleIds = [],
   roles,
   onClose,
   onConfirm,
 }: {
   count: number;
   dark: boolean;
+  initialSelectedRoleIds?: string[];
   roles: BusinessRole[];
   onClose(): void;
   onConfirm(roleIds: string[]): Promise<void>;
 }) {
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>(initialSelectedRoleIds);
   const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
   const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
 
@@ -1664,11 +1678,11 @@ function BulkAssignRolesModal({
   return (
     <BulkActionModalShell
       dark={dark}
-      title="Add Roles"
-      subtitle={`Assign additional roles to ${count} selected employee${count === 1 ? '' : 's'}.`}
-      footerNote="Selected roles will be added to the current employee assignments."
-      confirmLabel={selectedRoleIds.length ? `Add ${selectedRoleIds.length} Role${selectedRoleIds.length === 1 ? '' : 's'}` : 'Add Roles'}
-      confirmDisabled={!selectedRoleIds.length}
+      title="Assign Roles"
+      subtitle={`Update the shared role assignments for ${count} selected employee${count === 1 ? '' : 's'}.`}
+      footerNote="Shared roles can be added or removed here. Employee-specific roles stay intact."
+      confirmLabel="Update Roles"
+      confirmDisabled={selectedRoleIds.length === 0 && initialSelectedRoleIds.length === 0}
       onClose={onClose}
       onConfirm={() => onConfirm(selectedRoleIds)}
     >
@@ -2114,6 +2128,26 @@ export default function Team({
     [employeesData, selectedEmployees],
   );
 
+  const sharedSelectedLocationIds = useMemo(
+    () =>
+      intersectAll(
+        selectedEmployeeRecords.map((employee) =>
+          buildEmployeeEditorSeed(employee, businessRoles, businessLocations).location_ids,
+        ),
+      ),
+    [businessLocations, businessRoles, selectedEmployeeRecords],
+  );
+
+  const sharedSelectedRoleIds = useMemo(
+    () =>
+      intersectAll(
+        selectedEmployeeRecords.map((employee) =>
+          buildEmployeeEditorSeed(employee, businessRoles, businessLocations).role_ids,
+        ),
+      ),
+    [businessLocations, businessRoles, selectedEmployeeRecords],
+  );
+
   const handleBulkAction = useCallback((action: 'assign-location' | 'assign-role' | 'export' | 'remove') => {
     switch (action) {
       case 'assign-location':
@@ -2133,13 +2167,24 @@ export default function Team({
 
   const handleBulkAssignLocations = useCallback(async (locationIds: string[]) => {
     if (!businessId || !locationIds.length || !selectedEmployeeRecords.length) {
-      return;
+      if (!businessId || !selectedEmployeeRecords.length) {
+        return;
+      }
     }
+
+    const initialSharedLocationIds = intersectAll(
+      selectedEmployeeRecords.map((employee) =>
+        buildEmployeeEditorSeed(employee, businessRoles, businessLocations).location_ids,
+      ),
+    );
 
     const updatedEmployees = await Promise.all(
       selectedEmployeeRecords.map(async (employee) => {
         const seed = buildEmployeeEditorSeed(employee, businessRoles, businessLocations);
-        const nextLocationIds = uniqueOrdered([...seed.location_ids, ...locationIds]);
+        const preservedLocationIds = seed.location_ids.filter(
+          (locationId) => !initialSharedLocationIds.includes(locationId),
+        );
+        const nextLocationIds = uniqueOrdered([...preservedLocationIds, ...locationIds]);
         const primaryLocationId =
           seed.primary_location_id && nextLocationIds.includes(seed.primary_location_id)
             ? seed.primary_location_id
@@ -2162,19 +2207,30 @@ export default function Team({
     clearSelection();
     setFeedback({
       tone: 'success',
-      message: `Added ${locationIds.length} location${locationIds.length === 1 ? '' : 's'} to ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
+      message: `Updated locations for ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
     });
   }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
 
   const handleBulkAssignRoles = useCallback(async (roleIds: string[]) => {
     if (!businessId || !roleIds.length || !selectedEmployeeRecords.length) {
-      return;
+      if (!businessId || !selectedEmployeeRecords.length) {
+        return;
+      }
     }
+
+    const initialSharedRoleIds = intersectAll(
+      selectedEmployeeRecords.map((employee) =>
+        buildEmployeeEditorSeed(employee, businessRoles, businessLocations).role_ids,
+      ),
+    );
 
     const updatedEmployees = await Promise.all(
       selectedEmployeeRecords.map(async (employee) => {
         const seed = buildEmployeeEditorSeed(employee, businessRoles, businessLocations);
-        const nextRoleIds = uniqueOrdered([...seed.role_ids, ...roleIds]);
+        const preservedRoleIds = seed.role_ids.filter(
+          (roleId) => !initialSharedRoleIds.includes(roleId),
+        );
+        const nextRoleIds = uniqueOrdered([...preservedRoleIds, ...roleIds]);
         const primaryRoleId =
           seed.primary_role_id && nextRoleIds.includes(seed.primary_role_id)
             ? seed.primary_role_id
@@ -2197,7 +2253,7 @@ export default function Team({
     clearSelection();
     setFeedback({
       tone: 'success',
-      message: `Added ${roleIds.length} role${roleIds.length === 1 ? '' : 's'} to ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
+      message: `Updated roles for ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
     });
   }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
 
@@ -2338,7 +2394,7 @@ export default function Team({
               onFocus={() => setSearchFocused(true)}
               onBlur={() => setSearchFocused(false)}
               placeholder="Search..."
-              className={`w-full pl-9 pr-3 py-2.5 rounded-lg border text-[12px] focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${theme.inputClass}`}
+              className={`w-full rounded-lg border py-2.5 pl-9 pr-3 text-[16px] transition-all focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] focus:outline-none sm:text-[12px] ${theme.inputClass}`}
               style={{ fontWeight: 420 }}
             />
           </motion.div>
@@ -2862,6 +2918,7 @@ export default function Team({
           <BulkAssignLocationsModal
             count={selectedCount}
             dark={isDark}
+            initialSelectedLocationIds={sharedSelectedLocationIds}
             locations={businessLocations}
             onClose={() => setShowBulkAssignLocation(false)}
             onConfirm={async (locationIds) => {
@@ -2874,6 +2931,7 @@ export default function Team({
           <BulkAssignRolesModal
             count={selectedCount}
             dark={isDark}
+            initialSelectedRoleIds={sharedSelectedRoleIds}
             roles={businessRoles}
             onClose={() => setShowBulkAssignRole(false)}
             onConfirm={async (roleIds) => {

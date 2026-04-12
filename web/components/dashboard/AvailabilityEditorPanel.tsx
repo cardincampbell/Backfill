@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Briefcase,
@@ -22,25 +15,23 @@ import {
 } from "lucide-react";
 
 import { FloatingDropdown } from "@/components/floating-dropdown";
-import {
-  getSelfEmployeeAvailability,
-  replaceSelfEmployeeAvailability,
-  type SelfEmployeeAvailability,
+import type {
+  EmployeeAvailabilityRulePayload,
+  SelfEmployeeAvailability,
 } from "@/lib/api/workforce";
-import type { SettingsSectionHeaderAction } from "./SettingsShiftsSection";
 
-type Feedback = {
+export type AvailabilityEditorFeedback = {
   tone: "success" | "error";
   message: string;
 } | null;
 
-type DayState = {
+export type DayState = {
   enabled: boolean;
   startTime: string;
   endTime: string;
 };
 
-const DAY_ORDER = [
+export const DAY_ORDER = [
   { index: 0, short: "Mon", label: "Monday" },
   { index: 1, short: "Tue", label: "Tuesday" },
   { index: 2, short: "Wed", label: "Wednesday" },
@@ -65,7 +56,7 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   };
 });
 
-function createDefaultDayMap(): Record<number, DayState> {
+export function createDefaultDayMap(): Record<number, DayState> {
   return Object.fromEntries(
     DAY_ORDER.map((day) => [
       day.index,
@@ -99,10 +90,7 @@ function timeLabelToMinutes(label: string): number {
   return hour * 60 + minute;
 }
 
-function parseApiTimeToLabel(
-  value: string,
-  fallback: string,
-): string {
+function parseApiTimeToLabel(value: string, fallback: string): string {
   const [rawHour = "0", rawMinute = "0"] = value.split(":");
   const hour = Number(rawHour);
   const minute = Number(rawMinute);
@@ -125,8 +113,7 @@ function parseApiTimeToLabel(
   }
 
   const period = normalizedHour >= 12 ? "PM" : "AM";
-  const hour12 =
-    normalizedHour % 12 === 0 ? 12 : normalizedHour % 12;
+  const hour12 = normalizedHour % 12 === 0 ? 12 : normalizedHour % 12;
   return `${hour12}:${String(normalizedMinute).padStart(2, "0")} ${period}`;
 }
 
@@ -149,8 +136,8 @@ function formatHoursPerWeek(dayStates: Record<number, DayState>): number {
   }, 0);
 }
 
-function buildStateFromRules(
-  availability: SelfEmployeeAvailability,
+export function buildStateFromRules(
+  availability: Pick<SelfEmployeeAvailability, "rules">,
 ): Record<number, DayState> {
   const nextState = createDefaultDayMap();
 
@@ -184,7 +171,7 @@ function buildStateFromRules(
   return nextState;
 }
 
-function statesEqual(
+export function statesEqual(
   left: Record<number, DayState>,
   right: Record<number, DayState>,
 ): boolean {
@@ -199,7 +186,7 @@ function statesEqual(
   });
 }
 
-function countDayChanges(
+export function countDayChanges(
   left: Record<number, DayState>,
   right: Record<number, DayState>,
 ): number {
@@ -217,10 +204,10 @@ function countDayChanges(
   }, 0);
 }
 
-function serializeAvailability(
+export function serializeAvailability(
   dayStates: Record<number, DayState>,
   timezone: string,
-) {
+): { rules: EmployeeAvailabilityRulePayload[] } {
   return {
     rules: DAY_ORDER.filter((day) => dayStates[day.index].enabled).map((day) => {
       const state = dayStates[day.index];
@@ -232,14 +219,14 @@ function serializeAvailability(
         availability_type: "available",
         priority: 0,
         availability_metadata: {
-          source: "settings_personal_availability",
+          source: "availability_editor",
         },
       };
     }),
   };
 }
 
-function ensureTimeOrder(state: DayState): DayState {
+export function ensureTimeOrder(state: DayState): DayState {
   const startMinutes = timeLabelToMinutes(state.startTime);
   const endMinutes = timeLabelToMinutes(state.endTime);
   if (endMinutes > startMinutes) {
@@ -366,6 +353,7 @@ function DayRow({
   onSetEnabled,
   onSetEndTime,
   onSetStartTime,
+  showDaySummary,
   state,
 }: {
   copySuccess: boolean;
@@ -375,6 +363,7 @@ function DayRow({
   onSetEnabled(enabled: boolean): void;
   onSetEndTime(nextValue: string): void;
   onSetStartTime(nextValue: string): void;
+  showDaySummary?: boolean;
   state: DayState;
 }) {
   const rowSurfaceClass = state.enabled
@@ -410,26 +399,14 @@ function DayRow({
             }`}
           >
             <div className="absolute inset-x-0 top-1/2 flex -translate-y-1/2 items-center justify-center gap-3 sm:gap-4">
-              <div
-                className={`h-1 w-1 rounded-full ${
-                  state.enabled ? "bg-white/40" : "bg-white/30"
-                }`}
-              />
-              <div
-                className={`h-1 w-1 rounded-full ${
-                  state.enabled ? "bg-white/40" : "bg-white/30"
-                }`}
-              />
+              <div className={`h-1 w-1 rounded-full ${state.enabled ? "bg-white/40" : "bg-white/30"}`} />
+              <div className={`h-1 w-1 rounded-full ${state.enabled ? "bg-white/40" : "bg-white/30"}`} />
             </div>
           </div>
           <div className="flex flex-1 items-center justify-center">
             <span
               className={`text-[11px] transition-colors duration-300 sm:text-[12px] ${
-                state.enabled
-                  ? "text-[#635BFF]"
-                  : dark
-                    ? "text-[#8898AA]"
-                    : "text-[#C1CED8]"
+                state.enabled ? "text-[#635BFF]" : dark ? "text-[#8898AA]" : "text-[#C1CED8]"
               }`}
               style={{ fontWeight: 600 }}
             >
@@ -438,38 +415,30 @@ function DayRow({
           </div>
         </button>
 
-        <div className="hidden min-w-0 flex-1 sm:block">
-          <p
-            className="text-[13px]"
-            style={{
-              fontWeight: 500,
-              color: state.enabled
-                ? dark
-                  ? "#FFFFFF"
-                  : "#0A2540"
-                : dark
-                  ? "#8898AA"
-                  : "#C1CED8",
-            }}
-          >
-            {day.label}
-          </p>
-          {state.enabled ? (
+        {showDaySummary !== false ? (
+          <div className="hidden min-w-0 flex-1 sm:block">
             <p
-              className={`mt-0.5 text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}
-              style={{ fontWeight: 420 }}
+              className="text-[13px]"
+              style={{
+                fontWeight: 500,
+                color: state.enabled ? (dark ? "#FFFFFF" : "#0A2540") : dark ? "#8898AA" : "#C1CED8",
+              }}
             >
-              {state.startTime} – {state.endTime}
+              {day.label}
             </p>
-          ) : (
-            <p
-              className={`text-[11px] ${dark ? "text-[#8898AA]" : "text-[#C1CED8]"}`}
-              style={{ fontWeight: 420 }}
-            >
-              Unavailable
-            </p>
-          )}
-        </div>
+            {state.enabled ? (
+              <p className={`mt-0.5 text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#8898AA]"}`} style={{ fontWeight: 420 }}>
+                {state.startTime} – {state.endTime}
+              </p>
+            ) : (
+              <p className={`text-[11px] ${dark ? "text-[#8898AA]" : "text-[#C1CED8]"}`} style={{ fontWeight: 420 }}>
+                Unavailable
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
 
         <AnimatePresence>
           {state.enabled ? (
@@ -480,21 +449,13 @@ function DayRow({
               className="flex shrink-0 items-center gap-1.5 overflow-hidden sm:gap-2"
             >
               <div className="w-[100px] sm:w-[110px]">
-                <AvailabilityTimeSelect
-                  dark={dark}
-                  onChange={onSetStartTime}
-                  value={state.startTime}
-                />
+                <AvailabilityTimeSelect dark={dark} onChange={onSetStartTime} value={state.startTime} />
               </div>
               <span className="text-[10px] text-[#C1CED8]" style={{ fontWeight: 420 }}>
                 to
               </span>
               <div className="w-[100px] sm:w-[110px]">
-                <AvailabilityTimeSelect
-                  dark={dark}
-                  onChange={onSetEndTime}
-                  value={state.endTime}
-                />
+                <AvailabilityTimeSelect dark={dark} onChange={onSetEndTime} value={state.endTime} />
               </div>
               <button
                 type="button"
@@ -505,10 +466,7 @@ function DayRow({
                 {copySuccess ? (
                   <Check size={13} className="text-[#00B893]" />
                 ) : (
-                  <Copy
-                    size={13}
-                    className="text-[#C1CED8] transition-colors group-hover:text-[#635BFF]"
-                  />
+                  <Copy size={13} className="text-[#C1CED8] transition-colors group-hover:text-[#635BFF]" />
                 )}
               </button>
             </motion.div>
@@ -519,99 +477,34 @@ function DayRow({
   );
 }
 
-export default function SettingsAvailabilitySection({
-  businessId,
-  businessTimezone,
+export function AvailabilityEditorPanel({
   dark,
-  onHeaderActionChange,
+  dayStates,
+  feedback,
+  loadingMessage = "Loading availability…",
+  onApplyPreset,
+  onCopyToAll,
+  onSetDayEnabled,
+  onSetEndTime,
+  onSetStartTime,
+  savedPulse = false,
+  showDaySummary = true,
+  status,
 }: {
-  businessId: string | null;
-  businessTimezone: string | null;
   dark: boolean;
-  onHeaderActionChange?(action: SettingsSectionHeaderAction | null): void;
+  dayStates: Record<number, DayState>;
+  feedback: AvailabilityEditorFeedback;
+  loadingMessage?: string;
+  onApplyPreset(dayFilter: "all" | "weekdays" | "weekends", timeFilter: "all" | "mornings" | "evenings"): void;
+  onCopyToAll(dayIndex: number): void;
+  onSetDayEnabled(dayIndex: number, enabled: boolean): void;
+  onSetEndTime(dayIndex: number, nextValue: string): void;
+  onSetStartTime(dayIndex: number, nextValue: string): void;
+  savedPulse?: boolean;
+  showDaySummary?: boolean;
+  status: "loading" | "ready" | "error";
 }) {
-  const [status, setStatus] = useState<"loading" | "ready" | "error">(
-    businessId ? "loading" : "error",
-  );
-  const [timezone, setTimezone] = useState<string>(businessTimezone ?? "UTC");
-  const [dayStates, setDayStates] = useState<Record<number, DayState>>(
-    createDefaultDayMap,
-  );
-  const [baseline, setBaseline] = useState<Record<number, DayState>>(
-    createDefaultDayMap,
-  );
-  const [feedback, setFeedback] = useState<Feedback>(null);
-  const [savedPulse, setSavedPulse] = useState(false);
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
-  const [isPending, startTransition] = useTransition();
-
-  useEffect(() => {
-    if (!businessId) {
-      setStatus("error");
-      setFeedback({
-        tone: "error",
-        message: "No business is available for personal availability.",
-      });
-      return;
-    }
-
-    let cancelled = false;
-    const resolvedBusinessId = businessId;
-
-    async function loadAvailability() {
-      try {
-        setStatus("loading");
-        setFeedback(null);
-        const availability = await getSelfEmployeeAvailability(resolvedBusinessId);
-        if (cancelled) {
-          return;
-        }
-        const nextState = buildStateFromRules(availability);
-        setTimezone(
-          availability.rules.length > 0
-            ? availability.timezone || businessTimezone || "UTC"
-            : businessTimezone || availability.timezone || "UTC",
-        );
-        setDayStates(nextState);
-        setBaseline(nextState);
-        setSavedPulse(false);
-        setStatus("ready");
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Could not load your availability right now.";
-        if (message === "employee_self_not_found") {
-          const emptyState = createDefaultDayMap();
-          setFeedback(null);
-          setDayStates(emptyState);
-          setBaseline(emptyState);
-          setSavedPulse(false);
-          setStatus("ready");
-          return;
-        }
-        setStatus("error");
-        setFeedback({ tone: "error", message });
-      }
-    }
-
-    void loadAvailability();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [businessId, businessTimezone]);
-
-  useEffect(() => {
-    if (!savedPulse) {
-      return;
-    }
-    const timeoutId = window.setTimeout(() => setSavedPulse(false), 1800);
-    return () => window.clearTimeout(timeoutId);
-  }, [savedPulse]);
 
   useEffect(() => {
     if (copyFrom === null) {
@@ -625,185 +518,13 @@ export default function SettingsAvailabilitySection({
     () => DAY_ORDER.filter((day) => dayStates[day.index].enabled).length,
     [dayStates],
   );
-  const totalHours = useMemo(
-    () => Math.round(formatHoursPerWeek(dayStates)),
-    [dayStates],
-  );
-  const dirty = !statesEqual(dayStates, baseline);
-  const changeCount = useMemo(
-    () => countDayChanges(dayStates, baseline),
-    [baseline, dayStates],
-  );
-  const canSave = status === "ready" && dirty && !isPending;
-
-  const setDayState = (dayIndex: number, nextState: DayState) => {
-    setDayStates((current) => ({
-      ...current,
-      [dayIndex]: ensureTimeOrder(nextState),
-    }));
-    setSavedPulse(false);
-  };
-
-  const setDayEnabled = (dayIndex: number, enabled: boolean) => {
-    setDayStates((current) => ({
-      ...current,
-      [dayIndex]: {
-        ...current[dayIndex],
-        enabled,
-      },
-    }));
-    setSavedPulse(false);
-  };
-
-  const setStartTime = (dayIndex: number, startTime: string) => {
-    setDayStates((current) => {
-      const currentState = current[dayIndex];
-      const nextState = ensureTimeOrder({
-        ...currentState,
-        enabled: true,
-        startTime,
-      });
-      return {
-        ...current,
-        [dayIndex]: nextState,
-      };
-    });
-    setSavedPulse(false);
-  };
-
-  const setEndTime = (dayIndex: number, endTime: string) => {
-    setDayStates((current) => {
-      const currentState = current[dayIndex];
-      const nextState = ensureTimeOrder({
-        ...currentState,
-        enabled: true,
-        endTime,
-      });
-      return {
-        ...current,
-        [dayIndex]: nextState,
-      };
-    });
-    setSavedPulse(false);
-  };
-
-  const copyToAll = (sourceDayIndex: number) => {
-    setDayStates((current) => {
-      const source = current[sourceDayIndex];
-      const next = { ...current };
-      DAY_ORDER.forEach((day) => {
-        if (day.index !== sourceDayIndex) {
-          next[day.index] = { ...source };
-        }
-      });
-      return next;
-    });
-    setCopyFrom(sourceDayIndex);
-    setSavedPulse(false);
-  };
-
-  const applyPreset = (
-    dayFilter: "all" | "weekdays" | "weekends",
-    timeFilter: "all" | "mornings" | "evenings",
-  ) => {
-    setDayStates((current) => {
-      const next = { ...current };
-
-      DAY_ORDER.forEach((day) => {
-        const isWeekday = day.index <= 4;
-        const isWeekend = day.index >= 5;
-
-        let enabled = false;
-        if (dayFilter === "all") {
-          enabled = true;
-        } else if (dayFilter === "weekdays") {
-          enabled = isWeekday;
-        } else if (dayFilter === "weekends") {
-          enabled = isWeekend;
-        }
-
-        let startTime = "5:00 AM";
-        let endTime = "11:30 PM";
-        if (timeFilter === "mornings") {
-          startTime = "5:00 AM";
-          endTime = "2:00 PM";
-        } else if (timeFilter === "evenings") {
-          startTime = "4:00 PM";
-          endTime = "11:30 PM";
-        }
-
-        next[day.index] = {
-          enabled,
-          startTime,
-          endTime,
-        };
-      });
-
-      return next;
-    });
-    setSavedPulse(false);
-  };
-
-  const handleSave = useCallback(() => {
-    if (!businessId || !canSave) {
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        setFeedback(null);
-        const payload = serializeAvailability(dayStates, timezone);
-        const response = await replaceSelfEmployeeAvailability(businessId, payload);
-        const nextState = buildStateFromRules(response);
-        setTimezone(
-          response.rules.length > 0 ? response.timezone || timezone : timezone,
-        );
-        setDayStates(nextState);
-        setBaseline(nextState);
-        setSavedPulse(true);
-        setFeedback(null);
-      } catch (error) {
-        setSavedPulse(false);
-        setFeedback({
-          tone: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Could not update your availability.",
-        });
-      }
-    });
-  }, [businessId, canSave, dayStates, timezone]);
-
-  useEffect(() => {
-    if (!onHeaderActionChange) {
-      return;
-    }
-    if (status !== "ready" || (!dirty && !isPending)) {
-      onHeaderActionChange(null);
-      return;
-    }
-    onHeaderActionChange({
-      disabled: isPending,
-      label: isPending
-        ? "Saving..."
-        : `Save ${changeCount} Change${changeCount === 1 ? "" : "s"}`,
-      onClick: handleSave,
-    });
-    return () => {
-      onHeaderActionChange(null);
-    };
-  }, [changeCount, dirty, handleSave, isPending, onHeaderActionChange, status]);
+  const totalHours = useMemo(() => Math.round(formatHoursPerWeek(dayStates)), [dayStates]);
 
   if (status === "loading") {
     return (
-      <div
-        className={`flex items-center gap-2 py-6 text-[13px] ${
-          dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
-        }`}
-      >
+      <div className={`flex items-center gap-2 py-6 text-[13px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}>
         <Loader2 size={15} className="animate-spin" />
-        Loading availability…
+        {loadingMessage}
       </div>
     );
   }
@@ -819,49 +540,19 @@ export default function SettingsAvailabilitySection({
           fontWeight: 500,
         }}
       >
-        {feedback?.message ?? "Could not load your availability."}
+        {feedback?.message ?? "Could not load availability."}
       </div>
     );
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-      className="space-y-5"
-    >
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="space-y-5">
       <div className="flex flex-wrap gap-2">
-        <AvailabilityPresetButton
-          dark={dark}
-          icon={CalendarClock}
-          label="All Days"
-          onClick={() => applyPreset("all", "all")}
-        />
-        <AvailabilityPresetButton
-          dark={dark}
-          icon={Briefcase}
-          label="Weekdays"
-          onClick={() => applyPreset("weekdays", "all")}
-        />
-        <AvailabilityPresetButton
-          dark={dark}
-          icon={Sparkles}
-          label="Weekends"
-          onClick={() => applyPreset("weekends", "all")}
-        />
-        <AvailabilityPresetButton
-          dark={dark}
-          icon={Sunrise}
-          label="Mornings"
-          onClick={() => applyPreset("all", "mornings")}
-        />
-        <AvailabilityPresetButton
-          dark={dark}
-          icon={Sunset}
-          label="Evenings"
-          onClick={() => applyPreset("all", "evenings")}
-        />
+        <AvailabilityPresetButton dark={dark} icon={CalendarClock} label="All Days" onClick={() => onApplyPreset("all", "all")} />
+        <AvailabilityPresetButton dark={dark} icon={Briefcase} label="Weekdays" onClick={() => onApplyPreset("weekdays", "all")} />
+        <AvailabilityPresetButton dark={dark} icon={Sparkles} label="Weekends" onClick={() => onApplyPreset("weekends", "all")} />
+        <AvailabilityPresetButton dark={dark} icon={Sunrise} label="Mornings" onClick={() => onApplyPreset("all", "mornings")} />
+        <AvailabilityPresetButton dark={dark} icon={Sunset} label="Evenings" onClick={() => onApplyPreset("all", "evenings")} />
       </div>
 
       {feedback?.tone === "error" ? (
@@ -880,27 +571,16 @@ export default function SettingsAvailabilitySection({
 
       <div className="mb-3 flex items-center justify-end">
         <div className="flex items-center gap-2.5">
-          <span
-            className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
-            style={{ fontWeight: 500 }}
-          >
+          <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
             {enabledCount} days
           </span>
           <div className={`h-3 w-px ${dark ? "bg-white/[0.08]" : "bg-[#E5E7EB]"}`} />
-          <span
-            className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
-            style={{ fontWeight: 500 }}
-          >
+          <span className={`text-[11px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 500 }}>
             {totalHours}h / wk
           </span>
           <AnimatePresence>
             {savedPulse ? (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="ml-1 flex items-center gap-1 text-[#00B893]"
-              >
+              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="ml-1 flex items-center gap-1 text-[#00B893]">
                 <Check size={12} />
                 <span className="text-[11px]" style={{ fontWeight: 500 }}>
                   Saved
@@ -918,10 +598,14 @@ export default function SettingsAvailabilitySection({
             copySuccess={copyFrom === day.index}
             dark={dark}
             day={day}
-            onCopyToAll={() => copyToAll(day.index)}
-            onSetEnabled={(enabled) => setDayEnabled(day.index, enabled)}
-            onSetEndTime={(nextValue) => setEndTime(day.index, nextValue)}
-            onSetStartTime={(nextValue) => setStartTime(day.index, nextValue)}
+            onCopyToAll={() => {
+              onCopyToAll(day.index);
+              setCopyFrom(day.index);
+            }}
+            onSetEnabled={(enabled) => onSetDayEnabled(day.index, enabled)}
+            onSetEndTime={(nextValue) => onSetEndTime(day.index, nextValue)}
+            onSetStartTime={(nextValue) => onSetStartTime(day.index, nextValue)}
+            showDaySummary={showDaySummary}
             state={dayStates[day.index]}
           />
         ))}

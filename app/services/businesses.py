@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import ShiftStatus
+from app.models.common import ShiftLifecycleStatus, ShiftStaffingStatus
 from app.models.role_taxonomy import BusinessPlaceType
 from app.models.scheduling import Shift
 from app.schemas.business import (
@@ -21,16 +21,6 @@ from app.schemas.business import (
 )
 from app.services import business_identity_derivation, role_derivation, shift_defaults
 from app.services.utils import role_code_from_name, slugify
-
-LOCKED_SHIFT_STATUSES = (
-    ShiftStatus.draft,
-    ShiftStatus.scheduled,
-    ShiftStatus.open,
-    ShiftStatus.filling,
-    ShiftStatus.covered,
-    ShiftStatus.no_fill,
-)
-
 
 async def _next_unique_business_slug(session: AsyncSession, requested: str) -> str:
     base = slugify(requested)
@@ -459,10 +449,24 @@ async def delete_location(
     if location is None:
         raise LookupError("location_not_found")
 
-    shift_count = await session.scalar(
-        select(func.count(Shift.id)).where(Shift.location_id == location_id)
+    blocking_shift_count = await session.scalar(
+        select(func.count(Shift.id)).where(
+            Shift.location_id == location_id,
+            (Shift.starts_at < func.now())
+            | Shift.staffing_status.in_(
+                (
+                    ShiftStaffingStatus.no_fill,
+                )
+            )
+            | Shift.lifecycle_status.in_(
+                (
+                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.completed,
+                )
+            ),
+        )
     )
-    if int(shift_count or 0) > 0:
+    if int(blocking_shift_count or 0) > 0:
         raise ValueError("location_has_operational_data")
 
     await session.delete(location)
@@ -480,13 +484,27 @@ async def get_location_delete_readiness(
         raise LookupError("location_not_found")
 
     shift_count = await session.scalar(
-        select(func.count(Shift.id)).where(Shift.location_id == location_id)
+        select(func.count(Shift.id)).where(
+            Shift.location_id == location_id,
+            (Shift.starts_at < func.now())
+            | Shift.staffing_status.in_(
+                (
+                    ShiftStaffingStatus.no_fill,
+                )
+            )
+            | Shift.lifecycle_status.in_(
+                (
+                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.completed,
+                )
+            ),
+        )
     )
     blocking_shift_count = int(shift_count or 0)
     if blocking_shift_count > 0:
         reason = (
-            "This location has scheduled shifts and cannot be removed until those "
-            "shifts are deleted or moved."
+            "This location has historical shifts and cannot be removed until those shifts are "
+            "deleted or moved."
         )
     else:
         reason = None
@@ -853,7 +871,7 @@ async def _locked_shift_counts_by_role_id(
         select(Shift.role_id, func.count(Shift.id))
         .where(
             Shift.location_id == location_id,
-            Shift.status.in_(LOCKED_SHIFT_STATUSES),
+            Shift.lifecycle_status != ShiftLifecycleStatus.draft,
         )
         .group_by(Shift.role_id)
     )

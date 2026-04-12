@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, PenLine } from "lucide-react";
+import { ChevronDown, PenLine, Plus, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 
 import { FloatingDropdown } from "@/components/floating-dropdown";
@@ -32,6 +32,17 @@ function getDefaultShiftLabel(key: ShiftDefaultKey): string {
   }
 }
 
+function createShiftDefaultKey(presets: ShiftDefault[]): string {
+  let index = presets.length + 1;
+  let nextKey = `custom_${index}`;
+  const existing = new Set(presets.map((preset) => preset.key));
+  while (existing.has(nextKey)) {
+    index += 1;
+    nextKey = `custom_${index}`;
+  }
+  return nextKey;
+}
+
 function formatShiftHourWithMinutes(hour: number): string {
   return formatShiftHour(hour)
     .replace(" AM", ":00 AM")
@@ -60,8 +71,8 @@ function TimeSelect({
     <div className="relative">
       <button
         ref={buttonRef}
-        className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 transition-all ${
-          compact ? "h-9 text-[11px]" : "h-10 text-[12px]"
+        className={`flex w-full items-center justify-between rounded-lg border transition-all ${
+          compact ? "h-8 gap-1.5 px-2.5 text-[11px]" : "h-10 gap-2 px-3 text-[12px]"
         } ${
           dark
             ? "border-white/[0.08] bg-white/[0.05] text-white hover:border-[#635BFF]/40"
@@ -85,10 +96,10 @@ function TimeSelect({
             : "border border-[#E5E7EB] bg-white shadow-lg"
         }`}
         maxHeight={240}
-        minWidth={compact ? 168 : 180}
+        minWidth={compact ? 118 : 180}
         onClose={() => setOpen(false)}
         open={open}
-        width={compact ? 168 : 180}
+        width={compact ? 118 : 180}
         zIndex={10030}
       >
         {SHIFT_HOUR_OPTIONS.map((option) => {
@@ -122,14 +133,18 @@ function TimeSelect({
 }
 
 function ShiftDefaultCard({
+  allowDelete = false,
   compact = false,
   dark,
   onChange,
+  onDelete,
   preset,
 }: {
+  allowDelete?: boolean;
   compact?: boolean;
   dark: boolean;
   onChange(nextPreset: ShiftDefault): void;
+  onDelete?(): void;
   preset: ShiftDefault;
 }) {
   const [editing, setEditing] = useState(false);
@@ -160,7 +175,7 @@ function ShiftDefaultCard({
       }`}
     >
       <div className={compact ? "p-3" : "p-4"}>
-        <div className={compact ? "flex items-center gap-2.5" : "flex items-center gap-3"}>
+        <div className={compact ? "flex items-center gap-2" : "flex items-center gap-3"}>
           <div
             className={`flex shrink-0 items-center justify-center ${
               compact ? "h-8 w-8 rounded-lg" : "h-10 w-10 rounded-xl"
@@ -204,7 +219,7 @@ function ShiftDefaultCard({
                 type="button"
               >
                 <span
-                  className={compact ? "text-[13px] text-[#0A2540]" : "text-[14px] text-[#0A2540]"}
+                  className={compact ? "truncate text-[13px] text-[#0A2540]" : "text-[14px] text-[#0A2540]"}
                   style={{ fontWeight: 540, color: dark ? "#FFFFFF" : "#0A2540" }}
                 >
                   {preset.label}
@@ -230,7 +245,46 @@ function ShiftDefaultCard({
             ) : null}
           </div>
 
-          {!compact ? (
+          {compact ? (
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <div className="w-[102px]">
+                <TimeSelect
+                  compact
+                  dark={dark}
+                  onChange={(nextValue) =>
+                    onChange({ ...preset, start_hour: nextValue })
+                  }
+                  value={preset.start_hour}
+                />
+              </div>
+              <span className="text-[10px] text-[#C1CED8]" style={{ fontWeight: 420 }}>
+                to
+              </span>
+              <div className="w-[102px]">
+                <TimeSelect
+                  compact
+                  dark={dark}
+                  onChange={(nextValue) =>
+                    onChange({ ...preset, end_hour: nextValue })
+                  }
+                  value={preset.end_hour}
+                />
+              </div>
+              {allowDelete ? (
+                <button
+                  className={`rounded-lg border p-2 transition-colors ${
+                    dark
+                      ? "border-white/[0.08] text-[#C1CED8] hover:border-[#E5484D]/30 hover:bg-[#E5484D]/[0.08] hover:text-[#FF8A8A]"
+                      : "border-[#E5E7EB] text-[#8898AA] hover:border-[#E5484D]/20 hover:bg-[#E5484D]/[0.04] hover:text-[#E5484D]"
+                  }`}
+                  onClick={onDelete}
+                  type="button"
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : null}
+            </div>
+          ) : (
             <div className="hidden shrink-0 items-center gap-2 sm:flex">
               <div className="w-[110px]">
                 <TimeSelect
@@ -256,37 +310,24 @@ function ShiftDefaultCard({
                   value={preset.end_hour}
                 />
               </div>
+              {allowDelete ? (
+                <button
+                  className={`rounded-lg border p-2 transition-colors ${
+                    dark
+                      ? "border-white/[0.08] text-[#C1CED8] hover:border-[#E5484D]/30 hover:bg-[#E5484D]/[0.08] hover:text-[#FF8A8A]"
+                      : "border-[#E5E7EB] text-[#8898AA] hover:border-[#E5484D]/20 hover:bg-[#E5484D]/[0.04] hover:text-[#E5484D]"
+                  }`}
+                  onClick={onDelete}
+                  type="button"
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : null}
             </div>
-          ) : null}
+          )}
         </div>
 
-        {compact ? (
-          <div className="ml-10 mt-2.5 flex items-center gap-2">
-            <div className="flex-1">
-              <TimeSelect
-                compact
-                dark={dark}
-                onChange={(nextValue) =>
-                  onChange({ ...preset, start_hour: nextValue })
-                }
-                value={preset.start_hour}
-              />
-            </div>
-            <span className="text-[10px] text-[#C1CED8]" style={{ fontWeight: 420 }}>
-              to
-            </span>
-            <div className="flex-1">
-              <TimeSelect
-                compact
-                dark={dark}
-                onChange={(nextValue) =>
-                  onChange({ ...preset, end_hour: nextValue })
-                }
-                value={preset.end_hour}
-              />
-            </div>
-          </div>
-        ) : (
+        {!compact ? (
           <div className="mt-3 ml-[52px] flex items-center gap-2 sm:hidden">
             <div className="flex-1">
               <TimeSelect
@@ -310,7 +351,7 @@ function ShiftDefaultCard({
               />
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </motion.div>
   );
@@ -412,11 +453,13 @@ export function ShiftCoverageTimeline({
 }
 
 export function ShiftDefaultsEditor({
+  allowManage = false,
   compact = false,
   dark,
   onChange,
   presets,
 }: {
+  allowManage?: boolean;
   compact?: boolean;
   dark: boolean;
   onChange(presets: ShiftDefault[]): void;
@@ -435,17 +478,53 @@ export function ShiftDefaultsEditor({
     );
   }
 
+  function deletePreset(key: ShiftDefaultKey) {
+    if (normalizedPresets.length <= 1) {
+      return;
+    }
+    onChange(normalizedPresets.filter((preset) => preset.key !== key));
+  }
+
+  function addPreset() {
+    onChange([
+      ...normalizedPresets,
+      {
+        key: createShiftDefaultKey(normalizedPresets),
+        label: "New Shift",
+        start_hour: 9,
+        end_hour: 17,
+      },
+    ]);
+  }
+
   return (
     <div className="space-y-2.5">
       {normalizedPresets.map((preset) => (
         <ShiftDefaultCard
+          allowDelete={allowManage && normalizedPresets.length > 1}
           key={preset.key}
           compact={compact}
           dark={dark}
           onChange={(nextPreset) => updatePreset(preset.key, () => nextPreset)}
+          onDelete={() => deletePreset(preset.key)}
           preset={preset}
         />
       ))}
+      {allowManage ? (
+        <button
+          className={`group flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed p-3 text-[13px] transition-all ${
+            dark
+              ? "border-white/[0.08] text-[#C1CED8] hover:border-[#635BFF]/30 hover:bg-white/[0.04] hover:text-white"
+              : "border-[#E5E7EB] text-[#8898AA] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02] hover:text-[#635BFF]"
+          }`}
+          onClick={addPreset}
+          style={{ fontWeight: 480 }}
+          type="button"
+        >
+          <Plus size={14} className="transition-colors group-hover:text-[#635BFF]" />
+          Add Shift
+        </button>
+      ) : null}
     </div>
   );
 }

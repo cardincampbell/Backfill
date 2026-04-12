@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.business import Business, Location, Role
-from app.models.common import AssignmentStatus, ShiftStatus
+from app.models.common import AssignmentStatus, ShiftLifecycleStatus
 from app.models.workforce import (
     Employee,
     EmployeeAvailabilityRule,
@@ -52,14 +52,36 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "full_name": "full_name",
     "employee_name": "full_name",
     "name": "full_name",
+    "employee_full_name": "full_name",
+    "employee": "full_name",
+    "staff_name": "full_name",
+    "worker_name": "full_name",
     "preferred_name": "preferred_name",
     "email": "email",
     "email_address": "email",
+    "email_addr": "email",
+    "emailaddress": "email",
+    "e_mail": "email",
+    "work_email": "email",
+    "personal_email": "email",
+    "email_id": "email",
     "phone": "phone_e164",
     "phone_number": "phone_e164",
     "phone_e164": "phone_e164",
+    "phone_num": "phone_e164",
+    "phonenumber": "phone_e164",
+    "telephone": "phone_e164",
+    "contact_number": "phone_e164",
+    "contact_phone": "phone_e164",
+    "employee_phone": "phone_e164",
+    "work_phone": "phone_e164",
     "mobile": "phone_e164",
     "mobile_phone": "phone_e164",
+    "mobile_number": "phone_e164",
+    "mobile_no": "phone_e164",
+    "cell": "phone_e164",
+    "cell_phone": "phone_e164",
+    "cell_number": "phone_e164",
     "employee_number": "employee_number",
     "employee_id": "employee_number",
     "external_ref": "external_ref",
@@ -70,7 +92,16 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "start_date": "hire_date",
     "notes": "notes",
     "first_name": "first_name",
+    "firstname": "first_name",
+    "first": "first_name",
+    "given_name": "first_name",
+    "givenname": "first_name",
     "last_name": "last_name",
+    "lastname": "last_name",
+    "last": "last_name",
+    "family_name": "last_name",
+    "familyname": "last_name",
+    "surname": "last_name",
 }
 
 
@@ -183,15 +214,6 @@ async def _find_duplicate_employee(
 
     return None
 
-
-EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES = (
-    ShiftStatus.scheduled,
-    ShiftStatus.open,
-    ShiftStatus.filling,
-    ShiftStatus.covered,
-    ShiftStatus.no_fill,
-    ShiftStatus.completed,
-)
 
 EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES = (
     AssignmentStatus.assigned,
@@ -379,6 +401,14 @@ async def _get_or_create_self_service_employee(
     if employee is not None:
         return await _link_employee_to_user(session, employee, user_id=user_id)
 
+    location_result = await session.execute(
+        select(Location.id)
+        .where(Location.business_id == business_id, Location.is_active.is_(True))
+        .order_by(Location.created_at.asc())
+    )
+    active_location_ids = list(location_result.scalars().all())
+    primary_location_id = active_location_ids[0] if len(active_location_ids) == 1 else None
+
     employee = await create_employee(
         session,
         business_id,
@@ -390,6 +420,7 @@ async def _get_or_create_self_service_employee(
             ),
             phone_e164=phone_e164.strip() if phone_e164 else None,
             email=email.strip().lower() if email else None,
+            primary_location_id=primary_location_id,
             employee_metadata={
                 "source": "self_service_availability",
                 "auto_created_from_user": True,
@@ -982,7 +1013,9 @@ async def _blocking_employee_assignment_count(
         .where(
             Shift.business_id == business_id,
             ShiftAssignment.employee_id == employee_id,
-            Shift.status.in_(EMPLOYEE_DELETE_BLOCKING_SHIFT_STATUSES),
+            Shift.lifecycle_status.not_in(
+                [ShiftLifecycleStatus.draft, ShiftLifecycleStatus.cancelled]
+            ),
             ShiftAssignment.status.in_(EMPLOYEE_DELETE_BLOCKING_ASSIGNMENT_STATUSES),
         )
     )
@@ -1273,6 +1306,18 @@ async def replace_employee_availability_rules(
 
     await session.flush()
     return await _list_employee_availability_rules(session, employee_id)
+
+
+async def get_employee_availability_rules(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> tuple[Employee, list[EmployeeAvailabilityRule]]:
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.business_id != business_id:
+        raise LookupError("employee_not_found")
+    rules = await _list_employee_availability_rules(session, employee_id)
+    return employee, rules
 
 
 async def get_self_employee_availability_rules(

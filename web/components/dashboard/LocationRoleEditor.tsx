@@ -2,18 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, Lock, MapPin, Phone, Plus, Tag, Trash2, X } from "lucide-react";
+import { MapPin, Phone, Plus, Trash2, X, Info } from "lucide-react";
 
 import type {
   BusinessLocation,
-  BusinessRole,
   LocationRoleAssignment,
 } from "@/lib/api/businesses";
 import type {
   LocationShiftDefaults,
   ShiftDefault,
 } from "@/lib/api/workspace";
-import { validateCustomRoleName } from "@/lib/role-name-validation";
+import type { EmployeeSummary } from "@/lib/api/workforce";
 
 import {
   formatDisplayLabel,
@@ -25,6 +24,14 @@ import {
   ShiftDefaultsEditor,
 } from "./ShiftDefaultsEditor";
 import { getShiftCoverageHours, normalizeShiftDefaults } from "./shift-defaults";
+import {
+  countEmployeeAssignmentChanges,
+  employeeAssignedHere,
+  employeeDisplayName,
+  employeeEligibilityReason,
+  employeeHasAssignedRoles,
+  employeeInitials,
+} from "./location-employee-utils";
 
 export type LocationRoleEditorFeedback = {
   tone: "success" | "error";
@@ -39,7 +46,7 @@ export type LocationDeleteState = {
 };
 
 export type LocationRoleEditorSaveSummary = {
-  roleChangeCount: number;
+  employeeChangeCount: number;
   shiftChangeCount: number;
   totalChangeCount: number;
 };
@@ -49,8 +56,8 @@ export function formatLocationSaveSummary(
   locationName: string,
 ) {
   const parts: string[] = [];
-  if (summary.roleChangeCount > 0) {
-    parts.push(`${summary.roleChangeCount} role change${summary.roleChangeCount === 1 ? "" : "s"}`);
+  if (summary.employeeChangeCount > 0) {
+    parts.push(`${summary.employeeChangeCount} employee change${summary.employeeChangeCount === 1 ? "" : "s"}`);
   }
   if (summary.shiftChangeCount > 0) {
     parts.push(`${summary.shiftChangeCount} shift change${summary.shiftChangeCount === 1 ? "" : "s"}`);
@@ -59,25 +66,6 @@ export function formatLocationSaveSummary(
     return `No changes to save for ${locationName}.`;
   }
   return `Saved ${parts.join(" and ")} for ${locationName}.`;
-}
-
-function countRoleChanges(initialRoleIds: string[], nextRoleIds: string[]) {
-  const initial = new Set(initialRoleIds);
-  const next = new Set(nextRoleIds);
-  let count = 0;
-
-  initial.forEach((roleId) => {
-    if (!next.has(roleId)) {
-      count += 1;
-    }
-  });
-  next.forEach((roleId) => {
-    if (!initial.has(roleId)) {
-      count += 1;
-    }
-  });
-
-  return count;
 }
 
 function countShiftPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
@@ -103,72 +91,12 @@ function countShiftPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
   return count;
 }
 
-function RoleTag({
-  dark,
-  role,
-  locked = false,
-  lockedShiftCount = 0,
-  onRemove,
-}: {
-  dark: boolean;
-  role: BusinessRole;
-  locked?: boolean;
-  lockedShiftCount?: number;
-  onRemove(): void;
-}) {
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      className={`flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border ${
-        locked
-          ? dark
-            ? "bg-[#FFB800]/[0.1] border-[#FFB800]/25"
-            : "bg-[#FFB800]/[0.06] border-[#FFB800]/20"
-          : dark
-            ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
-            : "bg-[#635BFF]/[0.06] border-[#635BFF]/15"
-      }`}
-    >
-      <Tag size={11} className={locked ? "text-[#FFB800]" : "text-[#635BFF]"} />
-      <span
-        className={`text-[12px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-        style={{ fontWeight: 480 }}
-      >
-        {role.name}
-      </span>
-      {locked ? (
-        <div
-          className="ml-0.5 p-0.5"
-          title={
-            lockedShiftCount === 1
-              ? "This role has 1 active shift and cannot be removed."
-              : `This role has ${lockedShiftCount} active shifts and cannot be removed.`
-          }
-        >
-          <Lock size={12} className="text-[#FFB800]" />
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="p-0.5 rounded hover:bg-[#635BFF]/10 transition-colors ml-0.5"
-        >
-          <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
-        </button>
-      )}
-    </motion.div>
-  );
-}
-
 export function LocationRoleEditor({
   dark,
   location,
   businessTypeLabel,
   staffCount,
-  roles,
+  employees,
   assignments,
   shiftDefaults,
   loading,
@@ -178,13 +106,12 @@ export function LocationRoleEditor({
   onClose,
   onDelete,
   onSave,
-  onCreateRole,
 }: {
   dark: boolean;
   location: BusinessLocation;
   businessTypeLabel?: string | null;
   staffCount?: number | null;
-  roles: BusinessRole[];
+  employees: EmployeeSummary[];
   assignments: LocationRoleAssignment[];
   shiftDefaults: LocationShiftDefaults | null;
   loading: boolean;
@@ -194,15 +121,12 @@ export function LocationRoleEditor({
   onClose(): void;
   onDelete?(): void;
   onSave(
-    roleIds: string[],
+    employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
     summary: LocationRoleEditorSaveSummary,
   ): void;
-  onCreateRole(name: string): Promise<BusinessRole>;
 }) {
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
-  const [customRole, setCustomRole] = useState("");
-  const [isCreatingRole, setIsCreatingRole] = useState(false);
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [useBusinessDefaults, setUseBusinessDefaults] = useState(true);
   const [draftShiftDefaults, setDraftShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(null),
@@ -212,8 +136,12 @@ export function LocationRoleEditor({
   const closeTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
-    setSelectedRoleIds(assignments.map((assignment) => assignment.role_id));
-  }, [assignments, location.id]);
+    setSelectedEmployeeIds(
+      employees
+        .filter((employee) => employeeAssignedHere(employee, location.id))
+        .map((employee) => employee.id),
+    );
+  }, [employees, location.id]);
 
   useEffect(() => {
     if (!shiftDefaults) {
@@ -279,14 +207,36 @@ export function LocationRoleEditor({
     : placeTypeLabel;
   const resolvedStaffLabel =
     typeof staffCount === "number" ? `${staffCount} staff` : null;
-  const assignmentsByRoleId = useMemo(
-    () => new Map(assignments.map((assignment) => [assignment.role_id, assignment])),
-    [assignments],
+  const selectedEmployeeSet = useMemo(
+    () => new Set(selectedEmployeeIds),
+    [selectedEmployeeIds],
   );
-  const selectedRoles = roles.filter((role) => selectedRoleIds.includes(role.id));
-  const availableRoles = roles.filter((role) => !selectedRoleIds.includes(role.id));
-  const lockedRoles = selectedRoles.filter(
-    (role) => assignmentsByRoleId.get(role.id)?.is_locked,
+  const sortedEmployees = useMemo(
+    () =>
+      [...employees].sort((left, right) =>
+        employeeDisplayName(left).localeCompare(employeeDisplayName(right)),
+      ),
+    [employees],
+  );
+  const assignedEmployees = useMemo(
+    () => sortedEmployees.filter((employee) => selectedEmployeeSet.has(employee.id)),
+    [selectedEmployeeSet, sortedEmployees],
+  );
+  const availableReadyEmployees = useMemo(
+    () =>
+      sortedEmployees.filter(
+        (employee) =>
+          !selectedEmployeeSet.has(employee.id) && employeeHasAssignedRoles(employee),
+      ),
+    [selectedEmployeeSet, sortedEmployees],
+  );
+  const availableUnavailableEmployees = useMemo(
+    () =>
+      sortedEmployees.filter(
+        (employee) =>
+          !selectedEmployeeSet.has(employee.id) && !employeeHasAssignedRoles(employee),
+      ),
+    [selectedEmployeeSet, sortedEmployees],
   );
   const textPrimary = dark ? "text-white" : "text-[#0A2540]";
   const textSecondary = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
@@ -297,9 +247,12 @@ export function LocationRoleEditor({
   const deleteTooltip = deleteState?.canDelete
     ? null
     : deleteState?.reason ?? "This location cannot be removed right now.";
-  const baselineRoleIds = useMemo(
-    () => assignments.map((assignment) => assignment.role_id),
-    [assignments],
+  const baselineEmployeeIds = useMemo(
+    () =>
+      employees
+        .filter((employee) => employeeAssignedHere(employee, location.id))
+        .map((employee) => employee.id),
+    [employees, location.id],
   );
   const baselineShiftPresets = useMemo(
     () =>
@@ -319,15 +272,15 @@ export function LocationRoleEditor({
       ),
     [baselineShiftPresets, draftShiftDefaults, shiftDefaults, useBusinessDefaults],
   );
-  const roleChangeCount = useMemo(
-    () => countRoleChanges(baselineRoleIds, selectedRoleIds),
-    [baselineRoleIds, selectedRoleIds],
+  const employeeChangeCount = useMemo(
+    () => countEmployeeAssignmentChanges(baselineEmployeeIds, selectedEmployeeIds),
+    [baselineEmployeeIds, selectedEmployeeIds],
   );
   const shiftChangeCount = useMemo(
     () => countShiftPresetChanges(effectiveShiftPresets, baselineShiftPresets),
     [baselineShiftPresets, effectiveShiftPresets],
   );
-  const totalChangeCount = roleChangeCount + shiftChangeCount;
+  const totalChangeCount = employeeChangeCount + shiftChangeCount;
   const totalCoverageHours = useMemo(
     () => Math.round(getShiftCoverageHours(effectiveShiftPresets)),
     [effectiveShiftPresets],
@@ -355,58 +308,25 @@ export function LocationRoleEditor({
     setDraftShiftDefaults(normalizeShiftDefaults(nextPresets));
   };
 
-  const addRole = (roleId: string) => {
-    setSelectedRoleIds((current) =>
-      current.includes(roleId) ? current : [...current, roleId],
+  const addEmployee = (employeeId: string) => {
+    setSelectedEmployeeIds((current) =>
+      current.includes(employeeId) ? current : [...current, employeeId],
     );
   };
 
-  const removeRole = (roleId: string) => {
-    if (assignmentsByRoleId.get(roleId)?.is_locked) {
-      return;
-    }
-    setSelectedRoleIds((current) => current.filter((item) => item !== roleId));
+  const removeEmployee = (employeeId: string) => {
+    setSelectedEmployeeIds((current) => current.filter((item) => item !== employeeId));
   };
 
-  const addAllRoles = () => {
-    setSelectedRoleIds(roles.map((role) => role.id));
-  };
-
-  const addCustomRole = async () => {
-    const trimmed = customRole.trim();
-    if (!trimmed || isCreatingRole) {
-      return;
-    }
-
-    const existingRole = roles.find(
-      (role) => role.name.trim().toLowerCase() === trimmed.toLowerCase(),
+  const addAllEmployees = () => {
+    setSelectedEmployeeIds((current) =>
+      Array.from(
+        new Set([
+          ...current,
+          ...availableReadyEmployees.map((employee) => employee.id),
+        ]),
+      ),
     );
-    if (existingRole) {
-      addRole(existingRole.id);
-      setCustomRole("");
-      return;
-    }
-
-    const validation = validateCustomRoleName(
-      trimmed,
-      roles.map((role) => role.name),
-    );
-    if (!validation.ok) {
-      setVisibleFeedback({
-        tone: "error",
-        message: validation.message,
-      });
-      return;
-    }
-
-    try {
-      setIsCreatingRole(true);
-      const createdRole = await onCreateRole(validation.roleName);
-      addRole(createdRole.id);
-      setCustomRole("");
-    } finally {
-      setIsCreatingRole(false);
-    }
   };
 
   return (
@@ -443,10 +363,10 @@ export function LocationRoleEditor({
               type="button"
               onClick={() =>
                 onSave(
-                  selectedRoleIds,
+                  selectedEmployeeIds,
                   useBusinessDefaults ? null : normalizeShiftDefaults(draftShiftDefaults),
                   {
-                    roleChangeCount,
+                    employeeChangeCount,
                     shiftChangeCount,
                     totalChangeCount,
                   },
@@ -551,100 +471,129 @@ export function LocationRoleEditor({
           ) : null}
 
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3
-                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                style={{ fontWeight: 500 }}
-              >
-                Active Roles
-              </h3>
-              <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                {selectedRoles.length} roles
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <AnimatePresence>
-                {selectedRoles.map((role) => {
-                  const assignment = assignmentsByRoleId.get(role.id);
-                  return (
-                    <RoleTag
-                      key={role.id}
-                      dark={dark}
-                      role={role}
-                      locked={assignment?.is_locked ?? false}
-                      lockedShiftCount={assignment?.assigned_shift_count ?? 0}
-                      onRemove={() => removeRole(role.id)}
-                    />
-                  );
-                })}
-              </AnimatePresence>
-              {!loading && selectedRoles.length === 0 ? (
-                <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  No roles assigned yet. Add from the list below.
-                </p>
-              ) : null}
-              {loading ? (
-                <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  Loading location roles...
-                </p>
-              ) : null}
-            </div>
-
-            {lockedRoles.length > 0 ? (
-              <div
-                className={`mb-4 rounded-lg border px-3 py-3 ${
-                  dark
-                    ? "border-[#FFB800]/20 bg-[#FFB800]/[0.08]"
-                    : "border-[#FFB800]/15 bg-[#FFB800]/[0.04]"
-                }`}
-              >
-                <div className="flex items-start gap-2.5">
-                  <AlertCircle size={14} className="mt-0.5 shrink-0 text-[#FFB800]" />
-                  <div>
-                    <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 520 }}>
-                      Protected roles
-                    </p>
-                    <p className={`mt-0.5 text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                      {lockedRoles.length === 1
-                        ? "1 role has active shifts and cannot be removed until those shifts are reassigned or deleted."
-                        : `${lockedRoles.length} roles have active shifts and cannot be removed until those shifts are reassigned or deleted.`}
-                    </p>
-                  </div>
-                </div>
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <h3
+                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                  style={{ fontWeight: 500 }}
+                >
+                  Assigned Employees
+                </h3>
+                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  {assignedEmployees.length} of {employees.length}
+                </span>
               </div>
-            ) : null}
+              <div className="flex min-h-[36px] flex-wrap gap-2">
+                <AnimatePresence>
+                  {assignedEmployees.map((employee) => {
+                    const isReady = employeeHasAssignedRoles(employee);
+                    return (
+                      <motion.div
+                        key={employee.id}
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        className={`group flex items-center gap-2 rounded-lg border py-1.5 pl-2.5 pr-2 ${
+                          isReady
+                            ? dark
+                              ? "bg-[#635BFF]/[0.12] border-[#635BFF]/25"
+                              : "bg-[#635BFF]/[0.06] border-[#635BFF]/15"
+                            : dark
+                              ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1]"
+                              : "border-[#FFB800]/20 bg-[#FFB800]/[0.06]"
+                        }`}
+                      >
+                        <span
+                          className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
+                            isReady
+                              ? "bg-[#635BFF]/10 text-[#635BFF]"
+                              : "bg-[#FFB800]/10 text-[#FFB800]"
+                          }`}
+                        >
+                          {employeeInitials(employeeDisplayName(employee))}
+                        </span>
+                        <span
+                          className={`truncate text-[12px] ${textPrimary}`}
+                          style={{ fontWeight: 480 }}
+                        >
+                          {employeeDisplayName(employee)}
+                        </span>
+                        {!isReady ? (
+                          <div className="relative ml-0.5">
+                            <Info size={12} className="cursor-default text-[#FFB800]" />
+                            <div
+                              className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                                dark
+                                  ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
+                                  : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"
+                              }`}
+                              style={{ fontWeight: 440 }}
+                            >
+                              {employeeEligibilityReason(employee)}
+                            </div>
+                          </div>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => removeEmployee(employee.id)}
+                          className="ml-0.5 rounded p-0.5 transition-colors hover:bg-[#635BFF]/10"
+                        >
+                          <X size={12} className="text-[#8898AA] hover:text-[#E5484D]" />
+                        </button>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+                {!loading && assignedEmployees.length === 0 ? (
+                  <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    No employees assigned yet. Add from the list below.
+                  </p>
+                ) : null}
+                {loading ? (
+                  <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    Loading business employees...
+                  </p>
+                ) : null}
+              </div>
+            </div>
 
-            {availableRoles.length > 0 ? (
-              <div>
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3
-                    className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                    style={{ fontWeight: 500 }}
-                  >
-                    Available Roles
-                  </h3>
+            <div className="mt-6 border-t pt-6">
+              <div className="mb-3 flex items-center justify-between">
+                <h3
+                  className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                  style={{ fontWeight: 500 }}
+                >
+                  Available Employees
+                </h3>
+                {availableReadyEmployees.length > 1 ? (
                   <button
                     type="button"
-                    onClick={addAllRoles}
+                    onClick={addAllEmployees}
                     className="text-[11px] text-[#635BFF] hover:text-[#4B3FD9] transition-colors"
                     style={{ fontWeight: 520 }}
                   >
-                    + Add All
+                    + Add all
                   </button>
-                </div>
+                ) : null}
+              </div>
+
+              {availableReadyEmployees.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
-                  {availableRoles.map((role) => (
+                  {availableReadyEmployees.map((employee) => (
                     <button
-                      key={role.id}
+                      key={employee.id}
                       type="button"
-                      onClick={() => addRole(role.id)}
-                      className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
+                      onClick={() => addEmployee(employee.id)}
+                      className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${
                         dark
                           ? "bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]"
                           : "bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]"
                       }`}
                     >
-                      <Tag size={11} className="text-[#635BFF]" />
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
+                        {employeeInitials(employeeDisplayName(employee))}
+                      </span>
                       <span
                         className={`text-[12px] transition-colors ${
                           dark
@@ -653,7 +602,7 @@ export function LocationRoleEditor({
                         }`}
                         style={{ fontWeight: 440 }}
                       >
-                        {role.name}
+                        {employeeDisplayName(employee)}
                       </span>
                       <Plus
                         size={11}
@@ -662,60 +611,59 @@ export function LocationRoleEditor({
                     </button>
                   ))}
                 </div>
-              </div>
-            ) : null}
-
-            {!loading && roles.length === 0 ? (
-              <div className={`rounded-xl border px-4 py-4 ${subtleBorderClass} ${subtleSurfaceClass}`}>
-                <p
-                  className={`text-[12px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`}
-                  style={{ fontWeight: 440 }}
-                >
-                  This business does not have any roles yet. Business roles are the source of truth for location assignments.
+              ) : !loading ? (
+                <p className={`text-[12px] py-2 ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  All schedule-ready employees are already assigned to this location.
                 </p>
-              </div>
-            ) : null}
+              ) : null}
 
-            <div>
-              <h3
-                className={`text-[11px] uppercase tracking-[0.04em] mb-2 ${textSecondary}`}
-                style={{ fontWeight: 500 }}
-              >
-                Custom Role
-              </h3>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={customRole}
-                  onChange={(event) => setCustomRole(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void addCustomRole();
-                    }
-                  }}
-                  placeholder="Type a new role name..."
-                  spellCheck
-                  className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[13px] placeholder-[#8898AA]/50 focus:outline-none focus:border-[#635BFF]/40 focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] transition-all ${
-                    dark
-                      ? "border-white/[0.08] bg-white/[0.04] text-white"
-                      : "border-[#E5E7EB] bg-white text-[#0A2540]"
-                  }`}
-                  style={{ fontWeight: 440 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => void addCustomRole()}
-                  disabled={!customRole.trim() || isCreatingRole}
-                  className="px-3.5 py-2.5 rounded-lg text-[12px] text-white transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed hover:shadow-[0_0_12px_rgba(99,91,255,0.2)]"
-                  style={{
-                    fontWeight: 520,
-                    background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
-                  }}
-                >
-                  {isCreatingRole ? "Adding..." : "Add"}
-                </button>
-              </div>
+              {availableUnavailableEmployees.length > 0 ? (
+                <div className="mt-5">
+                  <div className="mb-2.5">
+                    <h4
+                      className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                      style={{ fontWeight: 500 }}
+                    >
+                      Needs role assignment
+                    </h4>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {availableUnavailableEmployees.map((employee) => (
+                      <div
+                        key={employee.id}
+                        className={`group relative z-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 hover:z-20 ${
+                          dark
+                            ? "border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]"
+                            : "border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]"
+                        }`}
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
+                          {employeeInitials(employeeDisplayName(employee))}
+                        </span>
+                        <span
+                          className={`text-[12px] ${textPrimary}`}
+                          style={{ fontWeight: 480 }}
+                        >
+                          {employeeDisplayName(employee)}
+                        </span>
+                        <div className="relative ml-0.5">
+                          <Info size={12} className="cursor-default text-[#FFB800]" />
+                          <div
+                            className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                              dark
+                                ? "border border-white/[0.08] bg-[#102B46] text-[#C1CED8]"
+                                : "border border-[#E5E7EB] bg-white text-[#5E6D7A]"
+                            }`}
+                            style={{ fontWeight: 440 }}
+                          >
+                            {employeeEligibilityReason(employee)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 

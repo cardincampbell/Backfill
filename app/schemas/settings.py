@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.schemas.common import BaseSchema
 
-ShiftPresetKey = Literal["morning", "afternoon", "evening", "night"]
+ShiftPresetKey = str
 
 
 class ShiftPresetRead(BaseSchema):

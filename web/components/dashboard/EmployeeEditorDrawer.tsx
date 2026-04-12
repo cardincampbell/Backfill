@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
   Mail,
+  Pencil,
   Phone,
   Plus,
   Shield as ShieldCheck,
@@ -19,13 +20,26 @@ import {
 } from "@/lib/api/businesses";
 import {
   deleteEmployee,
+  getEmployeeAvailability,
   getEmployeeDeleteReadiness,
   getEmployeeProfile,
+  replaceEmployeeAvailability,
   updateEmployee,
   type EmployeeProfile,
 } from "@/lib/api/workforce";
 import { validateCustomRoleName } from "@/lib/role-name-validation";
 
+import {
+  AvailabilityEditorPanel,
+  type AvailabilityEditorFeedback,
+  buildStateFromRules,
+  countDayChanges,
+  createDefaultDayMap,
+  ensureTimeOrder,
+  serializeAvailability,
+  statesEqual,
+  type DayState,
+} from "./AvailabilityEditorPanel";
 import { getLocationReference } from "./location-role-reference";
 
 type Feedback =
@@ -34,6 +48,8 @@ type Feedback =
       message: string;
     }
   | null;
+
+type AvailabilityStatus = "loading" | "ready" | "error";
 
 export type EmployeeEditorSeed = {
   id: string;
@@ -146,6 +162,15 @@ function getReliabilityColor(reliability: number) {
     return "#F59E0B";
   }
   return "#E5484D";
+}
+
+function resolveAvailabilityTimezone(
+  timezone?: string | null,
+): string {
+  if (timezone && timezone.trim()) {
+    return timezone;
+  }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 const statusConfig = {
@@ -273,6 +298,7 @@ export function EmployeeEditorDrawer({
   onSaved(employee: EmployeeProfile): Promise<void> | void;
   roles: BusinessRole[];
 }) {
+  const [fullName, setFullName] = useState(employee.full_name);
   const [email, setEmail] = useState(employee.email ?? "");
   const [phone, setPhone] = useState(employee.phone_e164 ?? "");
   const [formData, setFormData] = useState<EmployeeAssignmentState>(() =>
@@ -283,7 +309,23 @@ export function EmployeeEditorDrawer({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [profile, setProfile] = useState<EmployeeProfile | null>(null);
+  const [availabilityStatus, setAvailabilityStatus] = useState<AvailabilityStatus>("loading");
+  const [availabilityFeedback, setAvailabilityFeedback] =
+    useState<AvailabilityEditorFeedback>(null);
+  const [availabilityTimezone, setAvailabilityTimezone] = useState(() =>
+    resolveAvailabilityTimezone(),
+  );
+  const [availabilityDayStates, setAvailabilityDayStates] = useState<Record<number, DayState>>(
+    createDefaultDayMap,
+  );
+  const [availabilityBaseline, setAvailabilityBaseline] = useState<Record<number, DayState>>(
+    createDefaultDayMap,
+  );
+  const [availabilitySavedPulse, setAvailabilitySavedPulse] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [deleteState, setDeleteState] = useState<{
     canDelete: boolean;
     checking?: boolean;
@@ -300,21 +342,41 @@ export function EmployeeEditorDrawer({
 
     setEmail(employee.email ?? "");
     setPhone(employee.phone_e164 ?? "");
+    setFullName(employee.full_name);
     setFormData(buildAssignmentStateFromSeed(employee, roles, locations));
     setProfile(null);
+    setAvailabilityStatus("loading");
+    setAvailabilityFeedback(null);
+    setAvailabilityTimezone(resolveAvailabilityTimezone());
+    setAvailabilityDayStates(createDefaultDayMap());
+    setAvailabilityBaseline(createDefaultDayMap());
+    setAvailabilitySavedPulse(false);
+    setIsEditingName(false);
+    setIsEditingEmail(false);
+    setIsEditingPhone(false);
     setDeleteState({ canDelete: false, checking: true, reason: null });
 
     async function loadProfile() {
       try {
-        const [nextProfile, readiness] = await Promise.all([
+        const [nextProfile, readiness, availability] = await Promise.all([
           getEmployeeProfile(businessId, employee.id).catch(() => null),
           getEmployeeDeleteReadiness(businessId, employee.id).catch(() => null),
+          getEmployeeAvailability(businessId, employee.id)
+            .then((value) => ({ value, error: null }))
+            .catch((error: unknown) => ({
+              value: null,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not load this employee's availability.",
+            })),
         ]);
         if (cancelled) {
           return;
         }
         if (nextProfile) {
           setProfile(nextProfile);
+          setFullName(nextProfile.full_name);
           setEmail(nextProfile.email ?? "");
           setPhone(nextProfile.phone_e164 ?? "");
           setFormData(buildAssignmentStateFromProfile(nextProfile));
@@ -330,6 +392,24 @@ export function EmployeeEditorDrawer({
                 reason: "Could not determine whether this employee can be removed.",
               },
         );
+        if (availability.value) {
+          const nextAvailabilityState = buildStateFromRules(availability.value);
+          setAvailabilityTimezone(
+            availability.value.rules.length > 0
+              ? resolveAvailabilityTimezone(availability.value.timezone)
+              : resolveAvailabilityTimezone(),
+          );
+          setAvailabilityDayStates(nextAvailabilityState);
+          setAvailabilityBaseline(nextAvailabilityState);
+          setAvailabilityFeedback(null);
+          setAvailabilityStatus("ready");
+        } else {
+          setAvailabilityStatus("error");
+          setAvailabilityFeedback({
+            tone: "error",
+            message: availability.error ?? "Could not load this employee's availability.",
+          });
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -351,6 +431,14 @@ export function EmployeeEditorDrawer({
     return () => window.clearTimeout(timeoutId);
   }, [feedback]);
 
+  useEffect(() => {
+    if (!availabilitySavedPulse) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setAvailabilitySavedPulse(false), 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [availabilitySavedPulse]);
+
   const baselineState = useMemo(
     () =>
       profile
@@ -358,6 +446,7 @@ export function EmployeeEditorDrawer({
         : buildAssignmentStateFromSeed(employee, roles, locations),
     [employee, locations, profile, roles],
   );
+  const baselineFullName = profile?.full_name ?? employee.full_name;
   const baselineEmail = profile?.email ?? employee.email ?? "";
   const baselinePhone = profile?.phone_e164 ?? employee.phone_e164 ?? "";
 
@@ -385,7 +474,11 @@ export function EmployeeEditorDrawer({
       ? ((profile?.status ?? employee.status) as keyof typeof statusConfig)
       : "active";
   const status = statusConfig[statusKey];
-  const name = employeeDisplayName(employee);
+  const name =
+    profile?.preferred_name?.trim() ||
+    profile?.full_name ||
+    employeeDisplayName(employee);
+  const headerDisplayName = fullName.trim() || name;
   const theme = {
     textPrimary: dark ? "text-white" : "text-[#0A2540]",
     textSecondary: dark ? "text-[#C1CED8]" : "text-[#8898AA]",
@@ -400,9 +493,12 @@ export function EmployeeEditorDrawer({
     subtleSurfacePanelClass: dark ? "bg-white/[0.02]" : "bg-white",
   };
 
-  const dirtyCount = useMemo(() => {
+  const profileDirtyCount = useMemo(() => {
     let count = 0;
 
+    if (fullName.trim() !== baselineFullName.trim()) {
+      count += 1;
+    }
     if (email.trim() !== baselineEmail.trim()) {
       count += 1;
     }
@@ -431,6 +527,7 @@ export function EmployeeEditorDrawer({
 
     return count;
   }, [
+    baselineFullName,
     baselineEmail,
     baselinePhone,
     baselineState.primaryLocationId,
@@ -438,6 +535,7 @@ export function EmployeeEditorDrawer({
     baselineState.selectedLocationIds,
     baselineState.selectedRoleIds,
     email,
+    fullName,
     formData.primaryLocationId,
     formData.primaryRoleId,
     formData.selectedLocationIds,
@@ -445,7 +543,20 @@ export function EmployeeEditorDrawer({
     phone,
   ]);
 
+  const availabilityDirty =
+    availabilityStatus === "ready" &&
+    !statesEqual(availabilityDayStates, availabilityBaseline);
+  const availabilityDirtyCount = useMemo(
+    () =>
+      availabilityStatus === "ready"
+        ? countDayChanges(availabilityDayStates, availabilityBaseline)
+        : 0,
+    [availabilityBaseline, availabilityDayStates, availabilityStatus],
+  );
+  const dirtyCount = profileDirtyCount + availabilityDirtyCount;
+
   const canSave =
+    Boolean(fullName.trim()) &&
     Boolean(formData.primaryRoleId) &&
     Boolean(formData.primaryLocationId) &&
     dirtyCount > 0;
@@ -456,6 +567,103 @@ export function EmployeeEditorDrawer({
     }
     setFeedback(null);
   }, [dirtyCount, feedback]);
+
+  const setAvailabilityDayEnabled = (dayIndex: number, enabled: boolean) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: {
+        ...current[dayIndex],
+        enabled,
+      },
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const setAvailabilityStartTime = (dayIndex: number, startTime: string) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: ensureTimeOrder({
+        ...current[dayIndex],
+        enabled: true,
+        startTime,
+      }),
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const setAvailabilityEndTime = (dayIndex: number, endTime: string) => {
+    setAvailabilityDayStates((current) => ({
+      ...current,
+      [dayIndex]: ensureTimeOrder({
+        ...current[dayIndex],
+        enabled: true,
+        endTime,
+      }),
+    }));
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const copyAvailabilityToAll = (sourceDayIndex: number) => {
+    setAvailabilityDayStates((current) => {
+      const source = current[sourceDayIndex];
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        const numericKey = Number(key);
+        if (numericKey !== sourceDayIndex) {
+          next[numericKey] = { ...source };
+        }
+      }
+      return next;
+    });
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
+
+  const applyAvailabilityPreset = (
+    dayFilter: "all" | "weekdays" | "weekends",
+    timeFilter: "all" | "mornings" | "evenings",
+  ) => {
+    setAvailabilityDayStates((current) => {
+      const next = { ...current };
+      for (const [dayKey, value] of Object.entries(current)) {
+        const dayIndex = Number(dayKey);
+        const isWeekday = dayIndex <= 4;
+        const isWeekend = dayIndex >= 5;
+
+        let enabled = false;
+        if (dayFilter === "all") {
+          enabled = true;
+        } else if (dayFilter === "weekdays") {
+          enabled = isWeekday;
+        } else if (dayFilter === "weekends") {
+          enabled = isWeekend;
+        }
+
+        let startTime = "5:00 AM";
+        let endTime = "11:30 PM";
+        if (timeFilter === "mornings") {
+          startTime = "5:00 AM";
+          endTime = "2:00 PM";
+        } else if (timeFilter === "evenings") {
+          startTime = "4:00 PM";
+          endTime = "11:30 PM";
+        }
+
+        next[dayIndex] = {
+          ...value,
+          enabled,
+          startTime,
+          endTime,
+        };
+      }
+      return next;
+    });
+    setAvailabilityFeedback(null);
+    setAvailabilitySavedPulse(false);
+  };
 
   const toggleRole = (roleId: string) => {
     setFormData((current) => {
@@ -541,27 +749,79 @@ export function EmployeeEditorDrawer({
     }
 
     const pendingChangeCount = dirtyCount;
+    const hasProfileChanges = profileDirtyCount > 0;
+    const hasAvailabilityChanges = availabilityDirty;
 
     try {
       setIsSaving(true);
       setFeedback(null);
-      const nextProfile = await updateEmployee(businessId, employee.id, {
-        email: email.trim() || null,
-        phone_e164: phone.trim() || null,
-        roles: formData.selectedRoleIds.map((roleId) => ({
-          role_id: roleId,
-          is_primary: roleId === formData.primaryRoleId,
-        })),
-        locations: formData.selectedLocationIds.map((locationId) => ({
-          location_id: locationId,
-          is_primary: locationId === formData.primaryLocationId,
-        })),
-      });
-      setProfile(nextProfile);
-      setFormData(buildAssignmentStateFromProfile(nextProfile));
-      setEmail(nextProfile.email ?? "");
-      setPhone(nextProfile.phone_e164 ?? "");
-      await onSaved(nextProfile);
+      let nextProfile = profile;
+
+      if (hasProfileChanges) {
+        nextProfile = await updateEmployee(businessId, employee.id, {
+          full_name: fullName.trim(),
+          email: email.trim() || null,
+          phone_e164: phone.trim() || null,
+          roles: formData.selectedRoleIds.map((roleId) => ({
+            role_id: roleId,
+            is_primary: roleId === formData.primaryRoleId,
+          })),
+          locations: formData.selectedLocationIds.map((locationId) => ({
+            location_id: locationId,
+            is_primary: locationId === formData.primaryLocationId,
+          })),
+        });
+        setProfile(nextProfile);
+        setFullName(nextProfile.full_name);
+        setFormData(buildAssignmentStateFromProfile(nextProfile));
+        setEmail(nextProfile.email ?? "");
+        setPhone(nextProfile.phone_e164 ?? "");
+        await onSaved(nextProfile);
+      }
+
+      if (hasAvailabilityChanges) {
+        try {
+          const payload = serializeAvailability(
+            availabilityDayStates,
+            availabilityTimezone,
+          );
+          const response = await replaceEmployeeAvailability(
+            businessId,
+            employee.id,
+            payload,
+          );
+          const nextAvailabilityState = buildStateFromRules(response);
+          setAvailabilityTimezone(
+            response.rules.length > 0
+              ? resolveAvailabilityTimezone(response.timezone)
+              : availabilityTimezone,
+          );
+          setAvailabilityDayStates(nextAvailabilityState);
+          setAvailabilityBaseline(nextAvailabilityState);
+          setAvailabilityFeedback(null);
+          setAvailabilitySavedPulse(true);
+        } catch (error) {
+          setAvailabilitySavedPulse(false);
+          setAvailabilityFeedback({
+            tone: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Could not update this employee's availability.",
+          });
+          setFeedback({
+            tone: "error",
+            message:
+              hasProfileChanges
+                ? "Saved employee details but could not update availability."
+                : error instanceof Error
+                  ? error.message
+                  : "Could not update this employee's availability.",
+          });
+          return;
+        }
+      }
+
       setFeedback({
         tone: "success",
         message: `Saved ${pendingChangeCount} change${pendingChangeCount === 1 ? "" : "s"} for ${name}.`,
@@ -569,7 +829,10 @@ export function EmployeeEditorDrawer({
     } catch (error) {
       setFeedback({
         tone: "error",
-        message: error instanceof Error ? error.message : "Could not update this employee.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Could not update this employee.",
       });
     } finally {
       setIsSaving(false);
@@ -643,7 +906,7 @@ export function EmployeeEditorDrawer({
                   : "Save Changes"}
             </button>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-start gap-4">
             <div
               className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-[16px] text-white"
               style={{
@@ -651,30 +914,49 @@ export function EmployeeEditorDrawer({
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
             >
-              {employeeInitials(name)}
+              {employeeInitials(headerDisplayName)}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2.5">
-                <h2
-                  className={`truncate text-[18px] tracking-[-0.01em] ${theme.textPrimary}`}
-                  style={{ fontWeight: 600 }}
-                >
-                  {name}
-                </h2>
-                <div
-                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5"
-                  style={{ background: `${reliabilityColor}12` }}
-                >
-                  <ShieldCheck size={12} style={{ color: reliabilityColor }} />
-                  <span
-                    className="text-[12px] tabular-nums"
-                    style={{ color: reliabilityColor, fontWeight: 580 }}
-                  >
-                    {reliability}%
-                  </span>
-                </div>
+              <div className="group/name mb-1 flex items-center gap-1.5">
+                {isEditingName ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b-2 border-[#635BFF] bg-transparent text-[20px] tracking-[-0.01em] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingName(false)}
+                    onChange={(event) => setFullName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingName(false);
+                      }
+                      if (event.key === "Escape") {
+                        setFullName(profile?.full_name ?? employee.full_name);
+                        setIsEditingName(false);
+                      }
+                    }}
+                    style={{ fontWeight: 600 }}
+                    type="text"
+                    value={fullName}
+                  />
+                ) : (
+                  <>
+                    <h2
+                      className={`truncate text-[20px] tracking-[-0.01em] ${theme.textPrimary}`}
+                      style={{ fontWeight: 600 }}
+                    >
+                      {headerDisplayName}
+                    </h2>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/name:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingName(true)}
+                      title="Edit name"
+                      type="button"
+                    >
+                      <Pencil size={13} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
               </div>
-              <div className="mt-0.5 flex items-center gap-2">
+              <div className="mb-3 flex items-center gap-2">
                 <span
                   className="rounded-full px-2 py-0.5 text-[11px]"
                   style={{
@@ -685,6 +967,92 @@ export function EmployeeEditorDrawer({
                 >
                   {status.label}
                 </span>
+                <div
+                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5"
+                  style={{ background: `${reliabilityColor}12` }}
+                >
+                  <ShieldCheck size={11} style={{ color: reliabilityColor }} />
+                  <span
+                    className="text-[11px] tabular-nums"
+                    style={{ color: reliabilityColor, fontWeight: 580 }}
+                  >
+                    {reliability}%
+                  </span>
+                </div>
+              </div>
+              <div className="group/email mb-2 flex items-center gap-1.5">
+                <Mail size={13} className="shrink-0 text-[#8898AA]" />
+                {isEditingEmail ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b border-[#635BFF] bg-transparent text-[13px] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingEmail(false)}
+                    onChange={(event) => setEmail(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingEmail(false);
+                      }
+                      if (event.key === "Escape") {
+                        setEmail(profile?.email ?? employee.email ?? "");
+                        setIsEditingEmail(false);
+                      }
+                    }}
+                    style={{ fontWeight: 440 }}
+                    type="email"
+                    value={email}
+                  />
+                ) : (
+                  <>
+                    <span className={`text-[13px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                      {email || "Add email"}
+                    </span>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/email:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingEmail(true)}
+                      title="Edit email"
+                      type="button"
+                    >
+                      <Pencil size={12} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="group/phone flex items-center gap-1.5">
+                <Phone size={13} className="shrink-0 text-[#8898AA]" />
+                {isEditingPhone ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b border-[#635BFF] bg-transparent text-[13px] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingPhone(false)}
+                    onChange={(event) => setPhone(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingPhone(false);
+                      }
+                      if (event.key === "Escape") {
+                        setPhone(profile?.phone_e164 ?? employee.phone_e164 ?? "");
+                        setIsEditingPhone(false);
+                      }
+                    }}
+                    style={{ fontWeight: 440 }}
+                    type="tel"
+                    value={phone}
+                  />
+                ) : (
+                  <>
+                    <span className={`text-[13px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                      {phone || "Add phone"}
+                    </span>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/phone:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingPhone(true)}
+                      title="Edit phone"
+                      type="button"
+                    >
+                      <Pencil size={12} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -707,57 +1075,6 @@ export function EmployeeEditorDrawer({
               {feedback.message}
             </div>
           ) : null}
-
-          <div>
-            <h3
-              className="mb-3 text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-              style={{ fontWeight: 500 }}
-            >
-              Contact
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label
-                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-                  style={{ fontWeight: 500 }}
-                >
-                  Email
-                </label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md ${theme.subtleSurfaceClass}`}>
-                    <Mail className="text-[#8898AA]" size={13} />
-                  </div>
-                  <input
-                    className={`w-full rounded-lg border py-2.5 pl-12 pr-3.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
-                    onChange={(event) => setEmail(event.target.value)}
-                    style={{ fontWeight: 440 }}
-                    type="email"
-                    value={email}
-                  />
-                </div>
-              </div>
-              <div>
-                <label
-                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-                  style={{ fontWeight: 500 }}
-                >
-                  Phone
-                </label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md ${theme.subtleSurfaceClass}`}>
-                    <Phone className="text-[#8898AA]" size={13} />
-                  </div>
-                  <input
-                    className={`w-full rounded-lg border py-2.5 pl-12 pr-3.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
-                    onChange={(event) => setPhone(event.target.value)}
-                    style={{ fontWeight: 440 }}
-                    type="tel"
-                    value={phone}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
 
           <div>
             <div className="mb-3 flex items-center justify-between">
@@ -973,6 +1290,36 @@ export function EmployeeEditorDrawer({
                 </button>
               </div>
             </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <h3
+                className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
+                style={{ fontWeight: 500 }}
+              >
+                Availability
+              </h3>
+              <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                {availabilityStatus === "ready"
+                  ? `${availabilityDirtyCount} change${availabilityDirtyCount === 1 ? "" : "s"}`
+                  : "Weekly hours"}
+              </span>
+            </div>
+            <AvailabilityEditorPanel
+              dark={dark}
+              dayStates={availabilityDayStates}
+              feedback={availabilityFeedback}
+              loadingMessage="Loading availability..."
+              onApplyPreset={applyAvailabilityPreset}
+              onCopyToAll={copyAvailabilityToAll}
+              onSetDayEnabled={setAvailabilityDayEnabled}
+              onSetEndTime={setAvailabilityEndTime}
+              onSetStartTime={setAvailabilityStartTime}
+              savedPulse={availabilitySavedPulse}
+              showDaySummary={false}
+              status={availabilityStatus}
+            />
           </div>
 
           {onDeleted ? (

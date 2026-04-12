@@ -7,15 +7,10 @@ vi.mock("@/lib/api/copilot", () => ({
   createCopilotSession: vi.fn(),
 }));
 
-vi.mock("@/lib/api/events", () => ({
-  listPlatformEvents: vi.fn(),
-}));
-
 import {
   createCopilotMessage,
   createCopilotSession,
 } from "@/lib/api/copilot";
-import { listPlatformEvents } from "@/lib/api/events";
 import type { CopilotSessionDetail, CopilotTurn } from "@/lib/types/copilot";
 import DashboardCopilotSidebar from "../DashboardCopilotSidebar";
 
@@ -96,19 +91,17 @@ function deferredPromise<T>() {
 describe("DashboardCopilotSidebar", () => {
   const createCopilotSessionMock = vi.mocked(createCopilotSession);
   const createCopilotMessageMock = vi.mocked(createCopilotMessage);
-  const listPlatformEventsMock = vi.mocked(listPlatformEvents);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    listPlatformEventsMock.mockResolvedValue([]);
   });
 
-  it("keeps session creation lazy until the user explicitly starts Copilot", async () => {
-    const user = userEvent.setup();
+  it("keeps session creation lazy until the user explicitly opens Copilot", async () => {
     createCopilotSessionMock.mockResolvedValue(buildSessionDetail());
 
-    render(
+    const { rerender } = render(
       <DashboardCopilotSidebar
+        autoStartSignal={0}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -118,7 +111,15 @@ describe("DashboardCopilotSidebar", () => {
 
     expect(createCopilotSessionMock).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Start Copilot" }));
+    rerender(
+      <DashboardCopilotSidebar
+        autoStartSignal={1}
+        businessId="business-1"
+        dark={false}
+        locationId="location-1"
+        locationName="Santa Monica"
+      />,
+    );
 
     await waitFor(() => {
       expect(createCopilotSessionMock).toHaveBeenCalledTimes(1);
@@ -129,8 +130,9 @@ describe("DashboardCopilotSidebar", () => {
     const pending = deferredPromise<CopilotSessionDetail>();
     createCopilotSessionMock.mockReturnValue(pending.promise);
 
-    render(
+    const { rerender } = render(
       <DashboardCopilotSidebar
+        autoStartSignal={1}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -138,9 +140,15 @@ describe("DashboardCopilotSidebar", () => {
       />,
     );
 
-    const startButton = screen.getByRole("button", { name: "Start Copilot" });
-    fireEvent.click(startButton);
-    fireEvent.click(startButton);
+    rerender(
+      <DashboardCopilotSidebar
+        autoStartSignal={2}
+        businessId="business-1"
+        dark={false}
+        locationId="location-1"
+        locationName="Santa Monica"
+      />,
+    );
 
     expect(createCopilotSessionMock).toHaveBeenCalledTimes(1);
 
@@ -151,17 +159,18 @@ describe("DashboardCopilotSidebar", () => {
     pending.resolve(buildSessionDetail());
 
     await waitFor(() => {
-      expect(startButton).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading Copilot…")).not.toBeInTheDocument();
     });
   });
 
-  it("waits to load the feed until the feed tab is active", async () => {
+  it("renders a single copilot conversation surface without nested tabs", async () => {
     const user = userEvent.setup();
     createCopilotSessionMock.mockResolvedValue(buildSessionDetail());
     createCopilotMessageMock.mockResolvedValue(buildTurn());
 
     render(
       <DashboardCopilotSidebar
+        autoStartSignal={1}
         businessId="business-1"
         dark={false}
         locationId="location-1"
@@ -169,12 +178,15 @@ describe("DashboardCopilotSidebar", () => {
       />,
     );
 
-    expect(listPlatformEventsMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Feed/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Copilot" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Feed/i }));
+    const input = await screen.findByPlaceholderText(/Ask Copilot/i);
+    await user.type(input, "Show me open shifts");
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 
     await waitFor(() => {
-      expect(listPlatformEventsMock).toHaveBeenCalledTimes(1);
+      expect(createCopilotMessageMock).toHaveBeenCalledTimes(1);
     });
   });
 });

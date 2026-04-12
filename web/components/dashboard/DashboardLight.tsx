@@ -19,14 +19,11 @@ import {
   buildDashboardOverviewLocationEditPathFromAny,
 } from '@/lib/dashboard-paths';
 import {
-  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
-  listBusinessRoles,
   replaceLocationRoles,
   type BusinessLocation,
-  type BusinessRole,
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
@@ -38,7 +35,11 @@ import {
   type ShiftDefault,
   type WorkspaceBusiness,
 } from '@/lib/api/workspace';
-import { listEmployees } from '@/lib/api/workforce';
+import {
+  listEmployees,
+  updateEmployee,
+  type EmployeeSummary,
+} from '@/lib/api/workforce';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
 import AddLocationModal from './AddLocationModal';
 import DashboardShell from './DashboardShell';
@@ -54,6 +55,12 @@ import {
   type SourceDashboardLocation,
 } from './mock-data';
 import { useSmartGreeting } from './use-smart-greeting';
+import {
+  buildEmployeeLocationAssignments,
+  buildInheritedLocationRoleIds,
+  employeeAssignedHere,
+  mergeUpdatedEmployees,
+} from './location-employee-utils';
 import {
   Plus,
   MoreHorizontal,
@@ -780,7 +787,7 @@ function MultiLocationView({
   const coverageDate = useCoverageDateParts(timeZone);
   const [showAddLocation, setShowAddLocation] = useState(false);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
-  const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
+  const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
   const [editorStaffCount, setEditorStaffCount] = useState<number | null>(null);
@@ -811,6 +818,8 @@ function MultiLocationView({
     setEditorLocation(null);
     setEditorFeedback(null);
     setEditorStaffCount(null);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
     setEditorShiftDefaults(null);
     setEditorDeleteState(undefined);
   }, []);
@@ -831,6 +840,8 @@ function MultiLocationView({
     }
 
     setEditorLocation(editableLocation);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
     setEditorShiftDefaults(null);
     setEditorStaffCount(null);
     setEditorDeleteState({ canDelete: false, checking: true });
@@ -840,21 +851,19 @@ function MultiLocationView({
     try {
       const [
         nextLocation,
-        nextRoles,
         nextAssignments,
         nextShiftDefaults,
         nextDeleteReadiness,
         employees,
       ] = await Promise.all([
         getBusinessLocation(editableLocation.business_id, editableLocation.id),
-        listBusinessRoles(editableLocation.business_id),
         getLocationRoles(editableLocation.business_id, editableLocation.id),
         getLocationShiftDefaults(editableLocation.business_id, editableLocation.id),
         getLocationDeleteReadiness(editableLocation.business_id, editableLocation.id),
         listEmployees(editableLocation.business_id),
       ]);
       setEditorLocation(nextLocation);
-      setEditorRoles(nextRoles);
+      setEditorEmployees(employees);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
       setEditorStaffCount(
@@ -868,7 +877,7 @@ function MultiLocationView({
       setEditorFeedback({
         tone: 'error',
         message:
-          error instanceof Error ? error.message : 'Could not load location roles.',
+          error instanceof Error ? error.message : 'Could not load location setup.',
       });
       setEditorDeleteState({
         canDelete: false,
@@ -909,7 +918,7 @@ function MultiLocationView({
   }, [editingLocationId, editorLocation, locations, locationsLoaded, openLocationEditor, resetLocationEditor]);
 
   const handleSaveEditor = (
-    roleIds: string[],
+    employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
@@ -920,7 +929,17 @@ function MultiLocationView({
     const activeLocation = editorLocation;
     startSaveTransition(async () => {
       try {
-        const [nextAssignments, nextShiftDefaults] = await Promise.all([
+        const roleIds = buildInheritedLocationRoleIds(
+          editorAssignments,
+          editorEmployees,
+          employeeIds,
+        );
+        const changedEmployees = editorEmployees.filter((employee) => {
+          const currentlyAssigned = employeeAssignedHere(employee, activeLocation.id);
+          const shouldBeAssigned = employeeIds.includes(employee.id);
+          return currentlyAssigned !== shouldBeAssigned;
+        });
+        const [nextAssignments, nextShiftDefaults, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             activeLocation.business_id,
             activeLocation.id,
@@ -942,8 +961,20 @@ function MultiLocationView({
             activeLocation.id,
             locationShiftPresets,
           ),
+          Promise.all(
+            changedEmployees.map((employee) =>
+              updateEmployee(activeLocation.business_id, employee.id, {
+                locations: buildEmployeeLocationAssignments(
+                  employee,
+                  activeLocation.id,
+                  employeeIds.includes(employee.id),
+                ),
+              }),
+            ),
+          ),
         ]);
         setEditorAssignments(nextAssignments);
+        setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setEditorShiftDefaults(nextShiftDefaults);
         const board = await getLocationBoard(activeLocation.business_id, activeLocation.id);
         setLocationEntryMode(
@@ -965,30 +996,6 @@ function MultiLocationView({
         });
       }
     });
-  };
-
-  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
-    if (!editorLocation) {
-      throw new Error('No location selected.');
-    }
-
-    try {
-      setEditorFeedback(null);
-      const activeLocation = editorLocation;
-      const created = await createBusinessRole(activeLocation.business_id, { name });
-      setEditorRoles((current) =>
-        current.some((role) => role.id === created.id)
-          ? current
-          : [...current, created],
-      );
-      return created;
-    } catch (error) {
-      setEditorFeedback({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not create role.',
-      });
-      throw error;
-    }
   };
 
   const handleDeleteLocation = async (location: DashboardSurfaceLocation) => {
@@ -1367,12 +1374,11 @@ function MultiLocationView({
             loading={editorLoading}
             location={editorLocation}
             onClose={closeLocationEditor}
-            onCreateRole={handleCreateRole}
             onDelete={() => {
               void handleDeleteEditorLocation();
             }}
             onSave={handleSaveEditor}
-            roles={editorRoles}
+            employees={editorEmployees}
             saving={isSavingEditor}
             staffCount={editorStaffCount}
             shiftDefaults={editorShiftDefaults}

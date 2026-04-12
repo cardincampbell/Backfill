@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from sqlalchemy import select
 
-from app.models.common import CoverageCaseStatus, CoverageAttemptStatus, OfferStatus, ShiftStatus
+from app.models.common import (
+    CoverageAttemptStatus,
+    CoverageCaseStatus,
+    OfferStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+)
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.scheduling import Shift
 from app.schemas.coverage import CoverageExecutionDispatchRequest
@@ -241,7 +247,7 @@ async def process_queued_coverage_cases(
             if shift is None:
                 raise LookupError("shift_not_found")
 
-            if shift.status in {ShiftStatus.cancelled, ShiftStatus.completed}:
+            if shift.lifecycle_status in {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}:
                 coverage_case.status = CoverageCaseStatus.cancelled
                 coverage_case.closed_at = reference_time
                 coverage_case.case_metadata = {
@@ -423,7 +429,10 @@ async def reconcile_running_coverage_cases(
             if shift is None:
                 raise LookupError("shift_not_found")
 
-            if int(shift.seats_filled or 0) >= int(shift.seats_requested or 1) or shift.status == ShiftStatus.covered:
+            if (
+                int(shift.seats_filled or 0) >= int(shift.seats_requested or 1)
+                or shift.staffing_status == ShiftStaffingStatus.covered
+            ):
                 cancelled_offer_ids = await _cancel_active_offers(
                     session,
                     coverage_case=coverage_case,
@@ -455,7 +464,10 @@ async def reconcile_running_coverage_cases(
                 filled_count += 1
                 continue
 
-            if shift.status in {ShiftStatus.cancelled, ShiftStatus.completed, ShiftStatus.no_fill}:
+            if (
+                shift.lifecycle_status in {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}
+                or shift.staffing_status == ShiftStaffingStatus.no_fill
+            ):
                 cancelled_offer_ids = await _cancel_active_offers(
                     session,
                     coverage_case=coverage_case,

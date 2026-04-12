@@ -7,12 +7,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import {
   Loader2,
   Send,
   Sparkles,
-  Waves,
 } from "lucide-react";
 
 import {
@@ -25,9 +24,7 @@ import type {
   CopilotSessionDetail,
   CopilotTurn,
 } from "@/lib/types/copilot";
-import DashboardActivityFeedPanel from "./DashboardActivityFeedPanel";
 import DashboardCopilotToolResult from "./DashboardCopilotToolResult";
-import SegmentedControl from "./SegmentedControl";
 
 const copilotSuggestions = [
   "Show me open shifts this week",
@@ -143,8 +140,8 @@ function inputWrapClass(dark: boolean) {
 
 function inputClass(dark: boolean) {
   return dark
-    ? "flex-1 bg-transparent text-[12px] text-white placeholder-[#8898AA]/50 focus:outline-none"
-    : "flex-1 bg-transparent text-[12px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none";
+    ? "flex-1 bg-transparent text-[16px] text-white placeholder-[#8898AA]/50 focus:outline-none sm:text-[12px]"
+    : "flex-1 bg-transparent text-[16px] text-[#0A2540] placeholder-[#8898AA]/60 focus:outline-none sm:text-[12px]";
 }
 
 function sendButtonClass(dark: boolean) {
@@ -154,19 +151,20 @@ function sendButtonClass(dark: boolean) {
 }
 
 export default function DashboardCopilotSidebar({
+  autoStartSignal = 0,
   dark,
   businessId,
   locationId,
-  locationHref,
+  locationHref: _locationHref,
   locationName,
 }: {
+  autoStartSignal?: number;
   dark: boolean;
   businessId?: string | null;
   locationId?: string | null;
   locationHref?: string | null;
   locationName?: string | null;
 }) {
-  const [panelTab, setPanelTab] = useState<"chat" | "feed">("chat");
   const [sessionDetail, setSessionDetail] = useState<CopilotSessionDetail | null>(
     null,
   );
@@ -200,11 +198,8 @@ export default function DashboardCopilotSidebar({
   }, [sessionContextKey]);
 
   useEffect(() => {
-    if (panelTab !== "chat") {
-      return;
-    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping, panelTab]);
+  }, [messages, isTyping]);
 
   useEffect(() => {
     sessionRequestRef.current = null;
@@ -275,6 +270,16 @@ export default function DashboardCopilotSidebar({
     return request;
   }, [businessId, locationId, sessionContextKey]);
 
+  useEffect(() => {
+    if (!autoStartSignal || !businessId) {
+      return;
+    }
+    if (sessionDetailRef.current || sessionRequestRef.current) {
+      return;
+    }
+    void ensureSession();
+  }, [autoStartSignal, businessId, ensureSession]);
+
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -316,255 +321,159 @@ export default function DashboardCopilotSidebar({
 
   return (
     <div className="flex h-full flex-col">
-      <div
-        className={`border-b px-3 pb-2 pt-3 ${
-          dark ? "border-white/[0.06]" : "border-[#F0F0F5]"
-        }`}
+      <motion.div
+        animate={{ opacity: 1, x: 0 }}
+        className="flex h-full flex-col"
+        initial={{ opacity: 0, x: -8 }}
+        transition={{ duration: 0.18 }}
       >
-        <SegmentedControl
-          activeItemClassName={
-            dark
-              ? "backfill-ui-radius bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]"
-              : "bg-white text-[#0A2540] shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
-          }
-          className={dark ? "flex w-full bg-white/[0.04]" : "flex w-full bg-[#F0F0F5]"}
-          iconSize={13}
-          inactiveItemClassName={
-            dark
-              ? "text-[#8898AA] hover:text-[#C1CED8]"
-              : "text-[#8898AA] hover:text-[#5E6D7A]"
-          }
-          itemClassName="flex-1 py-2 text-[12px]"
-          items={[
-            { value: "chat", label: "Chat", icon: Sparkles },
-            { value: "feed", label: "Feed", icon: Waves },
-          ]}
-          onChange={(value) => setPanelTab(value as "chat" | "feed")}
-          value={panelTab}
-        />
-      </div>
+        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
+          {error ? (
+            <div
+              className={`rounded-xl border px-3 py-2 text-[11px] ${
+                dark
+                  ? "border-[#E5484D]/30 bg-[#E5484D]/10 text-[#F8B4B4]"
+                  : "border-[#E5484D]/20 bg-[#FFF2F2] text-[#A33A3A]"
+              }`}
+              style={{ fontWeight: 500 }}
+            >
+              {error}
+            </div>
+          ) : null}
 
-      <AnimatePresence mode="wait">
-        {panelTab === "chat" ? (
-          <motion.div
-            key="chat"
-            animate={{ opacity: 1, x: 0 }}
-            className="flex h-full flex-col"
-            initial={{ opacity: 0, x: -8 }}
-            transition={{ duration: 0.18 }}
-          >
-            <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
-              {error ? (
-                <div
-                  className={`rounded-xl border px-3 py-2 text-[11px] ${
-                    dark
-                      ? "border-[#E5484D]/30 bg-[#E5484D]/10 text-[#F8B4B4]"
-                      : "border-[#E5484D]/20 bg-[#FFF2F2] text-[#A33A3A]"
-                  }`}
-                  style={{ fontWeight: 500 }}
-                >
-                  {error}
-                </div>
-              ) : null}
+          {isLoadingSession && messages.length === 0 ? (
+            <div
+              className={`flex items-center gap-2 rounded-2xl px-3.5 py-3 text-[12px] ${
+                dark
+                  ? "bg-white/[0.05] text-[#C1CED8]"
+                  : "bg-[#F0F0F5] text-[#5E6D7A]"
+              }`}
+              style={{ fontWeight: 420 }}
+            >
+              <Loader2 size={14} className="animate-spin" />
+              Loading Copilot…
+            </div>
+          ) : null}
 
-              {isLoadingSession && messages.length === 0 ? (
-                <div
-                  className={`flex items-center gap-2 rounded-2xl px-3.5 py-3 text-[12px] ${
-                    dark
-                      ? "bg-white/[0.05] text-[#C1CED8]"
-                      : "bg-[#F0F0F5] text-[#5E6D7A]"
-                  }`}
-                  style={{ fontWeight: 420 }}
-                >
-                  <Loader2 size={14} className="animate-spin" />
-                  Loading Copilot…
-                </div>
-              ) : null}
-
-              {!error && !isLoadingSession && !sessionDetail ? (
-                <div
-                  className={`rounded-2xl border px-4 py-4 ${
-                    dark
-                      ? "border-white/[0.06] bg-white/[0.03]"
-                      : "border-[#E5E7EB] bg-white"
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
-                      <Sparkles size={14} className="text-white" />
-                    </div>
-                    <div className="min-w-0">
-                      <p
-                        className={`text-[13px] ${
-                          dark ? "text-white" : "text-[#0A2540]"
-                        }`}
-                        style={{ fontWeight: 560 }}
-                      >
-                        Copilot is ready when you are
-                      </p>
-                      <p
-                        className={`mt-1 text-[12px] ${
-                          dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
-                        }`}
-                        style={{ fontWeight: 420 }}
-                      >
-                        Start a session only when you want to ask about open shifts,
-                        active campaigns, or manager actions.
-                      </p>
-                      <button
-                        className="mt-3 rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] px-3.5 py-2 text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.22)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
-                        disabled={isLoadingSession}
-                        onClick={() => {
-                          void ensureSession();
-                        }}
-                        style={{ fontWeight: 540 }}
-                        type="button"
-                      >
-                        Start Copilot
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {messages.map((message) => {
-                const toolResult = toolResultsByMessageId.get(message.id);
-                return (
-                  <motion.div
-                    key={message.id}
-                    animate={{ opacity: 1, y: 0 }}
-                    className={`flex ${
-                      message.direction === "inbound"
-                        ? "justify-end"
-                        : "justify-start"
-                    }`}
-                    initial={{ opacity: 0, y: 6 }}
-                    transition={{ duration: 0.25 }}
-                  >
-                    {message.direction === "outbound" ? (
-                      <div className="mr-2 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
-                        <Sparkles size={11} className="text-white" />
-                      </div>
-                    ) : null}
-                    <div className="max-w-[85%]">
-                      <div
-                        className={`rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${messageSurfaceClass(
-                          {
-                            dark,
-                            direction: message.direction,
-                          },
-                        )}`}
-                        style={{ fontWeight: 420, whiteSpace: "pre-line" }}
-                      >
-                        {message.raw_text}
-                      </div>
-                      {toolResult ? (
-                        <DashboardCopilotToolResult
-                          actionRun={toolResult}
-                          dark={dark}
-                        />
-                      ) : null}
-                    </div>
-                  </motion.div>
-                );
-              })}
-
-              {isTyping ? (
-                <div className="flex items-center gap-2">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
+          {messages.map((message) => {
+            const toolResult = toolResultsByMessageId.get(message.id);
+            return (
+              <motion.div
+                key={message.id}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex ${
+                  message.direction === "inbound"
+                    ? "justify-end"
+                    : "justify-start"
+                }`}
+                initial={{ opacity: 0, y: 6 }}
+                transition={{ duration: 0.25 }}
+              >
+                {message.direction === "outbound" ? (
+                  <div className="mr-2 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
                     <Sparkles size={11} className="text-white" />
                   </div>
-                  <div className={typingBubbleClass(dark)}>
-                    <div
-                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                      style={{ animationDelay: "0ms" }}
-                    />
-                    <div
-                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                      style={{ animationDelay: "150ms" }}
-                    />
-                    <div
-                      className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                      style={{ animationDelay: "300ms" }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-              <div ref={bottomRef} />
-            </div>
-
-            {messages.length <= 2 ? (
-              <div className="space-y-1.5 px-3 pb-2">
-                {copilotSuggestions.map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    className={suggestionButtonClass(dark)}
-                    disabled={!businessId || isLoadingSession || isTyping}
-                    onClick={() => {
-                      void sendMessage(suggestion);
-                    }}
-                    style={{ fontWeight: 440 }}
-                    type="button"
+                ) : null}
+                <div className="max-w-[85%]">
+                  <div
+                    className={`rounded-2xl px-3.5 py-2.5 text-[12px] leading-relaxed ${messageSurfaceClass(
+                      {
+                        dark,
+                        direction: message.direction,
+                      },
+                    )}`}
+                    style={{ fontWeight: 420, whiteSpace: "pre-line" }}
                   >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+                    {message.raw_text}
+                  </div>
+                  {toolResult ? (
+                    <DashboardCopilotToolResult
+                      actionRun={toolResult}
+                      dark={dark}
+                    />
+                  ) : null}
+                </div>
+              </motion.div>
+            );
+          })}
 
-            <div className={`border-t p-3 ${footerBorderClass}`}>
-              <div className={inputWrapClass(dark)}>
-                <input
-                  className={inputClass(dark)}
-                  onChange={(event) => setInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      void sendMessage(input);
-                    }
-                  }}
-                  placeholder={
-                    locationName
-                      ? `Ask Copilot about ${locationName}...`
-                      : "Ask Copilot..."
-                  }
-                  style={{ fontWeight: 420 }}
-                  type="text"
-                  value={input}
+          {isTyping ? (
+            <div className="flex items-center gap-2">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
+                <Sparkles size={11} className="text-white" />
+              </div>
+              <div className={typingBubbleClass(dark)}>
+                <div
+                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
+                  style={{ animationDelay: "0ms" }}
                 />
-                <button
-                  className={sendButtonClass(dark)}
-                  disabled={
-                    !input.trim() || !businessId || isLoadingSession || isTyping
-                  }
-                  onClick={() => {
-                    void sendMessage(input);
-                  }}
-                  type="button"
-                >
-                  <Send size={14} className="text-[#635BFF]" />
-                </button>
+                <div
+                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
+                  style={{ animationDelay: "150ms" }}
+                />
+                <div
+                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
+                  style={{ animationDelay: "300ms" }}
+                />
               </div>
             </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="feed"
-            animate={{ opacity: 1, x: 0 }}
-            className="flex h-full flex-col overflow-hidden"
-            initial={{ opacity: 0, x: 8 }}
-            transition={{ duration: 0.18 }}
-          >
-            <DashboardActivityFeedPanel
-              active={panelTab === "feed"}
-              businessId={businessId}
-              dark={dark}
-              locationHref={locationHref}
-              locationId={locationId}
-              locationName={locationName}
+          ) : null}
+          <div ref={bottomRef} />
+        </div>
+
+        {messages.length <= 2 ? (
+          <div className="space-y-1.5 px-3 pb-2">
+            {copilotSuggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                className={suggestionButtonClass(dark)}
+                disabled={!businessId || isLoadingSession || isTyping}
+                onClick={() => {
+                  void sendMessage(suggestion);
+                }}
+                style={{ fontWeight: 440 }}
+                type="button"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className={`border-t p-3 ${footerBorderClass}`}>
+          <div className={inputWrapClass(dark)}>
+            <input
+              className={inputClass(dark)}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void sendMessage(input);
+                }
+              }}
+              placeholder={
+                locationName
+                  ? `Ask Copilot about ${locationName}...`
+                  : "Ask Copilot..."
+              }
+              style={{ fontWeight: 420 }}
+              type="text"
+              value={input}
             />
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <button
+              className={sendButtonClass(dark)}
+              disabled={
+                !input.trim() || !businessId || isLoadingSession || isTyping
+              }
+              onClick={() => {
+                void sendMessage(input);
+              }}
+              type="button"
+            >
+              <Send size={14} className="text-[#635BFF]" />
+            </button>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }

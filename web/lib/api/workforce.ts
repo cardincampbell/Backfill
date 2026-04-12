@@ -276,12 +276,44 @@ export async function getSelfEmployeeAvailability(
   return (await response.json()) as SelfEmployeeAvailability;
 }
 
+export async function getEmployeeAvailability(
+  businessId: string,
+  employeeId: string,
+): Promise<SelfEmployeeAvailability> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/${employeeId}/availability-rules`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as SelfEmployeeAvailability;
+}
+
 export async function replaceSelfEmployeeAvailability(
   businessId: string,
   payload: { rules: EmployeeAvailabilityRulePayload[] },
 ): Promise<SelfEmployeeAvailability> {
   const response = await apiFetchApp(
     `${API_PREFIX}/businesses/${businessId}/employees/availability-rules/self`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as SelfEmployeeAvailability;
+}
+
+export async function replaceEmployeeAvailability(
+  businessId: string,
+  employeeId: string,
+  payload: { rules: EmployeeAvailabilityRulePayload[] },
+): Promise<SelfEmployeeAvailability> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/${employeeId}/availability-rules`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },

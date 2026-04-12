@@ -6,6 +6,7 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { useRouter } from 'next/navigation';
 import {
+  Copy,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -24,15 +25,17 @@ import {
   UserMinus,
   UserPlus,
   AlertTriangle,
+  GripVertical,
+  Info,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
 import { FloatingDropdown } from '@/components/floating-dropdown';
 import {
-  createBusinessRole,
   getBusinessLocation,
   getLocationDeleteReadiness,
   getLocationRoles,
+  listBusinessLocations,
   listBusinessRoles,
   replaceLocationRoles,
   type BusinessLocation,
@@ -40,16 +43,28 @@ import {
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
+  assignShift as assignWorkspaceShift,
+  createShift as createWorkspaceShift,
   deleteLocation as deleteWorkspaceLocation,
+  deleteShift as deleteWorkspaceShift,
   getLocationBoard,
   getLocationShiftDefaults,
+  ShiftAssignmentConflictError,
   updateLocationShiftDefaults,
+  updateShift as updateWorkspaceShift,
+  type ShiftCreatePayload,
+  type ShiftAssignmentMutationResponse,
   type ShiftDefault,
   type ShiftDefaultKey,
   type LocationShiftDefaults,
+  type WorkspaceBoard,
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
-import { listEmployees } from '@/lib/api/workforce';
+import {
+  listEmployees,
+  updateEmployee,
+  type EmployeeSummary,
+} from '@/lib/api/workforce';
 import {
   buildDashboardLocationBasePathFromAny,
   buildSchedulerBasePathFromAny,
@@ -64,8 +79,17 @@ import {
   type LocationRoleEditorFeedback,
   type LocationRoleEditorSaveSummary,
 } from './LocationRoleEditor';
+import {
+  buildEmployeeLocationAssignments,
+  buildInheritedLocationRoleIds,
+  employeeAssignedHere,
+  mergeUpdatedEmployees,
+} from './location-employee-utils';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
+import {
+  SchedulerEmployeeEnrollmentModal,
+} from './LocationEmployeeActions';
 import {
   getShiftDefaultColor,
   getShiftDefaultIcon,
@@ -78,7 +102,11 @@ import {
 interface Employee { id: string; name: string; avatar: string; role: string; }
 interface Shift {
   id: string;
-  employeeId: string;
+  employeeId: string | null;
+  displayEmployeeId: string | null;
+  displayEmployeeName?: string | null;
+  currentAssignmentId?: string | null;
+  roleId: string;
   day: number;
   startHour: number;
   endHour: number;
@@ -90,37 +118,44 @@ interface Shift {
 
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
-
 /* ─── Role colors ─── */
 const roleColors: Record<string, string> = {
   'RN': '#635BFF', 'LPN': '#8B5CF6', 'CNA': '#00B893', 'NP': '#3B82F6', 'Medical Assistant': '#EC4899',
 };
 const roleOrder = ['RN', 'LPN', 'CNA', 'NP', 'Medical Assistant'];
+const ROLE_COLOR_PALETTE = ['#635BFF', '#8B5CF6', '#00B893', '#3B82F6', '#EC4899', '#F59E0B', '#14B8A6'];
+const OPEN_SHIFT_COLOR = '#E5484D';
 
-/* ─── Employees ─── */
-const employees: Employee[] = [
-  { id: 'e1', name: 'Sarah Martinez', role: 'RN', avatar: 'https://images.unsplash.com/photo-1594824476967-48c8b964273f?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e2', name: 'Carlos Rivera', role: 'RN', avatar: 'https://images.unsplash.com/photo-1627093143401-2ade923be6c2?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e3', name: 'Emily Chen', role: 'RN', avatar: 'https://images.unsplash.com/photo-1678695972687-033fa0bdbac9?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e4', name: 'Jordan Lee', role: 'RN', avatar: 'https://images.unsplash.com/photo-1622253694238-3b22139576c6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e5', name: 'David Kim', role: 'LPN', avatar: 'https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e6', name: 'Nicole Adams', role: 'LPN', avatar: 'https://images.unsplash.com/photo-1756699197173-5ef672a423fa?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e7', name: 'Aisha Patel', role: 'CNA', avatar: 'https://images.unsplash.com/photo-1581322929625-f4aab333778a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e8', name: 'Alex Thompson', role: 'CNA', avatar: 'https://images.unsplash.com/photo-1645736594095-b9a4cabc1a7c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e9', name: 'Taylor Brooks', role: 'NP', avatar: 'https://images.unsplash.com/photo-1756699280573-85c5628a4c6c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e10', name: 'Maria Santos', role: 'Medical Assistant', avatar: 'https://images.unsplash.com/photo-1731005116674-062a313bc7ab?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-  { id: 'e11', name: 'Ryan Murphy', role: 'Medical Assistant', avatar: 'https://images.unsplash.com/photo-1622253694238-3b22139576c6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=100' },
-];
+function employeeInitials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'E';
+}
+
+function buildAvatarDataUri(name: string) {
+  const initials = employeeInitials(name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80"><rect width="80" height="80" rx="40" fill="#EEF0FF"/><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="600" fill="#635BFF">${initials}</text></svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
 
 /* ─── Helpers ─── */
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const TIME_VALUES = Array.from({ length: 48 }, (_, i) => i / 2);
 
 function formatHour(h: number) {
-  if (h === 0 || h === 24) return '12 AM';
-  if (h === 12) return '12 PM';
-  return h < 12 ? `${h} AM` : `${h - 12} PM`;
+  const normalized = ((h % 24) + 24) % 24;
+  const wholeHours = Math.floor(normalized);
+  const minutes = Math.round((normalized - wholeHours) * 60);
+  const hour12 = wholeHours === 0 ? 12 : wholeHours > 12 ? wholeHours - 12 : wholeHours;
+  const suffix = wholeHours < 12 ? 'AM' : 'PM';
+  if (minutes === 0) {
+    return `${hour12} ${suffix}`;
+  }
+  return `${hour12}:${String(minutes).padStart(2, '0')} ${suffix}`;
 }
 
 function shiftDuration(s: Shift) {
@@ -142,12 +177,215 @@ function getWeekDates(offset: number) {
   return Array.from({ length: 7 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
 }
 
+function parseDateKey(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return { year, month, day };
+}
+
+function formatDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatUtcDateKey(value: Date) {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(value.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDaysToDateKey(dateKey: string, days: number) {
+  const { year, month, day } = parseDateKey(dateKey);
+  return formatUtcDateKey(new Date(Date.UTC(year, month - 1, day + days)));
+}
+
+function buildWeekDatesFromWeekStart(weekStartDate: string) {
+  const { year, month, day } = parseDateKey(weekStartDate);
+  return Array.from({ length: 7 }, (_, index) => new Date(year, month - 1, day + index));
+}
+
+function mondayDateKeyFor(timeZone: string, offset: number) {
+  const today = getZonedParts(new Date(), timeZone);
+  const weekday = new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay();
+  const mondayOffset = (weekday + 6) % 7;
+  return addDaysToDateKey(today.dateKey, offset * 7 - mondayOffset);
+}
+
+function dayDifference(startDateKey: string, endDateKey: string) {
+  const start = parseDateKey(startDateKey);
+  const end = parseDateKey(endDateKey);
+  const startUtc = Date.UTC(start.year, start.month - 1, start.day);
+  const endUtc = Date.UTC(end.year, end.month - 1, end.day);
+  return Math.round((endUtc - startUtc) / 86_400_000);
+}
+
+function getZonedParts(value: Date | string, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(typeof value === 'string' ? new Date(value) : value);
+  const lookup = new Map(parts.map((part) => [part.type, part.value]));
+  const year = Number(lookup.get('year'));
+  const month = Number(lookup.get('month'));
+  const day = Number(lookup.get('day'));
+  const hour = Number(lookup.get('hour'));
+  const minute = Number(lookup.get('minute'));
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    dateKey: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+  };
+}
+
+function zonedDateTimeToIso(dateKey: string, hourValue: number, timeZone: string) {
+  const { year, month, day } = parseDateKey(dateKey);
+  const hours = Math.floor(hourValue);
+  const minutes = Math.round((hourValue - hours) * 60);
+  let guess = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const actual = getZonedParts(guess, timeZone);
+    const desiredUtc = Date.UTC(year, month - 1, day, hours, minutes);
+    const actualUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+    );
+    const diffMinutes = (desiredUtc - actualUtc) / 60_000;
+    if (diffMinutes === 0) {
+      break;
+    }
+    guess = new Date(guess.getTime() + diffMinutes * 60_000);
+  }
+
+  return guess.toISOString();
+}
+
+function buildShiftPayload(
+  location: WorkspaceLocation,
+  roleId: string,
+  dateKey: string,
+  startHour: number,
+  endHour: number,
+): ShiftCreatePayload {
+  return {
+    location_id: location.location_id,
+    role_id: roleId,
+    timezone: location.timezone,
+    starts_at: zonedDateTimeToIso(dateKey, startHour, location.timezone),
+    ends_at: zonedDateTimeToIso(dateKey, endHour > startHour ? endHour : endHour + 24, location.timezone),
+    seats_requested: 1,
+    requires_manager_approval: false,
+    premium_cents: 0,
+    source_system: 'backfill_native',
+  };
+}
+
+function roleColor(roleName: string) {
+  if (roleColors[roleName]) {
+    return roleColors[roleName];
+  }
+  const hash = Array.from(roleName).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return ROLE_COLOR_PALETTE[hash % ROLE_COLOR_PALETTE.length];
+}
+
+function roleSortValue(roleName: string) {
+  const matchIndex = roleOrder.indexOf(roleName);
+  if (matchIndex >= 0) {
+    return matchIndex;
+  }
+  return roleOrder.length;
+}
+
+function boardWorkerToSchedulerEmployee(
+  employee: EmployeeSummary,
+  worker: WorkspaceBoard['workers'][number] | null,
+): Employee {
+  return {
+    id: employee.id,
+    name: employee.full_name,
+    avatar: buildAvatarDataUri(employee.full_name),
+    role:
+      worker?.role_names[0]
+      ?? employee.primary_role_name
+      ?? employee.role_names[0]
+      ?? 'Unassigned',
+  };
+}
+
+function inferShiftPreset(
+  startHour: number,
+  endHour: number,
+  shiftDefaults: ShiftDefault[],
+): Pick<Shift, 'presetKey' | 'presetLabel'> {
+  const matched = shiftDefaults.find(
+    (preset) => preset.start_hour === startHour && preset.end_hour === endHour,
+  );
+  if (!matched) {
+    return { presetKey: null, presetLabel: null };
+  }
+  return {
+    presetKey: matched.key,
+    presetLabel: matched.label,
+  };
+}
+
+function boardShiftToSchedulerShift(
+  shift: WorkspaceBoard['shifts'][number],
+  board: WorkspaceBoard,
+  shiftDefaults: ShiftDefault[],
+): Shift | null {
+  const startsAt = getZonedParts(shift.starts_at, board.timezone);
+  const endsAt = getZonedParts(shift.ends_at, board.timezone);
+  const day = dayDifference(board.week_start_date, startsAt.dateKey);
+  if (day < 0 || day > 6) {
+    return null;
+  }
+  const startHour = startsAt.hour + startsAt.minute / 60;
+  const crossesIntoNextDay = dayDifference(startsAt.dateKey, endsAt.dateKey) > 0;
+  const endHourBase = endsAt.hour + endsAt.minute / 60;
+  const endHour = crossesIntoNextDay && endHourBase <= startHour ? endHourBase + 24 : endHourBase;
+  const preset = inferShiftPreset(startHour, endHour, shiftDefaults);
+  return {
+    id: shift.shift_id,
+    employeeId: shift.current_assignment?.employee_id ?? null,
+    displayEmployeeId:
+      shift.current_assignment?.employee_id ??
+      shift.last_assignment?.employee_id ??
+      null,
+    displayEmployeeName:
+      shift.current_assignment?.employee_name ??
+      shift.last_assignment?.employee_name ??
+      null,
+    currentAssignmentId: shift.current_assignment?.assignment_id ?? null,
+    roleId: shift.role_id,
+    day,
+    startHour,
+    endHour,
+    role: shift.role_name,
+    color: roleColor(shift.role_name),
+    presetKey: preset.presetKey,
+    presetLabel: preset.presetLabel,
+  };
+}
+
 function isToday(date: Date) {
   const t = new Date();
   return date.getDate() === t.getDate() && date.getMonth() === t.getMonth() && date.getFullYear() === t.getFullYear();
 }
-
-const uid = () => Math.random().toString(36).slice(2, 10);
 
 function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
   return {
@@ -215,41 +453,6 @@ function getSchedulerTheme(isDark: boolean) {
   };
 }
 
-/* ─── Initial shifts ─── */
-function generateInitialShifts(): Shift[] {
-  return [
-    { id: uid(), employeeId: 'e1', day: 0, startHour: 7, endHour: 15, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e1', day: 2, startHour: 7, endHour: 15, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e1', day: 4, startHour: 7, endHour: 15, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e2', day: 0, startHour: 15, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e2', day: 1, startHour: 15, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e2', day: 3, startHour: 15, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e3', day: 1, startHour: 7, endHour: 15, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e3', day: 3, startHour: 7, endHour: 15, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e3', day: 5, startHour: 7, endHour: 19, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e4', day: 2, startHour: 15, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e4', day: 4, startHour: 15, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e1', day: 1, startHour: 19, endHour: 23, role: 'RN', color: roleColors['RN'] },
-    { id: uid(), employeeId: 'e5', day: 1, startHour: 8, endHour: 16, role: 'LPN', color: roleColors['LPN'] },
-    { id: uid(), employeeId: 'e5', day: 3, startHour: 8, endHour: 16, role: 'LPN', color: roleColors['LPN'] },
-    { id: uid(), employeeId: 'e5', day: 5, startHour: 8, endHour: 16, role: 'LPN', color: roleColors['LPN'] },
-    { id: uid(), employeeId: 'e6', day: 0, startHour: 7, endHour: 15, role: 'LPN', color: roleColors['LPN'] },
-    { id: uid(), employeeId: 'e6', day: 2, startHour: 7, endHour: 15, role: 'LPN', color: roleColors['LPN'] },
-    { id: uid(), employeeId: 'e7', day: 0, startHour: 7, endHour: 15, role: 'CNA', color: roleColors['CNA'] },
-    { id: uid(), employeeId: 'e7', day: 1, startHour: 7, endHour: 15, role: 'CNA', color: roleColors['CNA'] },
-    { id: uid(), employeeId: 'e7', day: 2, startHour: 7, endHour: 15, role: 'CNA', color: roleColors['CNA'] },
-    { id: uid(), employeeId: 'e8', day: 3, startHour: 7, endHour: 15, role: 'CNA', color: roleColors['CNA'] },
-    { id: uid(), employeeId: 'e8', day: 4, startHour: 7, endHour: 15, role: 'CNA', color: roleColors['CNA'] },
-    { id: uid(), employeeId: 'e9', day: 2, startHour: 9, endHour: 17, role: 'NP', color: roleColors['NP'] },
-    { id: uid(), employeeId: 'e9', day: 4, startHour: 9, endHour: 17, role: 'NP', color: roleColors['NP'] },
-    { id: uid(), employeeId: 'e10', day: 0, startHour: 9, endHour: 17, role: 'Medical Assistant', color: roleColors['Medical Assistant'] },
-    { id: uid(), employeeId: 'e10', day: 2, startHour: 9, endHour: 17, role: 'Medical Assistant', color: roleColors['Medical Assistant'] },
-    { id: uid(), employeeId: 'e10', day: 4, startHour: 9, endHour: 17, role: 'Medical Assistant', color: roleColors['Medical Assistant'] },
-    { id: uid(), employeeId: 'e11', day: 1, startHour: 9, endHour: 17, role: 'Medical Assistant', color: roleColors['Medical Assistant'] },
-    { id: uid(), employeeId: 'e11', day: 3, startHour: 9, endHour: 17, role: 'Medical Assistant', color: roleColors['Medical Assistant'] },
-  ];
-}
-
 /* ─── InlineSelect ─── */
 function InlineSelect({
   value,
@@ -302,10 +505,29 @@ function InlineSelect({
 }
 
 /* ─── Draggable Shift Chip ─── */
-function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: {
-  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; dark?: boolean;
+function DraggableShiftChip({
+  shift,
+  isMulti,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  onDragCopy,
+  onDragCopyPreview,
+  dark = false,
+  draggable = true,
+}: {
+  shift: Shift;
+  isMulti: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onDragCopy?: (targetDays: number[]) => void;
+  onDragCopyPreview?: (days: number[] | null) => void;
+  dark?: boolean;
+  draggable?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [isDragCopying, setIsDragCopying] = useState(false);
   const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
   const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : descriptor.icon;
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
@@ -315,8 +537,55 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: DRAG_TYPE,
     item: { type: DRAG_TYPE, shiftId: shift.id } as DragItem,
+    canDrag: draggable,
     collect: (monitor) => ({ isDragging: monitor.isDragging() }),
-  }), [shift.id]);
+  }), [draggable, shift.id]);
+
+  const handleDragCopyStart = (event: React.MouseEvent) => {
+    if (!onDragCopy) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragCopying(true);
+    onDragCopyPreview?.([shift.day]);
+
+    const startX = event.clientX;
+    const cellWidth = 100;
+    let previewDays = [shift.day];
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      const deltaX = moveEvent.clientX - startX;
+      const daysDelta = Math.round(deltaX / cellWidth);
+      const targetDay = shift.day + daysDelta;
+      const minDay = Math.max(0, Math.min(shift.day, targetDay));
+      const maxDay = Math.min(6, Math.max(shift.day, targetDay));
+      const nextDays: number[] = [];
+      for (let day = minDay; day <= maxDay; day += 1) {
+        nextDays.push(day);
+      }
+      if (JSON.stringify(nextDays) === JSON.stringify(previewDays)) {
+        return;
+      }
+      previewDays = nextDays;
+      onDragCopyPreview?.(nextDays);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragCopying(false);
+      const targetDays = previewDays.filter((day) => day !== shift.day);
+      if (targetDays.length > 0) {
+        onDragCopy(targetDays);
+      }
+      onDragCopyPreview?.(null);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
   /* Single shift: stacked layout showing descriptor + time + hours clearly.
      Multi shift: compact inline row to fit multiple in one cell. */
@@ -327,7 +596,9 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onClick={onEdit}
-        className={`relative rounded-lg cursor-grab active:cursor-grabbing overflow-hidden transition-all mx-1 my-0.5 ${
+        className={`relative rounded-lg overflow-hidden transition-all mx-1 my-0.5 ${
+          draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+        } ${
           isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
         }`}
         style={{ minHeight: 52 }}
@@ -355,6 +626,10 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
             {hovered && !isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex flex-col gap-0.5 shrink-0">
+                <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
+                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
+                  <Copy size={9} className={theme.textMuted} />
+                </button>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
                   <Trash2 size={9} className={theme.textMuted} />
@@ -363,6 +638,23 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
             )}
           </AnimatePresence>
         </div>
+
+        <AnimatePresence>
+          {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute right-0 top-1/2 z-10 flex h-8 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
+              draggable={false}
+              onMouseDown={handleDragCopyStart}
+              style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+              title="Drag to copy across days"
+            >
+              <GripVertical size={10} className="text-white" style={{ opacity: 0.8 }} />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
     );
   }
@@ -374,7 +666,9 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={onEdit}
-      className={`relative rounded-lg cursor-grab active:cursor-grabbing overflow-hidden transition-all mx-1 my-[1px] ${
+      className={`relative rounded-lg overflow-hidden transition-all mx-1 my-[1px] ${
+        draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+      } ${
         isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
       }`}
       style={{ minHeight: 38 }}
@@ -399,6 +693,10 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="flex gap-0.5">
+                  <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
+                    <Copy size={7} className={theme.textMuted} />
+                  </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
                     <Trash2 size={7} className={theme.textMuted} />
@@ -413,21 +711,55 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, dark = false }: 
           {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
         </p>
       </div>
+
+      <AnimatePresence>
+        {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute right-0 top-1/2 z-10 flex h-6 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
+            draggable={false}
+            onMouseDown={handleDragCopyStart}
+            style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+            title="Drag to copy across days"
+          >
+            <GripVertical size={8} className="text-white" style={{ opacity: 0.8 }} />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
 
 /* ─── Droppable Cell ─── */
-function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToday: isTodayCell, dark = false }: {
-  employeeId: string; day: number; children: React.ReactNode;
-  onDrop: (shiftId: string, newEmpId: string, newDay: number) => void;
-  onClickEmpty: () => void; isToday: boolean; dark?: boolean;
+function DroppableCell({
+  employeeId,
+  day,
+  children,
+  onDrop,
+  onClickEmpty,
+  isToday: isTodayCell,
+  isDragCopyTarget = false,
+  dragCopyColor,
+  dark = false,
+}: {
+  employeeId: string;
+  day: number;
+  children: React.ReactNode;
+  onDrop?: (shiftId: string, newEmpId: string, newDay: number) => void;
+  onClickEmpty?: () => void;
+  isToday: boolean;
+  isDragCopyTarget?: boolean;
+  dragCopyColor?: string;
+  dark?: boolean;
 }) {
   const [{ isOver, canDrop }, dropRef] = useDrop(() => ({
     accept: DRAG_TYPE,
-    drop: (item: DragItem) => { onDrop(item.shiftId, employeeId, day); },
+    canDrop: () => Boolean(onDrop),
+    drop: (item: DragItem) => { onDrop?.(item.shiftId, employeeId, day); },
     collect: (monitor) => ({ isOver: monitor.isOver(), canDrop: monitor.canDrop() }),
-  }), [employeeId, day]);
+  }), [day, employeeId, onDrop]);
 
   const hasChildren = Array.isArray(children) ? children.some(Boolean) : !!children;
   const theme = getSchedulerTheme(dark);
@@ -435,14 +767,25 @@ function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToda
   return (
     <div
       ref={dropRef as unknown as React.RefObject<HTMLDivElement>}
-      className={`flex-1 border-l py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${theme.cellBorderClass} ${
+      className={`relative flex-1 border-l py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${theme.cellBorderClass} ${
         isTodayCell ? theme.todayCellClass : ''
       } ${isOver && canDrop ? 'bg-[#635BFF]/[0.06]' : ''} ${canDrop && !isOver ? '' : ''}`}
     >
+      {isDragCopyTarget && dragCopyColor ? (
+        <div
+          className="pointer-events-none absolute inset-0 m-0.5 rounded-md border-2 border-dashed"
+          style={{
+            borderColor: dragCopyColor,
+            backgroundColor: `${dragCopyColor}08`,
+          }}
+        />
+      ) : null}
       {hasChildren ? children : (
         <div onClick={onClickEmpty}
-          className={`h-full min-h-[44px] flex items-center justify-center cursor-pointer group/empty mx-0.5 my-0.5 rounded-lg transition-colors ${theme.emptyStateClass}`}>
-          <div className="opacity-0 group-hover/empty:opacity-100 transition-opacity">
+          className={`h-full min-h-[44px] flex items-center justify-center mx-0.5 my-0.5 rounded-lg transition-colors ${
+            onClickEmpty ? `cursor-pointer group/empty ${theme.emptyStateClass}` : ''
+          }`}>
+          <div className={`transition-opacity ${onClickEmpty ? 'opacity-0 group-hover/empty:opacity-100' : 'opacity-0'}`}>
             <Plus size={12} className="text-[#635BFF]/50" />
           </div>
         </div>
@@ -484,30 +827,50 @@ function SchedulerContent({
   };
 
   const [weekOffset, setWeekOffset] = useState(0);
-  const [schedulerEmployees] = useState<Employee[]>(employees);
-  const [shifts, setShifts] = useState<Shift[]>(generateInitialShifts);
+  const [board, setBoard] = useState<WorkspaceBoard | null>(null);
+  const [businessEmployees, setBusinessEmployees] = useState<EmployeeSummary[]>([]);
+  const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
+  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
+  const [loadingSchedulerData, setLoadingSchedulerData] = useState(false);
+  const [schedulerError, setSchedulerError] = useState<string | null>(null);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
-  const [creatingAt, setCreatingAt] = useState<{ employeeId: string; day: number; role: string } | null>(null);
-  const [showPublishToast, setShowPublishToast] = useState(false);
-  const [showCopyToast, setShowCopyToast] = useState(false);
+  const [creatingAt, setCreatingAt] = useState<{
+    day: number;
+    roleId: string;
+    roleName: string;
+    employeeId?: string | null;
+    employeeName?: string | null;
+  } | null>(null);
+  const [schedulerNotice, setSchedulerNotice] = useState<{
+    tone: 'success' | 'error' | 'info';
+    title: string;
+    detail?: string;
+  } | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
-  const [activeEmployeeIds, setActiveEmployeeIds] = useState<Set<string>>(
-    () => new Set(employees.map((employee) => employee.id)),
-  );
   const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
-  const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [isRemovingEmployee, setIsRemovingEmployee] = useState(false);
+  const [addEmployeeContext, setAddEmployeeContext] = useState<{
+    roleId: string;
+    roleName: string;
+  } | null>(null);
+  const [addEmployeeTab, setAddEmployeeTab] = useState<'existing' | 'new'>('existing');
   const [hoveredEmployeeId, setHoveredEmployeeId] = useState<string | null>(null);
   const [swipedEmployeeId, setSwipedEmployeeId] = useState<string | null>(null);
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS),
   );
+  const [dragCopyPreview, setDragCopyPreview] = useState<{
+    employeeId: string;
+    days: number[];
+    color: string;
+  } | null>(null);
   const [showLocationMenu, setShowLocationMenu] = useState(false);
   const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
-  const [editorRoles, setEditorRoles] = useState<BusinessRole[]>([]);
+  const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
   const [editorShiftDefaults, setEditorShiftDefaults] = useState<LocationShiftDefaults | null>(null);
   const [editorStaffCount, setEditorStaffCount] = useState<number | null>(null);
@@ -530,8 +893,48 @@ function SchedulerContent({
     setEditorLocation(null);
     setEditorFeedback(null);
     setEditorStaffCount(null);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
+    setEditorShiftDefaults(null);
+    setEditorDeleteState(undefined);
     router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
   }, [location, router]);
+
+  const requestedWeekStart = useMemo(
+    () => mondayDateKeyFor(location.timezone, weekOffset),
+    [location.timezone, weekOffset],
+  );
+
+  const refreshSchedulerData = useCallback(async () => {
+    try {
+      setLoadingSchedulerData(true);
+      setSchedulerError(null);
+      const [nextBoard, employeeDirectory, roleDirectory, locationDirectory] = await Promise.all([
+        getLocationBoard(location.business_id, location.location_id, requestedWeekStart),
+        listEmployees(location.business_id),
+        listBusinessRoles(location.business_id),
+        listBusinessLocations(location.business_id),
+      ]);
+      setBoard(nextBoard);
+      setBusinessEmployees(employeeDirectory);
+      setBusinessRoles(roleDirectory);
+      setBusinessLocations(locationDirectory);
+    } catch (error) {
+      setBoard(null);
+      setBusinessEmployees([]);
+      setBusinessRoles([]);
+      setBusinessLocations([]);
+      setSchedulerError(
+        error instanceof Error ? error.message : 'Could not load scheduler data.',
+      );
+    } finally {
+      setLoadingSchedulerData(false);
+    }
+  }, [location.business_id, location.location_id, requestedWeekStart]);
+
+  useEffect(() => {
+    void refreshSchedulerData();
+  }, [refreshSchedulerData]);
 
   useEffect(() => {
     let cancelled = false;
@@ -593,15 +996,153 @@ function SchedulerContent({
     };
   }, [location.business_id, location.location_id]);
 
-  const weekDates = useMemo(() => getWeekDates(weekOffset), [weekOffset]);
-
-  const activeEmployees = useMemo(
-    () => schedulerEmployees.filter((employee) => activeEmployeeIds.has(employee.id)),
-    [activeEmployeeIds, schedulerEmployees],
+  const weekDates = useMemo(
+    () => (board ? buildWeekDatesFromWeekStart(board.week_start_date) : buildWeekDatesFromWeekStart(requestedWeekStart)),
+    [board, requestedWeekStart],
   );
 
-  const filteredRoles = roleOrder.filter((role) =>
-    activeEmployees.some((employee) => employee.role === role),
+  const shifts = useMemo(
+    () => {
+      if (!board) {
+        return [];
+      }
+      return board.shifts
+        .map((shift) => boardShiftToSchedulerShift(shift, board, shiftDefaults))
+        .filter((shift): shift is Shift => shift !== null);
+    },
+    [board, shiftDefaults],
+  );
+
+  const boardWorkersById = useMemo(
+    () => new Map((board?.workers ?? []).map((worker) => [worker.employee_id, worker])),
+    [board],
+  );
+
+  const schedulerEmployeeIds = useMemo(() => {
+    const next = new Set<string>();
+    (board?.workers ?? []).forEach((worker) => {
+      if (worker.can_cover_here) {
+        next.add(worker.employee_id);
+      }
+    });
+    shifts.forEach((shift) => {
+      if (shift.displayEmployeeId) {
+        next.add(shift.displayEmployeeId);
+      }
+    });
+    return next;
+  }, [board, shifts]);
+
+  const locationEmployeeIds = useMemo(() => {
+    const next = new Set<string>();
+    businessEmployees.forEach((employee) => {
+      if (employee.location_ids.includes(location.location_id)) {
+        next.add(employee.id);
+      }
+    });
+    shifts.forEach((shift) => {
+      if (shift.displayEmployeeId) {
+        next.add(shift.displayEmployeeId);
+      }
+    });
+    return next;
+  }, [businessEmployees, location.location_id, shifts]);
+
+  const schedulerEmployees = useMemo(() => {
+    const employeeMap = new Map(businessEmployees.map((employee) => [employee.id, employee]));
+    const assignedShiftNames = new Map<string, string>();
+    shifts.forEach((shift) => {
+      if (!shift.displayEmployeeId) {
+        return;
+      }
+      const assignmentName =
+        board?.shifts.find((item) => item.shift_id === shift.id)?.current_assignment?.employee_name ??
+        shift.displayEmployeeName;
+      if (assignmentName) {
+        assignedShiftNames.set(shift.displayEmployeeId, assignmentName);
+      }
+    });
+
+    return Array.from(schedulerEmployeeIds)
+      .map((employeeId) => {
+        const employee = employeeMap.get(employeeId);
+        if (employee) {
+          return boardWorkerToSchedulerEmployee(
+            employee,
+            boardWorkersById.get(employeeId) ?? null,
+          );
+        }
+        const fallbackName = assignedShiftNames.get(employeeId);
+        if (!fallbackName) {
+          return null;
+        }
+        const assignedRole =
+          shifts.find((shift) => shift.displayEmployeeId === employeeId)?.role ?? 'Assigned';
+        return {
+          id: employeeId,
+          name: fallbackName,
+          avatar: buildAvatarDataUri(fallbackName),
+          role: assignedRole,
+        } satisfies Employee;
+      })
+      .filter((employee): employee is Employee => employee !== null)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [board?.shifts, boardWorkersById, businessEmployees, schedulerEmployeeIds, shifts]);
+
+  const activeEmployees = schedulerEmployees;
+
+  const filteredRoles = useMemo(() => {
+    const rolesById = new Map<string, { id: string; name: string }>();
+    (board?.roles ?? []).forEach((role) => {
+      rolesById.set(role.role_id, {
+        id: role.role_id,
+        name: role.role_name,
+      });
+    });
+    shifts.forEach((shift) => {
+      if (!rolesById.has(shift.roleId)) {
+        rolesById.set(shift.roleId, {
+          id: shift.roleId,
+          name: shift.role,
+        });
+      }
+    });
+    return Array.from(rolesById.values())
+      .sort((left, right) => {
+        const sortDelta = roleSortValue(left.name) - roleSortValue(right.name);
+        if (sortDelta !== 0) {
+          return sortDelta;
+        }
+        return left.name.localeCompare(right.name);
+      });
+  }, [activeEmployees, board?.roles, shifts]);
+
+  const roleColorById = useMemo(() => {
+    const next = new Map<string, string>();
+    let previousColor: string | null = null;
+
+    filteredRoles.forEach((roleEntry, index) => {
+      const preferredColor = roleColors[roleEntry.name] ?? ROLE_COLOR_PALETTE[index % ROLE_COLOR_PALETTE.length];
+      let color = preferredColor;
+      if (color === previousColor) {
+        color =
+          ROLE_COLOR_PALETTE.find((candidate) => candidate !== previousColor) ??
+          preferredColor;
+      }
+      next.set(roleEntry.id, color);
+      previousColor = color;
+    });
+
+    return next;
+  }, [filteredRoles]);
+
+  const displayShifts = useMemo(
+    () =>
+      shifts.map((shift) => ({
+        ...shift,
+        color: shift.employeeId ? roleColorById.get(shift.roleId) ?? shift.color : OPEN_SHIFT_COLOR,
+      })),
+    [roleColorById, shifts],
   );
 
   const removeEmployee = useCallback((employeeId: string) => {
@@ -620,62 +1161,430 @@ function SchedulerContent({
     if (!removingEmployee) {
       return;
     }
-    setShifts((current) => current.filter((shift) => shift.employeeId !== removingEmployee.id));
-    setActiveEmployeeIds((current) => {
-      const next = new Set(current);
-      next.delete(removingEmployee.id);
-      return next;
-    });
-    setRemovingEmployee(null);
-    setSwipedEmployeeId(null);
-  }, [removingEmployee]);
+    if (removingEmployee.hasShifts) {
+      setSchedulerNotice({
+        tone: 'info',
+        title: 'Remove assigned shifts first',
+        detail: `${removingEmployee.name} still has scheduled shifts. Manual reassignment and shift deletion for assigned shifts are not wired yet.`,
+      });
+      setRemovingEmployee(null);
+      setSwipedEmployeeId(null);
+      return;
+    }
+    const employee = businessEmployees.find((item) => item.id === removingEmployee.id);
+    if (!employee) {
+      setRemovingEmployee(null);
+      return;
+    }
 
-  const addEmployeeToLocation = useCallback((employeeId: string) => {
-    setActiveEmployeeIds((current) => new Set([...current, employeeId]));
-    setShowAddEmployee(false);
+    setIsRemovingEmployee(true);
+    void (async () => {
+      try {
+        await updateEmployee(location.business_id, employee.id, {
+          locations: buildEmployeeLocationAssignments(employee, location.location_id, false),
+        });
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: 'success',
+          title: 'Employee removed',
+          detail: `${removingEmployee.name} is no longer assigned to this location.`,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not remove employee',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setIsRemovingEmployee(false);
+        setRemovingEmployee(null);
+        setSwipedEmployeeId(null);
+      }
+    })();
+  }, [businessEmployees, location.business_id, location.location_id, refreshSchedulerData, removingEmployee]);
+
+  const addEmployeeToLocation = useCallback((employee: EmployeeSummary) => {
+    void (async () => {
+      try {
+        await updateEmployee(location.business_id, employee.id, {
+          locations: buildEmployeeLocationAssignments(employee, location.location_id, true),
+        });
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: 'success',
+          title: 'Employee added',
+          detail: `${employee.full_name} is now available on this scheduler.`,
+        });
+        setAddEmployeeTab('existing');
+        setAddEmployeeContext(null);
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not add employee',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
+  }, [location.business_id, location.location_id, refreshSchedulerData]);
+
+  const openAddEmployeeModal = useCallback((roleId: string, roleName: string) => {
+    setAddEmployeeTab('existing');
+    setAddEmployeeContext({ roleId, roleName });
   }, []);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
-    shifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const getDayTotalHours = useCallback((day: number) =>
-    shifts.filter(s => s.day === day).reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.filter(s => s.day === day).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const weekTotalHours = useMemo(() =>
-    shifts.reduce((sum, s) => sum + shiftDuration(s), 0), [shifts]);
+    displayShifts.reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
 
   const getShiftsForCell = useCallback((empId: string, day: number) =>
-    shifts.filter(s => s.employeeId === empId && s.day === day), [shifts]);
+    displayShifts.filter((shift) => shift.displayEmployeeId === empId && shift.day === day), [displayShifts]);
 
-  const deleteShift = (id: string) => setShifts(prev => prev.filter(s => s.id !== id));
+  const assignedShiftsForPublishing = useMemo(
+    () =>
+      displayShifts
+        .filter((shift): shift is Shift & { employeeId: string } => shift.employeeId !== null)
+        .map((shift) => ({ ...shift, employeeId: shift.employeeId })),
+    [displayShifts],
+  );
 
-  const updateShift = (updated: Shift) => {
-    setShifts(prev => prev.map(s => s.id === updated.id ? updated : s));
-    setEditingShift(null);
-  };
+  const deleteShift = useCallback((id: string) => {
+    void (async () => {
+      try {
+        await deleteWorkspaceShift(location.business_id, id);
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: 'success',
+          title: 'Shift removed',
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not remove shift',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
+  }, [location.business_id, refreshSchedulerData]);
 
-  const moveShift = useCallback((shiftId: string, newEmpId: string, newDay: number) => {
-    setShifts(prev => prev.map(s => {
-      if (s.id !== shiftId) return s;
-      const newEmp = schedulerEmployees.find(e => e.id === newEmpId);
-      return {
-        ...s,
-        employeeId: newEmpId,
-        day: newDay,
-        role: newEmp?.role || s.role,
-        color: roleColors[newEmp?.role || s.role] || s.color,
-      };
-    }));
-  }, [schedulerEmployees]);
+  const updateShift = useCallback((updated: Shift) => {
+    const weekDate = weekDates[updated.day];
+    if (!weekDate) {
+      return;
+    }
+    void (async () => {
+      try {
+        await updateWorkspaceShift(location.business_id, updated.id, {
+          role_id: updated.roleId,
+          timezone: location.timezone,
+          starts_at: zonedDateTimeToIso(formatDateKey(weekDate), updated.startHour, location.timezone),
+          ends_at: zonedDateTimeToIso(formatDateKey(weekDate), updated.endHour > updated.startHour ? updated.endHour : updated.endHour + 24, location.timezone),
+        });
+        await refreshSchedulerData();
+        setEditingShift(null);
+        setSchedulerNotice({
+          tone: 'success',
+          title: 'Shift updated',
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not update shift',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
+  }, [location.business_id, location.timezone, refreshSchedulerData, weekDates]);
+
+  const moveShiftToDay = useCallback(async (shift: Shift, targetDay: number) => {
+    if (targetDay === shift.day) {
+      return;
+    }
+    const weekDate = weekDates[targetDay];
+    if (!weekDate) {
+      throw new Error('Could not resolve the target day for this shift.');
+    }
+    await updateWorkspaceShift(location.business_id, shift.id, {
+      role_id: shift.roleId,
+      timezone: location.timezone,
+      starts_at: zonedDateTimeToIso(formatDateKey(weekDate), shift.startHour, location.timezone),
+      ends_at: zonedDateTimeToIso(
+        formatDateKey(weekDate),
+        shift.endHour > shift.startHour ? shift.endHour : shift.endHour + 24,
+        location.timezone,
+      ),
+    });
+  }, [location.business_id, location.timezone, weekDates]);
+
+  const applyShiftAssignment = useCallback(async (
+    shift: Shift,
+    targetEmployeeId: string | null,
+  ): Promise<ShiftAssignmentMutationResponse> => {
+    return assignWorkspaceShift(location.business_id, shift.id, {
+      employee_id: targetEmployeeId,
+      source: 'scheduler_ui',
+      expected_assignment_id: shift.currentAssignmentId ?? null,
+    });
+  }, [location.business_id]);
+
+  const handleShiftDrop = useCallback((shiftId: string, newEmpId: string, newDay: number) => {
+    const shift = shifts.find((entry) => entry.id === shiftId);
+    if (!shift) {
+      return;
+    }
+
+    const targetEmployeeId = newEmpId;
+    const assignmentChanged = targetEmployeeId !== shift.employeeId;
+    const dayChanged = newDay !== shift.day;
+    if (!assignmentChanged && !dayChanged) {
+      return;
+    }
+
+    if (targetEmployeeId) {
+      const targetEmployee = businessEmployees.find((employee) => employee.id === targetEmployeeId);
+      if (!targetEmployee) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not move shift',
+          detail: 'The target employee could not be found.',
+        });
+        return;
+      }
+      if (!targetEmployee.role_ids.includes(shift.roleId)) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Role mismatch',
+          detail: `${targetEmployee.full_name} does not have the ${shift.role} role.`,
+        });
+        return;
+      }
+    }
+
+    void (async () => {
+      try {
+        if (assignmentChanged) {
+          await applyShiftAssignment(shift, targetEmployeeId);
+        }
+        if (dayChanged) {
+          await moveShiftToDay(shift, newDay);
+        }
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: 'success',
+          title: assignmentChanged
+            ? targetEmployeeId
+              ? 'Shift reassigned'
+              : 'Shift updated'
+            : 'Shift moved',
+          detail: dayChanged ? 'The shift was updated for the new day.' : undefined,
+        });
+      } catch (error) {
+        await refreshSchedulerData();
+        if (error instanceof ShiftAssignmentConflictError) {
+          setSchedulerNotice({
+            tone: 'info',
+            title: 'Schedule changed',
+            detail: 'Someone else updated this shift first. The scheduler was refreshed.',
+          });
+          return;
+        }
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not move shift',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
+  }, [applyShiftAssignment, businessEmployees, moveShiftToDay, refreshSchedulerData, shifts]);
 
   const copySchedule = (targetWeekOffset: number) => {
-    const copied = shifts.map(s => ({ ...s, id: uid() }));
-    setShifts(copied);
-    setWeekOffset(targetWeekOffset);
-    setShowCopyModal(false);
-    setShowCopyToast(true);
-    setTimeout(() => setShowCopyToast(false), 3000);
+    const targetWeekStart = mondayDateKeyFor(location.timezone, targetWeekOffset);
+    const targetWeekDates = buildWeekDatesFromWeekStart(targetWeekStart);
+    const targetWeekLabel = (() => {
+      const start = targetWeekDates[0];
+      const end = targetWeekDates[6];
+      const startMonth = start.toLocaleString('default', { month: 'short' });
+      const endMonth = end.toLocaleString('default', { month: 'short' });
+      if (startMonth === endMonth) {
+        return `${startMonth} ${start.getDate()} – ${end.getDate()}, ${start.getFullYear()}`;
+      }
+      return `${startMonth} ${start.getDate()} – ${endMonth} ${end.getDate()}, ${start.getFullYear()}`;
+    })();
+
+    void (async () => {
+      let createdCount = 0;
+      let openedCount = 0;
+      let assignmentFailureCount = 0;
+
+      try {
+        for (const shift of shifts) {
+          const targetDateKey = addDaysToDateKey(targetWeekStart, shift.day);
+          const createdShift = await createWorkspaceShift(
+            location.business_id,
+            buildShiftPayload(
+              location,
+              shift.roleId,
+              targetDateKey,
+              shift.startHour,
+              shift.endHour,
+            ),
+          );
+          createdCount += 1;
+
+          if (shift.employeeId) {
+            try {
+              await assignWorkspaceShift(location.business_id, createdShift.id, {
+                employee_id: shift.employeeId,
+                source: 'scheduler_ui',
+                expected_assignment_id: null,
+              });
+            } catch {
+              assignmentFailureCount += 1;
+              openedCount += 1;
+            }
+          } else {
+            openedCount += 1;
+          }
+        }
+
+        setWeekOffset(targetWeekOffset);
+        setShowCopyModal(false);
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: assignmentFailureCount ? 'info' : 'success',
+          title: 'Schedule copied',
+          detail: assignmentFailureCount
+            ? `${createdCount} shifts copied. ${assignmentFailureCount} assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied and ${openedCount} shift${openedCount === 1 ? ' is' : 's are'} open.`
+            : `${createdCount} shifts copied into ${targetWeekLabel}.`,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not copy schedule',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
   };
+
+  const duplicateShift = useCallback((shift: Shift) => {
+    const targetDay = (shift.day + 1) % 7;
+    const targetDate = weekDates[targetDay];
+    if (!targetDate) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const createdShift = await createWorkspaceShift(
+          location.business_id,
+          buildShiftPayload(
+            location,
+            shift.roleId,
+            formatDateKey(targetDate),
+            shift.startHour,
+            shift.endHour,
+          ),
+        );
+
+        let assignmentFailure = false;
+        if (shift.employeeId) {
+          try {
+            await assignWorkspaceShift(location.business_id, createdShift.id, {
+              employee_id: shift.employeeId,
+              source: 'scheduler_ui',
+              expected_assignment_id: null,
+            });
+          } catch {
+            assignmentFailure = true;
+          }
+        }
+
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: assignmentFailure ? 'info' : 'success',
+          title: 'Shift copied',
+          detail: assignmentFailure
+            ? 'The copied shift was created, but assignment could not be applied and it is now open.'
+            : undefined,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not copy shift',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    })();
+  }, [location, refreshSchedulerData, weekDates]);
+
+  const dragCopyShift = useCallback((shift: Shift, targetDays: number[]) => {
+    const validDays = Array.from(new Set(targetDays))
+      .filter((day) => day >= 0 && day <= 6 && day !== shift.day);
+    if (!validDays.length) {
+      return;
+    }
+
+    void (async () => {
+      let createdCount = 0;
+      let assignmentFailureCount = 0;
+
+      try {
+        for (const day of validDays) {
+          const targetDate = weekDates[day];
+          if (!targetDate) {
+            continue;
+          }
+          const createdShift = await createWorkspaceShift(
+            location.business_id,
+            buildShiftPayload(
+              location,
+              shift.roleId,
+              formatDateKey(targetDate),
+              shift.startHour,
+              shift.endHour,
+            ),
+          );
+          createdCount += 1;
+
+          if (!shift.employeeId) {
+            continue;
+          }
+
+          try {
+            await assignWorkspaceShift(location.business_id, createdShift.id, {
+              employee_id: shift.employeeId,
+              source: 'scheduler_ui',
+              expected_assignment_id: null,
+            });
+          } catch {
+            assignmentFailureCount += 1;
+          }
+        }
+
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: assignmentFailureCount ? 'info' : 'success',
+          title: createdCount === 1 ? 'Shift copied' : 'Shifts copied',
+          detail: assignmentFailureCount
+            ? `${assignmentFailureCount} copied shift assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied.`
+            : undefined,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not copy shifts',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setDragCopyPreview(null);
+      }
+    })();
+  }, [location, refreshSchedulerData, weekDates]);
 
   const toggleRoleCollapse = (role: string) => {
     setCollapsedRoles(prev => {
@@ -688,6 +1597,8 @@ function SchedulerContent({
   const openLocationEditor = useCallback(async () => {
     const editableLocation = adaptWorkspaceLocation(location);
     setEditorLocation(editableLocation);
+    setEditorEmployees([]);
+    setEditorAssignments([]);
     setEditorShiftDefaults(null);
     setEditorStaffCount(null);
     setEditorDeleteState({ canDelete: false, checking: true });
@@ -697,7 +1608,6 @@ function SchedulerContent({
     try {
       const [
         nextLocation,
-        nextRoles,
         nextAssignments,
         nextShiftDefaults,
         nextDeleteReadiness,
@@ -705,14 +1615,13 @@ function SchedulerContent({
       ] =
         await Promise.all([
           getBusinessLocation(location.business_id, location.location_id),
-          listBusinessRoles(location.business_id),
           getLocationRoles(location.business_id, location.location_id),
           getLocationShiftDefaults(location.business_id, location.location_id),
           getLocationDeleteReadiness(location.business_id, location.location_id),
           listEmployees(location.business_id),
         ]);
       setEditorLocation(nextLocation);
-      setEditorRoles(nextRoles);
+      setEditorEmployees(employees);
       setEditorAssignments(nextAssignments);
       setEditorShiftDefaults(nextShiftDefaults);
       setEditorStaffCount(
@@ -756,7 +1665,7 @@ function SchedulerContent({
   }, [editingLocation, editorLoading, editorLocation, openLocationEditor]);
 
   const handleSaveEditor = (
-    roleIds: string[],
+    employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
@@ -769,7 +1678,17 @@ function SchedulerContent({
 
     void (async () => {
       try {
-        const [replacedAssignments, updatedShiftDefaults] = await Promise.all([
+        const roleIds = buildInheritedLocationRoleIds(
+          editorAssignments,
+          editorEmployees,
+          employeeIds,
+        );
+        const changedEmployees = editorEmployees.filter((employee) => {
+          const currentlyAssigned = employeeAssignedHere(employee, editorLocation.id);
+          const shouldBeAssigned = employeeIds.includes(employee.id);
+          return currentlyAssigned !== shouldBeAssigned;
+        });
+        const [replacedAssignments, updatedShiftDefaults, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             editorLocation.business_id,
             editorLocation.id,
@@ -791,8 +1710,20 @@ function SchedulerContent({
             editorLocation.id,
             locationShiftPresets,
           ),
+          Promise.all(
+            changedEmployees.map((employee) =>
+              updateEmployee(editorLocation.business_id, employee.id, {
+                locations: buildEmployeeLocationAssignments(
+                  employee,
+                  editorLocation.id,
+                  employeeIds.includes(employee.id),
+                ),
+              }),
+            ),
+          ),
         ]);
         setEditorAssignments(replacedAssignments);
+        setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setEditorShiftDefaults(updatedShiftDefaults);
         setShiftDefaults(normalizeShiftDefaults(updatedShiftDefaults.presets));
         const board = await getLocationBoard(editorLocation.business_id, editorLocation.id);
@@ -820,29 +1751,6 @@ function SchedulerContent({
         setIsSavingEditor(false);
       }
     })();
-  };
-
-  const handleCreateRole = async (name: string): Promise<BusinessRole> => {
-    if (!editorLocation) {
-      throw new Error('No location selected.');
-    }
-
-    try {
-      setEditorFeedback(null);
-      const created = await createBusinessRole(editorLocation.business_id, { name });
-      setEditorRoles((current) =>
-        current.some((role) => role.id === created.id)
-          ? current
-          : [...current, created],
-      );
-      return created;
-    } catch (error) {
-      setEditorFeedback({
-        tone: 'error',
-        message: error instanceof Error ? error.message : 'Could not create role.',
-      });
-      throw error;
-    }
   };
 
   const handleDeleteLocation = async () => {
@@ -884,7 +1792,7 @@ function SchedulerContent({
     return `${sm} ${s.getDate()} – ${em} ${e.getDate()}, ${s.getFullYear()}`;
   }, [weekDates]);
 
-  const EMP_COL = 'w-[180px] min-w-[180px]';
+  const EMP_COL = 'w-[220px] min-w-[220px]';
 
   const content = (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
@@ -893,25 +1801,18 @@ function SchedulerContent({
         <div className={`px-4 sm:px-6 md:px-8 py-3.5 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
           {/* Row 1: Location name + subtext */}
           <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <button onClick={() => router.push(resolvedBackHref)}
-                className={`flex items-center transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#5E6D7A]'}`}
-                style={{ fontWeight: 440 }}>
-                <ChevronLeft size={16} />
-              </button>
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[14px]"
-                  style={{ background: `${loc.color}10` }}>
-                  {loc.emoji}
-                </div>
-                <div>
-                  <h1 className={`text-[18px] sm:text-[20px] tracking-[-0.02em] leading-none ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
-                    {loc.name}
-                  </h1>
-                  <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
-                    Weekly Scheduler
-                  </p>
-                </div>
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[14px]"
+                style={{ background: `${loc.color}10` }}>
+                {loc.emoji}
+              </div>
+              <div>
+                <h1 className={`text-[18px] sm:text-[20px] tracking-[-0.02em] leading-none ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
+                  {loc.name}
+                </h1>
+                <p className={`text-[11px] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                  Weekly Scheduler
+                </p>
               </div>
             </div>
             <div className="relative">
@@ -1010,6 +1911,11 @@ function SchedulerContent({
               <span className={`text-[12px] hidden md:inline ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
                 {weekLabel}
               </span>
+              {loadingSchedulerData ? (
+                <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                  Refreshing…
+                </span>
+              ) : null}
               <button onClick={() => setWeekOffset(w => w + 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
                 <ChevronRight size={15} className={theme.textMuted} />
               </button>
@@ -1017,16 +1923,19 @@ function SchedulerContent({
 
             {/* Copy Schedule + Publish Week */}
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowCopyModal(true)}
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border hover:border-[#635BFF]/30 transition-all cursor-pointer ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+              <button
+                onClick={() => setShowCopyModal(true)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
                 style={{ fontWeight: 500 }}>
                 <ClipboardCopy size={13} />
                 <span className="hidden lg:inline">Copy Schedule</span>
                 <span className="lg:hidden">Copy</span>
               </button>
-              <motion.button whileTap={{ scale: 0.97 }}
-                onClick={() => setShowPublishModal(true)}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white cursor-pointer transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)]"
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                disabled
+                title="Publish week is not wired yet"
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white cursor-not-allowed opacity-50 transition-all"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Zap size={13} />
                 <span className="hidden lg:inline">Publish Week</span>
@@ -1051,6 +1960,27 @@ function SchedulerContent({
           ))}
         </div>
 
+        {schedulerError && !board ? (
+          <div className="flex-1 flex items-center justify-center px-6">
+            <div className={`max-w-md rounded-2xl border px-6 py-5 text-center ${theme.cardClass}`}>
+              <p className={`text-[14px] ${theme.textPrimary}`} style={{ fontWeight: 560 }}>
+                Could not load the scheduler
+              </p>
+              <p className={`mt-1 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
+                {schedulerError}
+              </p>
+              <button
+                onClick={() => void refreshSchedulerData()}
+                className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#635BFF] px-4 py-2 text-[12px] text-white"
+                style={{ fontWeight: 540 }}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : (
+        <>
         {/* ─── Desktop Grid ─── */}
         <div className="flex-1 overflow-auto hidden lg:block">
           <div className="min-w-[900px]">
@@ -1094,32 +2024,30 @@ function SchedulerContent({
             </div>
 
             {/* Role Groups */}
-            {filteredRoles.map(role => {
-              const roleEmps = activeEmployees.filter(e => e.role === role);
-              const isCollapsed = collapsedRoles.has(role);
-              const roleColor = roleColors[role] || '#635BFF';
+            {filteredRoles.map((roleEntry) => {
+              const roleEmps = activeEmployees.filter((employee) => employee.role === roleEntry.name);
+              const isCollapsed = collapsedRoles.has(roleEntry.name);
+              const roleAccent = roleColorById.get(roleEntry.id) ?? roleColor(roleEntry.name);
 
               return (
-                <div key={role}>
+                <div key={roleEntry.id}>
                   {/* Role Header Row */}
                   <div className={`flex border-b ${theme.roleBandClass}`}>
                     <div className={`${EMP_COL} shrink-0 px-4 py-2 flex items-center gap-2`}>
-                      <button onClick={() => toggleRoleCollapse(role)} className="flex items-center gap-2 group">
+                      <button onClick={() => toggleRoleCollapse(roleEntry.name)} className="flex items-center gap-2 group">
                         <motion.div animate={{ rotate: isCollapsed ? -90 : 0 }} transition={{ duration: 0.2 }}>
                           <ChevronDown size={12} className={`${theme.textSecondary} transition-colors ${isDark ? 'group-hover:text-white' : 'group-hover:text-[#5E6D7A]'}`} />
                         </motion.div>
-                        <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                        <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
-                          {role}
+                        <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
+                        <span className={`text-[11px] uppercase tracking-[0.03em] whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
+                          {roleEntry.name}
                         </span>
                         <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                           {roleEmps.length}
                         </span>
                       </button>
                     </div>
-                    {DAYS.map((day, i) => (
-                      <div key={day} className={`flex-1 border-l ${theme.cellBorderClass} ${isToday(weekDates[i]) ? theme.todayRoleBandClass : ''}`} />
-                    ))}
+                    <div className="flex-1" />
                   </div>
 
                   {/* Employee Rows */}
@@ -1139,7 +2067,7 @@ function SchedulerContent({
                             <img src={emp.avatar} alt={emp.name}
                               className={`w-7 h-7 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                             <div className="min-w-0 flex-1">
-                              <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                              <p className={`text-[12px] truncate whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
                                 {emp.name}
                               </p>
                               <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -1168,18 +2096,46 @@ function SchedulerContent({
                           {DAYS.map((_day, dayIdx) => {
                             const cellShifts = getShiftsForCell(emp.id, dayIdx);
                             const isMulti = cellShifts.length > 1;
+                            const isDragCopyTarget =
+                              dragCopyPreview?.employeeId === emp.id &&
+                              dragCopyPreview.days.includes(dayIdx);
                             return (
-                              <DroppableCell key={dayIdx} employeeId={emp.id} day={dayIdx}
-                                onDrop={moveShift}
-                                onClickEmpty={() => setCreatingAt({ employeeId: emp.id, day: dayIdx, role: emp.role })}
+                              <DroppableCell
+                                key={dayIdx}
+                                employeeId={emp.id}
+                                day={dayIdx}
+                                onDrop={handleShiftDrop}
+                                onClickEmpty={() =>
+                                  setCreatingAt({
+                                    day: dayIdx,
+                                    roleId: roleEntry.id,
+                                    roleName: roleEntry.name,
+                                    employeeId: emp.id,
+                                    employeeName: emp.name,
+                                  })
+                                }
                                 isToday={isToday(weekDates[dayIdx])}
-                                dark={isDark}>
+                                isDragCopyTarget={isDragCopyTarget}
+                                dragCopyColor={dragCopyPreview?.color}
+                                dark={isDark}
+                              >
                                 {cellShifts.length > 0 ? (
                                   cellShifts.map(shift => (
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
                                       dark={isDark}
+                                      draggable
                                       onEdit={() => setEditingShift(shift)}
-                                      onDelete={() => deleteShift(shift.id)} />
+                                      onDelete={() => deleteShift(shift.id)}
+                                      onDuplicate={() => duplicateShift(shift)}
+                                      onDragCopy={(targetDays) => dragCopyShift(shift, targetDays)}
+                                      onDragCopyPreview={(days) =>
+                                        setDragCopyPreview(
+                                          days
+                                            ? { employeeId: emp.id, days, color: shift.color }
+                                            : null,
+                                        )
+                                      }
+                                    />
                                   ))
                                 ) : null}
                               </DroppableCell>
@@ -1197,7 +2153,9 @@ function SchedulerContent({
                       >
                         <div className={`${EMP_COL} shrink-0 px-4 py-2`}>
                           <button
-                            onClick={() => setShowAddEmployee(true)}
+                            onClick={() => {
+                              openAddEmployeeModal(roleEntry.id, roleEntry.name);
+                            }}
                             className={`flex items-center gap-1.5 text-[11px] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#635BFF]'} group/add`}
                             style={{ fontWeight: 460 }}
                             type="button"
@@ -1232,15 +2190,15 @@ function SchedulerContent({
                 </span>
               </div>
 
-            {filteredRoles.map(role => {
-              const roleEmps = activeEmployees.filter(e => e.role === role);
-              const roleColor = roleColors[role] || '#635BFF';
+            {filteredRoles.map((roleEntry) => {
+              const roleEmps = activeEmployees.filter((employee) => employee.role === roleEntry.name);
+              const roleAccent = roleColorById.get(roleEntry.id) ?? roleColor(roleEntry.name);
 
               return (
-                <div key={role} className="mb-4">
+                <div key={roleEntry.id} className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                    <span className={`text-[11px] uppercase tracking-[0.03em] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{role}</span>
+                    <div className="w-2 h-2 rounded-full" style={{ background: roleAccent }} />
+                    <span className={`text-[11px] uppercase tracking-[0.03em] whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 580 }}>{roleEntry.name}</span>
                     <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>{roleEmps.length}</span>
                   </div>
 
@@ -1261,12 +2219,22 @@ function SchedulerContent({
                           onSwipe={(id) => setSwipedEmployeeId(id === swipedEmployeeId ? null : id || null)}
                           onRemove={() => removeEmployee(emp.id)}
                           onEditShift={(shift) => setEditingShift(shift)}
-                          onCreateShift={() => setCreatingAt({ employeeId: emp.id, day: mobileDay, role: emp.role })}
+                          onCreateShift={() =>
+                            setCreatingAt({
+                              day: mobileDay,
+                              roleId: roleEntry.id,
+                              roleName: roleEntry.name,
+                              employeeId: emp.id,
+                              employeeName: emp.name,
+                            })
+                          }
                         />
                       );
                     })}
                     <button
-                      onClick={() => setShowAddEmployee(true)}
+                      onClick={() => {
+                        openAddEmployeeModal(roleEntry.id, roleEntry.name);
+                      }}
                       className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-xl border border-dashed text-[11px] transition-colors ${
                         isDark
                           ? 'border-white/[0.08] text-[#C1CED8] hover:text-white hover:border-[#635BFF]/40'
@@ -1284,26 +2252,60 @@ function SchedulerContent({
             })}
           </div>
         </div>
+        </>
+        )}
 
         {/* ─── Quick Create Modal ─── */}
         <AnimatePresence>
           {creatingAt && (
             <QuickCreateModal
               dark={isDark}
-              employeeName={schedulerEmployees.find(e => e.id === creatingAt.employeeId)?.name || ''}
+              employeeName={creatingAt.employeeName ?? "Open Shift"}
               dayLabel={`${FULL_DAYS[creatingAt.day]}, ${weekDates[creatingAt.day]?.toLocaleString('default', { month: 'short' })} ${weekDates[creatingAt.day]?.getDate()}`}
               shiftDefaults={shiftDefaults}
-              role={creatingAt.role}
+              role={creatingAt.roleName}
               onClose={() => setCreatingAt(null)}
-              onCreate={(start, end, presetKey, presetLabel) => {
-                setShifts(prev => [...prev, {
-                  id: uid(), employeeId: creatingAt.employeeId, day: creatingAt.day,
-                  startHour: start, endHour: end, role: creatingAt.role,
-                  color: roleColors[creatingAt.role] || '#635BFF',
-                  presetKey,
-                  presetLabel,
-                }]);
-                setCreatingAt(null);
+              onCreate={(start, end) => {
+                const targetDate = weekDates[creatingAt.day];
+                if (!targetDate) {
+                  return;
+                }
+                void (async () => {
+                  try {
+                    const createdShift = await createWorkspaceShift(
+                      location.business_id,
+                      buildShiftPayload(
+                        location,
+                        creatingAt.roleId,
+                        formatDateKey(targetDate),
+                        start,
+                        end,
+                      ),
+                    );
+                    if (creatingAt.employeeId) {
+                      await assignWorkspaceShift(location.business_id, createdShift.id, {
+                        employee_id: creatingAt.employeeId,
+                        source: 'scheduler_ui',
+                        expected_assignment_id: null,
+                      });
+                    }
+                    await refreshSchedulerData();
+                    setCreatingAt(null);
+                    setSchedulerNotice({
+                      tone: 'success',
+                      title: creatingAt.employeeId ? 'Shift created' : 'Open shift created',
+                      detail: creatingAt.employeeId
+                        ? `${creatingAt.roleName} shift added for ${creatingAt.employeeName ?? 'this employee'}.`
+                        : `${creatingAt.roleName} shift is open and ready for reassignment.`,
+                    });
+                  } catch (error) {
+                    setSchedulerNotice({
+                      tone: 'error',
+                      title: 'Could not create shift',
+                      detail: error instanceof Error ? error.message : 'Please try again.',
+                    });
+                  }
+                })();
               }}
             />
           )}
@@ -1316,7 +2318,13 @@ function SchedulerContent({
               dark={isDark}
               shiftDefaults={shiftDefaults}
               shift={editingShift}
-              employeeName={schedulerEmployees.find(e => e.id === editingShift.employeeId)?.name || 'Unassigned'}
+              employeeName={
+                editingShift.employeeId
+                  ? schedulerEmployees.find((employee) => employee.id === editingShift.employeeId)?.name || 'Assigned Employee'
+                  : editingShift.displayEmployeeName
+                    ? `${editingShift.displayEmployeeName} · Needs Reassignment`
+                    : 'Needs Reassignment'
+              }
               onClose={() => setEditingShift(null)}
               onSave={updateShift}
               onDelete={() => { deleteShift(editingShift.id); setEditingShift(null); }}
@@ -1331,7 +2339,7 @@ function SchedulerContent({
               dark={isDark}
               currentWeek={weekLabel}
               shiftsCount={shifts.length}
-              employeesCount={new Set(shifts.map(s => s.employeeId)).size}
+              employeesCount={new Set(shifts.map((s) => s.employeeId).filter(Boolean)).size}
               onClose={() => setShowCopyModal(false)}
               onCopy={copySchedule}
               currentWeekOffset={weekOffset}
@@ -1344,13 +2352,15 @@ function SchedulerContent({
             <PublishWeekModal
               dark={isDark}
               weekLabel={weekLabel}
-              shifts={shifts}
+              shifts={assignedShiftsForPublishing}
               employees={activeEmployees}
               onClose={() => setShowPublishModal(false)}
               onComplete={() => {
                 setShowPublishModal(false);
-                setShowPublishToast(true);
-                setTimeout(() => setShowPublishToast(false), 3000);
+                setSchedulerNotice({
+                  tone: 'success',
+                  title: 'Schedule published',
+                });
               }}
             />
           )}
@@ -1363,6 +2373,7 @@ function SchedulerContent({
               employeeName={removingEmployee.name}
               hasShifts={removingEmployee.hasShifts}
               shiftCount={shifts.filter((shift) => shift.employeeId === removingEmployee.id).length}
+              isLoading={isRemovingEmployee}
               onClose={() => setRemovingEmployee(null)}
               onConfirm={confirmRemoveEmployee}
             />
@@ -1370,12 +2381,26 @@ function SchedulerContent({
         </AnimatePresence>
 
         <AnimatePresence>
-          {showAddEmployee ? (
+          {addEmployeeContext ? (
             <AddEmployeeModal
+              activeTab={addEmployeeTab}
+              businessEmployees={businessEmployees}
+              businessId={location.business_id}
+              businessLocations={businessLocations}
+              businessRoles={businessRoles}
               dark={isDark}
-              employees={schedulerEmployees}
-              activeEmployeeIds={activeEmployeeIds}
-              onClose={() => setShowAddEmployee(false)}
+              loadingBusinessEmployees={loadingSchedulerData}
+              locationId={location.location_id}
+              locationName={locationDisplayName}
+              roleId={addEmployeeContext?.roleId ?? ''}
+              roleName={addEmployeeContext?.roleName ?? ''}
+              activeEmployeeIds={locationEmployeeIds}
+              onActiveTabChange={setAddEmployeeTab}
+              onAttach={addEmployeeToLocation}
+              onClose={() => {
+                setAddEmployeeTab('existing');
+                setAddEmployeeContext(null);
+              }}
               onAdd={addEmployeeToLocation}
             />
           ) : null}
@@ -1383,38 +2408,33 @@ function SchedulerContent({
 
         {/* ─── Toasts ─── */}
         <AnimatePresence>
-          {showPublishToast && (
+          {schedulerNotice && (
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
               className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl ${theme.toastClass}`}>
-              <div className="w-7 h-7 rounded-full bg-[#00B893]/20 flex items-center justify-center">
-                <Check size={14} className="text-[#00B893]" />
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
+                schedulerNotice.tone === 'success'
+                  ? 'bg-[#00B893]/20'
+                  : schedulerNotice.tone === 'error'
+                    ? 'bg-[#E5484D]/20'
+                    : 'bg-[#635BFF]/20'
+              }`}>
+                {schedulerNotice.tone === 'success' ? (
+                  <Check size={14} className="text-[#00B893]" />
+                ) : schedulerNotice.tone === 'error' ? (
+                  <AlertTriangle size={14} className="text-[#E5484D]" />
+                ) : (
+                  <Info size={14} className="text-[#635BFF]" />
+                )}
               </div>
               <div>
-                <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>Schedule published!</p>
-                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                  {shifts.length} shifts sent to {new Set(shifts.map(s => s.employeeId)).size} staff
-                </p>
+                <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>{schedulerNotice.title}</p>
+                {schedulerNotice.detail ? (
+                  <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
+                    {schedulerNotice.detail}
+                  </p>
+                ) : null}
               </div>
-              <button onClick={() => setShowPublishToast(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
-                <X size={12} className={theme.textSecondary} />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <AnimatePresence>
-          {showCopyToast && (
-            <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
-              className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl ${theme.toastClass}`}>
-              <div className="w-7 h-7 rounded-full bg-[#635BFF]/20 flex items-center justify-center">
-                <ClipboardCopy size={14} className="text-[#635BFF]" />
-              </div>
-              <div>
-                <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>Schedule copied!</p>
-                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                  {shifts.length} shifts duplicated to next week
-                </p>
-              </div>
-              <button onClick={() => setShowCopyToast(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
+              <button onClick={() => setSchedulerNotice(null)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
                 <X size={12} className={theme.textSecondary} />
               </button>
             </motion.div>
@@ -1422,11 +2442,11 @@ function SchedulerContent({
         </AnimatePresence>
 
         <AnimatePresence>
-          {editorLocation ? (
+        {editorLocation ? (
             <LocationRoleEditor
               dark={isDark}
               location={editorLocation}
-              roles={editorRoles}
+              employees={editorEmployees}
               assignments={editorAssignments}
               shiftDefaults={editorShiftDefaults}
               staffCount={editorStaffCount}
@@ -1442,7 +2462,6 @@ function SchedulerContent({
                 void handleDeleteLocation();
               }}
               onSave={handleSaveEditor}
-              onCreateRole={handleCreateRole}
             />
           ) : null}
         </AnimatePresence>
@@ -1566,15 +2585,9 @@ function MobileEmployeeCard({
             })}
           </div>
         ) : (
-          <button onClick={() => {
-            if (!isDragging) {
-              onCreateShift();
-            }
-          }}
-            className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:bg-[#F7F8FA]'}`}
-            type="button">
-            <Plus size={14} className="text-[#C1CED8]" />
-          </button>
+          <div className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
+            <Plus size={14} className="text-[#C1CED8]/40" />
+          </div>
         )}
       </motion.div>
 
@@ -1601,6 +2614,7 @@ function RemoveEmployeeModal({
   employeeName,
   hasShifts,
   shiftCount,
+  isLoading = false,
   onClose,
   onConfirm,
 }: {
@@ -1608,6 +2622,7 @@ function RemoveEmployeeModal({
   employeeName: string;
   hasShifts: boolean;
   shiftCount: number;
+  isLoading?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -1653,20 +2668,16 @@ function RemoveEmployeeModal({
           {hasShifts ? (
             <div className="space-y-3">
               <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
-                Removing <span className={`font-medium ${textPrimary}`}>{employeeName}</span> will:
+                <span className={`font-medium ${textPrimary}`}>{employeeName}</span> still has assigned shifts.
               </p>
               <ul className="space-y-2 ml-4">
                 <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
                   <span className="text-orange-500 mt-0.5">•</span>
-                  <span>Delete all {shiftCount} scheduled shift{shiftCount !== 1 ? 's' : ''}</span>
+                  <span>Assigned shifts cannot be removed from this real-data scheduler yet</span>
                 </li>
                 <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
                   <span className="text-orange-500 mt-0.5">•</span>
-                  <span>Remove them from this location&apos;s roster</span>
-                </li>
-                <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
-                  <span className="text-orange-500 mt-0.5">•</span>
-                  <span>You can add them back anytime</span>
+                  <span>Clear or reassign those shifts before removing them from this location</span>
                 </li>
               </ul>
             </div>
@@ -1681,6 +2692,7 @@ function RemoveEmployeeModal({
           <button onClick={onClose}
             className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
             style={{ fontWeight: 500 }}
+            disabled={isLoading}
             type="button">
             Cancel
           </button>
@@ -1691,9 +2703,10 @@ function RemoveEmployeeModal({
               hasShifts ? 'bg-orange-500 hover:bg-orange-600' : 'bg-red-500 hover:bg-red-600'
             }`}
             style={{ fontWeight: 540 }}
+            disabled={isLoading}
             type="button">
             <UserMinus size={13} />
-            {hasShifts ? 'Remove & Delete Shifts' : 'Remove'}
+            {isLoading ? 'Removing...' : hasShifts ? 'Understood' : 'Remove'}
           </motion.button>
         </div>
       </motion.div>
@@ -1702,34 +2715,80 @@ function RemoveEmployeeModal({
 }
 
 function AddEmployeeModal({
+  activeTab,
+  businessEmployees,
+  businessId,
+  businessLocations,
+  businessRoles,
   dark = false,
-  employees,
+  loadingBusinessEmployees,
+  locationId,
+  locationName,
+  roleId,
+  roleName,
   activeEmployeeIds,
+  onActiveTabChange,
+  onAttach,
   onClose,
   onAdd,
 }: {
+  activeTab: 'existing' | 'new';
+  businessEmployees: EmployeeSummary[];
+  businessId: string;
+  businessLocations: BusinessLocation[];
+  businessRoles: BusinessRole[];
   dark?: boolean;
-  employees: Employee[];
+  loadingBusinessEmployees: boolean;
+  locationId: string;
+  locationName: string;
+  roleId: string;
+  roleName: string;
   activeEmployeeIds: Set<string>;
+  onActiveTabChange: (tab: 'existing' | 'new') => void;
+  onAttach: (employee: EmployeeSummary) => void;
   onClose: () => void;
-  onAdd: (employeeId: string) => void;
+  onAdd: (employee: EmployeeSummary) => void;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const availableEmployees = employees.filter((employee) => !activeEmployeeIds.has(employee.id));
-  const filteredEmployees = availableEmployees.filter((employee) =>
-    employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    employee.role.toLowerCase().includes(searchQuery.toLowerCase()),
+  const searchableEmployees = useMemo(
+    () =>
+      businessEmployees.filter((employee) => !activeEmployeeIds.has(employee.id)),
+    [activeEmployeeIds, businessEmployees],
   );
-  const employeesByRole = useMemo(() => {
-    const grouped: Record<string, Employee[]> = {};
-    filteredEmployees.forEach((employee) => {
-      if (!grouped[employee.role]) {
-        grouped[employee.role] = [];
-      }
-      grouped[employee.role].push(employee);
-    });
-    return grouped;
-  }, [filteredEmployees]);
+  const scopedEmployees = useMemo(
+    () =>
+      searchableEmployees.filter(
+        (employee) =>
+          employee.role_ids.includes(roleId) || employee.role_ids.length === 0,
+      ),
+    [roleId, searchableEmployees],
+  );
+  const filteredEmployees = useMemo(
+    () =>
+      scopedEmployees.filter((employee) => {
+        const normalizedQuery = searchQuery.trim().toLowerCase();
+        if (!normalizedQuery) {
+          return true;
+        }
+        return (
+          employee.full_name.toLowerCase().includes(normalizedQuery) ||
+          employee.role_names.some((role) => role.toLowerCase().includes(normalizedQuery))
+        );
+      }),
+    [scopedEmployees, searchQuery],
+  );
+  const availableReadyEmployees = useMemo(
+    () => filteredEmployees.filter((employee) => employee.role_ids.includes(roleId)),
+    [filteredEmployees, roleId],
+  );
+  const availableUnavailableEmployees = useMemo(
+    () => filteredEmployees.filter((employee) => employee.role_names.length === 0),
+    [filteredEmployees],
+  );
+  const canOpenNewTab =
+    !loadingBusinessEmployees &&
+    businessLocations.length > 0 &&
+    businessRoles.some((role) => role.id === roleId);
   const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
   const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
@@ -1747,7 +2806,7 @@ function AddEmployeeModal({
           <div>
             <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Add Employee</h3>
             <p className={`text-[11px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>
-              {availableEmployees.length} available
+              Add someone to {roleName} at {locationName}
             </p>
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-lg ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'} transition-colors`} type="button">
@@ -1755,92 +2814,222 @@ function AddEmployeeModal({
           </button>
         </div>
 
-        {availableEmployees.length > 0 ? (
-          <div className="px-6 pt-4 pb-3">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search by name or role..."
-              className={`w-full px-3.5 py-2.5 border rounded-xl text-[13px] placeholder:text-[#8898AA] focus:border-[#635BFF]/40 focus:outline-none focus:ring-2 focus:ring-[#635BFF]/10 transition-all ${
-                dark
-                  ? 'border-white/[0.08] bg-white/[0.04] text-white'
-                  : 'border-[#E5E7EB] bg-white text-[#0A2540]'
-              }`}
-              style={{ fontWeight: 440 }}
-            />
+        <div className={`px-6 py-4 border-b ${borderClass}`}>
+          <div className={`flex items-center gap-1 rounded-lg p-0.5 ${dark ? 'bg-white/[0.04]' : 'bg-[#F0F0F5]'}`}>
+            {[
+              { value: 'existing', label: 'Existing' },
+              { value: 'new', label: 'New Employee' },
+            ].map((tab) => {
+              const selected = activeTab === tab.value;
+              const disabled = tab.value === 'new' ? !canOpenNewTab : false;
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => {
+                    if (!disabled) {
+                      onActiveTabChange(tab.value as 'existing' | 'new');
+                    }
+                  }}
+                  className={`flex-1 rounded-md py-2 text-[12px] transition-all duration-200 ${
+                    selected
+                      ? dark
+                        ? 'bg-white/[0.08] text-white shadow-[0_1px_3px_rgba(0,0,0,0.25)]'
+                        : 'bg-white text-[#0A2540] shadow-sm'
+                      : `${textSecondary} ${disabled ? 'opacity-50' : dark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
+                  }`}
+                  disabled={disabled}
+                  style={{ fontWeight: selected ? 520 : 440 }}
+                  type="button"
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
-        ) : null}
+        </div>
 
-        <div className="px-6 pb-5 max-h-[400px] overflow-y-auto">
-          {availableEmployees.length === 0 ? (
-            <div className="py-8 text-center">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
-                <UserPlus size={20} className="text-[#8898AA]" />
+        {activeTab === 'existing' ? (
+          <div className="px-6 py-4 max-h-[420px] overflow-y-auto">
+            {scopedEmployees.length > 0 ? (
+              <div className="pb-3">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search by name or role..."
+                  className={`w-full px-3.5 py-2.5 border rounded-xl text-[13px] placeholder:text-[#8898AA] focus:border-[#635BFF]/40 focus:outline-none focus:ring-2 focus:ring-[#635BFF]/10 transition-all ${
+                    dark
+                      ? 'border-white/[0.08] bg-white/[0.04] text-white'
+                      : 'border-[#E5E7EB] bg-white text-[#0A2540]'
+                  }`}
+                  style={{ fontWeight: 440 }}
+                />
               </div>
-              <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
-                All employees are already added
-              </p>
-            </div>
-          ) : filteredEmployees.length === 0 ? (
-            <div className="py-8 text-center">
-              <p className="text-[13px] text-[#8898AA]" style={{ fontWeight: 440 }}>
-                No employees match &quot;{searchQuery}&quot;
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {roleOrder.filter((role) => employeesByRole[role]).map((role) => {
-                const roleColor = roleColors[role] || '#635BFF';
-                const roleEmployees = employeesByRole[role];
-                return (
-                  <div key={role}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-                      <span className={`text-[11px] uppercase tracking-[0.03em] ${textPrimary}`} style={{ fontWeight: 580 }}>
-                        {role}
-                      </span>
-                      <span className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                        {roleEmployees.length}
-                      </span>
-                    </div>
-                    <div className="space-y-1.5">
-                      {roleEmployees.map((employee) => (
-                        <button
-                          key={employee.id}
-                          onClick={() => onAdd(employee.id)}
-                          className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all group ${
+            ) : null}
+
+            {loadingBusinessEmployees ? (
+              <div className="py-8 text-center">
+                <p className={`text-[13px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                  Loading business employees...
+                </p>
+              </div>
+            ) : scopedEmployees.length === 0 ? (
+              <div className="py-8 text-center">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${dark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`}>
+                  <UserPlus size={20} className="text-[#8898AA]" />
+                </div>
+                <p className={`text-[13px] ${dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]'}`} style={{ fontWeight: 480 }}>
+                  {businessEmployees.length === 0
+                    ? 'No employees found yet'
+                    : `All ${roleName} employees are already added`}
+                </p>
+                {businessEmployees.length === 0 ? (
+                  <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    Use New Employee to add someone to this scheduler.
+                  </p>
+                ) : null}
+              </div>
+            ) : filteredEmployees.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-[#8898AA]" style={{ fontWeight: 440 }}>
+                  No employees match &quot;{searchQuery}&quot;
+                </p>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
+                    Available {roleName}
+                  </h4>
+                  <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+                    {availableReadyEmployees.length} of {filteredEmployees.length}
+                  </span>
+                </div>
+                {availableReadyEmployees.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {availableReadyEmployees.map((employee) => (
+                      <button
+                        key={employee.id}
+                        onClick={() => onAdd(employee)}
+                        className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all duration-200 ${
+                          dark
+                            ? 'bg-white/[0.03] border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.08]'
+                            : 'bg-[#F7F8FA] border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.03]'
+                        }`}
+                        type="button"
+                      >
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#635BFF]/10 text-[10px] text-[#635BFF]">
+                          {employeeInitials(employee.full_name)}
+                        </span>
+                        <span
+                          className={`text-[12px] transition-colors ${
                             dark
-                              ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]'
-                              : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'
+                              ? 'text-[#C1CED8] group-hover:text-white'
+                              : 'text-[#5E6D7A] group-hover:text-[#0A2540]'
                           }`}
-                          type="button"
+                          style={{ fontWeight: 440 }}
                         >
-                          <img src={employee.avatar} alt={employee.name}
-                            className={`w-9 h-9 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
-                          <div className="flex-1 text-left min-w-0">
-                            <p className={`text-[13px] truncate ${textPrimary}`} style={{ fontWeight: 500 }}>
-                              {employee.name}
-                            </p>
-                            <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                              {employee.role}
-                            </p>
+                          {employee.full_name}
+                        </span>
+                        <Plus
+                          size={11}
+                          className="ml-0.5 text-[#8898AA] transition-colors group-hover:text-[#635BFF]"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={`py-2 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    All employees with the {roleName} role are already added to this scheduler.
+                  </p>
+                )}
+
+                {availableUnavailableEmployees.length > 0 ? (
+                  <div className="mt-5">
+                    <div className="mb-2.5">
+                      <h4 className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 500 }}>
+                        Needs role assignment
+                      </h4>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {availableUnavailableEmployees.map((employee) => (
+                        <div
+                          key={employee.id}
+                          className={`group relative z-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-all duration-200 hover:z-20 ${
+                            dark
+                              ? 'border-[#FFB800]/25 bg-[#FFB800]/[0.1] hover:bg-[#FFB800]/[0.14]'
+                              : 'border-[#FFB800]/20 bg-[#FFB800]/[0.06] hover:bg-[#FFB800]/[0.1]'
+                          }`}
+                        >
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FFB800]/10 text-[10px] text-[#FFB800]">
+                            {employeeInitials(employee.full_name)}
+                          </span>
+                          <span className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+                            {employee.full_name}
+                          </span>
+                          <div className="relative ml-0.5">
+                            <Info size={12} className="cursor-default text-[#FFB800]" />
+                            <div
+                              className={`pointer-events-none absolute bottom-full right-0 z-30 mb-2 w-56 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
+                                dark
+                                  ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
+                                  : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
+                              }`}
+                              style={{ fontWeight: 440 }}
+                            >
+                              Assign at least one role before adding this employee to the scheduler.
+                            </div>
                           </div>
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
-                            dark ? 'bg-white/[0.06] group-hover:bg-[#635BFF]/[0.16]' : 'bg-[#635BFF]/[0.06] group-hover:bg-[#635BFF]/[0.10]'
-                          }`}>
-                            <Plus size={14} className="text-[#635BFF]" />
-                          </div>
-                        </button>
+                        </div>
                       ))}
                     </div>
                   </div>
-                );
-              })}
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="px-6 py-6">
+            <div className={`rounded-2xl border px-4 py-4 ${
+              dark
+                ? 'border-white/[0.08] bg-white/[0.03]'
+                : 'border-[#E5E7EB] bg-[#FAFBFC]'
+            }`}>
+              <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+                Open the employee enrollment flow
+              </p>
+              <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                This employee will be created directly inside {locationName} with the {roleName} role already assigned.
+              </p>
+              {!canOpenNewTab ? (
+                <p className={`mt-3 text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  Loading live roles and locations for this business...
+                </p>
+              ) : null}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </motion.div>
+
+      <AnimatePresence>
+        {activeTab === 'new' && canOpenNewTab ? (
+          <SchedulerEmployeeEnrollmentModal
+            businessId={businessId}
+            businessLocations={businessLocations}
+            dark={dark}
+            locationId={locationId}
+            locationName={locationName}
+            roleId={roleId}
+            roleName={roleName}
+            onClose={() => onActiveTabChange('existing')}
+            onCreated={(employee) => {
+              onAttach(employee);
+              onClose();
+            }}
+            roles={businessRoles}
+          />
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }
@@ -1860,8 +3049,8 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
   const [selectedPresetKey, setSelectedPresetKey] = useState<ShiftDefaultKey>(initialPreset.key);
   const [startHour, setStartHour] = useState(initialPreset.start_hour);
   const [endHour, setEndHour] = useState(initialPreset.end_hour);
-  const roleColor = roleColors[role] || '#635BFF';
-  const hourOptions = HOURS.map(h => ({ label: formatHour(h), value: String(h) }));
+  const accentColor = roleColor(role);
+  const hourOptions = TIME_VALUES.map(h => ({ label: formatHour(h), value: String(h) }));
   const theme = getSchedulerTheme(dark);
 
   useEffect(() => {
@@ -1896,9 +3085,9 @@ function QuickCreateModal({ employeeName, dayLabel, role, shiftDefaults, onClose
           </button>
         </div>
         <div className="px-5 pt-4 pb-1">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit" style={{ background: `${roleColor}10` }}>
-            <div className="w-2 h-2 rounded-full" style={{ background: roleColor }} />
-            <span className="text-[11px]" style={{ fontWeight: 520, color: roleColor }}>{role}</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg w-fit" style={{ background: `${accentColor}10` }}>
+            <div className="w-2 h-2 rounded-full" style={{ background: accentColor }} />
+            <span className="text-[11px]" style={{ fontWeight: 520, color: accentColor }}>{role}</span>
           </div>
         </div>
         <div className="px-5 pt-3 pb-2">
@@ -1982,9 +3171,9 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
   );
   const [startHour, setStartHour] = useState(shift.startHour);
   const [endHour, setEndHour] = useState(shift.endHour);
-  const roleColor = roleColors[shift.role] || shift.color;
+  const accentColor = shift.color || roleColor(shift.role);
   const descriptor = getShiftDescriptor(startHour, endHour);
-  const hourOptions = HOURS.map(h => ({ label: formatHour(h), value: String(h) }));
+  const hourOptions = TIME_VALUES.map(h => ({ label: formatHour(h), value: String(h) }));
   const theme = getSchedulerTheme(dark);
 
   return (
@@ -1998,7 +3187,7 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
         <div className={`px-5 py-4 border-b flex items-center justify-between ${theme.modalBorderClass}`}>
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full" style={{ background: roleColor }} />
+              <div className="w-3 h-3 rounded-full" style={{ background: accentColor }} />
               <h3 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Edit Shift</h3>
             </div>
             <p className={`text-[11px] mt-1 ml-5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -2016,15 +3205,15 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
               const shiftLabel = resolveShiftLabel(normalizedDefaults, selectedPresetKey, startHour, endHour) || descriptor.label;
               return (
                 <>
-                  <Icon size={14} style={{ color: roleColor }} />
-                  <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{shiftLabel} Shift</span>
+                  <Icon size={14} style={{ color: accentColor }} />
+                  <span className="text-[12px]" style={{ fontWeight: 520, color: accentColor }}>{shiftLabel} Shift</span>
                 </>
               );
             })()
           ) : (
             <>
-              <descriptor.icon size={14} style={{ color: roleColor }} />
-              <span className="text-[12px]" style={{ fontWeight: 520, color: roleColor }}>{descriptor.label} Shift</span>
+              <descriptor.icon size={14} style={{ color: accentColor }} />
+              <span className="text-[12px]" style={{ fontWeight: 520, color: accentColor }}>{descriptor.label} Shift</span>
             </>
           )}
           <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>

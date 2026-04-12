@@ -18,6 +18,9 @@ PLATFORM_EVENT_PAYLOAD_KEY = "_platform_event"
 
 
 class PlatformEventType:
+    SCHEDULE_SHIFT_ASSIGNED = "schedule.shift.assigned"
+    SCHEDULE_SHIFT_REASSIGNED = "schedule.shift.reassigned"
+    SCHEDULE_SHIFT_UNASSIGNED = "schedule.shift.unassigned"
     COVERAGE_CAMPAIGN_CREATED = "coverage.campaign.created"
     COVERAGE_PHASE_1_EXECUTED = "coverage.phase_1.executed"
     COVERAGE_PHASE_2_EXECUTED = "coverage.phase_2.executed"

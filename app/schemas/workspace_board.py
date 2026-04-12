@@ -46,6 +46,8 @@ class WorkspaceBoardShiftRead(BaseSchema):
     role_name: str
     starts_at: datetime
     ends_at: datetime
+    lifecycle_status: str
+    staffing_status: str
     status: str
     seats_requested: int
     seats_filled: int
@@ -53,6 +55,7 @@ class WorkspaceBoardShiftRead(BaseSchema):
     premium_cents: int
     notes: Optional[str] = None
     current_assignment: Optional[WorkspaceBoardShiftAssignmentRead] = None
+    last_assignment: Optional[WorkspaceBoardShiftAssignmentRead] = None
     coverage_case_id: Optional[UUID] = None
     coverage_case_status: Optional[str] = None
     pending_offer_count: int = 0

@@ -1600,8 +1600,8 @@ export default function Settings({
             }
             inactiveWeight={420}
             items={[
-              { value: "business", label: "Business", icon: Building2 },
               { value: "personal", label: "Personal", icon: User },
+              { value: "business", label: "Business", icon: Building2 },
             ]}
             onChange={switchScope}
             value={scope}

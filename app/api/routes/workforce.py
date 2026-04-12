@@ -372,6 +372,72 @@ async def add_employee_availability_rule(
 
 
 @router.get(
+    "/{employee_id}/availability-rules",
+    response_model=SelfEmployeeAvailabilityRead,
+)
+async def get_employee_availability_rules(
+    business_id: UUID,
+    employee_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        employee, rules = await workforce.get_employee_availability_rules(
+            session,
+            business_id,
+            employee_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    timezone = rules[0].timezone if rules else "UTC"
+    return SelfEmployeeAvailabilityRead(
+        employee_id=employee.id,
+        employee_name=employee.preferred_name or employee.full_name,
+        timezone=timezone,
+        rules=rules,
+    )
+
+
+@router.put(
+    "/{employee_id}/availability-rules",
+    response_model=SelfEmployeeAvailabilityRead,
+)
+async def replace_employee_availability_rules(
+    business_id: UUID,
+    employee_id: UUID,
+    payload: EmployeeAvailabilityRuleReplace,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    try:
+        employee, _ = await workforce.get_employee_availability_rules(
+            session,
+            business_id,
+            employee_id,
+        )
+        rules = await workforce.replace_employee_availability_rules(
+            session,
+            business_id,
+            employee_id,
+            payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await session.commit()
+    timezone = rules[0].timezone if rules else payload.rules[0].timezone if payload.rules else "UTC"
+    return SelfEmployeeAvailabilityRead(
+        employee_id=employee.id,
+        employee_name=employee.preferred_name or employee.full_name,
+        timezone=timezone,
+        rules=rules,
+    )
+
+
+@router.get(
     "/availability-rules/self",
     response_model=SelfEmployeeAvailabilityRead,
 )

@@ -14,7 +14,13 @@ from sqlalchemy.orm import selectinload
 from app.domain.copilot.registry import get_tool, list_tools, planner_tools, resolve_intent
 from app.domain.copilot.validation import validate_and_normalize_tool_call
 from app.models.business import Business, Location
-from app.models.common import AuditActorType, CoverageCaseStatus, MembershipRole, ShiftStatus
+from app.models.common import (
+    AuditActorType,
+    CoverageCaseStatus,
+    MembershipRole,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+)
 from app.models.coverage import AuditLog, CoverageCase
 from app.models.scheduling import Shift
 from app.schemas.copilot import (
@@ -864,11 +870,15 @@ async def _execute_open_shifts(
             Shift.business_id == business_id,
             Shift.location_id.in_(location_ids),
             Shift.starts_at >= now - timedelta(hours=1),
-            Shift.status.in_([
-                ShiftStatus.scheduled,
-                ShiftStatus.open,
-                ShiftStatus.filling,
-                ShiftStatus.no_fill,
+            Shift.lifecycle_status.in_([
+                ShiftLifecycleStatus.scheduled,
+                ShiftLifecycleStatus.in_progress,
+            ]),
+            Shift.staffing_status.in_([
+                ShiftStaffingStatus.open,
+                ShiftStaffingStatus.filling,
+                ShiftStaffingStatus.no_fill,
+                ShiftStaffingStatus.covered,
             ]),
         )
         .order_by(Shift.starts_at.asc())

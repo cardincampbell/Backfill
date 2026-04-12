@@ -81,7 +81,7 @@ export type BusinessProfileUpdatePayload = {
   week_start_day?: string | null;
 };
 
-export type ShiftDefaultKey = "morning" | "afternoon" | "evening" | "night";
+export type ShiftDefaultKey = string;
 
 export type ShiftDefault = {
   key: ShiftDefaultKey;
@@ -221,6 +221,14 @@ export type WorkspaceBoard = {
       assigned_via: string;
       accepted_at?: string | null;
     } | null;
+    last_assignment?: {
+      assignment_id: string;
+      employee_id?: string | null;
+      employee_name?: string | null;
+      status: string;
+      assigned_via: string;
+      accepted_at?: string | null;
+    } | null;
     campaign_id?: string | null;
     campaign_status?: string | null;
     coverage_case_id?: string | null;
@@ -259,6 +267,53 @@ export type ShiftUpdatePayload = Partial<
   role_id?: string;
   shift_metadata?: Record<string, unknown>;
 };
+
+export type ShiftRecord = {
+  id: string;
+  business_id: string;
+  location_id: string;
+  role_id: string;
+  source_system: string;
+  source_shift_id?: string | null;
+  timezone: string;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  seats_requested: number;
+  seats_filled: number;
+  requires_manager_approval: boolean;
+  premium_cents: number;
+  notes?: string | null;
+  shift_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ShiftAssignmentMutationPayload = {
+  employee_id: string | null;
+  source: "scheduler_ui" | "copilot";
+  note?: string;
+  expected_assignment_id?: string | null;
+};
+
+export type ShiftAssignmentMutationResponse = {
+  shift_id: string;
+  status: string;
+  current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
+};
+
+export class ShiftAssignmentConflictError extends Error {
+  currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"];
+
+  constructor(
+    message: string,
+    currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"],
+  ) {
+    super(message);
+    this.name = "ShiftAssignmentConflictError";
+    this.currentAssignment = currentAssignment;
+  }
+}
 
 export type CoverageCampaign = {
   id: string;
@@ -690,7 +745,7 @@ export async function createShift(
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as WorkspaceBoard["shifts"][number];
+  return (await response.json()) as ShiftRecord;
 }
 
 export async function updateShift(
@@ -709,7 +764,7 @@ export async function updateShift(
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as WorkspaceBoard["shifts"][number];
+  return (await response.json()) as ShiftRecord;
 }
 
 export async function deleteShift(businessId: string, shiftId: string) {
@@ -723,6 +778,41 @@ export async function deleteShift(businessId: string, shiftId: string) {
     throw new Error(await parseError(response));
   }
   return (await response.json()) as { deleted: boolean; shift_id: string };
+}
+
+export async function assignShift(
+  businessId: string,
+  shiftId: string,
+  payload: ShiftAssignmentMutationPayload,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shifts/${shiftId}/assignment`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: {
+        code?: string;
+        current_assignment?: ShiftAssignmentMutationResponse["current_assignment"];
+      } | string;
+    } | null;
+    const detail = body?.detail;
+    if (detail && typeof detail === "object") {
+      throw new ShiftAssignmentConflictError(
+        detail.code ?? "stale_assignment_conflict",
+        detail.current_assignment,
+      );
+    }
+    throw new ShiftAssignmentConflictError("stale_assignment_conflict");
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as ShiftAssignmentMutationResponse;
 }
 
 function normalizeCoverageCampaign(

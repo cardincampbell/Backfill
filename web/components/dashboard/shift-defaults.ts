@@ -1,8 +1,12 @@
+"use client";
+
 import {
   CloudMoon,
+  Clock3,
   Sun,
   Sunrise,
   Sunset,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -22,26 +26,48 @@ export const SHIFT_DEFAULT_FALLBACKS: ShiftDefault[] = [
   { key: "night", label: "Night", start_hour: 23, end_hour: 7 },
 ];
 
-const SHIFT_ICON_BY_KEY: Record<ShiftDefaultKey, LucideIcon> = {
+const SHIFT_ICON_BY_KEY: Record<string, LucideIcon> = {
   morning: Sunrise,
   afternoon: Sun,
   evening: Sunset,
   night: CloudMoon,
 };
 
-const SHIFT_COLOR_BY_KEY: Record<ShiftDefaultKey, string> = {
+const SHIFT_COLOR_BY_KEY: Record<string, string> = {
   morning: "#635BFF",
   afternoon: "#3B82F6",
   evening: "#8B5CF6",
   night: "#818CF8",
 };
 
+const SHIFT_FALLBACK_ICONS: LucideIcon[] = [
+  Sunrise,
+  Sun,
+  Sunset,
+  CloudMoon,
+  Clock3,
+  Zap,
+];
+
+const SHIFT_FALLBACK_COLORS = [
+  "#635BFF",
+  "#3B82F6",
+  "#8B5CF6",
+  "#818CF8",
+  "#00B893",
+  "#F59E0B",
+];
+
+function hashKey(key: string) {
+  return Array.from(key).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
 export function getShiftDefaultIcon(key: ShiftDefaultKey): LucideIcon {
-  return SHIFT_ICON_BY_KEY[key];
+  return SHIFT_ICON_BY_KEY[key] ?? SHIFT_FALLBACK_ICONS[hashKey(key) % SHIFT_FALLBACK_ICONS.length];
 }
 
 export function getShiftDefaultColor(key: ShiftDefaultKey): string {
-  return SHIFT_COLOR_BY_KEY[key];
+  return SHIFT_COLOR_BY_KEY[key] ?? SHIFT_FALLBACK_COLORS[hashKey(key) % SHIFT_FALLBACK_COLORS.length];
 }
 
 export function formatShiftHour(hour: number): string {
@@ -87,22 +113,39 @@ export function getShiftCoverageHours(presets: ShiftDefault[]): number {
 export function normalizeShiftDefaults(
   presets: ShiftDefault[] | null | undefined,
 ): ShiftDefault[] {
-  const lookup = new Map((presets ?? []).map((preset) => [preset.key, preset]));
-  return SHIFT_DEFAULT_ORDER.map((key) => {
-    const preset = lookup.get(key);
-    if (preset) {
-      return {
-        key,
-        label: preset.label,
-        start_hour: preset.start_hour,
-        end_hour: preset.end_hour,
-      };
-    }
-    const fallback = SHIFT_DEFAULT_FALLBACKS.find((item) => item.key === key);
-    return fallback
-      ? { ...fallback }
-      : { key, label: key, start_hour: 7, end_hour: 15 };
-  });
+  if (!presets?.length) {
+    return SHIFT_DEFAULT_FALLBACKS.map((preset) => ({ ...preset }));
+  }
+
+  const seenKeys = new Set<string>();
+  const normalized = presets
+    .map((preset) => ({
+      key: String(preset.key ?? "").trim(),
+      label: String(preset.label ?? "").trim() || "Shift",
+      start_hour: Number(preset.start_hour),
+      end_hour: Number(preset.end_hour),
+    }))
+    .filter((preset) => {
+      if (!preset.key || seenKeys.has(preset.key)) {
+        return false;
+      }
+      if (
+        !Number.isFinite(preset.start_hour) ||
+        !Number.isFinite(preset.end_hour) ||
+        preset.start_hour < 0 ||
+        preset.start_hour > 23 ||
+        preset.end_hour < 0 ||
+        preset.end_hour > 23
+      ) {
+        return false;
+      }
+      seenKeys.add(preset.key);
+      return true;
+    });
+
+  return normalized.length
+    ? normalized
+    : SHIFT_DEFAULT_FALLBACKS.map((preset) => ({ ...preset }));
 }
 
 export function resolveShiftLabel(

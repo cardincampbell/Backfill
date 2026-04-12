@@ -1,17 +1,118 @@
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.models.business import Location, LocationRole, Role
-from app.models.common import CoverageCaseStatus, ShiftStatus
-from app.models.coverage import CoverageCase
-from app.models.scheduling import Shift
-from app.models.scheduling import ShiftAssignment
-from app.schemas.scheduling import ShiftCreate, ShiftUpdate
+from app.models.business import EmployeeLocation, Location, LocationRole, Role
+from app.models.common import (
+    AssignmentStatus,
+    CoverageAttemptStatus,
+    CoverageCaseStatus,
+    CoverageRunStatus,
+    EmployeeStatus,
+    OfferStatus,
+    OutboxStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+)
+from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOffer, OutboxEvent
+from app.models.scheduling import Shift, ShiftAssignment
+from app.models.workforce import Employee, EmployeeRole
+from app.schemas.scheduling import (
+    ShiftAssignmentMutationResponse,
+    ShiftAssignmentRead,
+    ShiftAssignmentWrite,
+    ShiftCreate,
+    ShiftUpdate,
+)
+from app.services import delivery, shift_assignments, worker_runtime
+
+_ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
+_ACTIVE_OFFER_STATUSES = {OfferStatus.pending, OfferStatus.delivered}
+_ACTIVE_RUN_STATUSES = {CoverageRunStatus.queued, CoverageRunStatus.running}
+_USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
+_TERMINAL_SHIFT_LIFECYCLE_STATUSES = {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}
+
+
+class ShiftAssignmentConflictError(Exception):
+    def __init__(self, current_assignment: ShiftAssignment | None):
+        super().__init__("stale_assignment_conflict")
+        self.current_assignment = current_assignment
+
+
+@dataclass
+class ShiftAssignmentMutationResult:
+    shift: Shift
+    action: str
+    source: str
+    previous_assignment: ShiftAssignment | None
+    current_assignment: ShiftAssignment | None
+    cancelled_cases: list[CoverageCase]
+    cancelled_offers: list[CoverageOffer]
+    no_op: bool = False
+
+
+def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    metadata = getattr(assignment, "assignment_metadata", None) or {}
+    if isinstance(metadata, dict):
+        raw_name = metadata.get("employee_name")
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    employee = getattr(assignment, "__dict__", {}).get("employee")
+    if employee is not None:
+        raw_name = getattr(employee, "full_name", None)
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    raw_name = getattr(assignment, "employee_name", None)
+    if isinstance(raw_name, str):
+        name = raw_name.strip()
+        if name:
+            return name
+    return None
+
+
+def _assignment_read(assignment: ShiftAssignment | None) -> ShiftAssignmentRead | None:
+    if assignment is None:
+        return None
+    return ShiftAssignmentRead(
+        assignment_id=assignment.id,
+        employee_id=assignment.employee_id,
+        employee_name=_assignment_employee_name(assignment),
+        status=assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
+        assigned_via=assignment.assigned_via,
+        accepted_at=assignment.accepted_at,
+    )
+
+
+def build_shift_assignment_response(
+    result: ShiftAssignmentMutationResult,
+) -> ShiftAssignmentMutationResponse:
+    return ShiftAssignmentMutationResponse(
+        shift_id=result.shift.id,
+        lifecycle_status=(
+            result.shift.lifecycle_status.value
+            if hasattr(result.shift.lifecycle_status, "value")
+            else str(result.shift.lifecycle_status)
+        ),
+        staffing_status=(
+            result.shift.staffing_status.value
+            if hasattr(result.shift.staffing_status, "value")
+            else str(result.shift.staffing_status)
+        ),
+        status=result.shift.status.value if hasattr(result.shift.status, "value") else str(result.shift.status),
+        current_assignment=_assignment_read(result.current_assignment),
+    )
 
 
 async def list_shifts(
@@ -119,12 +220,7 @@ async def update_shift(
     if payload.shift_metadata is not None:
         shift.shift_metadata = payload.shift_metadata
 
-    if shift.seats_filled >= shift.seats_requested and shift.seats_requested > 0:
-        shift.status = ShiftStatus.covered
-    elif shift.seats_filled > 0:
-        shift.status = ShiftStatus.filling
-    else:
-        shift.status = ShiftStatus.open
+    _recompute_shift_ownership_state(shift)
 
     await session.flush()
     await session.refresh(shift)
@@ -139,12 +235,6 @@ async def delete_shift(
     shift = await session.get(Shift, shift_id)
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
-
-    assignment_count = await session.scalar(
-        select(func.count(ShiftAssignment.id)).where(ShiftAssignment.shift_id == shift_id)
-    )
-    if int(assignment_count or 0) > 0:
-        raise ValueError("shift_has_assignments")
 
     active_case_count = await session.scalar(
         select(func.count(CoverageCase.id)).where(
@@ -162,3 +252,327 @@ async def delete_shift(
     await session.delete(shift)
     await session.flush()
     return shift
+
+
+async def set_shift_assignment(
+    session: AsyncSession,
+    business_id: UUID,
+    shift_id: UUID,
+    payload: ShiftAssignmentWrite,
+    *,
+    assigned_by_user_id: UUID | None = None,
+) -> ShiftAssignmentMutationResult:
+    shift = await _load_shift_for_assignment(session, business_id, shift_id)
+    current = shift_assignments.current_assignment(shift.assignments or [])
+
+    if int(shift.seats_requested or 1) != 1:
+        raise ValueError("single_seat_only_v1")
+
+    expected_assignment_id = payload.expected_assignment_id
+    current_assignment_id = current.id if current is not None else None
+    if expected_assignment_id != current_assignment_id:
+        raise ShiftAssignmentConflictError(current)
+
+    if payload.employee_id is None:
+        if current is None:
+            return ShiftAssignmentMutationResult(
+                shift=shift,
+                action="noop",
+                source=payload.source,
+                previous_assignment=None,
+                current_assignment=None,
+                cancelled_cases=[],
+                cancelled_offers=[],
+                no_op=True,
+            )
+
+        cancelled_cases, cancelled_offers = await _cancel_active_automation(
+            session,
+            shift,
+            reason="manual_assignment_override",
+        )
+        now = datetime.now(timezone.utc)
+        current.status = AssignmentStatus.cancelled
+        current.cancelled_at = now
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "manual_unassigned_at": now.isoformat(),
+            "manual_unassigned_note": payload.note,
+            "manual_unassigned_source": payload.source,
+        }
+        _recompute_shift_ownership_state(shift)
+        await session.flush()
+        return ShiftAssignmentMutationResult(
+            shift=shift,
+            action="unassigned",
+            source=payload.source,
+            previous_assignment=current,
+            current_assignment=None,
+            cancelled_cases=cancelled_cases,
+            cancelled_offers=cancelled_offers,
+        )
+
+    employee = await _load_employee_for_assignment(session, business_id, payload.employee_id)
+    _validate_employee_eligibility(employee, shift)
+
+    if current is not None and current.employee_id == employee.id:
+        return ShiftAssignmentMutationResult(
+            shift=shift,
+            action="noop",
+            source=payload.source,
+            previous_assignment=current,
+            current_assignment=current,
+            cancelled_cases=[],
+            cancelled_offers=[],
+            no_op=True,
+        )
+
+    cancelled_cases, cancelled_offers = await _cancel_active_automation(
+        session,
+        shift,
+        reason="manual_assignment_override",
+    )
+    now = datetime.now(timezone.utc)
+    next_sequence_no = _next_assignment_sequence_no(shift)
+    previous_assignment = current
+    if current is not None:
+        current.status = AssignmentStatus.replaced
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "replaced_at": now.isoformat(),
+            "replaced_via": payload.source,
+            "replacement_note": payload.note,
+        }
+
+    assignment = ShiftAssignment(
+        shift_id=shift.id,
+        employee_id=employee.id,
+        assigned_by_user_id=assigned_by_user_id,
+        replaced_assignment_id=current.id if current is not None else None,
+        assigned_via=payload.source,
+        status=AssignmentStatus.assigned,
+        sequence_no=next_sequence_no,
+        assignment_metadata={
+            "note": payload.note,
+            "source": payload.source,
+            "employee_name": employee.full_name,
+        },
+    )
+    assignment.employee = employee
+    session.add(assignment)
+    shift.assignments.append(assignment)
+    _recompute_shift_ownership_state(shift)
+    await session.flush()
+    return ShiftAssignmentMutationResult(
+        shift=shift,
+        action="assigned" if current is None else "reassigned",
+        source=payload.source,
+        previous_assignment=previous_assignment,
+        current_assignment=assignment,
+        cancelled_cases=cancelled_cases,
+        cancelled_offers=cancelled_offers,
+    )
+
+
+async def _load_shift_for_assignment(
+    session: AsyncSession,
+    business_id: UUID,
+    shift_id: UUID,
+) -> Shift:
+    shift = await session.get(
+        Shift,
+        shift_id,
+        options=(
+            selectinload(Shift.location),
+            selectinload(Shift.role),
+            selectinload(Shift.assignments).selectinload(ShiftAssignment.employee),
+            selectinload(Shift.coverage_cases)
+            .selectinload(CoverageCase.offers)
+            .selectinload(CoverageOffer.attempts)
+            .selectinload(CoverageContactAttempt.outbox_event),
+            selectinload(Shift.coverage_cases).selectinload(CoverageCase.runs),
+        ),
+    )
+    if shift is None or shift.business_id != business_id:
+        raise LookupError("shift_not_found")
+    return shift
+
+
+async def _load_employee_for_assignment(
+    session: AsyncSession,
+    business_id: UUID,
+    employee_id: UUID,
+) -> Employee:
+    employee = await session.get(
+        Employee,
+        employee_id,
+        options=(
+            selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
+            selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
+        ),
+    )
+    if employee is None or employee.business_id != business_id:
+        raise LookupError("employee_not_found")
+    return employee
+
+
+def _validate_employee_eligibility(employee: Employee, shift: Shift) -> None:
+    if employee.status != EmployeeStatus.active:
+        raise ValueError("employee_not_active")
+    if shift.role_id not in {assignment.role_id for assignment in (employee.employee_roles or [])}:
+        raise ValueError("employee_missing_shift_role")
+    employee_location = next(
+        (
+            record
+            for record in (employee.employee_locations or [])
+            if record.location_id == shift.location_id
+        ),
+        None,
+    )
+    if employee_location is None:
+        raise ValueError("employee_missing_location_eligibility")
+    if employee_location.access_level not in _USABLE_LOCATION_ACCESS_LEVELS:
+        raise ValueError("employee_location_not_usable")
+
+
+def _next_assignment_sequence_no(shift: Shift) -> int:
+    existing = [int(assignment.sequence_no or 0) for assignment in (shift.assignments or [])]
+    return (max(existing) if existing else 0) + 1
+
+
+def _recompute_shift_ownership_state(shift: Shift) -> None:
+    current = shift_assignments.current_assignment(shift.assignments or [])
+    shift.seats_filled = 1 if current is not None else 0
+    if current is not None:
+        _ensure_operational_lifecycle(shift)
+        shift.staffing_status = ShiftStaffingStatus.covered
+        return
+    has_active_automation = any(
+        coverage_case.status in _ACTIVE_CASE_STATUSES
+        for coverage_case in (shift.coverage_cases or [])
+    )
+    _ensure_operational_lifecycle(shift)
+    shift.staffing_status = (
+        ShiftStaffingStatus.filling if has_active_automation else ShiftStaffingStatus.open
+    )
+
+
+def _ensure_operational_lifecycle(shift: Shift) -> None:
+    if shift.lifecycle_status not in _TERMINAL_SHIFT_LIFECYCLE_STATUSES and shift.lifecycle_status == ShiftLifecycleStatus.draft:
+        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+
+
+async def _cancel_active_automation(
+    session: AsyncSession,
+    shift: Shift,
+    *,
+    reason: str,
+) -> tuple[list[CoverageCase], list[CoverageOffer]]:
+    now = datetime.now(timezone.utc)
+    cancelled_cases: list[CoverageCase] = []
+    cancelled_offers: list[CoverageOffer] = []
+
+    for coverage_case in shift.coverage_cases or []:
+        if coverage_case.status not in _ACTIVE_CASE_STATUSES:
+            continue
+        case_cancelled_offer_ids: list[str] = []
+        for offer in coverage_case.offers or []:
+            if offer.status not in _ACTIVE_OFFER_STATUSES:
+                continue
+            offer.status = OfferStatus.cancelled
+            offer.offer_metadata = {
+                **(offer.offer_metadata or {}),
+                "manual_override_reason": reason,
+                "manual_override_cancelled_at": now.isoformat(),
+            }
+            latest_attempt = _latest_attempt(offer)
+            if latest_attempt is not None:
+                await delivery.mark_offer_attempt_outcome(
+                    session,
+                    offer,
+                    status=CoverageAttemptStatus.cancelled,
+                    occurred_at=now,
+                    response_payload={"manual_override_reason": reason},
+                )
+                if latest_attempt.outbox_event is not None and latest_attempt.outbox_event.status in {
+                    OutboxStatus.pending,
+                    OutboxStatus.processing,
+                }:
+                    worker_runtime.mark_outbox_event_cancelled(
+                        latest_attempt.outbox_event,
+                        now=now,
+                        error_message=reason,
+                        result_payload={"manual_override_reason": reason},
+                    )
+            cancelled_offers.append(offer)
+            case_cancelled_offer_ids.append(str(offer.id))
+
+        if case_cancelled_offer_ids:
+            await _cancel_offer_outbox_events(
+                session,
+                [UUID(offer_id) for offer_id in case_cancelled_offer_ids],
+                now=now,
+                reason=reason,
+            )
+
+        for run in coverage_case.runs or []:
+            if run.status not in _ACTIVE_RUN_STATUSES:
+                continue
+            run.status = CoverageRunStatus.cancelled
+            run.finished_at = now
+            run.run_metadata = {
+                **(run.run_metadata or {}),
+                "cancel_reason": reason,
+                "cancelled_at": now.isoformat(),
+            }
+
+        coverage_case.status = CoverageCaseStatus.cancelled
+        coverage_case.closed_at = now
+        coverage_case.case_metadata = {
+            **(coverage_case.case_metadata or {}),
+            "manual_override_reason": reason,
+            "manual_override_cancelled_at": now.isoformat(),
+            "manual_override_cancelled_offer_ids": case_cancelled_offer_ids,
+        }
+        cancelled_cases.append(coverage_case)
+
+    return cancelled_cases, cancelled_offers
+
+
+async def _cancel_offer_outbox_events(
+    session: AsyncSession,
+    offer_ids: list[UUID],
+    *,
+    now: datetime,
+    reason: str,
+) -> None:
+    if not offer_ids:
+        return
+    result = await session.execute(
+        select(OutboxEvent).where(
+            OutboxEvent.aggregate_type == "coverage_offer",
+            OutboxEvent.aggregate_id.in_(offer_ids),
+            OutboxEvent.topic == "coverage.offer.created",
+            OutboxEvent.status.in_([OutboxStatus.pending, OutboxStatus.processing]),
+        )
+    )
+    for event in result.scalars().all():
+        worker_runtime.mark_outbox_event_cancelled(
+            event,
+            now=now,
+            error_message=reason,
+            result_payload={"manual_override_reason": reason},
+        )
+
+
+def _latest_attempt(offer: CoverageOffer) -> CoverageContactAttempt | None:
+    attempts = list(getattr(offer, "attempts", []) or [])
+    if not attempts:
+        return None
+    return max(
+        attempts,
+        key=lambda attempt: (
+            int(getattr(attempt, "attempt_no", 0) or 0),
+            getattr(attempt, "requested_at", None) or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )
