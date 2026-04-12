@@ -53,6 +53,7 @@ class WorkspaceBoardShiftRead(BaseSchema):
     premium_cents: int
     notes: Optional[str] = None
     current_assignment: Optional[WorkspaceBoardShiftAssignmentRead] = None
+    last_assignment: Optional[WorkspaceBoardShiftAssignmentRead] = None
     coverage_case_id: Optional[UUID] = None
     coverage_case_status: Optional[str] = None
     pending_offer_count: int = 0

@@ -221,6 +221,14 @@ export type WorkspaceBoard = {
       assigned_via: string;
       accepted_at?: string | null;
     } | null;
+    last_assignment?: {
+      assignment_id: string;
+      employee_id?: string | null;
+      employee_name?: string | null;
+      status: string;
+      assigned_via: string;
+      accepted_at?: string | null;
+    } | null;
     campaign_id?: string | null;
     campaign_status?: string | null;
     coverage_case_id?: string | null;

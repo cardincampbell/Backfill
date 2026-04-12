@@ -38,3 +38,10 @@ def current_assignment(assignments: Iterable[ShiftAssignment] | None) -> ShiftAs
     if not eligible:
         return None
     return max(eligible, key=_assignment_sort_key)
+
+
+def latest_assignment(assignments: Iterable[ShiftAssignment] | None) -> ShiftAssignment | None:
+    all_assignments = list(assignments or [])
+    if not all_assignments:
+        return None
+    return max(all_assignments, key=_assignment_sort_key)

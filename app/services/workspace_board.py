@@ -71,6 +71,21 @@ def _best_assignment(shift: Shift) -> ShiftAssignment | None:
     return shift_assignment_service.current_assignment(shift.assignments or [])
 
 
+def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    if assignment.employee is not None and assignment.employee.full_name:
+        return assignment.employee.full_name
+    metadata = assignment.assignment_metadata or {}
+    if isinstance(metadata, dict):
+        raw_name = metadata.get("employee_name")
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    return None
+
+
 def _latest_case(shift: Shift) -> CoverageCase | None:
     cases = list(shift.coverage_cases or [])
     if not cases:
@@ -239,6 +254,7 @@ async def get_location_board(
 
     for shift in shifts:
         current_assignment = _best_assignment(shift)
+        last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
         latest_case = _latest_case(shift)
         pending_offer_count, delivered_offer_count = _offer_counts(latest_case)
         standby_depth = _standby_depth(latest_case)
@@ -272,14 +288,24 @@ async def get_location_board(
                     WorkspaceBoardShiftAssignmentRead(
                         assignment_id=current_assignment.id,
                         employee_id=current_assignment.employee_id,
-                        employee_name=current_assignment.employee.full_name
-                        if current_assignment.employee is not None
-                        else None,
+                        employee_name=_assignment_employee_name(current_assignment),
                         status=current_assignment.status.value,
                         assigned_via=current_assignment.assigned_via,
                         accepted_at=current_assignment.accepted_at,
                     )
                     if current_assignment is not None
+                    else None
+                ),
+                last_assignment=(
+                    WorkspaceBoardShiftAssignmentRead(
+                        assignment_id=last_assignment.id,
+                        employee_id=last_assignment.employee_id,
+                        employee_name=_assignment_employee_name(last_assignment),
+                        status=last_assignment.status.value,
+                        assigned_via=last_assignment.assigned_via,
+                        accepted_at=last_assignment.accepted_at,
+                    )
+                    if last_assignment is not None
                     else None
                 ),
                 coverage_case_id=latest_case.id if latest_case is not None else None,
