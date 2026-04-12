@@ -410,6 +410,14 @@ async def _get_or_create_self_service_employee(
     if employee is not None:
         return await _link_employee_to_user(session, employee, user_id=user_id)
 
+    location_result = await session.execute(
+        select(Location.id)
+        .where(Location.business_id == business_id, Location.is_active.is_(True))
+        .order_by(Location.created_at.asc())
+    )
+    active_location_ids = list(location_result.scalars().all())
+    primary_location_id = active_location_ids[0] if len(active_location_ids) == 1 else None
+
     employee = await create_employee(
         session,
         business_id,
@@ -421,6 +429,7 @@ async def _get_or_create_self_service_employee(
             ),
             phone_e164=phone_e164.strip() if phone_e164 else None,
             email=email.strip().lower() if email else None,
+            primary_location_id=primary_location_id,
             employee_metadata={
                 "source": "self_service_availability",
                 "auto_created_from_user": True,

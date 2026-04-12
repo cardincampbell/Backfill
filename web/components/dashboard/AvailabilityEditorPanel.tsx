@@ -8,7 +8,6 @@ import {
   Check,
   ChevronDown,
   Copy,
-  Info,
   Loader2,
   Sparkles,
   Sunrise,
@@ -489,7 +488,6 @@ export function AvailabilityEditorPanel({
   onSetEndTime,
   onSetStartTime,
   savedPulse = false,
-  showProvisioningHint = false,
   showDaySummary = true,
   status,
 }: {
@@ -504,7 +502,6 @@ export function AvailabilityEditorPanel({
   onSetStartTime(dayIndex: number, nextValue: string): void;
   savedPulse?: boolean;
   showDaySummary?: boolean;
-  showProvisioningHint?: boolean;
   status: "loading" | "ready" | "error";
 }) {
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
@@ -557,22 +554,6 @@ export function AvailabilityEditorPanel({
         <AvailabilityPresetButton dark={dark} icon={Sunrise} label="Mornings" onClick={() => onApplyPreset("all", "mornings")} />
         <AvailabilityPresetButton dark={dark} icon={Sunset} label="Evenings" onClick={() => onApplyPreset("all", "evenings")} />
       </div>
-
-      {showProvisioningHint ? (
-        <div className={`rounded-[20px] border px-4 py-3 ${dark ? "border-white/[0.08] bg-white/[0.03]" : "border-[#E5E7EB] bg-[#FAFBFC]"}`} role="status">
-          <div className="flex items-start gap-3">
-            <Info size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
-            <div>
-              <p className={`text-[13px] ${dark ? "text-white" : "text-[#0A2540]"}`} style={{ fontWeight: 560 }}>
-                Availability is ready to set up
-              </p>
-              <p className={`mt-1 text-[12px] ${dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"}`} style={{ fontWeight: 420 }}>
-                Save hours here to define when this employee is generally available for scheduling.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {feedback?.tone === "error" ? (
         <div

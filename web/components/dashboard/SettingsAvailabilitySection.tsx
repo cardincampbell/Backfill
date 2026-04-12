@@ -15,7 +15,6 @@ import {
   Check,
   ChevronDown,
   Copy,
-  Info,
   Loader2,
   Sparkles,
   Sunrise,
@@ -541,7 +540,6 @@ export default function SettingsAvailabilitySection({
   const [baseline, setBaseline] = useState<Record<number, DayState>>(
     createDefaultDayMap,
   );
-  const [showProvisioningHint, setShowProvisioningHint] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [savedPulse, setSavedPulse] = useState(false);
   const [copyFrom, setCopyFrom] = useState<number | null>(null);
@@ -569,7 +567,6 @@ export default function SettingsAvailabilitySection({
           return;
         }
         const nextState = buildStateFromRules(availability);
-        setShowProvisioningHint(false);
         setTimezone(
           availability.rules.length > 0
             ? availability.timezone || businessTimezone || "UTC"
@@ -589,7 +586,6 @@ export default function SettingsAvailabilitySection({
             : "Could not load your availability right now.";
         if (message === "employee_self_not_found") {
           const emptyState = createDefaultDayMap();
-          setShowProvisioningHint(true);
           setFeedback(null);
           setDayStates(emptyState);
           setBaseline(emptyState);
@@ -759,7 +755,6 @@ export default function SettingsAvailabilitySection({
         const payload = serializeAvailability(dayStates, timezone);
         const response = await replaceSelfEmployeeAvailability(businessId, payload);
         const nextState = buildStateFromRules(response);
-        setShowProvisioningHint(false);
         setTimezone(
           response.rules.length > 0 ? response.timezone || timezone : timezone,
         );
@@ -868,38 +863,6 @@ export default function SettingsAvailabilitySection({
           onClick={() => applyPreset("all", "evenings")}
         />
       </div>
-
-      {showProvisioningHint ? (
-        <div
-          className={`rounded-[20px] border px-4 py-3 ${
-            dark
-              ? "border-white/[0.08] bg-white/[0.03]"
-              : "border-[#E5E7EB] bg-[#FAFBFC]"
-          }`}
-          role="status"
-        >
-          <div className="flex items-start gap-3">
-            <Info size={16} className="mt-0.5 shrink-0 text-[#8898AA]" />
-            <div>
-              <p
-                className={`text-[13px] ${dark ? "text-white" : "text-[#0A2540]"}`}
-                style={{ fontWeight: 560 }}
-              >
-                Availability is ready to set up
-              </p>
-              <p
-                className={`mt-1 text-[12px] ${
-                  dark ? "text-[#C1CED8]" : "text-[#5E6D7A]"
-                }`}
-                style={{ fontWeight: 420 }}
-              >
-                We&apos;ll create your employee profile automatically the first
-                time you save availability for this business.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {feedback?.tone === "error" ? (
         <div

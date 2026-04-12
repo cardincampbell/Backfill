@@ -767,6 +767,7 @@ export function EmployeeBulkUploadModal({
   const [importResult, setImportResult] = useState<EmployeeBulkImportResponse | null>(null);
   const [isPending, startTransition] = useTransition();
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+  const [detectedRowCount, setDetectedRowCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!feedback) {
@@ -801,6 +802,19 @@ export function EmployeeBulkUploadModal({
   const simulateUpload = (file: File) => {
     setSelectedFile(file);
     setUploadProgress(0);
+    setImportResult(null);
+    setDetectedRowCount(null);
+    if (file.name.toLowerCase().endsWith(".csv")) {
+      void file.text().then((contents) => {
+        const lines = contents
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        setDetectedRowCount(Math.max(lines.length - 1, 0));
+      }).catch(() => {
+        setDetectedRowCount(null);
+      });
+    }
     const intervalId = window.setInterval(() => {
       setUploadProgress((current) => {
         if (current >= 100) {
@@ -875,8 +889,8 @@ export function EmployeeBulkUploadModal({
               </h2>
               <p className={`text-[12px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                 {defaultLocationName
-                  ? `Import employees from a CSV or Excel file. New employees are also assigned to ${defaultLocationName}.`
-                  : "Import employees from a CSV or Excel file"}
+                  ? `Import from a CSV or Excel file. New employees are also assigned to ${defaultLocationName}.`
+                  : "Import from a CSV or Excel file"}
               </p>
             </div>
           </div>
@@ -915,7 +929,7 @@ export function EmployeeBulkUploadModal({
                 Need a template?
               </p>
               <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Download the simple CSV template with first name, last name, phone, and email.
+                Download our CSV template with the required columns.
               </p>
             </div>
             <button
@@ -1004,13 +1018,15 @@ export function EmployeeBulkUploadModal({
                         initial={{ width: 0 }}
                       />
                     </div>
-                    <p className={`mt-1.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                  <p className={`mt-1.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
                       Processing...
                     </p>
                   </div>
                 ) : (
                   <p className="text-[12px] text-[#00B893]" style={{ fontWeight: 480 }}>
-                    Ready to import this file
+                    {detectedRowCount !== null
+                      ? `Ready to import • ${detectedRowCount} employee${detectedRowCount === 1 ? "" : "s"} found`
+                      : "Ready to import this file"}
                   </p>
                 )}
               </div>
@@ -1023,7 +1039,7 @@ export function EmployeeBulkUploadModal({
                   Drop your file here, or click to browse
                 </p>
                 <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                  Supports CSV and Excel (.xlsx) files
+                  Supports CSV, XLS, XLSX • Max 5MB
                 </p>
               </div>
             )}
@@ -1047,11 +1063,11 @@ export function EmployeeBulkUploadModal({
                   { csv: "email_address", mapped: "Email Address" },
                 ].map((column) => (
                   <div key={column.csv} className="flex items-center gap-3 text-[12px]">
-                    <span className="text-[#00B893]">+</span>
+                    <span className="text-[#00B893]">✓</span>
                     <span className={`w-28 truncate ${textSecondary}`} style={{ fontWeight: 420 }}>
                       {column.csv}
                     </span>
-                    <span className={textSecondary}>-</span>
+                    <span className={textSecondary}>→</span>
                     <span className={textPrimary} style={{ fontWeight: 480 }}>
                       {column.mapped}
                     </span>

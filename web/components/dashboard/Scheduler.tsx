@@ -6,6 +6,7 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { useRouter } from 'next/navigation';
 import {
+  Copy,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -24,6 +25,7 @@ import {
   UserMinus,
   UserPlus,
   AlertTriangle,
+  GripVertical,
   Info,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
@@ -503,10 +505,29 @@ function InlineSelect({
 }
 
 /* ─── Draggable Shift Chip ─── */
-function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dark = false, draggable = true }: {
-  shift: Shift; isMulti: boolean; onEdit: () => void; onDelete: () => void; onDuplicate: () => void; dark?: boolean; draggable?: boolean;
+function DraggableShiftChip({
+  shift,
+  isMulti,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  onDragCopy,
+  onDragCopyPreview,
+  dark = false,
+  draggable = true,
+}: {
+  shift: Shift;
+  isMulti: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onDragCopy?: (targetDays: number[]) => void;
+  onDragCopyPreview?: (days: number[] | null) => void;
+  dark?: boolean;
+  draggable?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [isDragCopying, setIsDragCopying] = useState(false);
   const descriptor = getShiftDescriptor(shift.startHour, shift.endHour);
   const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : descriptor.icon;
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
@@ -519,6 +540,52 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
     canDrag: draggable,
     collect: (monitor) => ({ isDragging: monitor.isDragging() }),
   }), [draggable, shift.id]);
+
+  const handleDragCopyStart = (event: React.MouseEvent) => {
+    if (!onDragCopy) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragCopying(true);
+    onDragCopyPreview?.([shift.day]);
+
+    const startX = event.clientX;
+    const cellWidth = 100;
+    let previewDays = [shift.day];
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      const deltaX = moveEvent.clientX - startX;
+      const daysDelta = Math.round(deltaX / cellWidth);
+      const targetDay = shift.day + daysDelta;
+      const minDay = Math.max(0, Math.min(shift.day, targetDay));
+      const maxDay = Math.min(6, Math.max(shift.day, targetDay));
+      const nextDays: number[] = [];
+      for (let day = minDay; day <= maxDay; day += 1) {
+        nextDays.push(day);
+      }
+      if (JSON.stringify(nextDays) === JSON.stringify(previewDays)) {
+        return;
+      }
+      previewDays = nextDays;
+      onDragCopyPreview?.(nextDays);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragCopying(false);
+      const targetDays = previewDays.filter((day) => day !== shift.day);
+      if (targetDays.length > 0) {
+        onDragCopy(targetDays);
+      }
+      onDragCopyPreview?.(null);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
 
   /* Single shift: stacked layout showing descriptor + time + hours clearly.
      Multi shift: compact inline row to fit multiple in one cell. */
@@ -561,7 +628,7 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
                 className="flex flex-col gap-0.5 shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
-                  <ClipboardCopy size={9} className={theme.textMuted} />
+                  <Copy size={9} className={theme.textMuted} />
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
@@ -571,6 +638,23 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
             )}
           </AnimatePresence>
         </div>
+
+        <AnimatePresence>
+          {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute right-0 top-1/2 z-10 flex h-8 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
+              draggable={false}
+              onMouseDown={handleDragCopyStart}
+              style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+              title="Drag to copy across days"
+            >
+              <GripVertical size={10} className="text-white" style={{ opacity: 0.8 }} />
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </div>
     );
   }
@@ -611,7 +695,7 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
                 className="flex gap-0.5">
                   <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
-                    <ClipboardCopy size={7} className={theme.textMuted} />
+                    <Copy size={7} className={theme.textMuted} />
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
@@ -627,15 +711,48 @@ function DraggableShiftChip({ shift, isMulti, onEdit, onDelete, onDuplicate, dar
           {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
         </p>
       </div>
+
+      <AnimatePresence>
+        {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute right-0 top-1/2 z-10 flex h-6 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
+            draggable={false}
+            onMouseDown={handleDragCopyStart}
+            style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+            title="Drag to copy across days"
+          >
+            <GripVertical size={8} className="text-white" style={{ opacity: 0.8 }} />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
 
 /* ─── Droppable Cell ─── */
-function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToday: isTodayCell, dark = false }: {
-  employeeId: string; day: number; children: React.ReactNode;
+function DroppableCell({
+  employeeId,
+  day,
+  children,
+  onDrop,
+  onClickEmpty,
+  isToday: isTodayCell,
+  isDragCopyTarget = false,
+  dragCopyColor,
+  dark = false,
+}: {
+  employeeId: string;
+  day: number;
+  children: React.ReactNode;
   onDrop?: (shiftId: string, newEmpId: string, newDay: number) => void;
-  onClickEmpty?: () => void; isToday: boolean; dark?: boolean;
+  onClickEmpty?: () => void;
+  isToday: boolean;
+  isDragCopyTarget?: boolean;
+  dragCopyColor?: string;
+  dark?: boolean;
 }) {
   const [{ isOver, canDrop }, dropRef] = useDrop(() => ({
     accept: DRAG_TYPE,
@@ -650,10 +767,19 @@ function DroppableCell({ employeeId, day, children, onDrop, onClickEmpty, isToda
   return (
     <div
       ref={dropRef as unknown as React.RefObject<HTMLDivElement>}
-      className={`flex-1 border-l py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${theme.cellBorderClass} ${
+      className={`relative flex-1 border-l py-0.5 flex flex-col justify-center min-h-[52px] transition-colors ${theme.cellBorderClass} ${
         isTodayCell ? theme.todayCellClass : ''
       } ${isOver && canDrop ? 'bg-[#635BFF]/[0.06]' : ''} ${canDrop && !isOver ? '' : ''}`}
     >
+      {isDragCopyTarget && dragCopyColor ? (
+        <div
+          className="pointer-events-none absolute inset-0 m-0.5 rounded-md border-2 border-dashed"
+          style={{
+            borderColor: dragCopyColor,
+            backgroundColor: `${dragCopyColor}08`,
+          }}
+        />
+      ) : null}
       {hasChildren ? children : (
         <div onClick={onClickEmpty}
           className={`h-full min-h-[44px] flex items-center justify-center mx-0.5 my-0.5 rounded-lg transition-colors ${
@@ -736,6 +862,11 @@ function SchedulerContent({
   const [shiftDefaults, setShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(SHIFT_DEFAULT_FALLBACKS),
   );
+  const [dragCopyPreview, setDragCopyPreview] = useState<{
+    employeeId: string;
+    days: number[];
+    color: string;
+  } | null>(null);
   const [showLocationMenu, setShowLocationMenu] = useState(false);
   const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
@@ -1391,6 +1522,70 @@ function SchedulerContent({
     })();
   }, [location, refreshSchedulerData, weekDates]);
 
+  const dragCopyShift = useCallback((shift: Shift, targetDays: number[]) => {
+    const validDays = Array.from(new Set(targetDays))
+      .filter((day) => day >= 0 && day <= 6 && day !== shift.day);
+    if (!validDays.length) {
+      return;
+    }
+
+    void (async () => {
+      let createdCount = 0;
+      let assignmentFailureCount = 0;
+
+      try {
+        for (const day of validDays) {
+          const targetDate = weekDates[day];
+          if (!targetDate) {
+            continue;
+          }
+          const createdShift = await createWorkspaceShift(
+            location.business_id,
+            buildShiftPayload(
+              location,
+              shift.roleId,
+              formatDateKey(targetDate),
+              shift.startHour,
+              shift.endHour,
+            ),
+          );
+          createdCount += 1;
+
+          if (!shift.employeeId) {
+            continue;
+          }
+
+          try {
+            await assignWorkspaceShift(location.business_id, createdShift.id, {
+              employee_id: shift.employeeId,
+              source: 'scheduler_ui',
+              expected_assignment_id: null,
+            });
+          } catch {
+            assignmentFailureCount += 1;
+          }
+        }
+
+        await refreshSchedulerData();
+        setSchedulerNotice({
+          tone: assignmentFailureCount ? 'info' : 'success',
+          title: createdCount === 1 ? 'Shift copied' : 'Shifts copied',
+          detail: assignmentFailureCount
+            ? `${assignmentFailureCount} copied shift assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied.`
+            : undefined,
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not copy shifts',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setDragCopyPreview(null);
+      }
+    })();
+  }, [location, refreshSchedulerData, weekDates]);
+
   const toggleRoleCollapse = (role: string) => {
     setCollapsedRoles(prev => {
       const next = new Set(prev);
@@ -1597,7 +1792,7 @@ function SchedulerContent({
     return `${sm} ${s.getDate()} – ${em} ${e.getDate()}, ${s.getFullYear()}`;
   }, [weekDates]);
 
-  const EMP_COL = 'w-[180px] min-w-[180px]';
+  const EMP_COL = 'w-[220px] min-w-[220px]';
 
   const content = (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
@@ -1852,11 +2047,7 @@ function SchedulerContent({
                         </span>
                       </button>
                     </div>
-                    {DAYS.map((day, i) => {
-                      return (
-                        <div key={day} className={`flex-1 border-l ${theme.cellBorderClass} ${isToday(weekDates[i]) ? theme.todayRoleBandClass : ''}`} />
-                      );
-                    })}
+                    <div className="flex-1" />
                   </div>
 
                   {/* Employee Rows */}
@@ -1876,7 +2067,7 @@ function SchedulerContent({
                             <img src={emp.avatar} alt={emp.name}
                               className={`w-7 h-7 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                             <div className="min-w-0 flex-1">
-                              <p className={`text-[12px] truncate ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                              <p className={`text-[12px] truncate whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
                                 {emp.name}
                               </p>
                               <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -1905,6 +2096,9 @@ function SchedulerContent({
                           {DAYS.map((_day, dayIdx) => {
                             const cellShifts = getShiftsForCell(emp.id, dayIdx);
                             const isMulti = cellShifts.length > 1;
+                            const isDragCopyTarget =
+                              dragCopyPreview?.employeeId === emp.id &&
+                              dragCopyPreview.days.includes(dayIdx);
                             return (
                               <DroppableCell
                                 key={dayIdx}
@@ -1921,6 +2115,8 @@ function SchedulerContent({
                                   })
                                 }
                                 isToday={isToday(weekDates[dayIdx])}
+                                isDragCopyTarget={isDragCopyTarget}
+                                dragCopyColor={dragCopyPreview?.color}
                                 dark={isDark}
                               >
                                 {cellShifts.length > 0 ? (
@@ -1930,7 +2126,16 @@ function SchedulerContent({
                                       draggable
                                       onEdit={() => setEditingShift(shift)}
                                       onDelete={() => deleteShift(shift.id)}
-                                      onDuplicate={() => duplicateShift(shift)} />
+                                      onDuplicate={() => duplicateShift(shift)}
+                                      onDragCopy={(targetDays) => dragCopyShift(shift, targetDays)}
+                                      onDragCopyPreview={(days) =>
+                                        setDragCopyPreview(
+                                          days
+                                            ? { employeeId: emp.id, days, color: shift.color }
+                                            : null,
+                                        )
+                                      }
+                                    />
                                   ))
                                 ) : null}
                               </DroppableCell>

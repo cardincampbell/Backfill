@@ -282,7 +282,7 @@ async def delete_location(
         if detail == "location_has_operational_data":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This location already has operational data and cannot be deleted from the account profile.",
+                detail="This location has historical shifts and cannot be deleted from the account profile.",
             ) from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)

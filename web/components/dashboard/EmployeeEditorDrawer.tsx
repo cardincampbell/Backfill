@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
   Mail,
+  Pencil,
   Phone,
   Plus,
   Shield as ShieldCheck,
@@ -322,6 +323,9 @@ export function EmployeeEditorDrawer({
   );
   const [availabilitySavedPulse, setAvailabilitySavedPulse] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [deleteState, setDeleteState] = useState<{
     canDelete: boolean;
     checking?: boolean;
@@ -347,6 +351,9 @@ export function EmployeeEditorDrawer({
     setAvailabilityDayStates(createDefaultDayMap());
     setAvailabilityBaseline(createDefaultDayMap());
     setAvailabilitySavedPulse(false);
+    setIsEditingName(false);
+    setIsEditingEmail(false);
+    setIsEditingPhone(false);
     setDeleteState({ canDelete: false, checking: true, reason: null });
 
     async function loadProfile() {
@@ -471,6 +478,7 @@ export function EmployeeEditorDrawer({
     profile?.preferred_name?.trim() ||
     profile?.full_name ||
     employeeDisplayName(employee);
+  const headerDisplayName = fullName.trim() || name;
   const theme = {
     textPrimary: dark ? "text-white" : "text-[#0A2540]",
     textSecondary: dark ? "text-[#C1CED8]" : "text-[#8898AA]",
@@ -898,7 +906,7 @@ export function EmployeeEditorDrawer({
                   : "Save Changes"}
             </button>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-start gap-4">
             <div
               className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-[16px] text-white"
               style={{
@@ -906,30 +914,49 @@ export function EmployeeEditorDrawer({
                 background: "linear-gradient(135deg, #635BFF, #8B5CF6)",
               }}
             >
-              {employeeInitials(name)}
+              {employeeInitials(headerDisplayName)}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2.5">
-                <h2
-                  className={`truncate text-[18px] tracking-[-0.01em] ${theme.textPrimary}`}
-                  style={{ fontWeight: 600 }}
-                >
-                  {name}
-                </h2>
-                <div
-                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5"
-                  style={{ background: `${reliabilityColor}12` }}
-                >
-                  <ShieldCheck size={12} style={{ color: reliabilityColor }} />
-                  <span
-                    className="text-[12px] tabular-nums"
-                    style={{ color: reliabilityColor, fontWeight: 580 }}
-                  >
-                    {reliability}%
-                  </span>
-                </div>
+              <div className="group/name mb-1 flex items-center gap-1.5">
+                {isEditingName ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b-2 border-[#635BFF] bg-transparent text-[20px] tracking-[-0.01em] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingName(false)}
+                    onChange={(event) => setFullName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingName(false);
+                      }
+                      if (event.key === "Escape") {
+                        setFullName(profile?.full_name ?? employee.full_name);
+                        setIsEditingName(false);
+                      }
+                    }}
+                    style={{ fontWeight: 600 }}
+                    type="text"
+                    value={fullName}
+                  />
+                ) : (
+                  <>
+                    <h2
+                      className={`truncate text-[20px] tracking-[-0.01em] ${theme.textPrimary}`}
+                      style={{ fontWeight: 600 }}
+                    >
+                      {headerDisplayName}
+                    </h2>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/name:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingName(true)}
+                      title="Edit name"
+                      type="button"
+                    >
+                      <Pencil size={13} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
               </div>
-              <div className="mt-0.5 flex items-center gap-2">
+              <div className="mb-3 flex items-center gap-2">
                 <span
                   className="rounded-full px-2 py-0.5 text-[11px]"
                   style={{
@@ -940,6 +967,92 @@ export function EmployeeEditorDrawer({
                 >
                   {status.label}
                 </span>
+                <div
+                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5"
+                  style={{ background: `${reliabilityColor}12` }}
+                >
+                  <ShieldCheck size={11} style={{ color: reliabilityColor }} />
+                  <span
+                    className="text-[11px] tabular-nums"
+                    style={{ color: reliabilityColor, fontWeight: 580 }}
+                  >
+                    {reliability}%
+                  </span>
+                </div>
+              </div>
+              <div className="group/email mb-2 flex items-center gap-1.5">
+                <Mail size={13} className="shrink-0 text-[#8898AA]" />
+                {isEditingEmail ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b border-[#635BFF] bg-transparent text-[13px] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingEmail(false)}
+                    onChange={(event) => setEmail(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingEmail(false);
+                      }
+                      if (event.key === "Escape") {
+                        setEmail(profile?.email ?? employee.email ?? "");
+                        setIsEditingEmail(false);
+                      }
+                    }}
+                    style={{ fontWeight: 440 }}
+                    type="email"
+                    value={email}
+                  />
+                ) : (
+                  <>
+                    <span className={`text-[13px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                      {email || "Add email"}
+                    </span>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/email:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingEmail(true)}
+                      title="Edit email"
+                      type="button"
+                    >
+                      <Pencil size={12} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="group/phone flex items-center gap-1.5">
+                <Phone size={13} className="shrink-0 text-[#8898AA]" />
+                {isEditingPhone ? (
+                  <input
+                    autoFocus
+                    className={`flex-1 border-b border-[#635BFF] bg-transparent text-[13px] focus:outline-none ${theme.textPrimary}`}
+                    onBlur={() => setIsEditingPhone(false)}
+                    onChange={(event) => setPhone(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        setIsEditingPhone(false);
+                      }
+                      if (event.key === "Escape") {
+                        setPhone(profile?.phone_e164 ?? employee.phone_e164 ?? "");
+                        setIsEditingPhone(false);
+                      }
+                    }}
+                    style={{ fontWeight: 440 }}
+                    type="tel"
+                    value={phone}
+                  />
+                ) : (
+                  <>
+                    <span className={`text-[13px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                      {phone || "Add phone"}
+                    </span>
+                    <button
+                      className={`shrink-0 rounded p-1 transition-all sm:opacity-0 sm:group-hover/phone:opacity-100 ${theme.closeButtonClass}`}
+                      onClick={() => setIsEditingPhone(true)}
+                      title="Edit phone"
+                      type="button"
+                    >
+                      <Pencil size={12} className="text-[#8898AA]" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -962,72 +1075,6 @@ export function EmployeeEditorDrawer({
               {feedback.message}
             </div>
           ) : null}
-
-          <div>
-            <h3
-              className="mb-3 text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-              style={{ fontWeight: 500 }}
-            >
-              Profile
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label
-                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-                  style={{ fontWeight: 500 }}
-                >
-                  Full Name
-                </label>
-                <input
-                  className={`w-full rounded-lg border px-3.5 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
-                  onChange={(event) => setFullName(event.target.value)}
-                  style={{ fontWeight: 440 }}
-                  type="text"
-                  value={fullName}
-                />
-              </div>
-              <div>
-                <label
-                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-                  style={{ fontWeight: 500 }}
-                >
-                  Email
-                </label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md ${theme.subtleSurfaceClass}`}>
-                    <Mail className="text-[#8898AA]" size={13} />
-                  </div>
-                  <input
-                    className={`w-full rounded-lg border py-2.5 pl-12 pr-3.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
-                    onChange={(event) => setEmail(event.target.value)}
-                    style={{ fontWeight: 440 }}
-                    type="email"
-                    value={email}
-                  />
-                </div>
-              </div>
-              <div>
-                <label
-                  className="mb-1.5 block text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
-                  style={{ fontWeight: 500 }}
-                >
-                  Phone
-                </label>
-                <div className="relative">
-                  <div className={`absolute left-3 top-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-md ${theme.subtleSurfaceClass}`}>
-                    <Phone className="text-[#8898AA]" size={13} />
-                  </div>
-                  <input
-                    className={`w-full rounded-lg border py-2.5 pl-12 pr-3.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
-                    onChange={(event) => setPhone(event.target.value)}
-                    style={{ fontWeight: 440 }}
-                    type="tel"
-                    value={phone}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
 
           <div>
             <div className="mb-3 flex items-center justify-between">

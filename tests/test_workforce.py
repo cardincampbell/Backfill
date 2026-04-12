@@ -814,6 +814,7 @@ async def test_replace_self_employee_availability_rules_creates_employee_when_un
     business_id = uuid4()
     user_id = uuid4()
     employee_id = uuid4()
+    location_id = uuid4()
     captured: dict[str, object] = {}
 
     async def fake_find_self_employee(
@@ -845,7 +846,7 @@ async def test_replace_self_employee_availability_rules_creates_employee_when_un
         return EmployeeRead(
             id=employee_id,
             business_id=business_id,
-            primary_location_id=None,
+            primary_location_id=payload.primary_location_id,
             external_ref=None,
             employee_number=None,
             full_name=payload.full_name,
@@ -861,6 +862,21 @@ async def test_replace_self_employee_availability_rules_creates_employee_when_un
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
+
+    class DummyLocationScalarResult:
+        def __init__(self, values):
+            self._values = values
+
+        def all(self):
+            return list(self._values)
+
+    class DummySession:
+        async def execute(self, _statement):
+            return type(
+                "Result",
+                (),
+                {"scalars": lambda self: DummyLocationScalarResult([location_id])},
+            )()
 
     async def fake_replace_rules(_session, incoming_business_id, incoming_employee_id, payload):
         assert incoming_business_id == business_id
@@ -881,7 +897,7 @@ async def test_replace_self_employee_availability_rules_creates_employee_when_un
     )
 
     employee, rules = await workforce.replace_self_employee_availability_rules(
-        object(),
+        DummySession(),
         business_id,
         user_id=user_id,
         email="owner@example.com",
@@ -896,6 +912,7 @@ async def test_replace_self_employee_availability_rules_creates_employee_when_un
     assert payload.full_name == "Owner User"
     assert payload.email == "owner@example.com"
     assert payload.phone_e164 == "+15555550100"
+    assert payload.primary_location_id == location_id
     assert payload.employee_metadata["source"] == "self_service_availability"
     assert payload.employee_metadata["auto_created_from_user"] is True
     assert captured["linked_user_id"] == user_id

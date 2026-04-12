@@ -22,13 +22,14 @@ from app.schemas.business import (
 from app.services import business_identity_derivation, role_derivation, shift_defaults
 from app.services.utils import role_code_from_name, slugify
 
-LOCKED_SHIFT_STATUSES = (
-    ShiftStatus.draft,
+NON_DRAFT_SHIFT_STATUSES = (
     ShiftStatus.scheduled,
     ShiftStatus.open,
     ShiftStatus.filling,
     ShiftStatus.covered,
     ShiftStatus.no_fill,
+    ShiftStatus.cancelled,
+    ShiftStatus.completed,
 )
 
 
@@ -459,10 +460,20 @@ async def delete_location(
     if location is None:
         raise LookupError("location_not_found")
 
-    shift_count = await session.scalar(
-        select(func.count(Shift.id)).where(Shift.location_id == location_id)
+    blocking_shift_count = await session.scalar(
+        select(func.count(Shift.id)).where(
+            Shift.location_id == location_id,
+            (Shift.starts_at < func.now())
+            | Shift.status.in_(
+                (
+                    ShiftStatus.no_fill,
+                    ShiftStatus.cancelled,
+                    ShiftStatus.completed,
+                )
+            ),
+        )
     )
-    if int(shift_count or 0) > 0:
+    if int(blocking_shift_count or 0) > 0:
         raise ValueError("location_has_operational_data")
 
     await session.delete(location)
@@ -480,13 +491,23 @@ async def get_location_delete_readiness(
         raise LookupError("location_not_found")
 
     shift_count = await session.scalar(
-        select(func.count(Shift.id)).where(Shift.location_id == location_id)
+        select(func.count(Shift.id)).where(
+            Shift.location_id == location_id,
+            (Shift.starts_at < func.now())
+            | Shift.status.in_(
+                (
+                    ShiftStatus.no_fill,
+                    ShiftStatus.cancelled,
+                    ShiftStatus.completed,
+                )
+            ),
+        )
     )
     blocking_shift_count = int(shift_count or 0)
     if blocking_shift_count > 0:
         reason = (
-            "This location has scheduled shifts and cannot be removed until those "
-            "shifts are deleted or moved."
+            "This location has historical shifts and cannot be removed until those shifts are "
+            "deleted or moved."
         )
     else:
         reason = None
@@ -853,7 +874,7 @@ async def _locked_shift_counts_by_role_id(
         select(Shift.role_id, func.count(Shift.id))
         .where(
             Shift.location_id == location_id,
-            Shift.status.in_(LOCKED_SHIFT_STATUSES),
+            Shift.status.in_(NON_DRAFT_SHIFT_STATUSES),
         )
         .group_by(Shift.role_id)
     )

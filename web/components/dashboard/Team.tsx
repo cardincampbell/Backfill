@@ -1226,7 +1226,7 @@ function BulkUploadModal({
               <Upload size={18} className="text-[#00B893]" />
             </div>
             <div>
-              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Bulk Upload</h2>
+              <h2 className={`text-[16px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>Import Employees</h2>
               <p className={`text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Import employees from a CSV or Excel file</p>
             </div>
           </div>
@@ -1296,11 +1296,11 @@ function BulkUploadModal({
                       <motion.div className="h-full rounded-full bg-gradient-to-r from-[#00B893] to-[#00D4AA]"
                         initial={{ width: 0 }} animate={{ width: `${Math.min(uploadProgress, 100)}%` }} />
                     </div>
-                    <p className={`mt-1.5 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Processing...</p>
-                  </div>
-                ) : (
+                  <p className={`mt-1.5 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>Processing...</p>
+                </div>
+              ) : (
                   <p className="text-[12px] text-[#00B893]" style={{ fontWeight: 480 }}>Ready to import this file</p>
-                )}
+              )}
               </div>
             ) : (
               <div>

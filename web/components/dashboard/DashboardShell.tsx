@@ -195,9 +195,6 @@ export default function DashboardShell({
     );
   }, [pathname, workspaceLocations]);
 
-  const primaryNavItems = navItems.filter((item) => item.label !== 'Schedule');
-  const scheduleNavItem = navItems.find((item) => item.label === 'Schedule') ?? null;
-
   const handleNav = (path: string) => {
     if (path === '/schedule') {
       const schedulerTarget =
@@ -257,7 +254,7 @@ export default function DashboardShell({
                 setSidebarTab('copilot');
                 setCopilotActivationCount((current) => current + 1);
               }}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[12px] transition-all duration-200 ${
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2.5 text-[13px] transition-all duration-200 ${
                 sidebarTab === 'copilot'
                   ? 'bg-[#635BFF]/10 text-[#635BFF] shadow-sm'
                   : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
@@ -265,12 +262,12 @@ export default function DashboardShell({
               style={{ fontWeight: sidebarTab === 'copilot' ? 520 : 440 }}
               type="button"
             >
-              <Sparkles size={13} />
+              <Sparkles size={14} />
               Copilot
             </button>
             <button
               onClick={() => setSidebarTab('nav')}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2 text-[12px] transition-all duration-200 ${
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-2.5 text-[13px] transition-all duration-200 ${
                 sidebarTab === 'nav'
                   ? `${panelBgClass} ${textPrimaryClass} shadow-sm`
                   : `${mutedTextClass} ${isDark ? 'hover:text-white' : 'hover:text-[#0A2540]'}`
@@ -278,7 +275,7 @@ export default function DashboardShell({
               style={{ fontWeight: sidebarTab === 'nav' ? 520 : 440 }}
               type="button"
             >
-              <Navigation size={13} />
+              <Navigation size={14} />
               Navigate
             </button>
           </div>
@@ -296,69 +293,47 @@ export default function DashboardShell({
                 className="flex-1 flex flex-col"
               >
                 <nav className="flex-1 py-3 px-3 space-y-1 overflow-y-auto">
-                  {primaryNavItems.map((item) => {
-                    const isActiveSchedule =
-                      item.label === 'Schedule' &&
-                      Boolean(pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')));
-                    const isActive = activeNav === item.label || isActiveSchedule;
+                  {navItems.map((item) => {
+                    const isActive =
+                      item.label === 'Schedule'
+                        ? Boolean(pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')))
+                        : activeNav === item.label;
                     return (
                     <button
                       key={item.label}
                       onClick={() => handleNav(item.path)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
+                      className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ${
                         isActive
                           ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                           : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                       }`}
                       type="button"
                     >
-                      <item.icon size={18} className="shrink-0" />
-                      <span className="text-[13px]" style={{ fontWeight: isActive ? 540 : 440 }}>
+                      <item.icon size={20} className="shrink-0" />
+                      <span className="text-[14px]" style={{ fontWeight: isActive ? 540 : 440 }}>
                         {item.label}
                       </span>
                     </button>
                     );
                   })}
-
-                  {scheduleNavItem ? (() => {
-                    const isActiveSchedule = Boolean(
-                      pathname && (pathname === '/schedule' || pathname.startsWith('/scheduler/')),
-                    );
-                    return (
-                      <div className="pt-2 mt-1">
-                        <button
-                          onClick={() => handleNav(scheduleNavItem.path)}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
-                            isActiveSchedule
-                              ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
-                              : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
-                          }`}
-                          type="button"
-                        >
-                          <scheduleNavItem.icon size={18} className="shrink-0" />
-                          <span className="text-[13px]" style={{ fontWeight: isActiveSchedule ? 540 : 440 }}>
-                            {scheduleNavItem.label}
-                          </span>
-                        </button>
-
-                        <div className="mt-1 pt-1">
-                          <div className="mb-2 flex items-center justify-between px-3">
-                            <span className={`text-[10px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
-                              Locations
-                            </span>
-                            <button
-                              onClick={() => setShowAddLocation(true)}
-                              className={`rounded p-0.5 transition-colors ${hoverSurfaceClass}`}
-                              title="Add location"
-                              type="button"
-                            >
-                              <Plus
-                                size={13}
-                                className="text-[#8898AA] transition-colors hover:text-[#635BFF]"
-                              />
-                            </button>
-                          </div>
-                          {!workspaceLocationsLoaded ? (
+                  <div className="pt-2 mt-1">
+                    <div className="mb-2 flex items-center justify-between px-3">
+                      <span className={`text-[11px] uppercase tracking-[0.06em] ${mutedTextClass}`} style={{ fontWeight: 500 }}>
+                        Locations
+                      </span>
+                      <button
+                        onClick={() => setShowAddLocation(true)}
+                        className={`rounded p-0.5 transition-colors ${hoverSurfaceClass}`}
+                        title="Add location"
+                        type="button"
+                      >
+                        <Plus
+                          size={13}
+                          className="text-[#8898AA] transition-colors hover:text-[#635BFF]"
+                        />
+                      </button>
+                    </div>
+                    {!workspaceLocationsLoaded ? (
                       <div className="space-y-2 px-3 py-1">
                         {Array.from({ length: 3 }).map((_, index) => (
                           <div
@@ -376,15 +351,15 @@ export default function DashboardShell({
                           <button
                             key={location.id}
                             onClick={() => handleNav(location.entryPath)}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${
+                            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                               isActiveLocation
                                 ? 'bg-[#635BFF]/[0.08] text-[#635BFF]'
                                 : `${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`
                             }`}
                             type="button"
                           >
-                            <span className="text-[14px]">{location.logo}</span>
-                            <span className="text-[12px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
+                            <span className="text-[15px]">{location.logo}</span>
+                            <span className="text-[13px] truncate" style={{ fontWeight: isActiveLocation ? 540 : 440 }}>
                               {location.name}
                             </span>
                             {typeof location.openShifts === 'number' && location.openShifts > 0 ? (
@@ -399,19 +374,16 @@ export default function DashboardShell({
                     ) : (
                       <button
                         onClick={() => handleNav('/onboarding')}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-200 ${textSecondaryClass} ${isDark ? 'hover:text-white hover:bg-white/[0.04]' : 'hover:text-[#0A2540] hover:bg-[#F7F8FA]'}`}
                         type="button"
                       >
-                        <span className="text-[14px]">+</span>
-                        <span className="text-[12px]" style={{ fontWeight: 440 }}>
+                        <span className="text-[15px]">+</span>
+                        <span className="text-[13px]" style={{ fontWeight: 440 }}>
                           Set up your first location
                         </span>
                       </button>
                     )}
-                        </div>
-                      </div>
-                    );
-                  })() : null}
+                  </div>
                 </nav>
               </motion.div>
             ) : (
