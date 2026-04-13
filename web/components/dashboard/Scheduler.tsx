@@ -6,7 +6,6 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { useRouter } from 'next/navigation';
 import {
-  Copy,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -615,7 +614,7 @@ function DraggableShiftChip({
   isMulti,
   onEdit,
   onDelete,
-  onDuplicate,
+  onAddShift,
   onDragCopy,
   onDragCopyPreview,
   dark = false,
@@ -625,7 +624,7 @@ function DraggableShiftChip({
   isMulti: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  onDuplicate: () => void;
+  onAddShift: () => void;
   onDragCopy?: (targetDays: number[]) => void;
   onDragCopyPreview?: (days: number[] | null) => void;
   dark?: boolean;
@@ -731,9 +730,9 @@ function DraggableShiftChip({
             {hovered && !isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="mr-2 flex flex-col gap-0.5 shrink-0">
-                <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
-                  <Copy size={9} className={theme.textMuted} />
+                <button onClick={(e) => { e.stopPropagation(); onAddShift(); }}
+                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Add shift">
+                  <Plus size={9} className={theme.textMuted} />
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
@@ -798,9 +797,9 @@ function DraggableShiftChip({
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="mr-2 flex gap-0.5">
-                  <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
-                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
-                    <Copy size={7} className={theme.textMuted} />
+                  <button onClick={(e) => { e.stopPropagation(); onAddShift(); }}
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Add shift">
+                    <Plus size={7} className={theme.textMuted} />
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
@@ -2579,7 +2578,13 @@ function SchedulerContent({
                                       draggable
                                       onEdit={() => setEditingShift(shift)}
                                       onDelete={() => deleteShift(shift.id)}
-                                      onDuplicate={() => duplicateShift(shift)}
+                                      onAddShift={() => setCreatingAt({
+                                        day: dayIdx,
+                                        roleId: roleEntry.id,
+                                        roleName: roleEntry.name,
+                                        employeeId: emp.id,
+                                        employeeName: emp.name,
+                                      })}
                                       onDragCopy={(targetDays) => dragCopyShift(shift, targetDays)}
                                       onDragCopyPreview={(days) =>
                                         setDragCopyPreview(
@@ -3124,41 +3129,42 @@ function MobileEmployeeCard({
           <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
           <p className={`text-[10px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
         </div>
-        {cellShifts.length > 0 ? (
-          <div className="flex flex-col gap-1">
-            {cellShifts.map((shift) => {
-              const desc = getShiftDescriptor(shift.startHour, shift.endHour);
-              const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
-              const shiftLabel = shift.presetLabel?.trim() || desc.label;
-              const dur = shiftDuration(shift);
-              return (
-                <button
-                  key={shift.id}
-                  onClick={() => {
-                    if (!isDragging) {
-                      onEditShift(shift);
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all"
-                  style={{ background: `${shift.color}10` }}
-                  type="button"
-                >
-                  <DescIcon size={10} style={{ color: shift.color }} />
-                  <span className="text-[10px]" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
-                  <span className={`text-[9px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400 }}>{dur}h</span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
+        <div className="flex items-center gap-1.5 min-w-0">
+          {cellShifts.length > 0 && (
+            <div className="flex flex-col gap-1 min-w-0 flex-1">
+              {cellShifts.map((shift) => {
+                const desc = getShiftDescriptor(shift.startHour, shift.endHour);
+                const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
+                const shiftLabel = shift.presetLabel?.trim() || desc.label;
+                const dur = shiftDuration(shift);
+                return (
+                  <button
+                    key={shift.id}
+                    onClick={() => {
+                      if (!isDragging) {
+                        onEditShift(shift);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all min-w-0"
+                    style={{ background: `${shift.color}10` }}
+                    type="button"
+                  >
+                    <DescIcon size={10} style={{ color: shift.color }} className="shrink-0" />
+                    <span className="text-[10px] truncate" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
+                    <span className={`text-[9px] shrink-0 ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400 }}>{dur}h</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <button
             onClick={onCreateShift}
-            className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'}`}
+            className={`shrink-0 p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'}`}
             type="button"
           >
-            <Plus size={14} className="text-[#C1CED8]/40" />
+            <Plus size={14} className={dark ? 'text-[#C1CED8]/40' : 'text-[#8898AA]/40'} />
           </button>
-        )}
+        </div>
       </motion.div>
 
       <AnimatePresence>
