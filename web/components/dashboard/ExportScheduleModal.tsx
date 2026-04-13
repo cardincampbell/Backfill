@@ -19,6 +19,7 @@ export interface ExportModalShift {
 }
 
 interface Props {
+  businessName: string;
   weekLabel: string;
   locationName: string;
   weekStart: Date;
@@ -36,6 +37,7 @@ const FORMATS = [
 ];
 
 export function ExportScheduleModal({
+  businessName,
   weekLabel,
   locationName,
   weekStart,
@@ -54,7 +56,7 @@ export function ExportScheduleModal({
 
   const handleExport = async () => {
     setExporting(true);
-    const opts = { locationName, weekLabel, weekStart, employees, shifts };
+    const opts = { businessName, locationName, weekLabel, weekStart, employees, shifts };
     try {
       const { exportCSV, exportExcel, exportPDF } = await import('@/lib/export-schedule');
       if (selectedFormat === 'csv') exportCSV(opts);

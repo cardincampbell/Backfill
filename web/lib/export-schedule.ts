@@ -21,6 +21,7 @@ export interface ExportShift {
 }
 
 export interface ExportOptions {
+  businessName: string;
   locationName: string;
   weekLabel: string;
   /** The Monday of the displayed week */
@@ -51,6 +52,11 @@ export function safeFilename(locationName: string, weekLabel: string, ext: strin
   return `${safe(locationName)}_Schedule_${safe(weekLabel)}.${ext}`;
 }
 
+/** "Acme Corp · Downtown" */
+export function exportTitle(opts: Pick<ExportOptions, 'businessName' | 'locationName'>): string {
+  return `${opts.businessName} · ${opts.locationName}`;
+}
+
 export function buildRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
   const header = ['Name', 'Role', ...FULL_DAYS];
   const rows = opts.employees.map((emp) => {
@@ -70,8 +76,13 @@ export function buildRows(opts: ExportOptions): { header: string[]; rows: string
 export function exportCSV(opts: ExportOptions): void {
   const { header, rows } = buildRows(opts);
   const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
-  const lines = [header, ...rows].map((row) => row.map(escape).join(','));
-  const csv = lines.join('\r\n');
+  const titleLines = [
+    escape(exportTitle(opts)),
+    escape(`Schedule: ${opts.weekLabel}`),
+    '',
+  ];
+  const dataLines = [header, ...rows].map((row) => row.map(escape).join(','));
+  const csv = [...titleLines, ...dataLines].join('\r\n');
   triggerDownload(
     new Blob([csv], { type: 'text/csv;charset=utf-8;' }),
     safeFilename(opts.locationName, opts.weekLabel, 'csv'),
@@ -86,17 +97,33 @@ export async function exportExcel(opts: ExportOptions): Promise<void> {
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Backfill';
-  const ws = wb.addWorksheet('Schedule', { views: [{ state: 'frozen', ySplit: 1 }] });
+  // Freeze row 3: row 1 = business · location title, row 2 = week label, row 3 = column headers
+  const ws = wb.addWorksheet('Schedule', { views: [{ state: 'frozen', ySplit: 3 }] });
 
-  // Column widths
-  ws.columns = header.map((h, i) => ({
-    header: h,
+  // Column widths — no header property here; we write row 3 manually below
+  ws.columns = header.map((_, i) => ({
     key: String(i),
     width: i === 0 ? 22 : i === 1 ? 18 : 20,
   }));
 
-  // Header row styling
-  const headerRow = ws.getRow(1);
+  // Row 1 — business · location title
+  const titleRow = ws.getRow(1);
+  titleRow.height = 28;
+  titleRow.getCell(1).value = exportTitle(opts);
+  titleRow.getCell(1).font = { bold: true, color: { argb: 'FF0A2540' }, size: 12 };
+  titleRow.getCell(1).alignment = { vertical: 'middle' };
+  ws.mergeCells(1, 1, 1, header.length);
+
+  // Row 2 — week label
+  const weekRow = ws.getRow(2);
+  weekRow.height = 18;
+  weekRow.getCell(1).value = `Schedule: ${opts.weekLabel}`;
+  weekRow.getCell(1).font = { color: { argb: 'FF5E6D7A' }, size: 9 };
+  weekRow.getCell(1).alignment = { vertical: 'middle' };
+  ws.mergeCells(2, 1, 2, header.length);
+
+  // Row 3 — column headers
+  const headerRow = ws.getRow(3);
   headerRow.height = 26;
   header.forEach((_, ci) => {
     const cell = headerRow.getCell(ci + 1);
@@ -166,7 +193,7 @@ export async function exportPDF(opts: ExportOptions): Promise<void> {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(10, 37, 64); // #0A2540
-  doc.text(opts.locationName, 40, 38);
+  doc.text(exportTitle(opts), 40, 38);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);

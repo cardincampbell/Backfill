@@ -2878,6 +2878,7 @@ function SchedulerContent({
             <ExportScheduleModal
               dark={isDark}
               weekLabel={weekLabel}
+              businessName={location.business_display_name}
               locationName={location.location_display_name}
               weekStart={weekDates[0]}
               employees={activeEmployees.map((emp) => ({

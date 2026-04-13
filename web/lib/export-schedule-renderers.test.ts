@@ -11,7 +11,8 @@ import type { ExportOptions } from './export-schedule';
 // ─── shared fixtures ─────────────────────────────────────────────────────────
 
 const opts: ExportOptions = {
-  locationName: "Coley's Coffee",
+  businessName: "Coley's Coffee",
+  locationName: 'Downtown',
   weekLabel: 'Apr 14 – 20',
   weekStart: new Date(2025, 3, 14),
   employees: [
@@ -68,6 +69,7 @@ const {
     columns: [] as unknown[],
     getRow: vi.fn(() => ({ height: 0, getCell: vi.fn(mockCell) })),
     addRow: vi.fn(() => ({ height: 0, getCell: vi.fn(mockCell) })),
+    mergeCells: vi.fn(),
   };
 
   const mockWriteBuffer = vi.fn().mockResolvedValue(new Uint8Array([0, 1, 2]));
@@ -176,6 +178,13 @@ describe('exportPDF — rendering contract', () => {
     expect(tableOpts.alternateRowStyles.fillColor).toEqual([248, 249, 255]);
   });
 
+  it('renders the business · location title as the first text line', async () => {
+    const { exportPDF } = await import('./export-schedule');
+    await exportPDF(opts);
+    const firstTextCall = jsPDFInstance.text.mock.calls[0] as [string, number, number];
+    expect(firstTextCall[0]).toBe("Coley's Coffee · Downtown");
+  });
+
   it('saves with a .pdf filename', async () => {
     const { exportPDF } = await import('./export-schedule');
     await exportPDF(opts);
@@ -196,12 +205,13 @@ describe('exportExcel — rendering contract', () => {
     stubDomDownload();
   });
 
-  it('creates a worksheet named "Schedule" with a frozen first row', async () => {
+  it('creates a worksheet named "Schedule" with the first 3 rows frozen', async () => {
     const { exportExcel } = await import('./export-schedule');
     await exportExcel(opts);
 
+    // ySplit: 3 — title row, week label row, and column header row all frozen
     expect(mockWorkbookInstance.addWorksheet).toHaveBeenCalledWith('Schedule', {
-      views: [{ state: 'frozen', ySplit: 1 }],
+      views: [{ state: 'frozen', ySplit: 3 }],
     });
   });
 
@@ -246,5 +256,18 @@ describe('exportExcel — rendering contract', () => {
     const { exportExcel } = await import('./export-schedule');
     await exportExcel(opts);
     expect(mockWorkbookInstance.creator).toBe('Backfill');
+  });
+
+  it('writes the business · location title into the first frozen row', async () => {
+    const titleCell = { value: undefined as unknown, font: undefined as unknown, alignment: undefined as unknown };
+    mockWorksheet.getRow.mockImplementation((n: number) => ({
+      height: 0,
+      getCell: (ci: number) => (n === 1 && ci === 1 ? titleCell : { value: undefined, font: undefined, alignment: undefined }),
+    }));
+
+    const { exportExcel } = await import('./export-schedule');
+    await exportExcel(opts);
+
+    expect(titleCell.value).toBe("Coley's Coffee · Downtown");
   });
 });
