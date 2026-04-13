@@ -749,6 +749,19 @@ def has_location_access(
     ) is not None
 
 
+def has_global_access(
+    auth: AuthContext,
+    *,
+    allowed_roles: Optional[set[MembershipRole]] = None,
+) -> bool:
+    if not allowed_roles:
+        return True
+    for membership in auth.memberships:
+        if membership.status == MembershipStatus.active and membership.role in allowed_roles:
+            return True
+    return False
+
+
 def _is_step_up_purpose(purpose: ChallengePurpose) -> bool:
     return purpose in {
         ChallengePurpose.step_up_billing,

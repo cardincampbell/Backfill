@@ -11,6 +11,7 @@ from app.schemas.internal import (
     FeedProjectionRebuildResponse,
     OfferExpiryResponse,
     OutboxProcessResponse,
+    ProjectionStatus,
     SchedulerSyncProcessResponse,
     WebhookProcessResponse,
     WorkerBatchRequest,
@@ -114,6 +115,29 @@ async def rebuild_feed_projection(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await feed_projections.rebuild_feed_projection(session, limit=payload.limit)
+
+
+@router.get("/projections/status", response_model=list[ProjectionStatus])
+async def get_projection_status(
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    cursors = await feed_projections.get_all_projection_cursors(session)
+    return [
+        ProjectionStatus(
+            projection_name=c.projection_name,
+            schema_version=c.schema_version,
+            last_source_created_at=c.last_source_created_at,
+            last_source_event_id=c.last_source_event_id,
+            cursor_status=c.cursor_status,
+            last_run_started_at=c.last_run_started_at,
+            last_run_completed_at=c.last_run_completed_at,
+            last_error=c.last_error,
+            cursor_metadata=c.cursor_metadata,
+        )
+        for c in cursors
+    ]
 
 
 @router.post("/providers/callbacks/process")

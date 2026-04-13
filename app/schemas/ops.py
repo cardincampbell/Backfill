@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from app.schemas.common import BaseSchema
 from app.schemas.events import PlatformEventRead
 from app.schemas.finance import BillingLedgerEntryRead, CostLedgerEntryRead
 from app.schemas.llm import LlmGenerationSummaryRead
+
+
+class ProjectionStatusRead(BaseSchema):
+    projection_name: str
+    schema_version: int
+    last_source_created_at: Optional[datetime]
+    last_source_event_id: Optional[UUID]
+    cursor_status: str
+    last_run_started_at: Optional[datetime]
+    last_run_completed_at: Optional[datetime]
+    last_error: Optional[str]
+    cursor_metadata: dict
 
 
 class ProviderCallbackLogRead(BaseSchema):
@@ -25,6 +38,11 @@ class ProviderCallbackLogRead(BaseSchema):
     processed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CalendarFeedRead(BaseSchema):
+    feed_url: str
+    rotated_at: Optional[datetime]
 
 
 class BusinessTraceRead(BaseSchema):

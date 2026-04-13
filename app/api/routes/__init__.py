@@ -1,4 +1,5 @@
 from app.api.routes.account import router as account_router
+from app.api.routes.calendar_feeds import router as calendar_feeds_router
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.businesses import router as businesses_router
@@ -26,6 +27,7 @@ from app.api.routes.workforce import router as workforce_router
 
 __all__ = [
     "account_router",
+    "calendar_feeds_router",
     "audit_router",
     "auth_router",
     "businesses_router",

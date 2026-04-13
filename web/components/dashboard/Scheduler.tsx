@@ -35,6 +35,7 @@ import {
   AlertTriangle,
   GripVertical,
   Info,
+  CalendarDays,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -105,6 +106,7 @@ import {
 } from './location-employee-utils';
 import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
+import { CalendarSyncModal } from './CalendarSyncModal';
 import {
   SchedulerEmployeeEnrollmentModal,
 } from './LocationEmployeeActions';
@@ -970,6 +972,7 @@ function SchedulerContent({
   } | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showCalendarSyncModal, setShowCalendarSyncModal] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -2242,6 +2245,19 @@ function SchedulerContent({
                       Sync Schedule
                     </span>
                   </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowCalendarSyncModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <CalendarDays size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
+                      Calendar Sync
+                    </span>
+                  </button>
                 </div>
                 <div className="py-2">
                   <button
@@ -2805,6 +2821,18 @@ function SchedulerContent({
                       : 'No new draft shifts were available to publish.',
                 });
               }}
+            />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showCalendarSyncModal && (
+            <CalendarSyncModal
+              dark={isDark}
+              businessId={location.business_id}
+              locationId={location.location_id}
+              locationName={location.location_display_name}
+              onClose={() => setShowCalendarSyncModal(false)}
             />
           )}
         </AnimatePresence>

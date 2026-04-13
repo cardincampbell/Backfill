@@ -8,6 +8,7 @@ from app.api.routes import (
     audit_router,
     auth_router,
     businesses_router,
+    calendar_feeds_router,
     copilot_router,
     coverage_router,
     events_router,
@@ -48,6 +49,7 @@ async def meta() -> dict[str, str]:
     }
 
 
+router.include_router(calendar_feeds_router)
 router.include_router(identity_router)
 router.include_router(auth_router)
 router.include_router(account_router)
