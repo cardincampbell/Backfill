@@ -25,6 +25,10 @@ import {
   Sunset,
   ClipboardCopy,
   Edit3,
+  Printer,
+  FileDown,
+  RefreshCw,
+  ArrowRightLeft,
   Settings,
   UserMinus,
   UserPlus,
@@ -66,6 +70,11 @@ import {
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
 import { getLocationWeatherForecast } from '@/lib/api/weather';
+import {
+  getCachedSchedulerBootstrap,
+  preloadSchedulerBootstrap,
+  type SchedulerBootstrapData,
+} from '@/lib/scheduler-bootstrap';
 import {
   listEmployees,
   updateEmployee,
@@ -442,6 +451,22 @@ function boardShiftToSchedulerShift(
     presetKey: preset.presetKey,
     presetLabel: preset.presetLabel,
   };
+}
+
+function shiftCopyFingerprint(params: {
+  roleId: string;
+  dateKey: string;
+  startHour: number;
+  endHour: number;
+  employeeId?: string | null;
+}) {
+  return [
+    params.roleId,
+    params.dateKey,
+    Math.round(params.startHour * 60),
+    Math.round(params.endHour * 60),
+    params.employeeId ?? 'open',
+  ].join('|');
 }
 
 function isToday(date: Date) {
@@ -887,14 +912,30 @@ function SchedulerContent({
     color: locationReference.color,
     type: locationReference.typeLabel,
   };
+  const initialSchedulerBootstrap = getCachedSchedulerBootstrap(
+    location.business_id,
+    location.location_id,
+  );
 
   const [selectedWeekStart, setSelectedWeekStart] = useState<string | null>(null);
-  const [currentWeekStart, setCurrentWeekStart] = useState<string | null>(null);
-  const [board, setBoard] = useState<WorkspaceBoard | null>(null);
-  const [businessEmployees, setBusinessEmployees] = useState<EmployeeSummary[]>([]);
-  const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
-  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
-  const [loadingSchedulerData, setLoadingSchedulerData] = useState(false);
+  const [currentWeekStart, setCurrentWeekStart] = useState<string | null>(
+    () => initialSchedulerBootstrap?.board?.week_start_date ?? null,
+  );
+  const [board, setBoard] = useState<WorkspaceBoard | null>(
+    () => initialSchedulerBootstrap?.board ?? null,
+  );
+  const [businessEmployees, setBusinessEmployees] = useState<EmployeeSummary[]>(
+    () => initialSchedulerBootstrap?.employees ?? [],
+  );
+  const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>(
+    () => initialSchedulerBootstrap?.roles ?? [],
+  );
+  const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>(
+    () => initialSchedulerBootstrap?.locations ?? [],
+  );
+  const [loadingSchedulerData, setLoadingSchedulerData] = useState(
+    () => !initialSchedulerBootstrap,
+  );
   const [schedulerError, setSchedulerError] = useState<string | null>(null);
   const [weatherByDateKey, setWeatherByDateKey] = useState<Record<string, DayWeather>>({});
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
@@ -912,6 +953,12 @@ function SchedulerContent({
   } | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [showRevertModal, setShowRevertModal] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
   const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
@@ -931,7 +978,6 @@ function SchedulerContent({
     days: number[];
     color: string;
   } | null>(null);
-  const [showLocationMenu, setShowLocationMenu] = useState(false);
   const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
   const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
@@ -964,23 +1010,32 @@ function SchedulerContent({
     router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
   }, [location, router]);
 
-  const refreshSchedulerData = useCallback(async () => {
-    try {
-      setLoadingSchedulerData(true);
-      setSchedulerError(null);
-      const [nextBoard, employeeDirectory, roleDirectory, locationDirectory] = await Promise.all([
-        getLocationBoard(location.business_id, location.location_id, selectedWeekStart ?? undefined),
-        listEmployees(location.business_id),
-        listBusinessRoles(location.business_id),
-        listBusinessLocations(location.business_id),
-      ]);
-      setBoard(nextBoard);
-      if (!selectedWeekStart && nextBoard?.week_start_date) {
-        setCurrentWeekStart(nextBoard.week_start_date);
+  const applySchedulerBootstrap = useCallback(
+    (payload: SchedulerBootstrapData) => {
+      setBoard(payload.board);
+      setBusinessEmployees(payload.employees);
+      setBusinessRoles(payload.roles);
+      setBusinessLocations(payload.locations);
+      if (!selectedWeekStart && payload.board?.week_start_date) {
+        setCurrentWeekStart(payload.board.week_start_date);
       }
-      setBusinessEmployees(employeeDirectory);
-      setBusinessRoles(roleDirectory);
-      setBusinessLocations(locationDirectory);
+    },
+    [selectedWeekStart],
+  );
+
+  const refreshSchedulerData = useCallback(async (options?: { force?: boolean; silent?: boolean }) => {
+    try {
+      if (!options?.silent) {
+        setLoadingSchedulerData(true);
+      }
+      setSchedulerError(null);
+      const payload = await preloadSchedulerBootstrap(
+        location.business_id,
+        location.location_id,
+        selectedWeekStart ?? undefined,
+        { force: options?.force },
+      );
+      applySchedulerBootstrap(payload);
     } catch (error) {
       setBoard(null);
       setBusinessEmployees([]);
@@ -990,13 +1045,32 @@ function SchedulerContent({
         error instanceof Error ? error.message : 'Could not load scheduler data.',
       );
     } finally {
-      setLoadingSchedulerData(false);
+      if (!options?.silent) {
+        setLoadingSchedulerData(false);
+      }
     }
-  }, [location.business_id, location.location_id, selectedWeekStart]);
+  }, [applySchedulerBootstrap, location.business_id, location.location_id, selectedWeekStart]);
 
   useEffect(() => {
-    void refreshSchedulerData();
-  }, [refreshSchedulerData]);
+    const cached = getCachedSchedulerBootstrap(
+      location.business_id,
+      location.location_id,
+      selectedWeekStart ?? undefined,
+    );
+    if (cached) {
+      applySchedulerBootstrap(cached);
+      setLoadingSchedulerData(false);
+      void refreshSchedulerData({ force: true, silent: true });
+      return;
+    }
+    void refreshSchedulerData({ force: false });
+  }, [
+    applySchedulerBootstrap,
+    location.business_id,
+    location.location_id,
+    refreshSchedulerData,
+    selectedWeekStart,
+  ]);
 
   const weekDates = useMemo(
     () =>
@@ -1328,7 +1402,7 @@ function SchedulerContent({
         await updateEmployee(location.business_id, employee.id, {
           locations: buildEmployeeLocationAssignments(employee, location.location_id, false),
         });
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'success',
           title: 'Employee removed',
@@ -1354,7 +1428,7 @@ function SchedulerContent({
         await updateEmployee(location.business_id, employee.id, {
           locations: buildEmployeeLocationAssignments(employee, location.location_id, true),
         });
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'success',
           title: 'Employee added',
@@ -1401,7 +1475,7 @@ function SchedulerContent({
     void (async () => {
       try {
         await deleteWorkspaceShift(location.business_id, id);
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'success',
           title: 'Shift removed',
@@ -1429,7 +1503,7 @@ function SchedulerContent({
           starts_at: zonedDateTimeToIso(formatDateKey(weekDate), updated.startHour, location.timezone),
           ends_at: zonedDateTimeToIso(formatDateKey(weekDate), updated.endHour > updated.startHour ? updated.endHour : updated.endHour + 24, location.timezone),
         });
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setEditingShift(null);
         setSchedulerNotice({
           tone: 'success',
@@ -1517,7 +1591,7 @@ function SchedulerContent({
         if (dayChanged) {
           await moveShiftToDay(shift, newDay);
         }
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'success',
           title: assignmentChanged
@@ -1528,7 +1602,7 @@ function SchedulerContent({
           detail: dayChanged ? 'The shift was updated for the new day.' : undefined,
         });
       } catch (error) {
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         if (error instanceof ShiftAssignmentConflictError) {
           setSchedulerNotice({
             tone: 'info',
@@ -1561,12 +1635,58 @@ function SchedulerContent({
 
     void (async () => {
       let createdCount = 0;
+      let skippedCount = 0;
       let openedCount = 0;
       let assignmentFailureCount = 0;
 
       try {
+        const targetBoard =
+          board && targetWeekStart === activeWeekStart
+            ? board
+            : await getLocationBoard(
+                location.business_id,
+                location.location_id,
+                targetWeekStart,
+              );
+        const existingShiftFingerprints = new Set(
+          (targetBoard?.shifts ?? [])
+            .map((targetShift) => {
+              if (!targetBoard) {
+                return null;
+              }
+              const mappedShift = boardShiftToSchedulerShift(
+                targetShift,
+                targetBoard,
+                shiftDefaults,
+              );
+              if (!mappedShift) {
+                return null;
+              }
+              return shiftCopyFingerprint({
+                roleId: mappedShift.roleId,
+                dateKey: addDaysToDateKey(targetWeekStart, mappedShift.day),
+                startHour: mappedShift.startHour,
+                endHour: mappedShift.endHour,
+                employeeId: mappedShift.displayEmployeeId,
+              });
+            })
+            .filter((value): value is string => Boolean(value)),
+        );
+
         for (const shift of shifts) {
           const targetDateKey = addDaysToDateKey(targetWeekStart, shift.day);
+          const copyFingerprint = shiftCopyFingerprint({
+            roleId: shift.roleId,
+            dateKey: targetDateKey,
+            startHour: shift.startHour,
+            endHour: shift.endHour,
+            employeeId: shift.displayEmployeeId,
+          });
+          if (existingShiftFingerprints.has(copyFingerprint)) {
+            skippedCount += 1;
+            continue;
+          }
+
           const createdShift = await createWorkspaceShift(
             location.business_id,
             buildShiftPayload(
@@ -1578,6 +1698,7 @@ function SchedulerContent({
             ),
           );
           createdCount += 1;
+          existingShiftFingerprints.add(copyFingerprint);
 
           if (shift.employeeId) {
             try {
@@ -1597,13 +1718,19 @@ function SchedulerContent({
 
         setSelectedWeekStart(targetWeekStart);
         setShowCopyModal(false);
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
-          tone: assignmentFailureCount ? 'info' : 'success',
-          title: 'Schedule copied',
-          detail: assignmentFailureCount
-            ? `${createdCount} shifts copied. ${assignmentFailureCount} assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied and ${openedCount} shift${openedCount === 1 ? ' is' : 's are'} open.`
-            : `${createdCount} shifts copied into ${targetWeekLabel}.`,
+          tone:
+            assignmentFailureCount > 0 || skippedCount > 0 ? 'info' : 'success',
+          title: createdCount > 0 ? 'Schedule copied' : 'No new shifts copied',
+          detail:
+            createdCount === 0
+              ? `${skippedCount} matching shift${skippedCount === 1 ? '' : 's'} already exist in ${targetWeekLabel}.`
+              : assignmentFailureCount > 0
+                ? `${createdCount} shifts copied. ${assignmentFailureCount} assignment${assignmentFailureCount === 1 ? '' : 's'} could not be applied and ${openedCount} shift${openedCount === 1 ? ' is' : 's are'} open.${skippedCount > 0 ? ` ${skippedCount} duplicate shift${skippedCount === 1 ? '' : 's'} skipped.` : ''}`
+                : skippedCount > 0
+                  ? `${createdCount} shifts copied into ${targetWeekLabel}. ${skippedCount} duplicate shift${skippedCount === 1 ? '' : 's'} skipped.`
+                  : `${createdCount} shifts copied into ${targetWeekLabel}.`,
         });
       } catch (error) {
         setSchedulerNotice({
@@ -1648,7 +1775,7 @@ function SchedulerContent({
           }
         }
 
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: assignmentFailure ? 'info' : 'success',
           title: 'Shift copied',
@@ -1710,7 +1837,7 @@ function SchedulerContent({
           }
         }
 
-        await refreshSchedulerData();
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: assignmentFailureCount ? 'info' : 'success',
           title: createdCount === 1 ? 'Shift copied' : 'Shifts copied',
@@ -1930,13 +2057,6 @@ function SchedulerContent({
       return;
     }
 
-    const confirmed = window.confirm(
-      `Delete ${locationDisplayName}? This only works for locations that do not already have operational data.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
     try {
       setDeletingLocationId(location.location_id);
       setEditorFeedback(null);
@@ -1996,78 +2116,105 @@ function SchedulerContent({
             <div className="relative">
               <button
                 ref={locationMenuButtonRef}
-                onClick={() => setShowLocationMenu((current) => !current)}
-                className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${theme.cardClass} ${theme.ghostButtonClass}`}
+                onClick={() => setShowSettingsMenu((current) => !current)}
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors ${theme.cardClass} ${theme.ghostButtonClass}`}
                 type="button"
               >
                 <Settings size={15} className={theme.textMuted} />
               </button>
               <FloatingDropdown
-                open={showLocationMenu}
+                open={showSettingsMenu}
                 anchorRef={locationMenuButtonRef}
                 align="right"
-                minWidth={220}
+                minWidth={200}
                 className={`overflow-hidden border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'} rounded-2xl`}
-                maxHeight={220}
-                onClose={() => setShowLocationMenu(false)}
+                maxHeight={320}
+                onClose={() => setShowSettingsMenu(false)}
                 sideOffset={10}
                 zIndex={10050}
               >
-                <div className="py-1.5">
+                <div className="py-2">
                   <button
                     onClick={() => {
-                      setShowLocationMenu(false);
+                      setShowSettingsMenu(false);
                       router.push(buildSchedulerLocationEditPathFromAny(location), {
                         scroll: false,
                       });
                     }}
-                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
                     type="button"
                   >
-                    <Edit3 size={15} className={theme.textMuted} />
-                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
+                    <Edit3 size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
                       Edit Location
                     </span>
                   </button>
-                  <div className="group relative">
-                    <button
-                      onClick={() => {
-                        setShowLocationMenu(false);
-                        void handleDeleteLocation();
-                      }}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors ${
-                        locationDeleteState.canDelete
-                          ? isDark ? 'hover:bg-[#E5484D]/15' : 'hover:bg-[#E5484D]/10'
-                          : ''
-                      }`}
-                      disabled={!locationDeleteState.canDelete || locationDeleteState.checking || deletingLocationId === location.location_id}
-                      type="button"
-                    >
-                      <Trash2 size={15} className={locationDeleteState.canDelete ? 'text-[#E5484D]' : 'text-[#8898AA]'} />
-                      <span
-                        className={`text-[12px] ${locationDeleteState.canDelete ? 'text-[#E5484D]' : theme.textSecondary}`}
-                        style={{ fontWeight: 520 }}
-                      >
-                        {deletingLocationId === location.location_id
-                          ? 'Deleting...'
-                          : locationDeleteState.checking
-                            ? 'Checking...'
-                            : 'Delete Location'}
-                      </span>
-                    </button>
-                    {!locationDeleteState.canDelete && locationDeleteState.reason ? (
-                      <div
-                        className={`pointer-events-none absolute bottom-full right-3 mb-2 w-64 rounded-lg px-3 py-2 text-[11px] opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 ${
-                          isDark
-                            ? 'border border-white/[0.08] bg-[#102B46] text-[#C1CED8]'
-                            : 'border border-[#E5E7EB] bg-white text-[#5E6D7A]'
-                        }`}
-                        style={{ fontWeight: 440 }}
-                      >
-                        {locationDeleteState.reason}
-                      </div>
-                    ) : null}
-                  </div>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowPrintModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <Printer size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
+                      Print Schedule
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowExportModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <FileDown size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
+                      Export Schedule
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowSyncModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <RefreshCw size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
+                      Sync Schedule
+                    </span>
+                  </button>
+                  <div className={`my-2 h-px ${theme.modalBorderClass}`} />
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowRevertModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-[#FEF3C7]/10' : 'hover:bg-[#FEF3C7]'}`}
+                    type="button"
+                  >
+                    <ArrowRightLeft size={14} className="shrink-0 text-[#F59E0B]" />
+                    <span className="text-[12px] text-[#F59E0B]" style={{ fontWeight: 480 }}>
+                      Revert Schedule
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
+                      setShowClearModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-[#E5484D]/15' : 'hover:bg-red-50'}`}
+                    type="button"
+                  >
+                    <Trash2 size={14} className="shrink-0 text-[#E5484D]" />
+                    <span className="text-[12px] text-[#E5484D]" style={{ fontWeight: 480 }}>
+                      Clear Schedule
+                    </span>
+                  </button>
                 </div>
               </FloatingDropdown>
             </div>
@@ -2177,7 +2324,7 @@ function SchedulerContent({
                 {schedulerError}
               </p>
               <button
-                onClick={() => void refreshSchedulerData()}
+                onClick={() => void refreshSchedulerData({ force: true })}
                 className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#635BFF] px-4 py-2 text-[12px] text-white"
                 style={{ fontWeight: 540 }}
                 type="button"
@@ -2507,7 +2654,7 @@ function SchedulerContent({
                         expected_assignment_id: null,
                       });
                     }
-                    await refreshSchedulerData();
+                    await refreshSchedulerData({ force: true });
                     setCreatingAt(null);
                     setSchedulerNotice({
                       tone: 'success',
@@ -2582,6 +2729,88 @@ function SchedulerContent({
               }}
             />
           )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showPrintModal ? (
+            <PrintScheduleModal
+              dark={isDark}
+              weekLabel={weekLabel}
+              onClose={() => setShowPrintModal(false)}
+              onPrint={() => {
+                setShowPrintModal(false);
+                window.print();
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showExportModal ? (
+            <ExportScheduleModal
+              dark={isDark}
+              weekLabel={weekLabel}
+              onClose={() => setShowExportModal(false)}
+              onExport={() => {
+                setShowExportModal(false);
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showSyncModal ? (
+            <SyncScheduleModal
+              dark={isDark}
+              onClose={() => setShowSyncModal(false)}
+              onSync={() => {
+                setShowSyncModal(false);
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showRevertModal ? (
+            <RevertScheduleModal
+              dark={isDark}
+              onClose={() => setShowRevertModal(false)}
+              onRevert={() => {
+                setShowRevertModal(false);
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showClearModal ? (
+            <ClearScheduleModal
+              dark={isDark}
+              weekLabel={weekLabel}
+              shiftCount={shifts.length}
+              onClose={() => setShowClearModal(false)}
+              onClear={() => {
+                setShowClearModal(false);
+                void (async () => {
+                  try {
+                    await Promise.all(shifts.map((shift) => deleteWorkspaceShift(location.business_id, shift.id)));
+                    await refreshSchedulerData({ force: true });
+                    setSchedulerNotice({
+                      tone: 'success',
+                      title: 'Schedule cleared',
+                      detail: `${shifts.length} shift${shifts.length === 1 ? '' : 's'} removed from this week.`,
+                    });
+                  } catch (error) {
+                    setSchedulerNotice({
+                      tone: 'error',
+                      title: 'Could not clear schedule',
+                      detail: error instanceof Error ? error.message : 'Please try again.',
+                    });
+                  }
+                })();
+              }}
+            />
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
@@ -2824,6 +3053,494 @@ function MobileEmployeeCard({
         ) : null}
       </AnimatePresence>
     </div>
+  );
+}
+
+function PrintScheduleModal({
+  weekLabel,
+  onClose,
+  onPrint,
+  dark = false,
+}: {
+  weekLabel: string;
+  onClose: () => void;
+  onPrint: () => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const [printRange, setPrintRange] = useState<'current' | 'next' | 'custom'>('current');
+  const [includeEmployeeInfo, setIncludeEmployeeInfo] = useState(true);
+  const [includeHours, setIncludeHours] = useState(true);
+  const [includeRoles, setIncludeRoles] = useState(true);
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}
+      >
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#635BFF]/20' : 'bg-[#635BFF]/10'}`}>
+              <Printer size={20} className="text-[#635BFF]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Print Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>Choose what to include</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          <div>
+            <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Date Range</label>
+            <div className="space-y-2">
+              {[
+                { value: 'current', label: 'Current Week', detail: weekLabel },
+                { value: 'next', label: 'Next 2 Weeks', detail: 'Include upcoming schedule' },
+                { value: 'custom', label: 'Custom Range', detail: 'Select specific dates' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => setPrintRange(option.value as typeof printRange)}
+                  className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${
+                    printRange === option.value
+                      ? 'border-[#635BFF] bg-[#635BFF]/[0.04]'
+                      : dark
+                        ? 'border-white/[0.08] hover:border-[#635BFF]/30'
+                        : 'border-[#E5E7EB] hover:border-[#635BFF]/30'
+                  }`}>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                    printRange === option.value ? 'border-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+                  }`}>
+                    {printRange === option.value && <div className="w-2 h-2 rounded-full bg-[#635BFF]" />}
+                  </div>
+                  <div className="flex-1">
+                    <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{option.label}</p>
+                    <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{option.detail}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Include</label>
+            <div className="space-y-2">
+              {[
+                { state: includeEmployeeInfo, setState: setIncludeEmployeeInfo, label: 'Employee contact information', detail: 'Email and phone numbers' },
+                { state: includeHours, setState: setIncludeHours, label: 'Hour totals', detail: 'Daily and weekly hour counts' },
+                { state: includeRoles, setState: setIncludeRoles, label: 'Role assignments', detail: 'Show employee roles' },
+              ].map((option, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => option.setState(!option.state)}
+                  className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/30' : 'border-[#E5E7EB] hover:border-[#635BFF]/30'}`}>
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                    option.state ? 'border-[#635BFF] bg-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+                  }`}>
+                    {option.state && <Check size={10} className="text-white" />}
+                  </div>
+                  <div className="flex-1">
+                    <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{option.label}</p>
+                    <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{option.detail}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className={`flex gap-2.5 border-t px-6 py-4 ${borderClass}`}>
+          <button
+            onClick={onClose}
+            className={`flex-1 rounded-xl border py-2.5 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}
+            type="button"
+          >
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onPrint}
+            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2"
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
+            <Printer size={13} />
+            Print Schedule
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function ExportScheduleModal({
+  weekLabel,
+  onClose,
+  onExport,
+  dark = false,
+}: {
+  weekLabel: string;
+  onClose: () => void;
+  onExport: (format: string) => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const [selectedFormat, setSelectedFormat] = useState<'csv' | 'pdf' | 'excel'>('csv');
+  const formats = [
+    { value: 'csv', label: 'CSV', icon: '📄', detail: 'Comma-separated values for Excel, Google Sheets' },
+    { value: 'pdf', label: 'PDF', icon: '📕', detail: 'Print-ready document format' },
+    { value: 'excel', label: 'Excel', icon: '📊', detail: 'Microsoft Excel workbook (.xlsx)' },
+  ];
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}>
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#635BFF]/20' : 'bg-[#635BFF]/10'}`}>
+              <FileDown size={20} className="text-[#635BFF]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Export Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>{weekLabel}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Choose Format</label>
+          <div className="space-y-2">
+            {formats.map((format) => (
+              <button
+                key={format.value}
+                onClick={() => setSelectedFormat(format.value as typeof selectedFormat)}
+                className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${
+                  selectedFormat === format.value
+                    ? 'border-[#635BFF] bg-[#635BFF]/[0.04]'
+                    : dark
+                      ? 'border-white/[0.08] hover:border-[#635BFF]/30'
+                      : 'border-[#E5E7EB] hover:border-[#635BFF]/30'
+                }`}>
+                <span className="text-[24px] shrink-0">{format.icon}</span>
+                <div className="flex-1">
+                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>{format.label}</p>
+                  <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{format.detail}</p>
+                </div>
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-1 transition-all ${
+                  selectedFormat === format.value ? 'border-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+                }`}>
+                  {selectedFormat === format.value && <div className="w-2 h-2 rounded-full bg-[#635BFF]" />}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>
+          <button onClick={onClose}
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}>
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => onExport(selectedFormat)}
+            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2"
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
+            <FileDown size={13} />
+            Export {selectedFormat.toUpperCase()}
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function SyncScheduleModal({
+  onClose,
+  onSync,
+  dark = false,
+}: {
+  onClose: () => void;
+  onSync: (service: string) => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const services = [
+    { value: 'google', name: 'Google Calendar', icon: '📅', status: 'Connected' },
+    { value: 'outlook', name: 'Microsoft Outlook', icon: '📧', status: 'Not connected' },
+    { value: 'apple', name: 'Apple Calendar', icon: '🍎', status: 'Not connected' },
+  ];
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}>
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#635BFF]/20' : 'bg-[#635BFF]/10'}`}>
+              <RefreshCw size={20} className="text-[#635BFF]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Sync Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>Connect to external calendars</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className="space-y-2">
+            {services.map((service) => (
+              <button
+                key={service.value}
+                onClick={() => onSync(service.value)}
+                className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-white/[0.03]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA]'}`}>
+                <span className="text-[24px] shrink-0">{service.icon}</span>
+                <div className="flex-1">
+                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>{service.name}</p>
+                  <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>
+                    {service.status === 'Connected' ? 'Last synced 2 hours ago' : 'Click to connect'}
+                  </p>
+                </div>
+                <div className={`px-2.5 py-1 rounded-full text-[10px] ${
+                  service.status === 'Connected'
+                    ? 'bg-[#00B893]/10 text-[#00B893]'
+                    : 'bg-[#8898AA]/10 text-[#8898AA]'
+                }`} style={{ fontWeight: 500 }}>
+                  {service.status}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className={`mt-4 p-3 rounded-lg border ${dark ? 'bg-[#635BFF]/10 border-[#635BFF]/20' : 'bg-[#635BFF]/[0.04] border-[#635BFF]/10'}`}>
+            <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
+              <strong style={{ fontWeight: 560 }}>Auto-sync enabled:</strong> Changes to your schedule will automatically sync to connected calendars within 5 minutes.
+            </p>
+          </div>
+        </div>
+
+        <div className={`px-6 py-4 border-t ${borderClass}`}>
+          <button onClick={onClose}
+            className={`w-full py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}>
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function RevertScheduleModal({
+  onClose,
+  onRevert,
+  dark = false,
+}: {
+  onClose: () => void;
+  onRevert: () => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const versions = [
+    { id: 1, label: 'Published version', time: '2 hours ago', shifts: 45 },
+    { id: 2, label: 'Before recent changes', time: 'Yesterday at 3:24 PM', shifts: 42 },
+    { id: 3, label: 'Weekly backup', time: 'Monday at 9:00 AM', shifts: 38 },
+  ];
+  const [selectedVersion, setSelectedVersion] = useState(1);
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}>
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#F59E0B]/20' : 'bg-[#F59E0B]/10'}`}>
+              <ArrowRightLeft size={20} className="text-[#F59E0B]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Revert Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>Restore a previous version</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className={`p-3 rounded-lg border mb-4 ${dark ? 'bg-[#F59E0B]/10 border-[#F59E0B]/20' : 'bg-[#F59E0B]/[0.06] border-[#F59E0B]/20'}`}>
+            <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+              Warning: This will replace your current schedule with a previous version. This action can be undone.
+            </p>
+          </div>
+
+          <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Select Version</label>
+          <div className="space-y-2">
+            {versions.map((version) => (
+              <button
+                key={version.id}
+                onClick={() => setSelectedVersion(version.id)}
+                className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${
+                  selectedVersion === version.id
+                    ? 'border-[#635BFF] bg-[#635BFF]/[0.04]'
+                    : dark
+                      ? 'border-white/[0.08] hover:border-[#635BFF]/30'
+                      : 'border-[#E5E7EB] hover:border-[#635BFF]/30'
+                }`}>
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                  selectedVersion === version.id ? 'border-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+                }`}>
+                  {selectedVersion === version.id && <div className="w-2 h-2 rounded-full bg-[#635BFF]" />}
+                </div>
+                <div className="flex-1">
+                  <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{version.label}</p>
+                  <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{version.time} · {version.shifts} shifts</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>
+          <button onClick={onClose}
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}>
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onRevert}
+            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(245,158,11,0.3)] flex items-center justify-center gap-2"
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #F59E0B, #D97706)' }}>
+            <ArrowRightLeft size={13} />
+            Revert to This Version
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function ClearScheduleModal({
+  weekLabel,
+  shiftCount,
+  onClose,
+  onClear,
+  dark = false,
+}: {
+  weekLabel: string;
+  shiftCount: number;
+  onClose: () => void;
+  onClear: () => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const [confirmed, setConfirmed] = useState(false);
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black z-40" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[420px] rounded-2xl shadow-2xl ${modalClass}`}>
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#E5484D]/15' : 'bg-red-50'}`}>
+              <AlertTriangle size={20} className="text-[#E5484D]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Clear Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>{weekLabel}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className={`p-4 rounded-lg border mb-4 ${dark ? 'bg-[#E5484D]/10 border-[#E5484D]/20' : 'bg-red-50 border-red-200'}`}>
+            <p className="text-[13px] text-[#E5484D] mb-2" style={{ fontWeight: 560 }}>
+              Warning: This action cannot be undone
+            </p>
+            <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 440 }}>
+              All {shiftCount} shifts will be permanently deleted from this week's schedule. Employees will not be notified.
+            </p>
+          </div>
+
+          <button
+            onClick={() => setConfirmed(!confirmed)}
+            className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${dark ? 'border-white/[0.08] hover:border-[#E5484D]/30' : 'border-[#E5E7EB] hover:border-[#E5484D]/30'}`}>
+            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+              confirmed ? 'border-[#E5484D] bg-[#E5484D]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+            }`}>
+              {confirmed && <Check size={10} className="text-white" />}
+            </div>
+            <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 480 }}>
+              I understand this will delete all shifts and cannot be undone
+            </p>
+          </button>
+        </div>
+
+        <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>
+          <button onClick={onClose}
+            className={`flex-1 py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}>
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onClear}
+            disabled={!confirmed}
+            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #E5484D, #DC2626)' }}>
+            <Trash2 size={13} />
+            Clear All Shifts
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
   );
 }
 

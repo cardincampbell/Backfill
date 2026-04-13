@@ -23,8 +23,9 @@ import {
   type AppShellSidebarTab,
 } from '@/lib/app-shell-prefs';
 import { buildSettingsPath } from '@/lib/settings-routing';
+import { preloadSchedulerBootstrap } from '@/lib/scheduler-bootstrap';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Users,
   Activity,
@@ -90,6 +91,7 @@ export default function DashboardShell({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const navigate = useNavigate();
+  const router = useRouter();
   const pathname = usePathname();
   const workspace = useAppWorkspace();
   const workspaceLocationsLoaded = useAppWorkspaceReady();
@@ -195,12 +197,37 @@ export default function DashboardShell({
     );
   }, [pathname, workspaceLocations]);
 
+  const preferredSchedulerLocation = useMemo(
+    () => activeWorkspaceLocation ?? workspaceLocations[0] ?? null,
+    [activeWorkspaceLocation, workspaceLocations],
+  );
+
+  useEffect(() => {
+    if (!preferredSchedulerLocation) {
+      return;
+    }
+    const schedulerTarget = buildSchedulerBasePathFromAny(preferredSchedulerLocation);
+    router.prefetch(schedulerTarget);
+    void preloadSchedulerBootstrap(
+      preferredSchedulerLocation.business_id,
+      preferredSchedulerLocation.location_id,
+    );
+  }, [preferredSchedulerLocation, router]);
+
   const handleNav = (path: string) => {
     if (path === '/schedule') {
+      const schedulerTargetLocation = activeWorkspaceLocation ?? workspaceLocations[0] ?? null;
+      if (schedulerTargetLocation) {
+        void preloadSchedulerBootstrap(
+          schedulerTargetLocation.business_id,
+          schedulerTargetLocation.location_id,
+        );
+      }
       const schedulerTarget =
-        activeWorkspaceLocation
-          ? buildSchedulerBasePathFromAny(activeWorkspaceLocation)
+        schedulerTargetLocation
+          ? buildSchedulerBasePathFromAny(schedulerTargetLocation)
           : locationShortcuts[0]?.schedulerPath ?? '/schedule';
+      router.prefetch(schedulerTarget);
       navigate(schedulerTarget);
     } else {
       navigate(path);
