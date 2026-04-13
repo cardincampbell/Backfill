@@ -33,7 +33,7 @@ export interface ExportOptions {
 
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-function fmtHour(h: number): string {
+export function fmtHour(h: number): string {
   const normalized = ((h % 24) + 24) % 24;
   const whole = Math.floor(normalized);
   const mins = Math.round((normalized - whole) * 60);
@@ -42,16 +42,16 @@ function fmtHour(h: number): string {
   return mins === 0 ? `${h12} ${sfx}` : `${h12}:${String(mins).padStart(2, '0')} ${sfx}`;
 }
 
-function dayCell(shifts: ExportShift[]): string {
+export function dayCell(shifts: ExportShift[]): string {
   return shifts.map((s) => `${fmtHour(s.startHour)} – ${fmtHour(s.endHour)}`).join(' | ');
 }
 
-function safeFilename(locationName: string, weekLabel: string, ext: string): string {
+export function safeFilename(locationName: string, weekLabel: string, ext: string): string {
   const safe = (s: string) => s.replace(/[^a-zA-Z0-9_\- ]/g, '').replace(/\s+/g, '_');
   return `${safe(locationName)}_Schedule_${safe(weekLabel)}.${ext}`;
 }
 
-function buildRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
+export function buildRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
   const header = ['Name', 'Role', ...FULL_DAYS];
   const rows = opts.employees.map((emp) => {
     const days = FULL_DAYS.map((_, i) => {
