@@ -189,6 +189,16 @@ function shiftDuration(s: Shift) {
   return s.endHour > s.startHour ? s.endHour - s.startHour : 24 - s.startHour + s.endHour;
 }
 
+function describeShiftDeletionError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return 'Please try again.';
+  }
+  if (error.message === 'scheduled_shift_delete_requires_republish') {
+    return 'Published shifts cannot be removed directly. Make draft changes for the week and republish them.';
+  }
+  return error.message;
+}
+
 function getShiftDescriptor(start: number, end: number): { label: string; icon: typeof Sunrise } {
   const mid = end > start ? (start + end) / 2 : (start + (24 - start + end)) / 2;
   if (mid < 12) return { label: 'Morning', icon: Sunrise };
@@ -1526,7 +1536,7 @@ function SchedulerContent({
         setSchedulerNotice({
           tone: 'error',
           title: 'Could not remove shift',
-          detail: error instanceof Error ? error.message : 'Please try again.',
+          detail: describeShiftDeletionError(error),
         });
       }
     })();
@@ -2592,14 +2602,31 @@ function SchedulerContent({
         {/* ─── Mobile View ─── */}
         <div className="flex-1 overflow-auto lg:hidden">
           <div className="px-4 py-3">
+            {(() => {
+              const date = weekDates[mobileDay];
+              const weather = date ? weatherByDateKey[formatDateKey(date)] ?? null : null;
+              const WeatherIcon = weather?.icon;
+              return (
             <div className="flex items-center justify-between mb-3">
-                <h2 className={`text-[15px] ${theme.textPrimary}`} style={{ fontWeight: 580 }}>
-                  {FULL_DAYS[mobileDay]}, {weekDates[mobileDay]?.toLocaleString('default', { month: 'short' })} {weekDates[mobileDay]?.getDate()}
-                </h2>
+                <div className="flex items-center gap-2 min-w-0">
+                  <h2 className={`text-[15px] ${theme.textPrimary} truncate`} style={{ fontWeight: 580 }}>
+                    {FULL_DAYS[mobileDay]}, {weekDates[mobileDay]?.toLocaleString('default', { month: 'short' })} {weekDates[mobileDay]?.getDate()}
+                  </h2>
+                  {WeatherIcon ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <WeatherIcon size={14} style={{ color: weather.color }} />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
+                        {typeof weather.temp === 'number' ? `${weather.temp}°` : '--'}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
                 <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
                   {getDayTotalHours(mobileDay)}h
                 </span>
               </div>
+              );
+            })()}
 
             {filteredRoles.map((roleEntry) => {
               const roleEmps = activeEmployees.filter((employee) => employee.role === roleEntry.name);
@@ -2842,6 +2869,15 @@ function SchedulerContent({
               onClose={() => setShowClearModal(false)}
               onClear={() => {
                 setShowClearModal(false);
+                const nonDraftShiftCount = shifts.filter((shift) => shift.lifecycleStatus !== 'draft').length;
+                if (nonDraftShiftCount > 0) {
+                  setSchedulerNotice({
+                    tone: 'error',
+                    title: 'Could not clear schedule',
+                    detail: 'This week already has published shifts. Clear Schedule only works for draft weeks right now.',
+                  });
+                  return;
+                }
                 void (async () => {
                   try {
                     await Promise.all(shifts.map((shift) => deleteWorkspaceShift(location.business_id, shift.id)));
@@ -2855,7 +2891,7 @@ function SchedulerContent({
                     setSchedulerNotice({
                       tone: 'error',
                       title: 'Could not clear schedule',
-                      detail: error instanceof Error ? error.message : 'Please try again.',
+                      detail: describeShiftDeletionError(error),
                     });
                   }
                 })();
@@ -3083,9 +3119,13 @@ function MobileEmployeeCard({
             })}
           </div>
         ) : (
-          <div className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]'}`}>
+          <button
+            onClick={onCreateShift}
+            className={`p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'}`}
+            type="button"
+          >
             <Plus size={14} className="text-[#C1CED8]/40" />
-          </div>
+          </button>
         )}
       </motion.div>
 

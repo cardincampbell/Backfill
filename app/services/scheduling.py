@@ -371,7 +371,14 @@ async def update_shift(
     shift_id: UUID,
     payload: ShiftUpdate,
 ) -> Shift:
-    shift = await session.get(Shift, shift_id)
+    shift = await session.get(
+        Shift,
+        shift_id,
+        options=(
+            selectinload(Shift.assignments),
+            selectinload(Shift.coverage_cases),
+        ),
+    )
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
@@ -427,6 +434,9 @@ async def delete_shift(
     shift = await session.get(Shift, shift_id)
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
+
+    if shift.lifecycle_status != ShiftLifecycleStatus.draft:
+        raise ValueError("scheduled_shift_delete_requires_republish")
 
     active_case_count = await session.scalar(
         select(func.count(CoverageCase.id)).where(

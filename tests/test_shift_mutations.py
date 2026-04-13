@@ -41,6 +41,7 @@ class FakeSchedulingSession:
         self.scalar_queue: list[object] = []
         self.execute_queue: list[list[object]] = []
         self.get_map: dict[tuple[type, object], object] = {}
+        self.get_kwargs: list[tuple[type, object, dict]] = []
         self.commits = 0
 
     def add(self, obj):
@@ -55,6 +56,7 @@ class FakeSchedulingSession:
         self.get_map[(type(obj), obj.id)] = obj
 
     async def get(self, model, object_id, **_kwargs):
+        self.get_kwargs.append((model, object_id, dict(_kwargs)))
         return self.get_map.get((model, object_id))
 
     async def scalar(self, _query):
@@ -205,7 +207,8 @@ def test_update_shift_route_updates_shift():
         timezone="America/Los_Angeles",
         starts_at=now,
         ends_at=now + timedelta(hours=8),
-        status=ShiftStatus.open,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
         seats_requested=1,
         seats_filled=0,
         requires_manager_approval=False,
@@ -249,6 +252,10 @@ def test_update_shift_route_updates_shift():
           isinstance(entry, AuditLog) and entry.event_name == "shift.updated"
           for entry in fake_session.added
       )
+      get_call = next(
+          call for call in fake_session.get_kwargs if call[0] is Shift and call[1] == shift_id
+      )
+      assert get_call[2].get("options")
     finally:
       app.dependency_overrides.clear()
 
@@ -353,7 +360,8 @@ def test_delete_shift_route_deletes_empty_shift():
         timezone="America/Los_Angeles",
         starts_at=now,
         ends_at=now + timedelta(hours=8),
-        status=ShiftStatus.open,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
         seats_requested=1,
         seats_filled=0,
         requires_manager_approval=False,
@@ -389,7 +397,7 @@ def test_delete_shift_route_deletes_empty_shift():
         app.dependency_overrides.clear()
 
 
-def test_delete_shift_route_allows_assigned_shift_without_coverage_history():
+def test_delete_shift_route_allows_assigned_draft_shift_without_coverage_history():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
     business_id = uuid4()
@@ -407,7 +415,8 @@ def test_delete_shift_route_allows_assigned_shift_without_coverage_history():
         timezone="America/Los_Angeles",
         starts_at=now,
         ends_at=now + timedelta(hours=8),
-        status=ShiftStatus.covered,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
         seats_requested=1,
         seats_filled=1,
         requires_manager_approval=False,
@@ -447,6 +456,55 @@ def test_delete_shift_route_allows_assigned_shift_without_coverage_history():
         assert response.status_code == 200
         assert response.json() == {"deleted": True, "shift_id": str(shift_id)}
         assert fake_session.deleted == [shift]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_delete_shift_route_rejects_scheduled_shift_without_coverage_history():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.delete(f"/api/businesses/{business_id}/shifts/{shift_id}")
+        assert response.status_code == 409
+        assert response.json()["detail"] == "scheduled_shift_delete_requires_republish"
+        assert fake_session.deleted == []
     finally:
         app.dependency_overrides.clear()
 
