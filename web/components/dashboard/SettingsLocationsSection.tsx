@@ -25,6 +25,7 @@ import {
   getLocationBoard,
   deleteLocation as deleteWorkspaceLocation,
   getLocationShiftDefaults,
+  updateLocationSettings,
   updateLocationShiftDefaults,
   type LocationShiftDefaults,
   type ShiftDefault,
@@ -327,6 +328,7 @@ export default function SettingsLocationsSection({
   const handleSave = (
     employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    weekStartDay: string | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!selectedLocation) {
@@ -347,7 +349,12 @@ export default function SettingsLocationsSection({
           const shouldBeAssigned = employeeIds.includes(employee.id);
           return currentlyAssigned !== shouldBeAssigned;
         });
-        const [nextAssignments, nextShiftDefaults, updatedEmployees] = await Promise.all([
+        const currentWeekStartDay =
+          typeof activeLocation.settings?.week_start_day === "string"
+            ? activeLocation.settings.week_start_day
+            : null;
+        const nextWeekStartDay = weekStartDay || null;
+        const [nextAssignments, nextShiftDefaults, _updatedLocationSettings, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             businessId,
             activeLocation.id,
@@ -369,6 +376,13 @@ export default function SettingsLocationsSection({
             activeLocation.id,
             locationShiftPresets,
           ),
+          currentWeekStartDay === nextWeekStartDay
+            ? Promise.resolve(null)
+            : updateLocationSettings(
+                businessId,
+                activeLocation.id,
+                { week_start_day: nextWeekStartDay },
+              ),
           Promise.all(
             changedEmployees.map((employee) =>
               updateEmployee(businessId, employee.id, {
@@ -381,9 +395,20 @@ export default function SettingsLocationsSection({
             ),
           ),
         ]);
+        const nextLocationSettings = { ...(activeLocation.settings ?? {}) } as Record<string, unknown>;
+        if (nextWeekStartDay) {
+          nextLocationSettings.week_start_day = nextWeekStartDay;
+        } else {
+          delete nextLocationSettings.week_start_day;
+        }
         setAssignments(nextAssignments);
         setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setShiftDefaults(nextShiftDefaults);
+        setSelectedLocation((current) =>
+          current && current.id === activeLocation.id
+            ? { ...current, settings: nextLocationSettings }
+            : current,
+        );
         setRoleCounts((current) => ({
           ...current,
           [activeLocation.id]: nextAssignments.length,

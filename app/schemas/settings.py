@@ -59,6 +59,15 @@ class LocationSettingsRead(BaseSchema):
     backfill_shifts_enabled: bool = False
     backfill_shifts_launch_state: str = "off"
     backfill_shifts_beta_eligible: bool = False
+    week_start_day: Literal[
+        "sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+    ] | None = None
 
 
 class LocationSettingsUpdate(BaseSchema):
@@ -73,3 +82,12 @@ class LocationSettingsUpdate(BaseSchema):
     backfill_shifts_enabled: bool | None = None
     backfill_shifts_launch_state: str | None = None
     backfill_shifts_beta_eligible: bool | None = None
+    week_start_day: Literal[
+        "sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+    ] | None = None

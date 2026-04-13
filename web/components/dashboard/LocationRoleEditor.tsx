@@ -48,6 +48,7 @@ export type LocationDeleteState = {
 export type LocationRoleEditorSaveSummary = {
   employeeChangeCount: number;
   shiftChangeCount: number;
+  weekStartChangeCount: number;
   totalChangeCount: number;
 };
 
@@ -61,6 +62,11 @@ export function formatLocationSaveSummary(
   }
   if (summary.shiftChangeCount > 0) {
     parts.push(`${summary.shiftChangeCount} shift change${summary.shiftChangeCount === 1 ? "" : "s"}`);
+  }
+  if (summary.weekStartChangeCount > 0) {
+    parts.push(
+      `${summary.weekStartChangeCount} scheduler preference change${summary.weekStartChangeCount === 1 ? "" : "s"}`,
+    );
   }
   if (!parts.length) {
     return `No changes to save for ${locationName}.`;
@@ -89,6 +95,22 @@ function countShiftPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
   });
 
   return count;
+}
+
+const WEEK_START_DAY_OPTIONS = [
+  { value: "", label: "Use business default" },
+  { value: "sunday", label: "Sunday" },
+  { value: "monday", label: "Monday" },
+  { value: "tuesday", label: "Tuesday" },
+  { value: "wednesday", label: "Wednesday" },
+  { value: "thursday", label: "Thursday" },
+  { value: "friday", label: "Friday" },
+  { value: "saturday", label: "Saturday" },
+];
+
+function readLocationWeekStartDay(location: BusinessLocation) {
+  const value = location.settings?.week_start_day;
+  return typeof value === "string" ? value : "";
 }
 
 export function LocationRoleEditor({
@@ -123,6 +145,7 @@ export function LocationRoleEditor({
   onSave(
     employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    weekStartDay: string | null,
     summary: LocationRoleEditorSaveSummary,
   ): void;
 }) {
@@ -131,6 +154,7 @@ export function LocationRoleEditor({
   const [draftShiftDefaults, setDraftShiftDefaults] = useState<ShiftDefault[]>(() =>
     normalizeShiftDefaults(null),
   );
+  const [draftWeekStartDay, setDraftWeekStartDay] = useState<string>("");
   const [visibleFeedback, setVisibleFeedback] = useState<LocationRoleEditorFeedback>(feedback);
   const [isClosing, setIsClosing] = useState(false);
   const closeTimeoutRef = useRef<number | null>(null);
@@ -147,15 +171,19 @@ export function LocationRoleEditor({
     if (!shiftDefaults) {
       setUseBusinessDefaults(true);
       setDraftShiftDefaults(normalizeShiftDefaults(null));
-      return;
+    } else {
+      setUseBusinessDefaults(!shiftDefaults.has_overrides);
+      setDraftShiftDefaults(
+        normalizeShiftDefaults(
+          shiftDefaults.override_presets ?? shiftDefaults.business_presets,
+        ),
+      );
     }
-    setUseBusinessDefaults(!shiftDefaults.has_overrides);
-    setDraftShiftDefaults(
-      normalizeShiftDefaults(
-        shiftDefaults.override_presets ?? shiftDefaults.business_presets,
-      ),
-    );
   }, [location.id, shiftDefaults]);
+
+  useEffect(() => {
+    setDraftWeekStartDay(readLocationWeekStartDay(location));
+  }, [location]);
 
   useEffect(() => {
     setVisibleFeedback(feedback);
@@ -263,6 +291,7 @@ export function LocationRoleEditor({
       ),
     [shiftDefaults],
   );
+  const baselineWeekStartDay = useMemo(() => readLocationWeekStartDay(location), [location]);
   const effectiveShiftPresets = useMemo(
     () =>
       normalizeShiftDefaults(
@@ -280,7 +309,8 @@ export function LocationRoleEditor({
     () => countShiftPresetChanges(effectiveShiftPresets, baselineShiftPresets),
     [baselineShiftPresets, effectiveShiftPresets],
   );
-  const totalChangeCount = employeeChangeCount + shiftChangeCount;
+  const weekStartChangeCount = baselineWeekStartDay === draftWeekStartDay ? 0 : 1;
+  const totalChangeCount = employeeChangeCount + shiftChangeCount + weekStartChangeCount;
   const totalCoverageHours = useMemo(
     () => Math.round(getShiftCoverageHours(effectiveShiftPresets)),
     [effectiveShiftPresets],
@@ -365,9 +395,11 @@ export function LocationRoleEditor({
                 onSave(
                   selectedEmployeeIds,
                   useBusinessDefaults ? null : normalizeShiftDefaults(draftShiftDefaults),
+                  draftWeekStartDay || null,
                   {
                     employeeChangeCount,
                     shiftChangeCount,
+                    weekStartChangeCount,
                     totalChangeCount,
                   },
                 )
@@ -714,6 +746,44 @@ export function LocationRoleEditor({
                 </button>
               </div>
             ) : null}
+          </div>
+
+          <div>
+            <div className="mb-3">
+              <h3
+                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
+                style={{ fontWeight: 500 }}
+              >
+                Scheduler
+              </h3>
+            </div>
+            <div className={`rounded-2xl border px-4 py-4 ${subtleBorderClass} ${subtleSurfaceClass}`}>
+              <label
+                className={`block text-[10px] uppercase tracking-[0.05em] ${textSecondary}`}
+                style={{ fontWeight: 500 }}
+              >
+                Week starts on
+              </label>
+              <select
+                value={draftWeekStartDay}
+                onChange={(event) => setDraftWeekStartDay(event.target.value)}
+                className={`mt-2 w-full rounded-xl border px-3 py-2.5 text-[12px] outline-none transition-colors ${
+                  dark
+                    ? "border-white/[0.08] bg-[#102B46] text-white"
+                    : "border-[#E5E7EB] bg-white text-[#0A2540]"
+                }`}
+                style={{ fontWeight: 500 }}
+              >
+                {WEEK_START_DAY_OPTIONS.map((option) => (
+                  <option key={option.value || "business-default"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
+                Set a location-specific override, or leave this on the business default.
+              </p>
+            </div>
           </div>
 
           <div className={`border-t pt-4 ${borderClass}`}>

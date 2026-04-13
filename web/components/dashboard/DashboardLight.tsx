@@ -30,6 +30,7 @@ import {
   deleteLocation as deleteWorkspaceLocation,
   getLocationBoard,
   getLocationShiftDefaults,
+  updateLocationSettings,
   updateLocationShiftDefaults,
   type LocationShiftDefaults,
   type ShiftDefault,
@@ -920,6 +921,7 @@ function MultiLocationView({
   const handleSaveEditor = (
     employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    weekStartDay: string | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!editorLocation) {
@@ -939,7 +941,12 @@ function MultiLocationView({
           const shouldBeAssigned = employeeIds.includes(employee.id);
           return currentlyAssigned !== shouldBeAssigned;
         });
-        const [nextAssignments, nextShiftDefaults, updatedEmployees] = await Promise.all([
+        const currentWeekStartDay =
+          typeof activeLocation.settings?.week_start_day === 'string'
+            ? activeLocation.settings.week_start_day
+            : null;
+        const nextWeekStartDay = weekStartDay || null;
+        const [nextAssignments, nextShiftDefaults, _updatedLocationSettings, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             activeLocation.business_id,
             activeLocation.id,
@@ -961,6 +968,13 @@ function MultiLocationView({
             activeLocation.id,
             locationShiftPresets,
           ),
+          currentWeekStartDay === nextWeekStartDay
+            ? Promise.resolve(null)
+            : updateLocationSettings(
+                activeLocation.business_id,
+                activeLocation.id,
+                { week_start_day: nextWeekStartDay },
+              ),
           Promise.all(
             changedEmployees.map((employee) =>
               updateEmployee(activeLocation.business_id, employee.id, {
@@ -973,9 +987,20 @@ function MultiLocationView({
             ),
           ),
         ]);
+        const nextLocationSettings = { ...(activeLocation.settings ?? {}) } as Record<string, unknown>;
+        if (nextWeekStartDay) {
+          nextLocationSettings.week_start_day = nextWeekStartDay;
+        } else {
+          delete nextLocationSettings.week_start_day;
+        }
         setEditorAssignments(nextAssignments);
         setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setEditorShiftDefaults(nextShiftDefaults);
+        setEditorLocation((current) =>
+          current && current.id === activeLocation.id
+            ? { ...current, settings: nextLocationSettings }
+            : current,
+        );
         const board = await getLocationBoard(activeLocation.business_id, activeLocation.id);
         setLocationEntryMode(
           activeLocation.id,

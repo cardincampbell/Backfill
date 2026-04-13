@@ -125,8 +125,7 @@ export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, o
                 <div className="space-y-2">
                   {[
                     { icon: '📧', text: 'Email notifications sent to all staff', detail: `${affectedEmployees.length} recipients` },
-                    { icon: '📱', text: 'Push notifications via Backfill mobile app', detail: 'Instant delivery' },
-                    { icon: '📅', text: 'Shifts added to employee calendars', detail: 'Auto-sync enabled' },
+                    { icon: '💬', text: 'Text (SMS) notifications sent to all staff', detail: 'Instant delivery' },
                   ].map((item, idx) => (
                     <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg ${subtleSurfaceClass}`}>
                       <span className="text-[18px]">{item.icon}</span>
@@ -236,18 +235,14 @@ export function PublishWeekModal({ weekLabel, shifts, employees, dark = false, o
               <p className={`text-[12px] mb-4 ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {totalShifts} shifts published to {affectedEmployees.length} staff members
               </p>
-              <div className="flex items-center justify-center gap-6 pt-4">
+              <div className="flex items-center justify-center gap-8 pt-4">
                 <div className="text-center">
                   <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📧</p>
                   <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Emails sent</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📱</p>
-                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Push sent</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>📅</p>
-                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Calendars synced</p>
+                  <p className="text-[24px] text-[#635BFF]" style={{ fontWeight: 620 }}>💬</p>
+                  <p className={`text-[10px] mt-1 ${textSecondary}`} style={{ fontWeight: 440 }}>Texts sent</p>
                 </div>
               </div>
             </div>

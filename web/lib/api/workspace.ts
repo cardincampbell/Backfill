@@ -148,6 +148,7 @@ export type LocationSettings = {
   backfill_shifts_enabled: boolean;
   backfill_shifts_launch_state: string;
   backfill_shifts_beta_eligible: boolean;
+  week_start_day?: string | null;
 };
 
 export type LocationSettingsUpdate = Partial<
@@ -207,6 +208,8 @@ export type WorkspaceBoard = {
     role_name: string;
     starts_at: string;
     ends_at: string;
+    lifecycle_status: string;
+    staffing_status: string;
     status: string;
     seats_requested: number;
     seats_filled: number;
@@ -278,6 +281,8 @@ export type ShiftRecord = {
   timezone: string;
   starts_at: string;
   ends_at: string;
+  lifecycle_status: string;
+  staffing_status: string;
   status: string;
   seats_requested: number;
   seats_filled: number;
@@ -298,6 +303,8 @@ export type ShiftAssignmentMutationPayload = {
 
 export type ShiftAssignmentMutationResponse = {
   shift_id: string;
+  lifecycle_status: string;
+  staffing_status: string;
   status: string;
   current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
 };

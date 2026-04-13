@@ -16,6 +16,10 @@ import {
   ChevronDown,
   Zap,
   Sun,
+  Cloud,
+  CloudRain,
+  CloudSnow,
+  CloudDrizzle,
   CloudMoon,
   Sunrise,
   Sunset,
@@ -49,6 +53,7 @@ import {
   deleteShift as deleteWorkspaceShift,
   getLocationBoard,
   getLocationShiftDefaults,
+  updateLocationSettings,
   ShiftAssignmentConflictError,
   updateLocationShiftDefaults,
   updateShift as updateWorkspaceShift,
@@ -60,6 +65,7 @@ import {
   type WorkspaceBoard,
   type WorkspaceLocation,
 } from '@/lib/api/workspace';
+import { getLocationWeatherForecast } from '@/lib/api/weather';
 import {
   listEmployees,
   updateEmployee,
@@ -116,6 +122,13 @@ interface Shift {
   presetLabel?: string | null;
 }
 
+type DayWeather = {
+  icon: typeof Sun;
+  color: string;
+  temp: number | null;
+  label: string;
+};
+
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
 /* ─── Role colors ─── */
@@ -170,13 +183,6 @@ function getShiftDescriptor(start: number, end: number): { label: string; icon: 
   return { label: 'Night', icon: CloudMoon };
 }
 
-function getWeekDates(offset: number) {
-  const today = new Date();
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) + offset * 7);
-  return Array.from({ length: 7 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
-}
-
 function parseDateKey(dateKey: string) {
   const [year, month, day] = dateKey.split('-').map(Number);
   return { year, month, day };
@@ -206,6 +212,10 @@ function buildWeekDatesFromWeekStart(weekStartDate: string) {
   return Array.from({ length: 7 }, (_, index) => new Date(year, month - 1, day + index));
 }
 
+function shiftWeekStartDate(weekStartDate: string, offset: number) {
+  return addDaysToDateKey(weekStartDate, offset * 7);
+}
+
 function mondayDateKeyFor(timeZone: string, offset: number) {
   const today = getZonedParts(new Date(), timeZone);
   const weekday = new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay();
@@ -219,6 +229,58 @@ function dayDifference(startDateKey: string, endDateKey: string) {
   const startUtc = Date.UTC(start.year, start.month - 1, start.day);
   const endUtc = Date.UTC(end.year, end.month - 1, end.day);
   return Math.round((endUtc - startUtc) / 86_400_000);
+}
+
+function weatherPresentation(
+  weatherLabel: string,
+  weatherCode: number | null | undefined,
+  severityFlag: string,
+) {
+  const label = weatherLabel.toLowerCase();
+  if (label.includes('snow') || weatherCode === 71 || weatherCode === 73 || weatherCode === 75) {
+    return { icon: CloudSnow, color: '#60A5FA', label: 'Snow' } satisfies Omit<DayWeather, 'temp'>;
+  }
+  if (
+    label.includes('drizzle') ||
+    weatherCode === 51 ||
+    weatherCode === 53 ||
+    weatherCode === 55 ||
+    weatherCode === 56 ||
+    weatherCode === 57
+  ) {
+    return { icon: CloudDrizzle, color: '#7C8EA3', label: 'Drizzle' } satisfies Omit<DayWeather, 'temp'>;
+  }
+  if (
+    label.includes('rain') ||
+    label.includes('shower') ||
+    label.includes('thunder') ||
+    weatherCode === 61 ||
+    weatherCode === 63 ||
+    weatherCode === 65 ||
+    weatherCode === 80 ||
+    weatherCode === 81 ||
+    weatherCode === 82 ||
+    weatherCode === 95
+  ) {
+    return {
+      icon: CloudRain,
+      color: severityFlag === 'high' ? '#2563EB' : '#3B82F6',
+      label: 'Rain',
+    } satisfies Omit<DayWeather, 'temp'>;
+  }
+  if (
+    label.includes('cloud') ||
+    label.includes('overcast') ||
+    label.includes('fog') ||
+    weatherCode === 1 ||
+    weatherCode === 2 ||
+    weatherCode === 3 ||
+    weatherCode === 45 ||
+    weatherCode === 48
+  ) {
+    return { icon: Cloud, color: '#8898AA', label: 'Cloudy' } satisfies Omit<DayWeather, 'temp'>;
+  }
+  return { icon: Sun, color: '#F59E0B', label: 'Sunny' } satisfies Omit<DayWeather, 'temp'>;
 }
 
 function getZonedParts(value: Date | string, timeZone: string) {
@@ -625,7 +687,7 @@ function DraggableShiftChip({
           <AnimatePresence>
             {hovered && !isDragging && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="mr-1 flex flex-col gap-0.5 shrink-0">
+                className="mr-2 flex flex-col gap-0.5 shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
                   <Copy size={9} className={theme.textMuted} />
@@ -692,7 +754,7 @@ function DraggableShiftChip({
             <AnimatePresence>
               {hovered && !isDragging && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="mr-1 flex gap-0.5">
+                className="mr-2 flex gap-0.5">
                   <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Copy shift">
                     <Copy size={7} className={theme.textMuted} />
@@ -826,13 +888,15 @@ function SchedulerContent({
     type: locationReference.typeLabel,
   };
 
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedWeekStart, setSelectedWeekStart] = useState<string | null>(null);
+  const [currentWeekStart, setCurrentWeekStart] = useState<string | null>(null);
   const [board, setBoard] = useState<WorkspaceBoard | null>(null);
   const [businessEmployees, setBusinessEmployees] = useState<EmployeeSummary[]>([]);
   const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
   const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
   const [loadingSchedulerData, setLoadingSchedulerData] = useState(false);
   const [schedulerError, setSchedulerError] = useState<string | null>(null);
+  const [weatherByDateKey, setWeatherByDateKey] = useState<Record<string, DayWeather>>({});
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [creatingAt, setCreatingAt] = useState<{
     day: number;
@@ -900,22 +964,20 @@ function SchedulerContent({
     router.replace(buildSchedulerBasePathFromAny(location), { scroll: false });
   }, [location, router]);
 
-  const requestedWeekStart = useMemo(
-    () => mondayDateKeyFor(location.timezone, weekOffset),
-    [location.timezone, weekOffset],
-  );
-
   const refreshSchedulerData = useCallback(async () => {
     try {
       setLoadingSchedulerData(true);
       setSchedulerError(null);
       const [nextBoard, employeeDirectory, roleDirectory, locationDirectory] = await Promise.all([
-        getLocationBoard(location.business_id, location.location_id, requestedWeekStart),
+        getLocationBoard(location.business_id, location.location_id, selectedWeekStart ?? undefined),
         listEmployees(location.business_id),
         listBusinessRoles(location.business_id),
         listBusinessLocations(location.business_id),
       ]);
       setBoard(nextBoard);
+      if (!selectedWeekStart && nextBoard?.week_start_date) {
+        setCurrentWeekStart(nextBoard.week_start_date);
+      }
       setBusinessEmployees(employeeDirectory);
       setBusinessRoles(roleDirectory);
       setBusinessLocations(locationDirectory);
@@ -930,11 +992,99 @@ function SchedulerContent({
     } finally {
       setLoadingSchedulerData(false);
     }
-  }, [location.business_id, location.location_id, requestedWeekStart]);
+  }, [location.business_id, location.location_id, selectedWeekStart]);
 
   useEffect(() => {
     void refreshSchedulerData();
   }, [refreshSchedulerData]);
+
+  const weekDates = useMemo(
+    () =>
+      board
+        ? buildWeekDatesFromWeekStart(board.week_start_date)
+        : buildWeekDatesFromWeekStart(
+            selectedWeekStart ?? currentWeekStart ?? mondayDateKeyFor(location.timezone, 0),
+          ),
+    [board, currentWeekStart, location.timezone, selectedWeekStart],
+  );
+
+  useEffect(() => {
+    if (!board) {
+      setWeatherByDateKey({});
+      return;
+    }
+
+    const activeBoard = board;
+    let cancelled = false;
+
+    async function loadWeather() {
+      try {
+        const startsAt = zonedDateTimeToIso(activeBoard.week_start_date, 0, activeBoard.timezone);
+        const forecast = await getLocationWeatherForecast(
+          location.business_id,
+          location.location_id,
+          { startsAt, hours: 24 * 7 },
+        );
+        if (cancelled || !forecast) {
+          return;
+        }
+
+        const pointsByDateKey = new Map<string, typeof forecast.points>();
+        forecast.points.forEach((point) => {
+          const zoned = getZonedParts(point.forecast_at, activeBoard.timezone);
+          const existing = pointsByDateKey.get(zoned.dateKey) ?? [];
+          existing.push(point);
+          pointsByDateKey.set(zoned.dateKey, existing);
+        });
+
+        const nextWeather = weekDates.reduce<Record<string, DayWeather>>((accumulator, date) => {
+          const dateKey = formatDateKey(date);
+          const dailyPoints = pointsByDateKey.get(dateKey) ?? [];
+          if (!dailyPoints.length) {
+            return accumulator;
+          }
+
+          const representative = [...dailyPoints].sort((left, right) => {
+            const leftParts = getZonedParts(left.forecast_at, activeBoard.timezone);
+            const rightParts = getZonedParts(right.forecast_at, activeBoard.timezone);
+            const leftMiddayDelta = Math.abs(leftParts.hour - 13) * 60 + leftParts.minute;
+            const rightMiddayDelta = Math.abs(rightParts.hour - 13) * 60 + rightParts.minute;
+            if (leftMiddayDelta !== rightMiddayDelta) {
+              return leftMiddayDelta - rightMiddayDelta;
+            }
+            const severityRank = { high: 0, monitor: 1, none: 2 } as const;
+            return severityRank[left.severity_flag] - severityRank[right.severity_flag];
+          })[0];
+
+          const presentation = weatherPresentation(
+            representative.weather_label,
+            representative.weather_code,
+            representative.severity_flag,
+          );
+          accumulator[dateKey] = {
+            ...presentation,
+            temp:
+              typeof representative.temperature_f === 'number'
+                ? Math.round(representative.temperature_f)
+                : null,
+          };
+          return accumulator;
+        }, {});
+
+        setWeatherByDateKey(nextWeather);
+      } catch {
+        if (!cancelled) {
+          setWeatherByDateKey({});
+        }
+      }
+    }
+
+    void loadWeather();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [board, location.business_id, location.location_id, weekDates]);
 
   useEffect(() => {
     let cancelled = false;
@@ -995,11 +1145,6 @@ function SchedulerContent({
       cancelled = true;
     };
   }, [location.business_id, location.location_id]);
-
-  const weekDates = useMemo(
-    () => (board ? buildWeekDatesFromWeekStart(board.week_start_date) : buildWeekDatesFromWeekStart(requestedWeekStart)),
-    [board, requestedWeekStart],
-  );
 
   const shifts = useMemo(
     () => {
@@ -1401,8 +1546,7 @@ function SchedulerContent({
     })();
   }, [applyShiftAssignment, businessEmployees, moveShiftToDay, refreshSchedulerData, shifts]);
 
-  const copySchedule = (targetWeekOffset: number) => {
-    const targetWeekStart = mondayDateKeyFor(location.timezone, targetWeekOffset);
+  const copySchedule = (targetWeekStart: string) => {
     const targetWeekDates = buildWeekDatesFromWeekStart(targetWeekStart);
     const targetWeekLabel = (() => {
       const start = targetWeekDates[0];
@@ -1451,7 +1595,7 @@ function SchedulerContent({
           }
         }
 
-        setWeekOffset(targetWeekOffset);
+        setSelectedWeekStart(targetWeekStart);
         setShowCopyModal(false);
         await refreshSchedulerData();
         setSchedulerNotice({
@@ -1667,6 +1811,7 @@ function SchedulerContent({
   const handleSaveEditor = (
     employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
+    weekStartDay: string | null,
     saveSummary: LocationRoleEditorSaveSummary,
   ) => {
     if (!editorLocation || isSavingEditor) {
@@ -1688,7 +1833,12 @@ function SchedulerContent({
           const shouldBeAssigned = employeeIds.includes(employee.id);
           return currentlyAssigned !== shouldBeAssigned;
         });
-        const [replacedAssignments, updatedShiftDefaults, updatedEmployees] = await Promise.all([
+        const currentWeekStartDay =
+          typeof editorLocation.settings?.week_start_day === 'string'
+            ? editorLocation.settings.week_start_day
+            : null;
+        const nextWeekStartDay = weekStartDay || null;
+        const [replacedAssignments, updatedShiftDefaults, _updatedLocationSettings, updatedEmployees] = await Promise.all([
           replaceLocationRoles(
             editorLocation.business_id,
             editorLocation.id,
@@ -1710,6 +1860,13 @@ function SchedulerContent({
             editorLocation.id,
             locationShiftPresets,
           ),
+          currentWeekStartDay === nextWeekStartDay
+            ? Promise.resolve(null)
+            : updateLocationSettings(
+                editorLocation.business_id,
+                editorLocation.id,
+                { week_start_day: nextWeekStartDay },
+              ),
           Promise.all(
             changedEmployees.map((employee) =>
               updateEmployee(editorLocation.business_id, employee.id, {
@@ -1722,11 +1879,26 @@ function SchedulerContent({
             ),
           ),
         ]);
+        const nextLocationSettings = { ...(editorLocation.settings ?? {}) } as Record<string, unknown>;
+        if (nextWeekStartDay) {
+          nextLocationSettings.week_start_day = nextWeekStartDay;
+        } else {
+          delete nextLocationSettings.week_start_day;
+        }
         setEditorAssignments(replacedAssignments);
         setEditorEmployees((current) => mergeUpdatedEmployees(current, updatedEmployees));
         setEditorShiftDefaults(updatedShiftDefaults);
         setShiftDefaults(normalizeShiftDefaults(updatedShiftDefaults.presets));
-        const board = await getLocationBoard(editorLocation.business_id, editorLocation.id);
+        setEditorLocation((current) =>
+          current && current.id === editorLocation.id
+            ? { ...current, settings: nextLocationSettings }
+            : current,
+        );
+        const board = await getLocationBoard(
+          editorLocation.business_id,
+          editorLocation.id,
+          selectedWeekStart ?? undefined,
+        );
         setLocationEntryMode(
           editorLocation.id,
           board?.location_setup_required ? 'setup' : 'scheduler',
@@ -1783,6 +1955,12 @@ function SchedulerContent({
   };
 
   /* ─── Week Label ─── */
+  const activeWeekStart = board?.week_start_date ?? selectedWeekStart ?? currentWeekStart ?? mondayDateKeyFor(location.timezone, 0);
+  const isViewingCurrentWeek =
+    selectedWeekStart === null ||
+    (Boolean(currentWeekStart) && Boolean(board?.week_start_date) && board?.week_start_date === currentWeekStart);
+  const initialSchedulerLoad = loadingSchedulerData && !board && !schedulerError;
+
   const weekLabel = useMemo(() => {
     const s = weekDates[0];
     const e = weekDates[6];
@@ -1798,9 +1976,9 @@ function SchedulerContent({
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
 
         {/* ─── Top Bar: Location | Week Nav | Buttons ─── */}
-        <div className={`px-4 sm:px-6 md:px-8 py-3.5 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
+        <div className={`px-4 sm:px-6 md:px-8 pt-4 pb-4 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
           {/* Row 1: Location name + subtext */}
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3.5 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg flex items-center justify-center text-[14px]"
                 style={{ background: `${loc.color}10` }}>
@@ -1899,24 +2077,25 @@ function SchedulerContent({
           <div className="flex items-center justify-between gap-4">
             {/* Week navigation: Today button, then arrows around week dates */}
             <div className="flex items-center gap-2">
-              <button onClick={() => setWeekOffset(0)}
+              <button onClick={() => setSelectedWeekStart(null)}
                 className={`text-[12px] px-2.5 py-1.5 rounded-lg transition-colors ${
-                  weekOffset === 0 ? theme.todaySelectorClass : theme.daySelectorIdleClass
+                  isViewingCurrentWeek ? theme.todaySelectorClass : theme.daySelectorIdleClass
                 }`} style={{ fontWeight: 500 }}>
                 Today
               </button>
-              <button onClick={() => setWeekOffset(w => w - 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+              <button
+                onClick={() => setSelectedWeekStart(shiftWeekStartDate(activeWeekStart, -1))}
+                className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}
+              >
                 <ChevronLeft size={15} className={theme.textMuted} />
               </button>
               <span className={`text-[12px] hidden md:inline ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
                 {weekLabel}
               </span>
-              {loadingSchedulerData ? (
-                <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
-                  Refreshing…
-                </span>
-              ) : null}
-              <button onClick={() => setWeekOffset(w => w + 1)} className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}>
+              <button
+                onClick={() => setSelectedWeekStart(shiftWeekStartDate(activeWeekStart, 1))}
+                className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}
+              >
                 <ChevronRight size={15} className={theme.textMuted} />
               </button>
             </div>
@@ -1933,9 +2112,8 @@ function SchedulerContent({
               </button>
               <motion.button
                 whileTap={{ scale: 0.97 }}
-                disabled
-                title="Publish week is not wired yet"
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white cursor-not-allowed opacity-50 transition-all"
+                onClick={() => setShowPublishModal(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)]"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Zap size={13} />
                 <span className="hidden lg:inline">Publish Week</span>
@@ -1946,7 +2124,7 @@ function SchedulerContent({
         </div>
 
         {/* ─── Mobile Day Selector ─── */}
-        <div className={`lg:hidden px-4 py-2 border-b flex gap-1 overflow-x-auto no-scrollbar ${theme.mobileDayBorderClass}`}>
+        <div className={`lg:hidden sticky top-0 z-20 px-4 py-2 border-b flex gap-1 overflow-x-auto no-scrollbar ${theme.stickyHeaderClass} ${theme.mobileDayBorderClass}`}>
           {DAYS.map((day, i) => (
             <button key={day} onClick={() => setMobileDay(i)}
               className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all min-w-[44px] ${
@@ -1960,7 +2138,36 @@ function SchedulerContent({
           ))}
         </div>
 
-        {schedulerError && !board ? (
+        {initialSchedulerLoad ? (
+          <div className="flex-1 overflow-auto">
+            <div className="min-w-[900px] px-4 sm:px-6 md:px-8 py-4">
+              <div className={`animate-pulse overflow-hidden rounded-3xl border ${theme.cardClass}`}>
+                <div className={`flex border-b ${theme.stickyHeaderClass}`}>
+                  <div className={`${EMP_COL} shrink-0 px-4 py-4`}>
+                    <div className={`h-4 w-24 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-[#E5E7EB]'}`} />
+                  </div>
+                  {DAYS.map((day) => (
+                    <div key={day} className={`flex-1 border-l px-3 py-4 ${theme.cellBorderClass}`}>
+                      <div className={`h-6 w-14 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-[#E5E7EB]'}`} />
+                    </div>
+                  ))}
+                </div>
+                {Array.from({ length: 5 }).map((_, rowIndex) => (
+                  <div key={`scheduler-skeleton-${rowIndex}`} className={`flex border-b ${theme.rowClass}`}>
+                    <div className={`${EMP_COL} shrink-0 px-4 py-4`}>
+                      <div className={`h-10 w-full rounded-2xl ${isDark ? 'bg-white/[0.06]' : 'bg-[#F7F8FA]'}`} />
+                    </div>
+                    {DAYS.map((day) => (
+                      <div key={`${day}-${rowIndex}`} className={`flex-1 border-l px-3 py-4 ${theme.cellBorderClass}`}>
+                        <div className={`h-12 rounded-2xl ${isDark ? 'bg-white/[0.04]' : 'bg-[#F7F8FA]'}`} />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : schedulerError && !board ? (
           <div className="flex-1 flex items-center justify-center px-6">
             <div className={`max-w-md rounded-2xl border px-6 py-5 text-center ${theme.cardClass}`}>
               <p className={`text-[14px] ${theme.textPrimary}`} style={{ fontWeight: 560 }}>
@@ -1997,10 +2204,21 @@ function SchedulerContent({
                 {DAYS.map((day, i) => {
                   const dayHours = getDayTotalHours(i);
                   const today = isToday(weekDates[i]);
+                  const dateKey = formatDateKey(weekDates[i]);
+                  const weather = weatherByDateKey[dateKey] ?? null;
+                  const WeatherIcon = weather?.icon;
                   return (
-                    <div key={day} className={`flex-1 border-l px-3 py-3 flex items-end justify-between ${theme.cellBorderClass} ${
+                    <div key={day} className={`relative flex-1 border-l px-3 py-3 flex items-end justify-between ${theme.cellBorderClass} ${
                       today ? theme.todayHeaderClass : ''
                     }`}>
+                      {WeatherIcon ? (
+                        <div className="absolute right-2 top-2 flex items-center gap-1">
+                          <WeatherIcon size={14} style={{ color: weather.color }} />
+                          <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
+                            {typeof weather.temp === 'number' ? `${weather.temp}°` : '--'}
+                          </span>
+                        </div>
+                      ) : null}
                       {/* Left-aligned: date + day name */}
                       <div>
                         <p className={`text-[24px] leading-none ${
@@ -2338,11 +2556,11 @@ function SchedulerContent({
             <CopyScheduleModal
               dark={isDark}
               currentWeek={weekLabel}
+              currentWeekStart={activeWeekStart}
               shiftsCount={shifts.length}
               employeesCount={new Set(shifts.map((s) => s.employeeId).filter(Boolean)).size}
               onClose={() => setShowCopyModal(false)}
               onCopy={copySchedule}
-              currentWeekOffset={weekOffset}
             />
           )}
         </AnimatePresence>
@@ -3300,15 +3518,15 @@ function EditShiftModal({ shift, employeeName, shiftDefaults, onClose, onSave, o
 }
 
 /* ─── Copy Schedule Modal ─── */
-function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, onCopy, currentWeekOffset, dark = false }: {
-  currentWeek: string; shiftsCount: number; employeesCount: number;
-  onClose: () => void; onCopy: (targetWeek: number) => void; currentWeekOffset: number; dark?: boolean;
+function CopyScheduleModal({ currentWeek, currentWeekStart, shiftsCount, employeesCount, onClose, onCopy, dark = false }: {
+  currentWeek: string; currentWeekStart: string; shiftsCount: number; employeesCount: number;
+  onClose: () => void; onCopy: (targetWeekStart: string) => void; dark?: boolean;
 }) {
-  const [selectedWeek, setSelectedWeek] = useState(currentWeekOffset + 1);
+  const [selectedWeekStart, setSelectedWeekStart] = useState(shiftWeekStartDate(currentWeekStart, 1));
   const theme = getSchedulerTheme(dark);
 
-  const getWeekLabel = (offset: number) => {
-    const dates = getWeekDates(offset);
+  const getWeekLabel = (weekStartDate: string) => {
+    const dates = buildWeekDatesFromWeekStart(weekStartDate);
     const s = dates[0];
     const e = dates[6];
     const sm = s.toLocaleString('default', { month: 'short' });
@@ -3318,10 +3536,10 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
   };
 
   const weekOptions = [
-    { offset: currentWeekOffset + 1, label: 'Next Week', sublabel: getWeekLabel(currentWeekOffset + 1) },
-    { offset: currentWeekOffset + 2, label: 'Two Weeks Out', sublabel: getWeekLabel(currentWeekOffset + 2) },
-    { offset: currentWeekOffset + 3, label: 'Three Weeks Out', sublabel: getWeekLabel(currentWeekOffset + 3) },
-    { offset: currentWeekOffset + 4, label: 'Four Weeks Out', sublabel: getWeekLabel(currentWeekOffset + 4) },
+    { weekStart: shiftWeekStartDate(currentWeekStart, 1), label: 'Next Week' },
+    { weekStart: shiftWeekStartDate(currentWeekStart, 2), label: 'Two Weeks Out' },
+    { weekStart: shiftWeekStartDate(currentWeekStart, 3), label: 'Three Weeks Out' },
+    { weekStart: shiftWeekStartDate(currentWeekStart, 4), label: 'Four Weeks Out' },
   ];
 
   return (
@@ -3371,10 +3589,10 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
           <div className="space-y-2">
             {weekOptions.map(opt => (
               <button
-                key={opt.offset}
-                onClick={() => setSelectedWeek(opt.offset)}
+                key={opt.weekStart}
+                onClick={() => setSelectedWeekStart(opt.weekStart)}
                 className={`w-full text-left px-4 py-3.5 rounded-xl border transition-all ${
-                  selectedWeek === opt.offset
+                  selectedWeekStart === opt.weekStart
                     ? 'border-[#635BFF]/30 bg-[#635BFF]/[0.08] shadow-sm'
                     : dark
                       ? 'border-white/[0.08] hover:border-[#635BFF]/20 hover:bg-white/[0.04]'
@@ -3383,15 +3601,15 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
                 <div className="flex items-center justify-between">
                   <div>
                     <p className={`text-[13px] ${
-                      selectedWeek === opt.offset ? 'text-[#635BFF]' : theme.textPrimary
+                      selectedWeekStart === opt.weekStart ? 'text-[#635BFF]' : theme.textPrimary
                     }`} style={{ fontWeight: 540 }}>
                       {opt.label}
                     </p>
                     <p className={`text-[11px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                      {opt.sublabel}
+                      {getWeekLabel(opt.weekStart)}
                     </p>
                   </div>
-                  {selectedWeek === opt.offset && (
+                  {selectedWeekStart === opt.weekStart && (
                     <div className="w-5 h-5 rounded-full bg-[#635BFF] flex items-center justify-center">
                       <Check size={12} className="text-white" />
                     </div>
@@ -3411,7 +3629,7 @@ function CopyScheduleModal({ currentWeek, shiftsCount, employeesCount, onClose, 
           </button>
           <motion.button 
             whileTap={{ scale: 0.97 }}
-            onClick={() => onCopy(selectedWeek)}
+            onClick={() => onCopy(selectedWeekStart)}
             className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
             <ClipboardCopy size={13} />

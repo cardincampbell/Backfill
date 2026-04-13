@@ -30,6 +30,7 @@ DEFAULT_LOCATION_SETTINGS = {
     "backfill_shifts_enabled": False,
     "backfill_shifts_launch_state": "off",
     "backfill_shifts_beta_eligible": False,
+    "week_start_day": None,
 }
 
 
@@ -79,6 +80,11 @@ def _read_location_settings(location: Location) -> LocationSettingsRead:
         backfill_shifts_enabled=bool(payload["backfill_shifts_enabled"]),
         backfill_shifts_launch_state=str(payload["backfill_shifts_launch_state"]),
         backfill_shifts_beta_eligible=bool(payload["backfill_shifts_beta_eligible"]),
+        week_start_day=(
+            str(payload["week_start_day"])
+            if payload.get("week_start_day") is not None
+            else None
+        ),
     )
 
 

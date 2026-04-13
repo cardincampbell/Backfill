@@ -151,6 +151,17 @@ def test_location_board_route_returns_snapshot(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_board_window_respects_configured_week_start_day():
+    window = workspace_board.board_window(
+        "America/Los_Angeles",
+        "sunday",
+        date(2026, 4, 8),
+    )
+
+    assert window.week_start == date(2026, 4, 5)
+    assert window.week_end == date(2026, 4, 11)
+
+
 async def _build_board() -> WorkspaceLocationBoardRead:
     session = FakeWorkspaceBoardSession()
     now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)

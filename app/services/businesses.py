@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import ShiftLifecycleStatus, ShiftStaffingStatus
+from app.models.common import ShiftLifecycleStatus
 from app.models.role_taxonomy import BusinessPlaceType
 from app.models.scheduling import Shift
 from app.schemas.business import (
@@ -453,14 +453,9 @@ async def delete_location(
         select(func.count(Shift.id)).where(
             Shift.location_id == location_id,
             (Shift.starts_at < func.now())
-            | Shift.staffing_status.in_(
-                (
-                    ShiftStaffingStatus.no_fill,
-                )
-            )
             | Shift.lifecycle_status.in_(
                 (
-                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.in_progress,
                     ShiftLifecycleStatus.completed,
                 )
             ),
@@ -487,14 +482,9 @@ async def get_location_delete_readiness(
         select(func.count(Shift.id)).where(
             Shift.location_id == location_id,
             (Shift.starts_at < func.now())
-            | Shift.staffing_status.in_(
-                (
-                    ShiftStaffingStatus.no_fill,
-                )
-            )
             | Shift.lifecycle_status.in_(
                 (
-                    ShiftLifecycleStatus.cancelled,
+                    ShiftLifecycleStatus.in_progress,
                     ShiftLifecycleStatus.completed,
                 )
             ),
