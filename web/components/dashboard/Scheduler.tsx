@@ -2433,6 +2433,16 @@ function SchedulerContent({
                   {weekLabel}
                 </span>
               </div>
+              {isWeekPublished ? (
+                <div className="md:hidden flex items-center gap-1 px-2 py-1 rounded-full bg-[#00B893]/[0.08] border border-[#00B893]/20">
+                  <Lock size={10} className="text-[#00B893]" />
+                </div>
+              ) : null}
+              {isWeekAmended ? (
+                <div className="md:hidden flex items-center gap-1 px-2 py-1 rounded-full bg-[#F59E0B]/[0.08] border border-[#F59E0B]/20">
+                  <LockOpen size={10} className="text-[#F59E0B]" />
+                </div>
+              ) : null}
               <button
                 onClick={() => setSelectedWeekStart(shiftWeekStartDate(activeWeekStart, 1))}
                 className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}
@@ -2467,16 +2477,6 @@ function SchedulerContent({
 
         {/* ─── Mobile Day Selector ─── */}
         <div className={`lg:hidden sticky top-0 z-20 px-4 py-2 border-b flex gap-1 overflow-x-auto no-scrollbar ${theme.stickyHeaderClass} ${theme.mobileDayBorderClass}`}>
-          {isWeekPublished ? (
-            <div className="flex shrink-0 items-center gap-1 rounded-full border border-[#00B893]/20 bg-[#00B893]/[0.08] px-2 py-1">
-              <Lock size={10} className="text-[#00B893]" />
-            </div>
-          ) : null}
-          {isWeekAmended ? (
-            <div className="flex shrink-0 items-center gap-1 rounded-full border border-[#F59E0B]/20 bg-[#F59E0B]/[0.08] px-2 py-1">
-              <LockOpen size={10} className="text-[#F59E0B]" />
-            </div>
-          ) : null}
           {DAYS.map((day, i) => (
             <button key={day} onClick={() => setMobileDay(i)}
               className={`flex flex-col items-center px-3 py-1.5 rounded-xl transition-all min-w-[44px] ${
@@ -3406,7 +3406,8 @@ function PublishedEditWarningModal({
   const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
   const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
-  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedText = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const bodyText = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
 
   return (
     <>
@@ -3424,30 +3425,54 @@ function PublishedEditWarningModal({
               <Lock size={20} className="text-[#F59E0B]" />
             </div>
             <div>
-              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Continue Editing</h3>
-              <p className={`mt-0.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-                The week stays published until you save a real change
-              </p>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Move to Draft</h3>
+              <p className={`mt-0.5 text-[11px] ${mutedText}`} style={{ fontWeight: 440 }}>This will unpublish the schedule</p>
             </div>
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
-            <X size={18} className={textSecondary} />
+            <X size={18} className={mutedText} />
           </button>
         </div>
 
         <div className="px-6 py-5">
-          {publishedDateLabel ? (
-            <div className={`mb-4 rounded-xl border px-3 py-2 text-[12px] ${dark ? 'border-[#F59E0B]/25 bg-[#F59E0B]/10 text-[#FDE68A]' : 'border-[#FDE68A] bg-[#FFF7D6] text-[#8A6100]'}`}>
-              This schedule was published on {publishedDateLabel}
+          <div className={`mb-4 rounded-lg border p-4 ${dark ? 'border-[#F59E0B]/20 bg-[#F59E0B]/10' : 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.06]'}`}>
+            <div className="flex items-start gap-3">
+              <Lock size={16} className="mt-0.5 shrink-0 text-[#F59E0B]" />
+              <div>
+                <p className={`mb-2 text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                  {publishedDateLabel
+                    ? `This schedule was published on ${publishedDateLabel}.`
+                    : 'This schedule has been published'}
+                </p>
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Making changes will move this schedule back to <strong style={{ fontWeight: 560 }}>Draft</strong> mode. Employees will not be notified of changes until you publish again.
+                </p>
+              </div>
             </div>
-          ) : null}
-          <div className={`rounded-xl border px-4 py-3 ${dark ? 'border-[#F59E0B]/25 bg-[#F59E0B]/10' : 'border-[#FDE68A] bg-[#FFF7D6]'}`}>
-            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
-              Nothing changes until you actually save an edit
-            </p>
-            <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-              Continue Editing will not move this week back to draft on its own. The week becomes unpublished only after a real schedule change.
-            </p>
+          </div>
+
+          <div className="space-y-2">
+            <p className={`text-[11px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>What happens next</p>
+            <div className="space-y-1.5">
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Schedule status changes to Draft
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  You can make your changes freely
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Publish again to notify employees of updates
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
