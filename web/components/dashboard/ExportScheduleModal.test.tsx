@@ -18,8 +18,9 @@ vi.mock('@/lib/export-schedule', () => ({
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
 const defaultProps = {
+  businessName: "Coley's Coffee",
   weekLabel: 'Apr 14 – 20',
-  locationName: "Coley's Coffee",
+  locationName: 'Downtown',
   weekStart: new Date(2025, 3, 14),
   employees: [
     { id: 'e1', name: 'Alice', role: 'Barista', roleColor: '#635BFF' },
@@ -143,7 +144,8 @@ describe('ExportScheduleModal — export trigger', () => {
     fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
     await waitFor(() => expect(mockExportCSV).toHaveBeenCalledOnce());
     const [opts] = mockExportCSV.mock.calls[0] as [Record<string, unknown>];
-    expect(opts.locationName).toBe("Coley's Coffee");
+    expect(opts.businessName).toBe("Coley's Coffee");
+    expect(opts.locationName).toBe('Downtown');
     expect(opts.weekLabel).toBe('Apr 14 – 20');
     expect(opts.employees).toHaveLength(1);
     expect(opts.shifts).toHaveLength(1);

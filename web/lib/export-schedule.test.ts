@@ -26,7 +26,8 @@ const shifts: ExportShift[] = [
 ];
 
 const baseOpts: ExportOptions = {
-  locationName: "The Original Coley's LLC",
+  businessName: "The Original Coley's LLC",
+  locationName: 'Downtown',
   weekLabel: 'Apr 14 – 20',
   weekStart: new Date(2025, 3, 14), // Mon Apr 14 2025
   employees,
@@ -229,7 +230,13 @@ describe('exportCSV', () => {
     expect((capturedBlob as Blob).type).toContain('text/csv');
   });
 
-  it('CSV content contains the header row', async () => {
+  it('CSV content starts with the business · location title', async () => {
+    exportCSV(baseOpts);
+    const text = await (capturedBlob as Blob).text();
+    expect(text.trimStart()).toMatch(/^"The Original Coley's LLC · Downtown"/);
+  });
+
+  it('CSV content contains the column header row', async () => {
     exportCSV(baseOpts);
     const text = await (capturedBlob as Blob).text();
     expect(text).toContain('"Name","Role","Monday"');
