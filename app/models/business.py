@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.identity import Membership
+    from app.models.role_taxonomy import BusinessPlaceType
+    from app.models.scheduling import Shift
+    from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 
 
 class Business(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -153,7 +159,3 @@ class LocationRole(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     role: Mapped["Role"] = relationship(back_populates="location_roles")
 
 
-from app.models.identity import Membership  # noqa: E402
-from app.models.role_taxonomy import BusinessPlaceType  # noqa: E402
-from app.models.scheduling import Shift  # noqa: E402
-from app.models.workforce import Employee, EmployeeLocation, EmployeeRole  # noqa: E402

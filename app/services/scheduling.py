@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.business import Business, EmployeeLocation, Location, LocationRole, Role
+from app.models.business import Business, Location, LocationRole, Role
 from app.models.common import (
     AssignmentStatus,
     CoverageAttemptStatus,
@@ -24,7 +24,7 @@ from app.models.common import (
 )
 from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOffer, OutboxEvent
 from app.models.scheduling import Shift, ShiftAssignment
-from app.models.workforce import Employee, EmployeeRole
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.scheduling import (
     ScheduleWeekPublishRead,
     ScheduleWeekPublishWrite,

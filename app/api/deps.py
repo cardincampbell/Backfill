@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Optional
 
 from fastapi import Cookie, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing_extensions import Annotated
 
 from app.config import settings
 from app.db.session import get_db_session

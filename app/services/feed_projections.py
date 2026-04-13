@@ -570,3 +570,8 @@ async def rebuild_feed_projection(
             error_message=str(exc),
         )
         raise
+
+
+async def get_all_projection_cursors(session: AsyncSession) -> list[ProjectionCursor]:
+    result = await session.execute(select(ProjectionCursor).order_by(ProjectionCursor.projection_name))
+    return list(result.scalars().all())

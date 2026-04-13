@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -18,6 +18,9 @@ from app.models.common import (
     MembershipStatus,
     SessionRiskLevel,
 )
+
+if TYPE_CHECKING:
+    from app.models.business import Business, Location
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -184,4 +187,3 @@ class Session(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user: Mapped["User"] = relationship(back_populates="sessions")
 
 
-from app.models.business import Business, Location  # noqa: E402

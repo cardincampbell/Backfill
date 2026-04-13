@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
+from uuid import UUID
 
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
+
+
+class ProjectionStatus(BaseSchema):
+    projection_name: str
+    schema_version: int
+    last_source_created_at: Optional[datetime]
+    last_source_event_id: Optional[UUID]
+    cursor_status: str
+    last_run_started_at: Optional[datetime]
+    last_run_completed_at: Optional[datetime]
+    last_error: Optional[str]
+    cursor_metadata: dict
 
 
 class WorkerBatchRequest(BaseSchema):
