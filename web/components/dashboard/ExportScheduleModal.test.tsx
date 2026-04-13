@@ -44,11 +44,35 @@ describe('ExportScheduleModal — format selection', () => {
     vi.clearAllMocks();
   });
 
-  it('renders all three format options', () => {
+  it('renders all three format labels', () => {
     renderModal();
     expect(screen.getByText('CSV')).toBeInTheDocument();
     expect(screen.getByText('Excel')).toBeInTheDocument();
     expect(screen.getByText('PDF')).toBeInTheDocument();
+  });
+
+  it('renders the CSV format description copy', () => {
+    renderModal();
+    expect(
+      screen.getByText('Comma-separated values — opens in Excel or Google Sheets'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the Excel format description copy', () => {
+    renderModal();
+    expect(
+      screen.getByText('Formatted Microsoft Excel workbook (.xlsx)'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the PDF format description copy', () => {
+    renderModal();
+    expect(screen.getByText('Print-ready landscape document')).toBeInTheDocument();
+  });
+
+  it('renders the week label as the modal subtitle', () => {
+    renderModal();
+    expect(screen.getByText('Apr 14 – 20')).toBeInTheDocument();
   });
 
   it('defaults to CSV and shows "Export CSV" on the button', () => {
