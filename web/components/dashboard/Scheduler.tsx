@@ -27,7 +27,6 @@ import {
   Edit3,
   Printer,
   FileDown,
-  RefreshCw,
   ArrowRightLeft,
   Settings,
   UserMinus,
@@ -976,7 +975,6 @@ function SchedulerContent({
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
-  const [showSyncModal, setShowSyncModal] = useState(false);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
@@ -999,6 +997,10 @@ function SchedulerContent({
     color: string;
   } | null>(null);
   const locationMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const schedulerTopBarRef = useRef<HTMLDivElement>(null);
+  const dayHeaderScrollRef = useRef<HTMLDivElement>(null);
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const [topBarHeight, setTopBarHeight] = useState(0);
   const [editorLocation, setEditorLocation] = useState<BusinessLocation | null>(null);
   const [editorEmployees, setEditorEmployees] = useState<EmployeeSummary[]>([]);
   const [editorAssignments, setEditorAssignments] = useState<LocationRoleAssignment[]>([]);
@@ -1990,6 +1992,26 @@ function SchedulerContent({
     }
   }, [editingLocation, editorLoading, editorLocation, openLocationEditor]);
 
+  // Measure scheduler top bar height so the day header sticks just below it.
+  useEffect(() => {
+    const el = schedulerTopBarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setTopBarHeight(el.offsetHeight));
+    ro.observe(el);
+    setTopBarHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  // Keep the sticky day header's x-scroll in sync with the grid body.
+  useEffect(() => {
+    const grid = gridScrollRef.current;
+    const header = dayHeaderScrollRef.current;
+    if (!grid || !header) return;
+    const onScroll = () => { header.scrollLeft = grid.scrollLeft; };
+    grid.addEventListener('scroll', onScroll, { passive: true });
+    return () => grid.removeEventListener('scroll', onScroll);
+  }, []);
+
   const handleSaveEditor = (
     employeeIds: string[],
     locationShiftPresets: ShiftDefault[] | null,
@@ -2151,7 +2173,7 @@ function SchedulerContent({
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
 
         {/* ─── Top Bar: Location | Week Nav | Buttons ─── */}
-        <div className={`px-4 sm:px-6 md:px-8 pt-4 pb-4 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
+        <div ref={schedulerTopBarRef} className={`px-4 sm:px-6 md:px-8 pt-4 pb-4 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
           {/* Row 1: Location name + subtext */}
           <div className="mb-3.5 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -2230,19 +2252,6 @@ function SchedulerContent({
                     <FileDown size={14} className={`${theme.textSecondary} shrink-0`} />
                     <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
                       Export Schedule
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowSettingsMenu(false);
-                      setShowSyncModal(true);
-                    }}
-                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
-                    type="button"
-                  >
-                    <RefreshCw size={14} className={`${theme.textSecondary} shrink-0`} />
-                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
-                      Sync Schedule
                     </span>
                   </button>
                   <button
@@ -2407,58 +2416,65 @@ function SchedulerContent({
           </div>
         ) : (
         <>
-        {/* ─── Desktop Grid ─── */}
-        <div className="flex-1 overflow-auto hidden lg:block">
+        {/* ─── Desktop Day Header (sticky, outside overflow-auto so page-scroll sticky works) ─── */}
+        <div
+          ref={dayHeaderScrollRef}
+          className={`hidden lg:block sticky z-20 border-b overflow-x-hidden ${theme.stickyHeaderClass}`}
+          style={{ top: topBarHeight }}
+        >
           <div className="min-w-[900px]">
-            {/* Sticky Header: Consolidated day + hours row */}
-            <div className={`sticky top-0 z-20 border-b ${theme.stickyHeaderClass}`}>
-              <div className="flex">
-                {/* Left column: Week total */}
-                <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-end`}>
-                  <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 480 }}>
-                    Week: {weekTotalHours}h
-                  </span>
-                </div>
-                {/* Day columns */}
-                {DAYS.map((day, i) => {
-                  const dayHours = getDayTotalHours(i);
-                  const today = isToday(weekDates[i]);
-                  const dateKey = formatDateKey(weekDates[i]);
-                  const weather = weatherByDateKey[dateKey] ?? null;
-                  const WeatherIcon = weather?.icon;
-                  return (
-                    <div key={day} className={`relative flex-1 border-l px-3 py-3 flex items-end justify-between ${theme.cellBorderClass} ${
-                      today ? theme.todayHeaderClass : ''
-                    }`}>
-                      {WeatherIcon ? (
-                        <div className="absolute right-2 top-2 flex items-center gap-1">
-                          <WeatherIcon size={14} style={{ color: weather.color }} />
-                          <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
-                            {typeof weather.temp === 'number' ? `${weather.temp}°` : '--'}
-                          </span>
-                        </div>
-                      ) : null}
-                      {/* Left-aligned: date + day name */}
-                      <div>
-                        <p className={`text-[24px] leading-none ${
-                          today ? 'text-[#635BFF]' : theme.textPrimary
-                        }`} style={{ fontWeight: today ? 620 : 540 }}>
-                          {weekDates[i].getDate()}
-                        </p>
-                        <p className={`text-[10px] uppercase tracking-[0.04em] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
-                          {day}
-                        </p>
-                      </div>
-                      {/* Right-aligned: hours */}
-                      <span className={`text-[11px] ${theme.textSecondary}`}
-                        style={{ fontWeight: 440 }}>
-                        {dayHours}h
-                      </span>
-                    </div>
-                  );
-                })}
+            <div className="flex">
+              {/* Left column: Week total */}
+              <div className={`${EMP_COL} shrink-0 px-4 py-3 flex items-end`}>
+                <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 480 }}>
+                  Week: {weekTotalHours}h
+                </span>
               </div>
+              {/* Day columns */}
+              {DAYS.map((day, i) => {
+                const dayHours = getDayTotalHours(i);
+                const today = isToday(weekDates[i]);
+                const dateKey = formatDateKey(weekDates[i]);
+                const weather = weatherByDateKey[dateKey] ?? null;
+                const WeatherIcon = weather?.icon;
+                return (
+                  <div key={day} className={`relative flex-1 border-l px-3 py-3 flex items-end justify-between ${theme.cellBorderClass} ${
+                    today ? theme.todayHeaderClass : ''
+                  }`}>
+                    {WeatherIcon ? (
+                      <div className="absolute right-2 top-2 flex items-center gap-1">
+                        <WeatherIcon size={14} style={{ color: weather.color }} />
+                        <span className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
+                          {typeof weather.temp === 'number' ? `${weather.temp}°` : '--'}
+                        </span>
+                      </div>
+                    ) : null}
+                    {/* Left-aligned: date + day name */}
+                    <div>
+                      <p className={`text-[24px] leading-none ${
+                        today ? 'text-[#635BFF]' : theme.textPrimary
+                      }`} style={{ fontWeight: today ? 620 : 540 }}>
+                        {weekDates[i].getDate()}
+                      </p>
+                      <p className={`text-[10px] uppercase tracking-[0.04em] mt-1 ${theme.textSecondary}`} style={{ fontWeight: 460 }}>
+                        {day}
+                      </p>
+                    </div>
+                    {/* Right-aligned: hours */}
+                    <span className={`text-[11px] ${theme.textSecondary}`}
+                      style={{ fontWeight: 440 }}>
+                      {dayHours}h
+                    </span>
+                  </div>
+                );
+              })}
             </div>
+          </div>
+        </div>
+
+        {/* ─── Desktop Grid ─── */}
+        <div ref={gridScrollRef} className="flex-1 overflow-auto hidden lg:block">
+          <div className="min-w-[900px]">
 
             {/* Role Groups */}
             {filteredRoles.map((roleEntry) => {
@@ -2859,18 +2875,6 @@ function SchedulerContent({
               onClose={() => setShowExportModal(false)}
               onExport={() => {
                 setShowExportModal(false);
-              }}
-            />
-          ) : null}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {showSyncModal ? (
-            <SyncScheduleModal
-              dark={isDark}
-              onClose={() => setShowSyncModal(false)}
-              onSync={() => {
-                setShowSyncModal(false);
               }}
             />
           ) : null}
@@ -3390,91 +3394,6 @@ function ExportScheduleModal({
             <FileDown size={13} />
             Export {selectedFormat.toUpperCase()}
           </motion.button>
-        </div>
-      </motion.div>
-    </>
-  );
-}
-
-function SyncScheduleModal({
-  onClose,
-  onSync,
-  dark = false,
-}: {
-  onClose: () => void;
-  onSync: (service: string) => void;
-  dark?: boolean;
-}) {
-  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
-  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
-  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
-  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
-  const services = [
-    { value: 'google', name: 'Google Calendar', icon: '📅', status: 'Connected' },
-    { value: 'outlook', name: 'Microsoft Outlook', icon: '📧', status: 'Not connected' },
-    { value: 'apple', name: 'Apple Calendar', icon: '🍎', status: 'Not connected' },
-  ];
-
-  return (
-    <>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 bg-black z-40" onClick={onClose} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}>
-        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#635BFF]/20' : 'bg-[#635BFF]/10'}`}>
-              <RefreshCw size={20} className="text-[#635BFF]" />
-            </div>
-            <div>
-              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Sync Schedule</h3>
-              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>Connect to external calendars</p>
-            </div>
-          </div>
-          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
-            <X size={18} className={textSecondary} />
-          </button>
-        </div>
-
-        <div className="px-6 py-5">
-          <div className="space-y-2">
-            {services.map((service) => (
-              <button
-                key={service.value}
-                onClick={() => onSync(service.value)}
-                className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/30 hover:bg-white/[0.03]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#F7F8FA]'}`}>
-                <span className="text-[24px] shrink-0">{service.icon}</span>
-                <div className="flex-1">
-                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>{service.name}</p>
-                  <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>
-                    {service.status === 'Connected' ? 'Last synced 2 hours ago' : 'Click to connect'}
-                  </p>
-                </div>
-                <div className={`px-2.5 py-1 rounded-full text-[10px] ${
-                  service.status === 'Connected'
-                    ? 'bg-[#00B893]/10 text-[#00B893]'
-                    : 'bg-[#8898AA]/10 text-[#8898AA]'
-                }`} style={{ fontWeight: 500 }}>
-                  {service.status}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <div className={`mt-4 p-3 rounded-lg border ${dark ? 'bg-[#635BFF]/10 border-[#635BFF]/20' : 'bg-[#635BFF]/[0.04] border-[#635BFF]/10'}`}>
-            <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
-              <strong style={{ fontWeight: 560 }}>Auto-sync enabled:</strong> Changes to your schedule will automatically sync to connected calendars within 5 minutes.
-            </p>
-          </div>
-        </div>
-
-        <div className={`px-6 py-4 border-t ${borderClass}`}>
-          <button onClick={onClose}
-            className={`w-full py-2.5 rounded-xl border text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
-            style={{ fontWeight: 500 }}>
-            Close
-          </button>
         </div>
       </motion.div>
     </>
