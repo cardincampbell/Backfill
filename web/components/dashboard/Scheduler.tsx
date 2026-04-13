@@ -2877,10 +2877,24 @@ function SchedulerContent({
             <ExportScheduleModal
               dark={isDark}
               weekLabel={weekLabel}
+              locationName={location.location_display_name}
+              weekStart={weekDates[0]}
+              employees={activeEmployees.map((emp) => ({
+                id: emp.id,
+                name: emp.name,
+                role: emp.role,
+                roleColor: roleColorById.get(
+                  filteredRoles.find((r) => r.name === emp.role)?.id ?? ''
+                ) ?? '#635BFF',
+              }))}
+              shifts={displayShifts.map((s) => ({
+                employeeId: s.displayEmployeeId,
+                day: s.day,
+                startHour: s.startHour,
+                endHour: s.endHour,
+              }))}
               onClose={() => setShowExportModal(false)}
-              onExport={() => {
-                setShowExportModal(false);
-              }}
+              onExport={() => setShowExportModal(false)}
             />
           ) : null}
         </AnimatePresence>
@@ -3315,13 +3329,21 @@ function PrintScheduleModal({
 
 function ExportScheduleModal({
   weekLabel,
+  locationName,
+  weekStart,
+  employees,
+  shifts,
   onClose,
   onExport,
   dark = false,
 }: {
   weekLabel: string;
+  locationName: string;
+  weekStart: Date;
+  employees: { id: string; name: string; role: string; roleColor: string }[];
+  shifts: { employeeId: string | null; day: number; startHour: number; endHour: number }[];
   onClose: () => void;
-  onExport: (format: string) => void;
+  onExport: () => void;
   dark?: boolean;
 }) {
   const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
@@ -3329,11 +3351,28 @@ function ExportScheduleModal({
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
   const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
   const [selectedFormat, setSelectedFormat] = useState<'csv' | 'pdf' | 'excel'>('csv');
+  const [exporting, setExporting] = useState(false);
+
   const formats = [
-    { value: 'csv', label: 'CSV', icon: '📄', detail: 'Comma-separated values for Excel, Google Sheets' },
-    { value: 'pdf', label: 'PDF', icon: '📕', detail: 'Print-ready document format' },
-    { value: 'excel', label: 'Excel', icon: '📊', detail: 'Microsoft Excel workbook (.xlsx)' },
-  ];
+    { value: 'csv', label: 'CSV', icon: '📄', detail: 'Comma-separated values — opens in Excel or Google Sheets' },
+    { value: 'excel', label: 'Excel', icon: '📊', detail: 'Formatted Microsoft Excel workbook (.xlsx)' },
+    { value: 'pdf', label: 'PDF', icon: '📕', detail: 'Print-ready landscape document' },
+  ] as const;
+
+  const handleExport = async () => {
+    setExporting(true);
+    const opts = { locationName, weekLabel, weekStart, employees, shifts };
+    try {
+      const { exportCSV, exportExcel, exportPDF } = await import('@/lib/export-schedule');
+      if (selectedFormat === 'csv') exportCSV(opts);
+      else if (selectedFormat === 'excel') await exportExcel(opts);
+      else await exportPDF(opts);
+      onExport();
+    } catch (err) {
+      console.error('Export failed', err);
+      setExporting(false);
+    }
+  };
 
   return (
     <>
@@ -3363,7 +3402,7 @@ function ExportScheduleModal({
             {formats.map((format) => (
               <button
                 key={format.value}
-                onClick={() => setSelectedFormat(format.value as typeof selectedFormat)}
+                onClick={() => setSelectedFormat(format.value)}
                 className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${
                   selectedFormat === format.value
                     ? 'border-[#635BFF] bg-[#635BFF]/[0.04]'
@@ -3394,11 +3433,16 @@ function ExportScheduleModal({
           </button>
           <motion.button
             whileTap={{ scale: 0.97 }}
-            onClick={() => onExport(selectedFormat)}
-            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
-            <FileDown size={13} />
-            Export {selectedFormat.toUpperCase()}
+            {exporting ? (
+              <div className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+            ) : (
+              <FileDown size={13} />
+            )}
+            {exporting ? 'Exporting…' : `Export ${selectedFormat.toUpperCase()}`}
           </motion.button>
         </div>
       </motion.div>
