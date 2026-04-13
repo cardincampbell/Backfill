@@ -22,6 +22,7 @@ from app.api.routes import (
     ops_router,
     places_router,
     providers_router,
+    realtime_router,
     retell_provider_router,
     scheduler_integrations_router,
     scheduler_provider_webhooks_router,
@@ -60,6 +61,7 @@ router.include_router(invites_router)
 router.include_router(onboarding_router)
 router.include_router(places_router)
 router.include_router(providers_router)
+router.include_router(realtime_router)
 router.include_router(retell_provider_router)
 router.include_router(scheduler_integrations_router)
 router.include_router(scheduler_provider_webhooks_router)

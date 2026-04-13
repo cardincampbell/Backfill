@@ -16,6 +16,7 @@ from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.ops import router as ops_router
 from app.api.routes.places import places_router
 from app.api.routes.providers import router as providers_router
+from app.api.routes.realtime import router as realtime_router
 from app.api.routes.retell_provider import router as retell_provider_router
 from app.api.routes.scheduler_integrations import router as scheduler_integrations_router
 from app.api.routes.scheduler_provider_webhooks import router as scheduler_provider_webhooks_router
@@ -44,6 +45,7 @@ __all__ = [
     "ops_router",
     "places_router",
     "providers_router",
+    "realtime_router",
     "retell_provider_router",
     "scheduler_integrations_router",
     "scheduler_provider_webhooks_router",

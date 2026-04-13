@@ -80,6 +80,10 @@ import {
   type SchedulerBootstrapData,
 } from '@/lib/scheduler-bootstrap';
 import {
+  shouldRefreshSchedulerForRealtimeEvent,
+  subscribeToRealtimePlatformEvents,
+} from '@/lib/realtime-events';
+import {
   listEmployees,
   updateEmployee,
   type EmployeeSummary,
@@ -1131,6 +1135,31 @@ function SchedulerContent({
     refreshSchedulerData,
     selectedWeekStart,
   ]);
+
+  useEffect(() => {
+    let refreshTimer: number | null = null;
+    const unsubscribe = subscribeToRealtimePlatformEvents(location.business_id, {
+      locationId: location.location_id,
+      onEvent: (event) => {
+        if (!shouldRefreshSchedulerForRealtimeEvent(event)) {
+          return;
+        }
+        if (refreshTimer !== null) {
+          return;
+        }
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = null;
+          void refreshSchedulerData({ force: true, silent: true }).catch(() => undefined);
+        }, 300);
+      },
+    });
+    return () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      unsubscribe();
+    };
+  }, [location.business_id, location.location_id, refreshSchedulerData]);
 
   const weekDates = useMemo(
     () =>

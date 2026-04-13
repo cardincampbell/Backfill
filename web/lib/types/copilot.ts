@@ -171,3 +171,94 @@ export type CopilotMessageCreatePayload = {
   location_id?: string | null;
   normalized_channel?: string;
 };
+
+export type CopilotLiveProgressState =
+  | "thinking"
+  | "planning"
+  | "running_tool";
+
+export type CopilotLiveEvent =
+  | {
+      event_id: string;
+      event_type: "session.ready";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { detail: CopilotSessionDetail };
+    }
+  | {
+      event_id: string;
+      event_type: "user.message.accepted";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { message: CopilotMessage; session: CopilotSession };
+    }
+  | {
+      event_id: string;
+      event_type: "assistant.turn.started";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { session: CopilotSession; message_id: string };
+    }
+  | {
+      event_id: string;
+      event_type: "assistant.progress";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: {
+        state: CopilotLiveProgressState;
+        label: string;
+        resolved_intent?: CopilotIntent;
+        planner_source?: string;
+      };
+    }
+  | {
+      event_id: string;
+      event_type: "tool.started";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: {
+        tool_name: string;
+        input_payload: Record<string, unknown>;
+        validation_result: CopilotValidationResult;
+      };
+    }
+  | {
+      event_id: string;
+      event_type: "tool.finished";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { action_run: CopilotActionRun };
+    }
+  | {
+      event_id: string;
+      event_type: "assistant.message.completed";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { turn: CopilotTurn };
+    }
+  | {
+      event_id: string;
+      event_type: "assistant.turn.failed";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: {
+        error: { code: string; message: string };
+        turn?: CopilotTurn;
+      };
+    }
+  | {
+      event_id: string;
+      event_type: "session.error";
+      trace_id: string;
+      session_id: string;
+      occurred_at: string;
+      payload: { code: string; message: string };
+    };

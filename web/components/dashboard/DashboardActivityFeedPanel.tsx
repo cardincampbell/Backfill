@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   Activity,
@@ -13,6 +13,10 @@ import {
 } from "lucide-react";
 
 import { listPlatformEvents } from "@/lib/api/events";
+import {
+  shouldRefreshActivityFeedForRealtimeEvent,
+  subscribeToRealtimePlatformEvents,
+} from "@/lib/realtime-events";
 import type { PlatformEvent } from "@/lib/types/events";
 import { Link } from "./router-shim";
 
@@ -266,6 +270,7 @@ export default function DashboardActivityFeedPanel({
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const hasLoadedEventsRef = useRef(false);
 
   const loadEvents = useCallback(
     async ({ background = false }: { background?: boolean } = {}) => {
@@ -273,6 +278,7 @@ export default function DashboardActivityFeedPanel({
         return;
       }
       if (!businessId) {
+        hasLoadedEventsRef.current = false;
         setEvents([]);
         setStatus("error");
         setError("Event feed needs a business context before it can load.");
@@ -291,6 +297,7 @@ export default function DashboardActivityFeedPanel({
           limit: 20,
         });
         const visible = nextEvents.filter(visibleEvent);
+        hasLoadedEventsRef.current = visible.length > 0;
         setEvents(visible);
         setStatus(visible.length > 0 ? "ready" : "empty");
       } catch (nextError) {
@@ -300,7 +307,7 @@ export default function DashboardActivityFeedPanel({
           message === "business_access_denied"
             ? "You need manager access to view the activity feed."
             : message;
-        if (background && events.length > 0) {
+        if (background && hasLoadedEventsRef.current) {
           setRefreshError(
             `${normalizedMessage}. Showing the latest loaded activity.`,
           );
@@ -312,7 +319,7 @@ export default function DashboardActivityFeedPanel({
         setIsRefreshing(false);
       }
     },
-    [active, businessId, events.length, locationId],
+    [active, businessId, locationId],
   );
 
   useEffect(() => {
@@ -326,13 +333,29 @@ export default function DashboardActivityFeedPanel({
     if (!active || !businessId) {
       return;
     }
-    const intervalId = window.setInterval(() => {
-      void loadEvents({ background: true });
-    }, 30000);
+    let refreshTimer: number | null = null;
+    const unsubscribe = subscribeToRealtimePlatformEvents(businessId, {
+      locationId: locationId ?? null,
+      onEvent: (event) => {
+        if (!shouldRefreshActivityFeedForRealtimeEvent(event)) {
+          return;
+        }
+        if (refreshTimer !== null) {
+          return;
+        }
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = null;
+          void loadEvents({ background: hasLoadedEventsRef.current });
+        }, 300);
+      },
+    });
     return () => {
-      window.clearInterval(intervalId);
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      unsubscribe();
     };
-  }, [active, businessId, loadEvents]);
+  }, [active, businessId, loadEvents, locationId]);
 
   const headerDescription = useMemo(() => {
     if (locationName) {

@@ -12,14 +12,19 @@ import {
   Loader2,
   Send,
   Sparkles,
+  Square,
 } from "lucide-react";
 
 import {
+  cancelCopilotSocketTurn,
+  connectCopilotSessionSocket,
   createCopilotMessage,
   createCopilotSession,
+  sendCopilotSocketMessage,
 } from "@/lib/api/copilot";
 import type {
   CopilotActionRun,
+  CopilotLiveEvent,
   CopilotMessage as CopilotMessageRecord,
   CopilotSessionDetail,
   CopilotTurn,
@@ -44,16 +49,44 @@ function mergeTurnIntoSession(
   current: CopilotSessionDetail | null,
   turn: CopilotTurn,
 ): CopilotSessionDetail {
-  const messages = sortCopilotMessages([
-    ...(current?.messages ?? []),
-    turn.inbound_message,
-    turn.outbound_message,
-  ]);
+  const messagesById = new Map<string, CopilotMessageRecord>();
+  for (const message of current?.messages ?? []) {
+    messagesById.set(message.id, message);
+  }
+  messagesById.set(turn.inbound_message.id, turn.inbound_message);
+  messagesById.set(turn.outbound_message.id, turn.outbound_message);
+
+  const actionRunsById = new Map<string, CopilotActionRun>();
+  for (const actionRun of current?.action_runs ?? []) {
+    actionRunsById.set(actionRun.id, actionRun);
+  }
+  actionRunsById.set(turn.action_run.id, turn.action_run);
+
   return {
     session: turn.session,
     tools: turn.tools,
-    messages,
-    action_runs: [...(current?.action_runs ?? []), turn.action_run],
+    messages: sortCopilotMessages([...messagesById.values()]),
+    action_runs: [...actionRunsById.values()],
+  };
+}
+
+function mergeAcceptedMessageIntoSession(
+  current: CopilotSessionDetail | null,
+  message: CopilotMessageRecord,
+  session: CopilotSessionDetail["session"],
+): CopilotSessionDetail | null {
+  if (!current) {
+    return current;
+  }
+  const messagesById = new Map<string, CopilotMessageRecord>();
+  for (const currentMessage of current.messages) {
+    messagesById.set(currentMessage.id, currentMessage);
+  }
+  messagesById.set(message.id, message);
+  return {
+    ...current,
+    session,
+    messages: sortCopilotMessages([...messagesById.values()]),
   };
 }
 
@@ -150,6 +183,12 @@ function sendButtonClass(dark: boolean) {
     : "p-1.5 rounded-lg hover:bg-[#E5E7EB] transition-colors disabled:opacity-30";
 }
 
+type LiveStatus = {
+  traceId: string | null;
+  state: "thinking" | "planning" | "running_tool" | "completed" | "failed";
+  label: string;
+};
+
 export default function DashboardCopilotSidebar({
   autoStartSignal = 0,
   dark,
@@ -172,12 +211,19 @@ export default function DashboardCopilotSidebar({
   const [isTyping, setIsTyping] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const [socketState, setSocketState] = useState<
+    "idle" | "connecting" | "connected" | "failed"
+  >("idle");
   const bottomRef = useRef<HTMLDivElement>(null);
   const sessionDetailRef = useRef<CopilotSessionDetail | null>(null);
   const sessionContextKeyRef = useRef("");
   const sessionRequestRef = useRef<Promise<CopilotSessionDetail | null> | null>(
     null,
   );
+  const socketRef = useRef<WebSocket | null>(null);
+  const activeTraceIdRef = useRef<string | null>(null);
+  const clearLiveStatusTimeoutRef = useRef<number | null>(null);
 
   const activeSessionId = sessionDetail?.session.id ?? null;
   const messages = sessionDetail?.messages ?? [];
@@ -188,6 +234,12 @@ export default function DashboardCopilotSidebar({
     [actionRuns, messages],
   );
   const footerBorderClass = dark ? "border-white/[0.06]" : "border-[#F0F0F5]";
+  const isRealtimeReady =
+    socketState === "connected" &&
+    socketRef.current?.readyState === 1;
+  const canCancelLiveTurn = Boolean(
+    liveStatus && activeTraceIdRef.current && isRealtimeReady,
+  );
 
   useEffect(() => {
     sessionDetailRef.current = sessionDetail;
@@ -199,10 +251,12 @@ export default function DashboardCopilotSidebar({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
+  }, [liveStatus, messages]);
 
   useEffect(() => {
     sessionRequestRef.current = null;
+    socketRef.current?.close();
+    socketRef.current = null;
     if (!businessId) {
       setSessionDetail(null);
       setError("Copilot needs a business context before it can answer.");
@@ -213,6 +267,13 @@ export default function DashboardCopilotSidebar({
     setInput("");
     setIsTyping(false);
     setIsLoadingSession(false);
+    setLiveStatus(null);
+    setSocketState("idle");
+    activeTraceIdRef.current = null;
+    if (clearLiveStatusTimeoutRef.current) {
+      window.clearTimeout(clearLiveStatusTimeoutRef.current);
+      clearLiveStatusTimeoutRef.current = null;
+    }
   }, [businessId, locationId]);
 
   const ensureSession = useCallback(async (): Promise<CopilotSessionDetail | null> => {
@@ -280,6 +341,165 @@ export default function DashboardCopilotSidebar({
     void ensureSession();
   }, [autoStartSignal, businessId, ensureSession]);
 
+  const scheduleLiveStatusClear = useCallback(() => {
+    if (clearLiveStatusTimeoutRef.current) {
+      window.clearTimeout(clearLiveStatusTimeoutRef.current);
+    }
+    clearLiveStatusTimeoutRef.current = window.setTimeout(() => {
+      setLiveStatus(null);
+      clearLiveStatusTimeoutRef.current = null;
+    }, 1200);
+  }, []);
+
+  const handleSocketEvent = useCallback(
+    (event: CopilotLiveEvent) => {
+      switch (event.event_type) {
+        case "session.ready":
+          sessionDetailRef.current = {
+            ...event.payload.detail,
+            messages: sortCopilotMessages(event.payload.detail.messages),
+          };
+          setSessionDetail(sessionDetailRef.current);
+          return;
+        case "user.message.accepted":
+          activeTraceIdRef.current = event.trace_id;
+          setSessionDetail((current) => {
+            const next = mergeAcceptedMessageIntoSession(
+              current,
+              event.payload.message,
+              event.payload.session,
+            );
+            if (next) {
+              sessionDetailRef.current = next;
+            }
+            return next;
+          });
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "thinking",
+            label: "Thinking…",
+          });
+          return;
+        case "assistant.turn.started":
+          activeTraceIdRef.current = event.trace_id;
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "thinking",
+            label: "Thinking…",
+          });
+          return;
+        case "assistant.progress":
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: event.payload.state,
+            label: event.payload.label,
+          });
+          return;
+        case "tool.started":
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "running_tool",
+            label: `Running ${event.payload.tool_name}…`,
+          });
+          return;
+        case "tool.finished":
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "running_tool",
+            label: `${event.payload.action_run.tool_name} completed.`,
+          });
+          return;
+        case "assistant.message.completed": {
+          activeTraceIdRef.current = null;
+          setSessionDetail((current) => {
+            const next = mergeTurnIntoSession(current, event.payload.turn);
+            sessionDetailRef.current = next;
+            return next;
+          });
+          setIsTyping(false);
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "completed",
+            label: "Completed.",
+          });
+          scheduleLiveStatusClear();
+          return;
+        }
+        case "assistant.turn.failed": {
+          activeTraceIdRef.current = null;
+          if (event.payload.turn) {
+            setSessionDetail((current) => {
+              const next = mergeTurnIntoSession(current, event.payload.turn as CopilotTurn);
+              sessionDetailRef.current = next;
+              return next;
+            });
+          }
+          setIsTyping(false);
+          setError(event.payload.error.message);
+          setLiveStatus({
+            traceId: event.trace_id,
+            state: "failed",
+            label: event.payload.error.message,
+          });
+          return;
+        }
+        case "session.error":
+          setError(event.payload.message);
+          return;
+      }
+    },
+    [scheduleLiveStatusClear],
+  );
+
+  useEffect(() => {
+    if (!businessId || !activeSessionId) {
+      return;
+    }
+    if (socketRef.current?.readyState === 1) {
+      return;
+    }
+
+    setSocketState("connecting");
+    const socket = connectCopilotSessionSocket({
+      businessId,
+      sessionId: activeSessionId,
+      onEvent: handleSocketEvent,
+      onError: (message) => {
+        setSocketState("failed");
+        setError(message);
+      },
+      onClose: () => {
+        if (socketRef.current === socket) {
+          socketRef.current = null;
+        }
+        setSocketState((current) =>
+          current === "connected" ? "failed" : current,
+        );
+      },
+    });
+    socket.addEventListener("open", () => {
+      if (socketRef.current === socket) {
+        setSocketState("connected");
+      }
+    });
+    socketRef.current = socket;
+
+    return () => {
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
+      socket.close();
+    };
+  }, [activeSessionId, businessId, handleSocketEvent]);
+
+  const cancelActiveTurn = useCallback(() => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== 1) {
+      return;
+    }
+    cancelCopilotSocketTurn(socket, activeTraceIdRef.current);
+  }, []);
+
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -299,12 +519,38 @@ export default function DashboardCopilotSidebar({
           setInput(trimmed);
           return;
         }
+        const socket = socketRef.current;
+        if (socket && socket.readyState === 1) {
+          const traceId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `${Date.now()}`;
+          activeTraceIdRef.current = traceId;
+          sendCopilotSocketMessage(socket, {
+            text: trimmed,
+            location_id: locationId ?? null,
+            normalized_channel: "dashboard",
+            trace_id: traceId,
+          });
+          setLiveStatus({
+            traceId,
+            state: "thinking",
+            label: "Thinking…",
+          });
+          return;
+        }
         const turn = await createCopilotMessage(businessId, sessionId, {
           text: trimmed,
           location_id: locationId ?? null,
           normalized_channel: "dashboard",
         });
         setSessionDetail((current) => mergeTurnIntoSession(current, turn));
+        setLiveStatus({
+          traceId: null,
+          state: "completed",
+          label: "Completed.",
+        });
+        scheduleLiveStatusClear();
       } catch (nextError) {
         setInput(trimmed);
         setError(
@@ -312,11 +558,25 @@ export default function DashboardCopilotSidebar({
             ? nextError.message
             : "Failed to send Copilot message.",
         );
+        setLiveStatus({
+          traceId: null,
+          state: "failed",
+          label:
+            nextError instanceof Error
+              ? nextError.message
+              : "Failed to send Copilot message.",
+        });
       } finally {
         setIsTyping(false);
       }
     },
-    [activeSessionId, businessId, ensureSession, locationId],
+    [
+      activeSessionId,
+      businessId,
+      ensureSession,
+      locationId,
+      scheduleLiveStatusClear,
+    ],
   );
 
   return (
@@ -397,24 +657,25 @@ export default function DashboardCopilotSidebar({
             );
           })}
 
-          {isTyping ? (
+          {liveStatus ? (
             <div className="flex items-center gap-2">
               <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#635BFF] to-[#8B5CF6]">
                 <Sparkles size={11} className="text-white" />
               </div>
               <div className={typingBubbleClass(dark)}>
-                <div
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                  style={{ animationDelay: "0ms" }}
-                />
-                <div
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                  style={{ animationDelay: "150ms" }}
-                />
-                <div
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#8898AA]"
-                  style={{ animationDelay: "300ms" }}
-                />
+                {liveStatus.state === "completed" ? (
+                  <Sparkles size={12} className="text-[#635BFF]" />
+                ) : liveStatus.state === "failed" ? (
+                  <span className="h-2 w-2 rounded-full bg-[#E5484D]" />
+                ) : (
+                  <Loader2 size={12} className="animate-spin text-[#8898AA]" />
+                )}
+                <span
+                  className={dark ? "text-[11px] text-[#C1CED8]" : "text-[11px] text-[#5E6D7A]"}
+                  style={{ fontWeight: 500 }}
+                >
+                  {liveStatus.label}
+                </span>
               </div>
             </div>
           ) : null}
@@ -447,6 +708,9 @@ export default function DashboardCopilotSidebar({
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
+                  if (liveStatus) {
+                    return;
+                  }
                   void sendMessage(input);
                 }
               }}
@@ -462,14 +726,24 @@ export default function DashboardCopilotSidebar({
             <button
               className={sendButtonClass(dark)}
               disabled={
-                !input.trim() || !businessId || isLoadingSession || isTyping
+                (!canCancelLiveTurn && (!input.trim() || !businessId || isTyping)) ||
+                !businessId ||
+                isLoadingSession
               }
               onClick={() => {
+                if (canCancelLiveTurn) {
+                  cancelActiveTurn();
+                  return;
+                }
                 void sendMessage(input);
               }}
               type="button"
             >
-              <Send size={14} className="text-[#635BFF]" />
+              {canCancelLiveTurn ? (
+                <Square size={14} className="text-[#635BFF]" />
+              ) : (
+                <Send size={14} className="text-[#635BFF]" />
+              )}
             </button>
           </div>
         </div>

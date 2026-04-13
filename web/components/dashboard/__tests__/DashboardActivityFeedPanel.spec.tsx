@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/events", () => ({
   listPlatformEvents: vi.fn(),
@@ -9,6 +9,42 @@ vi.mock("@/lib/api/events", () => ({
 import { listPlatformEvents } from "@/lib/api/events";
 import type { PlatformEvent } from "@/lib/types/events";
 import DashboardActivityFeedPanel from "../DashboardActivityFeedPanel";
+
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+
+  onerror: (() => void) | null = null;
+  listeners = new Map<string, Set<(event: MessageEvent<string>) => void>>();
+  closed = false;
+
+  constructor(
+    public readonly url: string,
+    public readonly options?: { withCredentials?: boolean },
+  ) {
+    MockEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener) {
+    const handlers = this.listeners.get(type) ?? new Set();
+    handlers.add(listener as (event: MessageEvent<string>) => void);
+    this.listeners.set(type, handlers);
+  }
+
+  removeEventListener(type: string, listener: EventListener) {
+    this.listeners.get(type)?.delete(
+      listener as (event: MessageEvent<string>) => void,
+    );
+  }
+
+  close() {
+    this.closed = true;
+  }
+
+  emit(type: string, data: Record<string, unknown>) {
+    const message = { data: JSON.stringify(data) } as MessageEvent<string>;
+    this.listeners.get(type)?.forEach((handler) => handler(message));
+  }
+}
 
 function buildEvent(overrides: Partial<PlatformEvent> = {}): PlatformEvent {
   return {
@@ -53,7 +89,13 @@ describe("DashboardActivityFeedPanel", () => {
   const listPlatformEventsMock = vi.mocked(listPlatformEvents);
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    listPlatformEventsMock.mockReset();
+    MockEventSource.instances = [];
+    vi.stubGlobal("EventSource", MockEventSource);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows loading and empty states", async () => {
@@ -106,7 +148,7 @@ describe("DashboardActivityFeedPanel", () => {
     });
   });
 
-  it("refreshes only while active", async () => {
+  it("refreshes from realtime events only while active", async () => {
     vi.useFakeTimers();
     listPlatformEventsMock.mockResolvedValue([buildEvent()]);
 
@@ -125,9 +167,21 @@ describe("DashboardActivityFeedPanel", () => {
     });
     const initialCallCount = listPlatformEventsMock.mock.calls.length;
     expect(initialCallCount).toBeGreaterThan(0);
+    expect(MockEventSource.instances).toHaveLength(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30000);
+      MockEventSource.instances[0].emit("platform_event", {
+        platform_event_id: "event-2",
+        business_id: "business-1",
+        location_id: "location-1",
+        event_type: "coverage.campaign.created",
+        entity_type: "coverage_campaign",
+        entity_id: "campaign-2",
+        trace_id: "trace-2",
+        occurred_at: "2026-04-10T12:01:00Z",
+        source: "platform_event",
+      });
+      await vi.advanceTimersByTimeAsync(300);
     });
     expect(listPlatformEventsMock).toHaveBeenCalledTimes(initialCallCount + 1);
 
@@ -140,18 +194,28 @@ describe("DashboardActivityFeedPanel", () => {
         locationName="Santa Monica"
       />,
     );
+    expect(MockEventSource.instances[0].closed).toBe(true);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30000);
+      MockEventSource.instances[0].emit("platform_event", {
+        platform_event_id: "event-3",
+        business_id: "business-1",
+        location_id: "location-1",
+        event_type: "coverage.campaign.created",
+        entity_type: "coverage_campaign",
+        entity_id: "campaign-3",
+        trace_id: "trace-3",
+        occurred_at: "2026-04-10T12:02:00Z",
+        source: "platform_event",
+      });
+      await vi.advanceTimersByTimeAsync(300);
     });
     expect(listPlatformEventsMock).toHaveBeenCalledTimes(initialCallCount + 1);
-
     vi.useRealTimers();
   });
 
   it("preserves the last good feed state when a background refresh fails", async () => {
     listPlatformEventsMock
-      .mockResolvedValueOnce([buildEvent()])
       .mockResolvedValueOnce([buildEvent()])
       .mockRejectedValueOnce(new Error("network_error"));
 
