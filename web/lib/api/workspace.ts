@@ -309,6 +309,27 @@ export type ShiftAssignmentMutationResponse = {
   current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
 };
 
+export type ScheduleWeekPublishPayload = {
+  source: "scheduler_ui" | "copilot";
+  notify_channels: Array<"sms" | "email">;
+  expected_shift_ids?: string[] | null;
+  note?: string;
+};
+
+export type ScheduleWeekPublishResponse = {
+  business_id: string;
+  location_id: string;
+  week_start_date: string;
+  week_end_date: string;
+  publish_mode: "draft_only_net_new";
+  published_shift_count: number;
+  already_scheduled_shift_count: number;
+  notification_enqueued_assignment_count: number;
+  notification_enqueued_employee_count: number;
+  published_shift_ids: string[];
+  already_scheduled_shift_ids: string[];
+};
+
 export class ShiftAssignmentConflictError extends Error {
   currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"];
 
@@ -319,6 +340,24 @@ export class ShiftAssignmentConflictError extends Error {
     super(message);
     this.name = "ShiftAssignmentConflictError";
     this.currentAssignment = currentAssignment;
+  }
+}
+
+export class ScheduleWeekPublishConflictError extends Error {
+  current?: {
+    week_start_date: string;
+    publishable_shift_ids: string[];
+    draft_shift_count: number;
+    already_scheduled_shift_count: number;
+  };
+
+  constructor(
+    message: string,
+    current?: ScheduleWeekPublishConflictError["current"],
+  ) {
+    super(message);
+    this.name = "ScheduleWeekPublishConflictError";
+    this.current = current;
   }
 }
 
@@ -820,6 +859,42 @@ export async function assignShift(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as ShiftAssignmentMutationResponse;
+}
+
+export async function publishScheduleWeek(
+  businessId: string,
+  locationId: string,
+  weekStartDate: string,
+  payload: ScheduleWeekPublishPayload,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/schedule-weeks/${weekStartDate}/publish`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: {
+        code?: string;
+        current?: ScheduleWeekPublishConflictError["current"];
+      } | string;
+    } | null;
+    const detail = body?.detail;
+    if (detail && typeof detail === "object") {
+      throw new ScheduleWeekPublishConflictError(
+        detail.code ?? "stale_publish_conflict",
+        detail.current,
+      );
+    }
+    throw new ScheduleWeekPublishConflictError("stale_publish_conflict");
+  }
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as ScheduleWeekPublishResponse;
 }
 
 function normalizeCoverageCampaign(

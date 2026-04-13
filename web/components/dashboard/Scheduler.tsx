@@ -57,12 +57,15 @@ import {
   deleteShift as deleteWorkspaceShift,
   getLocationBoard,
   getLocationShiftDefaults,
+  publishScheduleWeek,
+  ScheduleWeekPublishConflictError,
   updateLocationSettings,
   ShiftAssignmentConflictError,
   updateLocationShiftDefaults,
   updateShift as updateWorkspaceShift,
   type ShiftCreatePayload,
   type ShiftAssignmentMutationResponse,
+  type ScheduleWeekPublishResponse,
   type ShiftDefault,
   type ShiftDefaultKey,
   type LocationShiftDefaults,
@@ -121,6 +124,8 @@ interface Shift {
   displayEmployeeId: string | null;
   displayEmployeeName?: string | null;
   currentAssignmentId?: string | null;
+  lifecycleStatus: string;
+  staffingStatus: string;
   roleId: string;
   day: number;
   startHour: number;
@@ -442,6 +447,8 @@ function boardShiftToSchedulerShift(
       shift.last_assignment?.employee_name ??
       null,
     currentAssignmentId: shift.current_assignment?.assignment_id ?? null,
+    lifecycleStatus: shift.lifecycle_status,
+    staffingStatus: shift.staffing_status,
     roleId: shift.role_id,
     day,
     startHour,
@@ -1463,13 +1470,48 @@ function SchedulerContent({
   const getShiftsForCell = useCallback((empId: string, day: number) =>
     displayShifts.filter((shift) => shift.displayEmployeeId === empId && shift.day === day), [displayShifts]);
 
-  const assignedShiftsForPublishing = useMemo(
+  const draftShiftIdsForPublishing = useMemo(
     () =>
-      displayShifts
-        .filter((shift): shift is Shift & { employeeId: string } => shift.employeeId !== null)
-        .map((shift) => ({ ...shift, employeeId: shift.employeeId })),
+      (board?.shifts ?? [])
+        .filter((shift) => shift.lifecycle_status === 'draft')
+        .map((shift) => shift.shift_id),
+    [board],
+  );
+
+  const draftShiftsForPublishing = useMemo(
+    () =>
+      displayShifts.filter((shift) => shift.lifecycleStatus === 'draft'),
     [displayShifts],
   );
+
+  const publishWeek = async (): Promise<ScheduleWeekPublishResponse> => {
+    try {
+      const response = await publishScheduleWeek(
+        location.business_id,
+        location.location_id,
+        activeWeekStart,
+        {
+          source: 'scheduler_ui',
+          notify_channels: ['sms', 'email'],
+          expected_shift_ids: draftShiftIdsForPublishing,
+        },
+      );
+      void refreshSchedulerData({ force: true, silent: true }).catch(() => {
+        setSchedulerNotice({
+          tone: 'info',
+          title: 'Schedule published',
+          detail: 'The week published successfully, but the scheduler could not refresh automatically.',
+        });
+      });
+      return response;
+    } catch (error) {
+      if (error instanceof ScheduleWeekPublishConflictError) {
+        await refreshSchedulerData({ force: true });
+        throw new Error('This week changed before publish completed. The scheduler was refreshed.');
+      }
+      throw error;
+    }
+  };
 
   const deleteShift = useCallback((id: string) => {
     void (async () => {
@@ -2133,7 +2175,7 @@ function SchedulerContent({
                 sideOffset={10}
                 zIndex={10050}
               >
-                <div className="py-2">
+                <div className={`py-2 ${theme.modalBorderClass} border-b`}>
                   <button
                     onClick={() => {
                       setShowSettingsMenu(false);
@@ -2149,6 +2191,8 @@ function SchedulerContent({
                       Edit Location
                     </span>
                   </button>
+                </div>
+                <div className={`py-2 ${theme.modalBorderClass} border-b`}>
                   <button
                     onClick={() => {
                       setShowSettingsMenu(false);
@@ -2188,7 +2232,8 @@ function SchedulerContent({
                       Sync Schedule
                     </span>
                   </button>
-                  <div className={`my-2 h-px ${theme.modalBorderClass}`} />
+                </div>
+                <div className="py-2">
                   <button
                     onClick={() => {
                       setShowSettingsMenu(false);
@@ -2260,7 +2305,8 @@ function SchedulerContent({
               <motion.button
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setShowPublishModal(true)}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)]"
+                disabled={draftShiftsForPublishing.length === 0}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Zap size={13} />
                 <span className="hidden lg:inline">Publish Week</span>
@@ -2717,14 +2763,19 @@ function SchedulerContent({
             <PublishWeekModal
               dark={isDark}
               weekLabel={weekLabel}
-              shifts={assignedShiftsForPublishing}
+              shifts={draftShiftsForPublishing}
               employees={activeEmployees}
+              onPublish={publishWeek}
               onClose={() => setShowPublishModal(false)}
-              onComplete={() => {
+              onComplete={(result) => {
                 setShowPublishModal(false);
                 setSchedulerNotice({
                   tone: 'success',
                   title: 'Schedule published',
+                  detail:
+                    result.published_shift_count > 0
+                      ? `${result.published_shift_count} draft shift${result.published_shift_count === 1 ? '' : 's'} published. ${result.notification_enqueued_employee_count} employee notification${result.notification_enqueued_employee_count === 1 ? '' : 's'} enqueued.`
+                      : 'No new draft shifts were available to publish.',
                 });
               }}
             />

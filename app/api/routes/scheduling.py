@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -9,6 +9,8 @@ from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
 from app.models.scheduling import ShiftAssignment
 from app.schemas.scheduling import (
+    ScheduleWeekPublishRead,
+    ScheduleWeekPublishWrite,
     ShiftAssignmentMutationResponse,
     ShiftAssignmentWrite,
     ShiftCreate,
@@ -19,7 +21,7 @@ from app.schemas.scheduling import (
 from app.services import audit as audit_service
 from app.services import auth as auth_service, outreach as outreach_service, platform_events, scheduling
 
-router = APIRouter(prefix="/businesses/{business_id}/shifts", tags=["scheduling"])
+router = APIRouter(prefix="/businesses/{business_id}", tags=["scheduling"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
 
 
@@ -36,7 +38,7 @@ def _assignment_conflict_payload(assignment: ShiftAssignment | None) -> dict | N
     }
 
 
-@router.get("", response_model=list[ShiftRead])
+@router.get("/shifts", response_model=list[ShiftRead])
 async def list_shifts(
     business_id: UUID,
     session: SessionDep,
@@ -56,7 +58,7 @@ async def list_shifts(
     )
 
 
-@router.post("", response_model=ShiftRead, status_code=status.HTTP_201_CREATED)
+@router.post("/shifts", response_model=ShiftRead, status_code=status.HTTP_201_CREATED)
 async def create_shift(
     business_id: UUID,
     payload: ShiftCreate,
@@ -95,7 +97,120 @@ async def create_shift(
     return shift
 
 
-@router.patch("/{shift_id}/assignment", response_model=ShiftAssignmentMutationResponse)
+@router.post(
+    "/locations/{location_id}/schedule-weeks/{week_start_date}/publish",
+    response_model=ScheduleWeekPublishRead,
+)
+async def publish_schedule_week(
+    business_id: UUID,
+    location_id: UUID,
+    week_start_date: date,
+    payload: ScheduleWeekPublishWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    try:
+        result = await scheduling.publish_schedule_week(
+            session,
+            business_id,
+            location_id,
+            week_start_date,
+            payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except scheduling.ScheduleWeekPublishConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "stale_publish_conflict",
+                "current": {
+                    "week_start_date": exc.week_start_date.isoformat(),
+                    "publishable_shift_ids": [str(shift_id) for shift_id in exc.publishable_shift_ids],
+                    "draft_shift_count": exc.draft_shift_count,
+                    "already_scheduled_shift_count": exc.already_scheduled_shift_count,
+                },
+            },
+        ) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
+    response = scheduling.build_schedule_week_publish_response(result)
+    client_ip = audit_service.request_client_ip(request)
+    user_agent = audit_service.request_user_agent(request)
+
+    if response.published_shift_count > 0:
+        for shift in result.published_shifts:
+            await platform_events.append(
+                session,
+                event_type=platform_events.PlatformEventType.SCHEDULE_SHIFT_PUBLISHED,
+                target_type="shift",
+                target_id=shift.id,
+                business_id=business_id,
+                location_id=location_id,
+                actor_type=AuditActorType.user,
+                actor_user_id=auth_ctx.user.id,
+                actor_membership_id=membership.id if membership is not None else None,
+                ip_address=client_ip,
+                user_agent=user_agent,
+                payload={
+                    "shift_id": str(shift.id),
+                    "lifecycle_status": (
+                        shift.lifecycle_status.value
+                        if hasattr(shift.lifecycle_status, "value")
+                        else str(shift.lifecycle_status)
+                    ),
+                    "staffing_status": (
+                        shift.staffing_status.value
+                        if hasattr(shift.staffing_status, "value")
+                        else str(shift.staffing_status)
+                    ),
+                    "status": shift.status.value if hasattr(shift.status, "value") else str(shift.status),
+                    "current_assignment": scheduling._assignment_read(
+                        scheduling.shift_assignments.current_assignment(shift.assignments or [])
+                    ).model_dump(mode="json")
+                    if scheduling.shift_assignments.current_assignment(shift.assignments or []) is not None
+                    else None,
+                },
+                metadata={
+                    "source": payload.source,
+                    "note": payload.note,
+                    "week_start_date": response.week_start_date.isoformat(),
+                    "week_end_date": response.week_end_date.isoformat(),
+                },
+            )
+
+        await platform_events.append(
+            session,
+            event_type=platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
+            target_type="location",
+            target_id=location_id,
+            business_id=business_id,
+            location_id=location_id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            payload=response.model_dump(mode="json"),
+            metadata={
+                "source": payload.source,
+                "note": payload.note,
+            },
+        )
+
+    await session.commit()
+    return response
+
+
+@router.patch("/shifts/{shift_id}/assignment", response_model=ShiftAssignmentMutationResponse)
 async def update_shift_assignment(
     business_id: UUID,
     shift_id: UUID,
@@ -214,7 +329,7 @@ async def update_shift_assignment(
     return response
 
 
-@router.patch("/{shift_id}", response_model=ShiftRead)
+@router.patch("/shifts/{shift_id}", response_model=ShiftRead)
 async def update_shift(
     business_id: UUID,
     shift_id: UUID,
@@ -250,7 +365,7 @@ async def update_shift(
     return shift
 
 
-@router.delete("/{shift_id}", response_model=ShiftDeleteResponse)
+@router.delete("/shifts/{shift_id}", response_model=ShiftDeleteResponse)
 async def delete_shift(
     business_id: UUID,
     shift_id: UUID,

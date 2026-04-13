@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +21,7 @@ from app.schemas.workspace_board import (
     WorkspaceBoardWorkerRead,
     WorkspaceLocationBoardRead,
 )
+from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 from app.services import shift_assignments as shift_assignment_service
 
 
@@ -32,68 +31,6 @@ READ_ROLES = {
     MembershipRole.manager,
     MembershipRole.viewer,
 }
-
-WEEKDAY_INDEX = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-    "saturday": 5,
-    "sunday": 6,
-}
-
-
-@dataclass
-class LocationBoardWindow:
-    week_start: date
-    week_end: date
-    starts_at: datetime
-    ends_at: datetime
-
-
-def week_anchor_for(
-    timezone_name: str,
-    week_start_day: str | None,
-    value: date | None = None,
-) -> date:
-    current = value or datetime.now(ZoneInfo(timezone_name)).date()
-    start_index = WEEKDAY_INDEX.get((week_start_day or "monday").strip().lower(), 0)
-    return current - timedelta(days=(current.weekday() - start_index) % 7)
-
-
-def _effective_week_start_day(business: Business, location: Location) -> str:
-    location_settings = location.settings if isinstance(location.settings, dict) else {}
-    business_settings = business.settings if isinstance(business.settings, dict) else {}
-    location_override = location_settings.get("week_start_day")
-    if isinstance(location_override, str) and location_override.strip().lower() in WEEKDAY_INDEX:
-        return location_override.strip().lower()
-    business_default = business_settings.get("week_start_day")
-    if isinstance(business_default, str) and business_default.strip().lower() in WEEKDAY_INDEX:
-        return business_default.strip().lower()
-    return "monday"
-
-
-def board_window(
-    timezone_name: str,
-    week_start_day: str | date | None,
-    week_start: date | None = None,
-) -> LocationBoardWindow:
-    local_zone = ZoneInfo(timezone_name)
-    if isinstance(week_start_day, date):
-        week_start = week_start_day
-        week_start_day = "monday"
-    anchor = week_anchor_for(timezone_name, week_start_day, week_start)
-    week_end = anchor + timedelta(days=6)
-    starts_at = datetime.combine(anchor, datetime.min.time(), tzinfo=local_zone).astimezone(timezone.utc)
-    ends_at = datetime.combine(week_end, datetime.max.time(), tzinfo=local_zone).astimezone(timezone.utc)
-    return LocationBoardWindow(
-        week_start=anchor,
-        week_end=week_end,
-        starts_at=starts_at,
-        ends_at=ends_at,
-    )
-
 
 def _to_float(value: Decimal | float | int | None) -> float:
     if value is None:
@@ -170,9 +107,14 @@ async def get_location_board(
     location = await session.get(Location, location_id)
     if business is None or location is None or location.business_id != business_id:
         raise LookupError("business_or_location_not_found")
-    window = board_window(
+    location_settings = location.settings if isinstance(location.settings, dict) else {}
+    business_settings = business.settings if isinstance(business.settings, dict) else {}
+    window = schedule_week_window(
         location.timezone,
-        _effective_week_start_day(business, location),
+        effective_week_start_day(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
         week_start,
     )
 

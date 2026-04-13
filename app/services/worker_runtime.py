@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Awaitable, Callable, Optional, TypeVar
+from typing import Awaitable, Callable, Optional, Sequence, TypeVar
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,9 +72,10 @@ async def claim_outbox_events(
     *,
     now: datetime,
     limit: int,
-    topic: str,
+    topic: str | Sequence[str],
     business_resolver: BusinessResolver[OutboxEvent] | None = None,
 ) -> list[OutboxEvent]:
+    topics = [topic] if isinstance(topic, str) else [value for value in topic]
     due_filter = or_(OutboxEvent.available_at.is_(None), OutboxEvent.available_at <= now)
     stale_filter = and_(
         OutboxEvent.status == OutboxStatus.processing,
@@ -84,7 +85,7 @@ async def claim_outbox_events(
     result = await session.execute(
         select(OutboxEvent)
         .where(
-            OutboxEvent.topic == topic,
+            OutboxEvent.topic.in_(topics),
             or_(
                 and_(OutboxEvent.status.in_([OutboxStatus.pending, OutboxStatus.failed]), due_filter),
                 stale_filter,

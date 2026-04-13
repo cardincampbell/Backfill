@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -81,6 +81,27 @@ class ShiftAssignmentMutationResponse(BaseSchema):
     staffing_status: str
     status: str
     current_assignment: Optional[ShiftAssignmentRead] = None
+
+
+class ScheduleWeekPublishWrite(BaseSchema):
+    source: Literal["scheduler_ui", "copilot"]
+    notify_channels: list[Literal["sms", "email"]] = Field(default_factory=list)
+    expected_shift_ids: Optional[list[UUID]] = None
+    note: Optional[str] = None
+
+
+class ScheduleWeekPublishRead(BaseSchema):
+    business_id: UUID
+    location_id: UUID
+    week_start_date: date
+    week_end_date: date
+    publish_mode: Literal["draft_only_net_new"]
+    published_shift_count: int
+    already_scheduled_shift_count: int
+    notification_enqueued_assignment_count: int
+    notification_enqueued_employee_count: int
+    published_shift_ids: list[UUID]
+    already_scheduled_shift_ids: list[UUID]
 
 
 class ShiftDeleteResponse(BaseSchema):

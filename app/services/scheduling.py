@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.business import EmployeeLocation, Location, LocationRole, Role
+from app.models.business import Business, EmployeeLocation, Location, LocationRole, Role
 from app.models.common import (
     AssignmentStatus,
     CoverageAttemptStatus,
@@ -16,6 +17,7 @@ from app.models.common import (
     CoverageRunStatus,
     EmployeeStatus,
     OfferStatus,
+    OutboxChannel,
     OutboxStatus,
     ShiftLifecycleStatus,
     ShiftStaffingStatus,
@@ -24,6 +26,8 @@ from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOf
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeRole
 from app.schemas.scheduling import (
+    ScheduleWeekPublishRead,
+    ScheduleWeekPublishWrite,
     ShiftAssignmentMutationResponse,
     ShiftAssignmentRead,
     ShiftAssignmentWrite,
@@ -31,18 +35,32 @@ from app.schemas.scheduling import (
     ShiftUpdate,
 )
 from app.services import delivery, shift_assignments, worker_runtime
+from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 
 _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
 _ACTIVE_OFFER_STATUSES = {OfferStatus.pending, OfferStatus.delivered}
 _ACTIVE_RUN_STATUSES = {CoverageRunStatus.queued, CoverageRunStatus.running}
 _USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
-_TERMINAL_SHIFT_LIFECYCLE_STATUSES = {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}
-
-
 class ShiftAssignmentConflictError(Exception):
     def __init__(self, current_assignment: ShiftAssignment | None):
         super().__init__("stale_assignment_conflict")
         self.current_assignment = current_assignment
+
+
+class ScheduleWeekPublishConflictError(Exception):
+    def __init__(
+        self,
+        *,
+        week_start_date: date,
+        publishable_shift_ids: list[UUID],
+        draft_shift_count: int,
+        already_scheduled_shift_count: int,
+    ):
+        super().__init__("stale_publish_conflict")
+        self.week_start_date = week_start_date
+        self.publishable_shift_ids = publishable_shift_ids
+        self.draft_shift_count = draft_shift_count
+        self.already_scheduled_shift_count = already_scheduled_shift_count
 
 
 @dataclass
@@ -55,6 +73,18 @@ class ShiftAssignmentMutationResult:
     cancelled_cases: list[CoverageCase]
     cancelled_offers: list[CoverageOffer]
     no_op: bool = False
+
+
+@dataclass
+class ScheduleWeekPublishResult:
+    business_id: UUID
+    location_id: UUID
+    week_start_date: date
+    week_end_date: date
+    published_shifts: list[Shift]
+    already_scheduled_shifts: list[Shift]
+    notification_enqueued_assignment_count: int
+    notification_enqueued_employee_count: int
 
 
 def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
@@ -113,6 +143,168 @@ def build_shift_assignment_response(
         status=result.shift.status.value if hasattr(result.shift.status, "value") else str(result.shift.status),
         current_assignment=_assignment_read(result.current_assignment),
     )
+
+
+def build_schedule_week_publish_response(
+    result: ScheduleWeekPublishResult,
+) -> ScheduleWeekPublishRead:
+    return ScheduleWeekPublishRead(
+        business_id=result.business_id,
+        location_id=result.location_id,
+        week_start_date=result.week_start_date,
+        week_end_date=result.week_end_date,
+        publish_mode="draft_only_net_new",
+        published_shift_count=len(result.published_shifts),
+        already_scheduled_shift_count=len(result.already_scheduled_shifts),
+        notification_enqueued_assignment_count=result.notification_enqueued_assignment_count,
+        notification_enqueued_employee_count=result.notification_enqueued_employee_count,
+        published_shift_ids=[shift.id for shift in result.published_shifts],
+        already_scheduled_shift_ids=[shift.id for shift in result.already_scheduled_shifts],
+    )
+
+
+def _normalized_notify_channels(channels: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw_channel in channels:
+        channel = str(raw_channel).strip().lower()
+        if channel not in {"sms", "email"} or channel in seen:
+            continue
+        seen.add(channel)
+        normalized.append(channel)
+    return normalized
+
+
+def _format_shift_notification_line(shift: Shift) -> str:
+    timezone_name = shift.timezone or "UTC"
+    try:
+        tz = ZoneInfo(timezone_name)
+    except Exception:
+        tz = timezone.utc
+    starts_local = shift.starts_at.astimezone(tz)
+    ends_local = shift.ends_at.astimezone(tz)
+    role_name = getattr(getattr(shift, "role", None), "name", None) or "Shift"
+    date_label = starts_local.strftime("%a %b %d").replace(" 0", " ")
+    start_label = starts_local.strftime("%I:%M%p").lstrip("0")
+    end_label = ends_local.strftime("%I:%M%p").lstrip("0")
+    return f"{date_label} {start_label}-{end_label} · {role_name}"
+
+
+def _schedule_publish_notification_payload(
+    *,
+    business_id: UUID,
+    location_id: UUID,
+    location_name: str,
+    week_start_date: date,
+    week_end_date: date,
+    employee: Employee,
+    shifts: list[Shift],
+    note: str | None,
+) -> dict:
+    week_label = f"{week_start_date.strftime('%b %d').replace(' 0', ' ')} – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
+    shift_lines = [_format_shift_notification_line(shift) for shift in shifts]
+    subject = f"Your Backfill schedule for {week_label} is live"
+    intro = f"Your schedule for {location_name} for the week of {week_label} is now live."
+    text_body = "\n".join(
+        [
+            f"Hi {employee.full_name},",
+            "",
+            intro,
+            "",
+            *[f"- {line}" for line in shift_lines],
+            *(["", note] if note else []),
+        ]
+    )
+    html_lines = "".join(f"<li>{line}</li>" for line in shift_lines)
+    html_body = (
+        f"<p>Hi {employee.full_name},</p>"
+        f"<p>{intro}</p>"
+        f"<ul>{html_lines}</ul>"
+        + (f"<p>{note}</p>" if note else "")
+    )
+    return {
+        "business_id": str(business_id),
+        "location_id": str(location_id),
+        "employee_id": str(employee.id),
+        "employee_name": employee.full_name,
+        "phone_e164": employee.phone_e164,
+        "email": employee.email,
+        "location_name": location_name,
+        "week_start_date": week_start_date.isoformat(),
+        "week_end_date": week_end_date.isoformat(),
+        "shift_ids": [str(shift.id) for shift in shifts],
+        "shift_count": len(shifts),
+        "text_body": text_body,
+        "html_body": html_body,
+        "subject": subject,
+    }
+
+
+async def _enqueue_schedule_publish_notifications(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID,
+    location_name: str,
+    week_start_date: date,
+    week_end_date: date,
+    shifts: list[Shift],
+    notify_channels: list[str],
+    note: str | None,
+) -> tuple[int, int]:
+    normalized_channels = _normalized_notify_channels(notify_channels)
+    if not normalized_channels:
+        return 0, 0
+
+    shifts_by_employee: dict[UUID, list[Shift]] = {}
+    employees_by_id: dict[UUID, Employee] = {}
+    enqueued_assignment_count = 0
+
+    for shift in shifts:
+        current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+        employee = current_assignment.employee if current_assignment is not None else None
+        if current_assignment is None or employee is None:
+            continue
+        available_channels = [
+            channel
+            for channel in normalized_channels
+            if (channel == "sms" and employee.phone_e164) or (channel == "email" and employee.email)
+        ]
+        if not available_channels:
+            continue
+        shifts_by_employee.setdefault(employee.id, []).append(shift)
+        employees_by_id[employee.id] = employee
+        enqueued_assignment_count += 1
+
+    for employee_id, employee_shifts in shifts_by_employee.items():
+        employee = employees_by_id[employee_id]
+        payload = _schedule_publish_notification_payload(
+            business_id=business_id,
+            location_id=location_id,
+            location_name=location_name,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date,
+            employee=employee,
+            shifts=employee_shifts,
+            note=note,
+        )
+        for channel in normalized_channels:
+            if channel == "sms" and not employee.phone_e164:
+                continue
+            if channel == "email" and not employee.email:
+                continue
+            session.add(
+                OutboxEvent(
+                    aggregate_type="schedule_publish",
+                    aggregate_id=employee.id,
+                    topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+                    channel=OutboxChannel(channel),
+                    payload=payload,
+                    result_payload={},
+                )
+            )
+
+    return enqueued_assignment_count, len(shifts_by_employee)
 
 
 async def list_shifts(
@@ -252,6 +444,94 @@ async def delete_shift(
     await session.delete(shift)
     await session.flush()
     return shift
+
+
+async def publish_schedule_week(
+    session: AsyncSession,
+    business_id: UUID,
+    location_id: UUID,
+    week_start_date: date,
+    payload: ScheduleWeekPublishWrite,
+) -> ScheduleWeekPublishResult:
+    business = await session.get(Business, business_id)
+    location = await session.get(Location, location_id)
+    if business is None or location is None or location.business_id != business_id:
+        raise LookupError("business_or_location_not_found")
+
+    business_settings = business.settings if isinstance(business.settings, dict) else {}
+    location_settings = location.settings if isinstance(location.settings, dict) else {}
+    window = schedule_week_window(
+        location.timezone,
+        effective_week_start_day(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
+        week_start_date,
+    )
+
+    result = await session.execute(
+        select(Shift)
+        .options(
+            selectinload(Shift.location),
+            selectinload(Shift.role),
+            selectinload(Shift.assignments).selectinload(ShiftAssignment.employee),
+        )
+        .where(
+            Shift.business_id == business_id,
+            Shift.location_id == location_id,
+            Shift.ends_at >= window.starts_at,
+            Shift.starts_at <= window.ends_at,
+        )
+        .order_by(Shift.starts_at.asc(), Shift.created_at.asc())
+    )
+    shifts = list(result.scalars().all())
+    draft_shifts = [
+        shift for shift in shifts if shift.lifecycle_status == ShiftLifecycleStatus.draft
+    ]
+    already_scheduled_shifts = [
+        shift for shift in shifts if shift.lifecycle_status == ShiftLifecycleStatus.scheduled
+    ]
+    current_publishable_shift_ids = [shift.id for shift in draft_shifts]
+
+    if payload.expected_shift_ids is not None:
+        expected_shift_ids = sorted(str(shift_id) for shift_id in payload.expected_shift_ids)
+        actual_shift_ids = sorted(str(shift_id) for shift_id in current_publishable_shift_ids)
+        if expected_shift_ids != actual_shift_ids:
+            raise ScheduleWeekPublishConflictError(
+                week_start_date=window.week_start,
+                publishable_shift_ids=current_publishable_shift_ids,
+                draft_shift_count=len(draft_shifts),
+                already_scheduled_shift_count=len(already_scheduled_shifts),
+            )
+
+    for shift in draft_shifts:
+        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+
+    notification_enqueued_assignment_count, notification_enqueued_employee_count = (
+        await _enqueue_schedule_publish_notifications(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+            location_name=getattr(location, "display_name", None) or location.name,
+            week_start_date=window.week_start,
+            week_end_date=window.week_end,
+            shifts=draft_shifts,
+            notify_channels=payload.notify_channels,
+            note=payload.note,
+        )
+    )
+
+    await session.flush()
+    return ScheduleWeekPublishResult(
+        business_id=business_id,
+        location_id=location_id,
+        week_start_date=window.week_start,
+        week_end_date=window.week_end,
+        published_shifts=draft_shifts,
+        already_scheduled_shifts=already_scheduled_shifts,
+        notification_enqueued_assignment_count=notification_enqueued_assignment_count,
+        notification_enqueued_employee_count=notification_enqueued_employee_count,
+    )
 
 
 async def set_shift_assignment(
@@ -444,22 +724,15 @@ def _recompute_shift_ownership_state(shift: Shift) -> None:
     current = shift_assignments.current_assignment(shift.assignments or [])
     shift.seats_filled = 1 if current is not None else 0
     if current is not None:
-        _ensure_operational_lifecycle(shift)
         shift.staffing_status = ShiftStaffingStatus.covered
         return
     has_active_automation = any(
         coverage_case.status in _ACTIVE_CASE_STATUSES
         for coverage_case in (shift.coverage_cases or [])
     )
-    _ensure_operational_lifecycle(shift)
     shift.staffing_status = (
         ShiftStaffingStatus.filling if has_active_automation else ShiftStaffingStatus.open
     )
-
-
-def _ensure_operational_lifecycle(shift: Shift) -> None:
-    if shift.lifecycle_status not in _TERMINAL_SHIFT_LIFECYCLE_STATUSES and shift.lifecycle_status == ShiftLifecycleStatus.draft:
-        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
 
 
 async def _cancel_active_automation(

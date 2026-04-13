@@ -159,6 +159,49 @@ async def test_process_outbox_batch_marks_offer_delivered_and_creates_attempt():
 
 
 @pytest.mark.asyncio
+async def test_process_outbox_batch_sends_schedule_publish_sms(monkeypatch):
+    now = datetime.now(timezone.utc)
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="schedule_publish",
+        aggregate_id=uuid4(),
+        topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+        channel="sms",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={
+            "business_id": str(uuid4()),
+            "phone_e164": "+15555550100",
+            "text_body": "Your schedule is live.",
+        },
+    )
+    captured: dict[str, str | None] = {}
+
+    def fake_send_sms(*, to: str, body: str, status_callback: str | None = None):
+        captured["to"] = to
+        captured["body"] = body
+        captured["status_callback"] = status_callback
+        return {"sid": "SM-PUBLISH", "status": "queued"}
+
+    monkeypatch.setattr("app.services.messaging.send_sms", fake_send_sms)
+
+    session = FakeDeliverySession()
+    session.execute_queue = [[event]]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        now=now,
+        limit=10,
+    )
+
+    assert result["claimed_count"] == 1
+    assert result["sent_count"] == 1
+    assert event.status == OutboxStatus.sent
+    assert captured["to"] == "+15555550100"
+    assert captured["body"] == "Your schedule is live."
+
+
+@pytest.mark.asyncio
 async def test_process_outbox_batch_terminal_failure_advances_next_candidate(monkeypatch):
     now = datetime.now(timezone.utc)
     business_id = uuid4()

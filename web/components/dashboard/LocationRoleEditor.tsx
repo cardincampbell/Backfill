@@ -4,16 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { MapPin, Phone, Plus, Trash2, X, Info } from "lucide-react";
 
+import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
+import { BrandedSelect } from "./BrandedSelect";
+
 import type {
   BusinessLocation,
   LocationRoleAssignment,
 } from "@/lib/api/businesses";
 import type {
+  BusinessProfile,
   LocationShiftDefaults,
   ShiftDefault,
 } from "@/lib/api/workspace";
 import type { EmployeeSummary } from "@/lib/api/workforce";
 
+import { getBusinessProfile } from "@/lib/api/workspace";
 import {
   formatDisplayLabel,
   formatLocationMeta,
@@ -97,8 +102,7 @@ function countShiftPresetChanges(left: ShiftDefault[], right: ShiftDefault[]) {
   return count;
 }
 
-const WEEK_START_DAY_OPTIONS = [
-  { value: "", label: "Use business default" },
+const WEEK_START_DAY_OPTIONS: CustomSelectOption[] = [
   { value: "sunday", label: "Sunday" },
   { value: "monday", label: "Monday" },
   { value: "tuesday", label: "Tuesday" },
@@ -111,6 +115,17 @@ const WEEK_START_DAY_OPTIONS = [
 function readLocationWeekStartDay(location: BusinessLocation) {
   const value = location.settings?.week_start_day;
   return typeof value === "string" ? value : "";
+}
+
+function readBusinessWeekStartDay(business: BusinessProfile | null) {
+  const raw = business?.settings?.week_start_day;
+  if (typeof raw !== "string") {
+    return "monday";
+  }
+  const normalized = raw.trim().toLowerCase();
+  return WEEK_START_DAY_OPTIONS.some((option) => option.value === normalized)
+    ? normalized
+    : "monday";
 }
 
 export function LocationRoleEditor({
@@ -155,9 +170,12 @@ export function LocationRoleEditor({
     normalizeShiftDefaults(null),
   );
   const [draftWeekStartDay, setDraftWeekStartDay] = useState<string>("");
+  const [businessDefaultWeekStartDay, setBusinessDefaultWeekStartDay] = useState<string>("monday");
+  const [hasTouchedWeekStartDay, setHasTouchedWeekStartDay] = useState(false);
   const [visibleFeedback, setVisibleFeedback] = useState<LocationRoleEditorFeedback>(feedback);
   const [isClosing, setIsClosing] = useState(false);
   const closeTimeoutRef = useRef<number | null>(null);
+  const locationWeekStartOverride = readLocationWeekStartDay(location);
 
   useEffect(() => {
     setSelectedEmployeeIds(
@@ -182,8 +200,33 @@ export function LocationRoleEditor({
   }, [location.id, shiftDefaults]);
 
   useEffect(() => {
-    setDraftWeekStartDay(readLocationWeekStartDay(location));
-  }, [location]);
+    let cancelled = false;
+    void getBusinessProfile(location.business_id)
+      .then((business) => {
+        if (!cancelled) {
+          setBusinessDefaultWeekStartDay(readBusinessWeekStartDay(business));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBusinessDefaultWeekStartDay("monday");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [location.business_id]);
+
+  useEffect(() => {
+    setHasTouchedWeekStartDay(false);
+    setDraftWeekStartDay(locationWeekStartOverride || businessDefaultWeekStartDay);
+  }, [businessDefaultWeekStartDay, location.id, locationWeekStartOverride]);
+
+  useEffect(() => {
+    if (!hasTouchedWeekStartDay && !locationWeekStartOverride) {
+      setDraftWeekStartDay(businessDefaultWeekStartDay);
+    }
+  }, [businessDefaultWeekStartDay, hasTouchedWeekStartDay, locationWeekStartOverride]);
 
   useEffect(() => {
     setVisibleFeedback(feedback);
@@ -291,7 +334,9 @@ export function LocationRoleEditor({
       ),
     [shiftDefaults],
   );
-  const baselineWeekStartDay = useMemo(() => readLocationWeekStartDay(location), [location]);
+  const baselineWeekStartDay = useMemo(() => locationWeekStartOverride, [locationWeekStartOverride]);
+  const nextPersistedWeekStartDay =
+    draftWeekStartDay === businessDefaultWeekStartDay ? null : draftWeekStartDay;
   const effectiveShiftPresets = useMemo(
     () =>
       normalizeShiftDefaults(
@@ -309,7 +354,8 @@ export function LocationRoleEditor({
     () => countShiftPresetChanges(effectiveShiftPresets, baselineShiftPresets),
     [baselineShiftPresets, effectiveShiftPresets],
   );
-  const weekStartChangeCount = baselineWeekStartDay === draftWeekStartDay ? 0 : 1;
+  const weekStartChangeCount =
+    (baselineWeekStartDay || null) === nextPersistedWeekStartDay ? 0 : 1;
   const totalChangeCount = employeeChangeCount + shiftChangeCount + weekStartChangeCount;
   const totalCoverageHours = useMemo(
     () => Math.round(getShiftCoverageHours(effectiveShiftPresets)),
@@ -395,7 +441,7 @@ export function LocationRoleEditor({
                 onSave(
                   selectedEmployeeIds,
                   useBusinessDefaults ? null : normalizeShiftDefaults(draftShiftDefaults),
-                  draftWeekStartDay || null,
+                  nextPersistedWeekStartDay,
                   {
                     employeeChangeCount,
                     shiftChangeCount,
@@ -748,41 +794,34 @@ export function LocationRoleEditor({
             ) : null}
           </div>
 
-          <div>
-            <div className="mb-3">
-              <h3
-                className={`text-[11px] uppercase tracking-[0.04em] ${textSecondary}`}
-                style={{ fontWeight: 500 }}
-              >
-                Scheduler
-              </h3>
-            </div>
-            <div className={`rounded-2xl border px-4 py-4 ${subtleBorderClass} ${subtleSurfaceClass}`}>
-              <label
-                className={`block text-[10px] uppercase tracking-[0.05em] ${textSecondary}`}
-                style={{ fontWeight: 500 }}
-              >
-                Week starts on
-              </label>
-              <select
-                value={draftWeekStartDay}
-                onChange={(event) => setDraftWeekStartDay(event.target.value)}
-                className={`mt-2 w-full rounded-xl border px-3 py-2.5 text-[12px] outline-none transition-colors ${
+          <div className={`rounded-2xl border px-4 py-4 ${subtleBorderClass} ${subtleSurfaceClass}`}>
+            <label
+              className={`block text-[10px] uppercase tracking-[0.05em] ${textSecondary}`}
+              style={{ fontWeight: 500 }}
+            >
+              Week Starts On
+            </label>
+            <div className="mt-2">
+              {dark ? (
+                <BrandedSelect
                   dark
-                    ? "border-white/[0.08] bg-[#102B46] text-white"
-                    : "border-[#E5E7EB] bg-white text-[#0A2540]"
-                }`}
-                style={{ fontWeight: 500 }}
-              >
-                {WEEK_START_DAY_OPTIONS.map((option) => (
-                  <option key={option.value || "business-default"} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 420 }}>
-                Set a location-specific override, or leave this on the business default.
-              </p>
+                  options={WEEK_START_DAY_OPTIONS}
+                  value={draftWeekStartDay}
+                  onChange={(event: { target: { value: string } }) => {
+                    setHasTouchedWeekStartDay(true);
+                    setDraftWeekStartDay(event.target.value);
+                  }}
+                />
+              ) : (
+                <CustomSelect
+                  options={WEEK_START_DAY_OPTIONS}
+                  value={draftWeekStartDay}
+                  onChange={(nextValue) => {
+                    setHasTouchedWeekStartDay(true);
+                    setDraftWeekStartDay(nextValue);
+                  }}
+                />
+              )}
             </div>
           </div>
 

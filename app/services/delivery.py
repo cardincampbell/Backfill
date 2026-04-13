@@ -139,6 +139,8 @@ class ActionableOfferContext:
 
 
 _DELIVERY_MAX_ATTEMPTS = 3
+COVERAGE_OFFER_OUTBOX_TOPIC = "coverage.offer.created"
+SCHEDULE_PUBLISH_NOTIFICATION_TOPIC = "schedule.week.published_notification"
 
 
 def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
@@ -189,6 +191,75 @@ def _resolve_provider_for_channel(channel) -> DeliveryProvider:
     if channel_value == "voice":
         return RetellVoiceDeliveryProvider()
     return StubDeliveryProvider()
+
+
+def _schedule_notification_destination(
+    outbox_event: OutboxEvent,
+) -> str | None:
+    channel_value = outbox_event.channel.value if hasattr(outbox_event.channel, "value") else str(outbox_event.channel)
+    if channel_value == "sms":
+        raw_phone = outbox_event.payload.get("phone_e164")
+        return str(raw_phone).strip() if raw_phone else None
+    if channel_value == "email":
+        raw_email = outbox_event.payload.get("email")
+        return str(raw_email).strip() if raw_email else None
+    return None
+
+
+async def _send_schedule_publish_notification(
+    *,
+    outbox_event: OutboxEvent,
+) -> DeliverySendResult:
+    channel_value = outbox_event.channel.value if hasattr(outbox_event.channel, "value") else str(outbox_event.channel)
+    destination = _schedule_notification_destination(outbox_event)
+    if not destination:
+        return DeliverySendResult(
+            success=False,
+            provider="stub",
+            error_message="missing_destination",
+            result_payload={"topic": outbox_event.topic},
+        )
+
+    subject = str(outbox_event.payload.get("subject") or "Your Backfill schedule is live")
+    text_body = str(outbox_event.payload.get("text_body") or "").strip()
+    html_body_raw = outbox_event.payload.get("html_body")
+    html_body = str(html_body_raw) if isinstance(html_body_raw, str) and html_body_raw.strip() else None
+    now = datetime.now(timezone.utc)
+
+    if channel_value == "sms":
+        message = messaging.send_sms(to=destination, body=text_body)
+        return DeliverySendResult(
+            success=True,
+            provider="twilio",
+            provider_message_id=message.get("sid"),
+            sent_at=now,
+            result_payload={
+                "topic": outbox_event.topic,
+                "status": message.get("status"),
+            },
+        )
+
+    if channel_value == "email":
+        message_id = messaging.send_email(
+            to=destination,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
+        return DeliverySendResult(
+            success=True,
+            provider="sendgrid",
+            provider_message_id=message_id,
+            sent_at=now,
+            result_payload={"topic": outbox_event.topic},
+        )
+
+    return DeliverySendResult(
+        success=False,
+        provider="stub",
+        error_message="unsupported_notification_channel",
+        result_payload={"channel": channel_value, "topic": outbox_event.topic},
+    )
 
 
 async def refresh_employee_reliability(
@@ -299,9 +370,18 @@ async def _coverage_outbox_business_keys(
     session: AsyncSession,
     events: list[OutboxEvent],
 ) -> dict[object, object | None]:
-    offer_ids = [event.aggregate_id for event in events if event.aggregate_id is not None]
+    business_by_event_id: dict[object, object | None] = {}
+    offer_ids = [
+        event.aggregate_id
+        for event in events
+        if event.aggregate_id is not None and event.topic == COVERAGE_OFFER_OUTBOX_TOPIC
+    ]
     if not offer_ids:
-        return {}
+        for event in events:
+            if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
+                raw_business_id = event.payload.get("business_id")
+                business_by_event_id[event.id] = raw_business_id
+        return business_by_event_id
     result = await session.execute(
         select(CoverageOffer.id, Shift.business_id)
         .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
@@ -312,10 +392,13 @@ async def _coverage_outbox_business_keys(
         offer_id: business_id
         for offer_id, business_id in result.all()
     }
-    return {
-        event.id: business_by_offer_id.get(event.aggregate_id)
-        for event in events
-    }
+    for event in events:
+        if event.topic == COVERAGE_OFFER_OUTBOX_TOPIC:
+            business_by_event_id[event.id] = business_by_offer_id.get(event.aggregate_id)
+            continue
+        if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
+            business_by_event_id[event.id] = event.payload.get("business_id")
+    return business_by_event_id
 
 
 async def _get_or_create_contact_attempt(
@@ -369,7 +452,7 @@ async def process_outbox_batch(
         session,
         now=reference_time,
         limit=limit,
-        topic="coverage.offer.created",
+        topic=(COVERAGE_OFFER_OUTBOX_TOPIC, SCHEDULE_PUBLISH_NOTIFICATION_TOPIC),
         business_resolver=_coverage_outbox_business_keys,
     )
 
@@ -378,6 +461,59 @@ async def process_outbox_batch(
     processed_event_ids: list[str] = []
 
     for event in events:
+        if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
+            try:
+                result = await _send_schedule_publish_notification(outbox_event=event)
+            except Exception as exc:
+                retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+                error_message = str(exc)
+                if retryable:
+                    worker_runtime.mark_outbox_event_retry(
+                        event,
+                        now=reference_time,
+                        next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
+                        error_message=error_message,
+                        result_payload={"topic": event.topic},
+                    )
+                else:
+                    worker_runtime.mark_outbox_event_cancelled(
+                        event,
+                        now=reference_time,
+                        error_message=error_message,
+                        result_payload={"topic": event.topic},
+                    )
+                failed_count += 1
+                processed_event_ids.append(str(event.id))
+                continue
+
+            if result.success:
+                worker_runtime.mark_outbox_event_sent(
+                    event,
+                    now=reference_time,
+                    result_payload=result.result_payload,
+                )
+                sent_count += 1
+            else:
+                retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+                if retryable:
+                    worker_runtime.mark_outbox_event_retry(
+                        event,
+                        now=reference_time,
+                        next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
+                        error_message=result.error_message or "delivery_retry_scheduled",
+                        result_payload=result.result_payload,
+                    )
+                else:
+                    worker_runtime.mark_outbox_event_cancelled(
+                        event,
+                        now=reference_time,
+                        error_message=result.error_message or "delivery_failed",
+                        result_payload=result.result_payload,
+                    )
+                failed_count += 1
+            processed_event_ids.append(str(event.id))
+            continue
+
         offer = await session.get(CoverageOffer, event.aggregate_id)
         if offer is None:
             worker_runtime.mark_outbox_event_cancelled(
