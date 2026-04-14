@@ -112,6 +112,7 @@ import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import { CalendarSyncModal } from './CalendarSyncModal';
 import { ExportScheduleModal } from './ExportScheduleModal';
+import { PrintScheduleModal } from './PrintScheduleModal';
 import {
   SchedulerEmployeeEnrollmentModal,
 } from './LocationEmployeeActions';
@@ -3054,12 +3055,33 @@ function SchedulerContent({
           {showPrintModal ? (
             <PrintScheduleModal
               dark={isDark}
+              businessName={location.business_display_name}
+              locationName={location.location_display_name}
               weekLabel={weekLabel}
+              weekDates={weekDates}
+              employees={activeEmployees.map((emp) => {
+                const summary = businessEmployees.find((e) => e.id === emp.id);
+                return {
+                  id: emp.id,
+                  name: emp.name,
+                  role: emp.role,
+                  roleColor: roleColorById.get(
+                    filteredRoles.find((r) => r.name === emp.role)?.id ?? ''
+                  ) ?? '#635BFF',
+                  email: summary?.email ?? null,
+                  phone: summary?.phone_e164 ?? null,
+                };
+              })}
+              shifts={displayShifts.map((s) => ({
+                // Use employeeId (current assignment only), not displayEmployeeId,
+                // which falls back to last_assignment and would attribute an
+                // unassigned shift to whoever previously held it.
+                employeeId: s.employeeId,
+                day: s.day,
+                startHour: s.startHour,
+                endHour: s.endHour,
+              }))}
               onClose={() => setShowPrintModal(false)}
-              onPrint={() => {
-                setShowPrintModal(false);
-                window.print();
-              }}
             />
           ) : null}
         </AnimatePresence>
@@ -3607,55 +3629,6 @@ function PrintScheduleModal({
             </div>
           </div>
 
-          <div>
-            <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Include</label>
-            <div className="space-y-2">
-              {[
-                { state: includeEmployeeInfo, setState: setIncludeEmployeeInfo, label: 'Employee contact information', detail: 'Email and phone numbers' },
-                { state: includeHours, setState: setIncludeHours, label: 'Hour totals', detail: 'Daily and weekly hour counts' },
-                { state: includeRoles, setState: setIncludeRoles, label: 'Role assignments', detail: 'Show employee roles' },
-              ].map((option, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => option.setState(!option.state)}
-                  className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/30' : 'border-[#E5E7EB] hover:border-[#635BFF]/30'}`}>
-                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
-                    option.state ? 'border-[#635BFF] bg-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
-                  }`}>
-                    {option.state && <Check size={10} className="text-white" />}
-                  </div>
-                  <div className="flex-1">
-                    <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{option.label}</p>
-                    <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{option.detail}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className={`flex gap-2.5 border-t px-6 py-4 ${borderClass}`}>
-          <button
-            onClick={onClose}
-            className={`flex-1 rounded-xl border py-2.5 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
-            style={{ fontWeight: 500 }}
-            type="button"
-          >
-            Cancel
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={onPrint}
-            className="flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] flex items-center justify-center gap-2"
-            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
-            <Printer size={13} />
-            Print Schedule
-          </motion.button>
-        </div>
-      </motion.div>
-    </>
-  );
-}
 
 
 function RevertScheduleModal({
