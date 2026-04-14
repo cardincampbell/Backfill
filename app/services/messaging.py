@@ -127,6 +127,7 @@ def send_email(
     subject: str,
     text_body: str,
     html_body: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> str | None:
     if not settings.sendgrid_api_key or not settings.backfill_email_from:
         raise RuntimeError(
@@ -146,6 +147,8 @@ def send_email(
         "subject": subject,
         "content": content,
     }
+    if headers:
+        payload["headers"] = {str(key): str(value) for key, value in headers.items() if str(key).strip()}
 
     response = httpx.post(
         "https://api.sendgrid.com/v3/mail/send",

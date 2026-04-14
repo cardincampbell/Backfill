@@ -29,11 +29,22 @@ from app.schemas.workforce import (
     EmployeeEnrollmentRead,
     EmployeeImportErrorRead,
     EmployeeLocationCreate,
+    EmployeeNotificationPreferencesUpdate,
     EmployeeLocationUpsert,
     EmployeeRoleCreate,
     EmployeeRoleUpsert,
     EmployeeUpdate,
 )
+
+
+_DEFAULT_EMPLOYEE_NOTIFICATION_PREFERENCES = {
+    "schedule_publish_email_enabled": True,
+    "schedule_publish_sms_enabled": False,
+    "email_opted_out_at": None,
+    "sms_opted_out_at": None,
+    "email_opt_out_reason": None,
+    "sms_opt_out_reason": None,
+}
 
 EMPLOYEE_IMPORT_HEADERS = (
     "first_name",
@@ -176,6 +187,80 @@ def _normalize_employee_email(value: str | None) -> str | None:
 def _normalize_employee_external_ref(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _normalize_notification_datetime(value: object) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def normalized_employee_notification_preferences(metadata: dict | None) -> dict[str, object]:
+    raw = dict(((metadata or {}).get("notification_preferences")) or {})
+    return {
+        "schedule_publish_email_enabled": bool(
+            raw.get(
+                "schedule_publish_email_enabled",
+                _DEFAULT_EMPLOYEE_NOTIFICATION_PREFERENCES["schedule_publish_email_enabled"],
+            )
+        ),
+        "schedule_publish_sms_enabled": bool(
+            raw.get(
+                "schedule_publish_sms_enabled",
+                _DEFAULT_EMPLOYEE_NOTIFICATION_PREFERENCES["schedule_publish_sms_enabled"],
+            )
+        ),
+        "email_opted_out_at": _normalize_notification_datetime(raw.get("email_opted_out_at")),
+        "sms_opted_out_at": _normalize_notification_datetime(raw.get("sms_opted_out_at")),
+        "email_opt_out_reason": str(raw.get("email_opt_out_reason") or "").strip() or None,
+        "sms_opt_out_reason": str(raw.get("sms_opt_out_reason") or "").strip() or None,
+    }
+
+
+def _serialized_employee_notification_preferences(preferences: dict[str, object]) -> dict[str, object]:
+    return {
+        "schedule_publish_email_enabled": bool(preferences["schedule_publish_email_enabled"]),
+        "schedule_publish_sms_enabled": bool(preferences["schedule_publish_sms_enabled"]),
+        "email_opted_out_at": (
+            preferences["email_opted_out_at"].isoformat()
+            if isinstance(preferences.get("email_opted_out_at"), datetime)
+            else None
+        ),
+        "sms_opted_out_at": (
+            preferences["sms_opted_out_at"].isoformat()
+            if isinstance(preferences.get("sms_opted_out_at"), datetime)
+            else None
+        ),
+        "email_opt_out_reason": str(preferences.get("email_opt_out_reason") or "").strip() or None,
+        "sms_opt_out_reason": str(preferences.get("sms_opt_out_reason") or "").strip() or None,
+    }
+
+
+def _apply_employee_notification_preferences_update(
+    employee: Employee,
+    payload: EmployeeNotificationPreferencesUpdate,
+) -> None:
+    preferences = normalized_employee_notification_preferences(employee.employee_metadata)
+    for field_name in payload.model_fields_set:
+        preferences[field_name] = getattr(payload, field_name)
+    employee.employee_metadata = {
+        **(employee.employee_metadata or {}),
+        "notification_preferences": _serialized_employee_notification_preferences(preferences),
+    }
+
+
+def _attach_employee_notification_preferences(employee: Employee) -> Employee:
+    setattr(
+        employee,
+        "notification_preferences",
+        normalized_employee_notification_preferences(employee.employee_metadata),
+    )
+    return employee
 
 
 async def _find_duplicate_employee(
@@ -612,7 +697,7 @@ async def list_employees(session: AsyncSession, business_id: UUID) -> list[Emplo
         .where(Employee.business_id == business_id)
         .order_by(Employee.created_at.desc())
     )
-    return list(result.scalars().all())
+    return [_attach_employee_notification_preferences(employee) for employee in result.scalars().all()]
 
 
 async def get_employee(
@@ -620,12 +705,15 @@ async def get_employee(
     business_id: UUID,
     employee_id: UUID,
 ) -> Optional[Employee]:
-    return await session.scalar(
+    employee = await session.scalar(
         _employee_query().where(
             Employee.id == employee_id,
             Employee.business_id == business_id,
         )
     )
+    if employee is None:
+        return None
+    return _attach_employee_notification_preferences(employee)
 
 
 async def _require_employee(
@@ -861,7 +949,7 @@ async def create_employee(
     else:
         set_committed_value(employee, "employee_locations", [])
     set_committed_value(employee, "employee_roles", [])
-    return employee
+    return _attach_employee_notification_preferences(employee)
 
 
 async def bulk_import_employees(
@@ -985,7 +1073,10 @@ async def enroll_employee_at_location(
     set_committed_value(employee, "employee_locations", [primary_employee_location])
     set_committed_value(employee, "employee_roles", employee_roles)
 
-    return EmployeeEnrollmentRead(employee=employee, roles=employee_roles)
+    return EmployeeEnrollmentRead(
+        employee=_attach_employee_notification_preferences(employee),
+        roles=employee_roles,
+    )
 
 
 async def get_employee_profile(
@@ -998,7 +1089,7 @@ async def get_employee_profile(
     employee_locations = await _list_employee_locations(session, employee_id)
     set_committed_value(employee, "employee_roles", employee_roles)
     set_committed_value(employee, "employee_locations", employee_locations)
-    return employee
+    return _attach_employee_notification_preferences(employee)
 
 
 async def _blocking_employee_assignment_count(
@@ -1122,6 +1213,9 @@ async def update_employee(
         if field_name in payload.model_fields_set:
             setattr(employee, field_name, field_value)
 
+    if "notification_preferences" in payload.model_fields_set and payload.notification_preferences is not None:
+        _apply_employee_notification_preferences_update(employee, payload.notification_preferences)
+
     if "roles" in payload.model_fields_set:
         await _replace_employee_roles(session, employee, business_id, payload.roles or [])
 
@@ -1136,7 +1230,7 @@ async def update_employee(
     employee_locations = await _list_employee_locations(session, employee_id)
     set_committed_value(refreshed, "employee_roles", employee_roles)
     set_committed_value(refreshed, "employee_locations", employee_locations)
-    return refreshed
+    return _attach_employee_notification_preferences(refreshed)
 
 
 async def add_employee_role(

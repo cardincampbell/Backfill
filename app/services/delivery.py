@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,7 +17,14 @@ from app.models.coverage import CoverageCandidate, CoverageCase, CoverageCaseRun
 from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
-from app.services import messaging, outreach as outreach_service, platform_events, retell as retell_service, worker_runtime
+from app.services import (
+    communication_suppressions,
+    messaging,
+    outreach as outreach_service,
+    platform_events,
+    retell as retell_service,
+    worker_runtime,
+)
 
 
 @dataclass
@@ -206,7 +214,87 @@ def _schedule_notification_destination(
     return None
 
 
+async def _suppressed_delivery_result(
+    session: AsyncSession,
+    *,
+    channel_value: str,
+    destination: str | None,
+    topic: str,
+) -> DeliverySendResult | None:
+    suppression = await communication_suppressions.get_active_suppression(
+        session,
+        channel=channel_value,
+        destination=destination,
+    )
+    if suppression is None:
+        return None
+    return DeliverySendResult(
+        success=False,
+        provider="suppression",
+        error_message="destination_suppressed",
+        retryable=False,
+        result_payload={
+            "topic": topic,
+            "suppressed": True,
+            "suppression_channel": suppression.channel,
+            "suppression_scope": suppression.scope,
+            "suppression_reason_code": suppression.reason_code,
+            "suppression_source": suppression.source,
+        },
+    )
+
+
+def _schedule_notification_failure_result(
+    *,
+    channel_value: str,
+    outbox_event: OutboxEvent,
+    exc: Exception,
+) -> DeliverySendResult:
+    result_payload = {"topic": outbox_event.topic}
+
+    if channel_value == "sms":
+        twilio_code = getattr(exc, "code", None)
+        twilio_status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+        if twilio_code is not None:
+            result_payload["twilio_error_code"] = twilio_code
+        if twilio_status is not None:
+            result_payload["twilio_status_code"] = twilio_status
+        retryable = not (
+            twilio_code == 21211
+            or (isinstance(twilio_status, int) and 400 <= twilio_status < 500)
+        )
+        return DeliverySendResult(
+            success=False,
+            provider="twilio",
+            error_message=str(exc),
+            retryable=retryable,
+            result_payload=result_payload,
+        )
+
+    if channel_value == "email":
+        retryable = True
+        if isinstance(exc, httpx.HTTPStatusError):
+            result_payload["sendgrid_status_code"] = exc.response.status_code
+            retryable = exc.response.status_code >= 500
+        return DeliverySendResult(
+            success=False,
+            provider="sendgrid",
+            error_message=str(exc),
+            retryable=retryable,
+            result_payload=result_payload,
+        )
+
+    return DeliverySendResult(
+        success=False,
+        provider="stub",
+        error_message=str(exc),
+        retryable=False,
+        result_payload=result_payload,
+    )
+
+
 async def _send_schedule_publish_notification(
+    session: AsyncSession,
     *,
     outbox_event: OutboxEvent,
 ) -> DeliverySendResult:
@@ -220,15 +308,41 @@ async def _send_schedule_publish_notification(
             result_payload={"topic": outbox_event.topic},
         )
 
+    suppressed = await _suppressed_delivery_result(
+        session,
+        channel_value=channel_value,
+        destination=destination,
+        topic=outbox_event.topic,
+    )
+    if suppressed is not None:
+        return suppressed
+
     subject = str(outbox_event.payload.get("subject") or "Your Backfill schedule is live")
     text_body = str(outbox_event.payload.get("text_body") or "").strip()
     sms_body = str(outbox_event.payload.get("sms_body") or text_body).strip()
     html_body_raw = outbox_event.payload.get("html_body")
     html_body = str(html_body_raw) if isinstance(html_body_raw, str) and html_body_raw.strip() else None
+    email_headers_raw = outbox_event.payload.get("email_headers")
+    email_headers = (
+        {
+            str(key): str(value)
+            for key, value in email_headers_raw.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if isinstance(email_headers_raw, dict)
+        else None
+    )
     now = datetime.now(timezone.utc)
 
     if channel_value == "sms":
-        message = messaging.send_sms(to=destination, body=sms_body)
+        try:
+            message = messaging.send_sms(to=destination, body=sms_body)
+        except Exception as exc:
+            return _schedule_notification_failure_result(
+                channel_value=channel_value,
+                outbox_event=outbox_event,
+                exc=exc,
+            )
         return DeliverySendResult(
             success=True,
             provider="twilio",
@@ -241,12 +355,20 @@ async def _send_schedule_publish_notification(
         )
 
     if channel_value == "email":
-        message_id = messaging.send_email(
-            to=destination,
-            subject=subject,
-            text_body=text_body,
-            html_body=html_body,
-        )
+        try:
+            message_id = messaging.send_email(
+                to=destination,
+                subject=subject,
+                text_body=text_body,
+                html_body=html_body,
+                headers=email_headers,
+            )
+        except Exception as exc:
+            return _schedule_notification_failure_result(
+                channel_value=channel_value,
+                outbox_event=outbox_event,
+                exc=exc,
+            )
         return DeliverySendResult(
             success=True,
             provider="sendgrid",
@@ -464,7 +586,7 @@ async def process_outbox_batch(
     for event in events:
         if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
             try:
-                result = await _send_schedule_publish_notification(outbox_event=event)
+                result = await _send_schedule_publish_notification(session, outbox_event=event)
             except Exception as exc:
                 retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
                 error_message = str(exc)
@@ -554,6 +676,44 @@ async def process_outbox_batch(
             shift=shift,
             now=reference_time,
         )
+
+        destination = None
+        channel_value = offer.channel.value if hasattr(offer.channel, "value") else str(offer.channel)
+        if channel_value == "sms":
+            raw_phone = event.payload.get("phone_e164") or offer.offer_metadata.get("phone_e164")
+            destination = str(raw_phone).strip() if raw_phone else None
+        elif channel_value == "email":
+            raw_email = event.payload.get("email") or offer.offer_metadata.get("email")
+            destination = str(raw_email).strip() if raw_email else None
+
+        suppressed_result = await _suppressed_delivery_result(
+            session,
+            channel_value=channel_value,
+            destination=destination,
+            topic=event.topic,
+        )
+        if suppressed_result is not None:
+            advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+                session,
+                offer=offer,
+                attempt=attempt,
+                reference_time=reference_time,
+                error_message=suppressed_result.error_message or "destination_suppressed",
+                result_payload=suppressed_result.result_payload,
+            )
+            worker_runtime.mark_outbox_event_cancelled(
+                event,
+                now=reference_time,
+                error_message=suppressed_result.error_message or "destination_suppressed",
+                result_payload={
+                    **suppressed_result.result_payload,
+                    "advanced_offer_ids": advanced_offer_ids,
+                    "exhausted_case_id": exhausted_case_id,
+                },
+            )
+            failed_count += 1
+            processed_event_ids.append(str(event.id))
+            continue
 
         active_provider = provider or _resolve_provider_for_channel(offer.channel)
         try:
@@ -902,6 +1062,15 @@ async def handle_twilio_inbound_reply(
     body: str,
     raw_payload: dict | None = None,
 ) -> str:
+    command_result = await communication_suppressions.handle_inbound_sms_command(
+        session,
+        from_phone=from_phone,
+        body=body,
+        raw_payload=raw_payload,
+    )
+    if command_result.handled:
+        return command_result.response_text or "Backfill SMS preference updated."
+
     normalized = " ".join(body.strip().upper().split())
     if normalized not in {"YES", "Y", "ACCEPT", "CONFIRM", "NO", "N", "DECLINE"}:
         return "Reply YES to take the shift or NO to decline."

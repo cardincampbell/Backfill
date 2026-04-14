@@ -29,12 +29,22 @@ export type EmployeeSummary = {
   termination_date?: string | null;
   notes?: string | null;
   employee_metadata: Record<string, unknown>;
+  notification_preferences?: EmployeeNotificationPreferences;
   role_ids: string[];
   role_names: string[];
   location_ids: string[];
   location_names: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type EmployeeNotificationPreferences = {
+  schedule_publish_email_enabled: boolean;
+  schedule_publish_sms_enabled: boolean;
+  email_opted_out_at?: string | null;
+  sms_opted_out_at?: string | null;
+  email_opt_out_reason?: string | null;
+  sms_opt_out_reason?: string | null;
 };
 
 export type EmployeeRoleAssignment = {
@@ -146,6 +156,7 @@ export type EmployeeUpdatePayload = {
   termination_date?: string | null;
   notes?: string | null;
   employee_metadata?: Record<string, unknown>;
+  notification_preferences?: Partial<EmployeeNotificationPreferences>;
   roles?: EmployeeRoleUpsertPayload[];
   locations?: EmployeeLocationUpsertPayload[];
 };

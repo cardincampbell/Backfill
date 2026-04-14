@@ -1679,7 +1679,7 @@ function SchedulerContent({
         activeWeekStart,
         {
           source: 'scheduler_ui',
-          notify_channels: ['sms', 'email'],
+          notify_channels: ['email'],
           expected_shift_ids: draftShiftIdsForPublishing,
         },
       );

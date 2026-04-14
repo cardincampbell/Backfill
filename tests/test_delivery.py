@@ -203,6 +203,51 @@ async def test_process_outbox_batch_sends_schedule_publish_sms(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_outbox_batch_cancels_schedule_publish_sms_on_invalid_twilio_number(monkeypatch):
+    now = datetime.now(timezone.utc)
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="schedule_publish",
+        aggregate_id=uuid4(),
+        topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+        channel="sms",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={
+            "business_id": str(uuid4()),
+            "phone_e164": "not-a-real-number",
+            "text_body": "Your schedule is live.",
+        },
+    )
+
+    class FakeTwilioRestException(Exception):
+        def __init__(self):
+            super().__init__("The 'To' number is not a valid phone number.")
+            self.code = 21211
+            self.status = 400
+
+    def fake_send_sms(*, to: str, body: str, status_callback: str | None = None):
+        raise FakeTwilioRestException()
+
+    monkeypatch.setattr("app.services.messaging.send_sms", fake_send_sms)
+
+    session = FakeDeliverySession()
+    session.execute_queue = [[event]]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        now=now,
+        limit=10,
+    )
+
+    assert result["claimed_count"] == 1
+    assert result["failed_count"] == 1
+    assert event.status == OutboxStatus.cancelled
+    assert event.error_message == "The 'To' number is not a valid phone number."
+    assert event.result_payload["twilio_error_code"] == 21211
+
+
+@pytest.mark.asyncio
 async def test_process_outbox_batch_sends_schedule_publish_email(monkeypatch):
     now = datetime.now(timezone.utc)
     event = OutboxEvent(
@@ -219,15 +264,24 @@ async def test_process_outbox_batch_sends_schedule_publish_email(monkeypatch):
             "subject": "Your Backfill schedule is live",
             "text_body": "Plain text schedule body",
             "html_body": "<div>Styled schedule email</div>",
+            "email_headers": {"List-Unsubscribe": "<mailto:unsubscribe@example.com>"},
         },
     )
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    def fake_send_email(*, to: str, subject: str, text_body: str, html_body: str | None = None):
+    def fake_send_email(
+        *,
+        to: str,
+        subject: str,
+        text_body: str,
+        html_body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         captured["to"] = to
         captured["subject"] = subject
         captured["text_body"] = text_body
         captured["html_body"] = html_body or ""
+        captured["headers"] = headers or {}
         return "SG-PUBLISH"
 
     monkeypatch.setattr("app.services.messaging.send_email", fake_send_email)
@@ -248,6 +302,158 @@ async def test_process_outbox_batch_sends_schedule_publish_email(monkeypatch):
     assert captured["subject"] == "Your Backfill schedule is live"
     assert captured["text_body"] == "Plain text schedule body"
     assert captured["html_body"] == "<div>Styled schedule email</div>"
+    assert captured["headers"] == {"List-Unsubscribe": "<mailto:unsubscribe@example.com>"}
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_cancels_suppressed_schedule_publish_email(monkeypatch):
+    now = datetime.now(timezone.utc)
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="schedule_publish",
+        aggregate_id=uuid4(),
+        topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+        channel="email",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={
+            "business_id": str(uuid4()),
+            "email": "worker@example.com",
+            "subject": "Your schedule is live",
+            "text_body": "Your schedule is live.",
+        },
+    )
+
+    class Suppression:
+        channel = "email"
+        scope = "global"
+        reason_code = "user_unsubscribe"
+        source = "email_unsubscribe_link"
+
+    async def fake_get_active_suppression(session, *, channel, destination, scope="global"):
+        assert channel == "email"
+        assert destination == "worker@example.com"
+        return Suppression()
+
+    def fake_send_email(*, to: str, subject: str, text_body: str, html_body: str | None = None, headers: dict[str, str] | None = None):
+        raise AssertionError("send_email should not be called for suppressed destinations")
+
+    monkeypatch.setattr(
+        "app.services.delivery.communication_suppressions.get_active_suppression",
+        fake_get_active_suppression,
+    )
+    monkeypatch.setattr("app.services.messaging.send_email", fake_send_email)
+
+    session = FakeDeliverySession()
+    session.execute_queue = [[event]]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        now=now,
+        limit=10,
+    )
+
+    assert result["claimed_count"] == 1
+    assert result["failed_count"] == 1
+    assert event.status == OutboxStatus.cancelled
+    assert event.error_message == "destination_suppressed"
+    assert event.result_payload["suppressed"] is True
+    assert event.result_payload["suppression_reason_code"] == "user_unsubscribe"
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_cancels_suppressed_coverage_sms_and_advances_case(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    offer_id = uuid4()
+    event_id = uuid4()
+    employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.pending,
+        idempotency_key="offer-suppressed",
+        expires_at=now + timedelta(minutes=5),
+        offer_metadata={"shift_id": str(shift_id), "phone_e164": "+15555550100"},
+    )
+    event = OutboxEvent(
+        id=event_id,
+        aggregate_type="coverage_offer",
+        aggregate_id=offer_id,
+        topic="coverage.offer.created",
+        channel="sms",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={"shift_id": str(shift_id), "phone_e164": "+15555550100"},
+    )
+
+    class Suppression:
+        channel = "sms"
+        scope = "global"
+        reason_code = "user_unsubscribe"
+        source = "twilio_inbound"
+
+    async def fake_get_active_suppression(session, *, channel, destination, scope="global"):
+        assert channel == "sms"
+        assert destination == "+15555550100"
+        return Suppression()
+
+    async def fake_append_outreach_attempt_event(*args, **kwargs):
+        return None
+
+    async def fake_refresh_employee_reliability(*args, **kwargs):
+        return None
+
+    async def fake_advance_case_after_terminal_offer(*args, **kwargs):
+        return [], None
+
+    monkeypatch.setattr(
+        "app.services.delivery.communication_suppressions.get_active_suppression",
+        fake_get_active_suppression,
+    )
+    monkeypatch.setattr(
+        "app.services.delivery.outreach_service.append_outreach_attempt_event",
+        fake_append_outreach_attempt_event,
+    )
+    monkeypatch.setattr("app.services.delivery.refresh_employee_reliability", fake_refresh_employee_reliability)
+    monkeypatch.setattr("app.services.delivery._advance_case_after_terminal_offer", fake_advance_case_after_terminal_offer)
+
+    session = FakeDeliverySession()
+    session.get_map[(CoverageOffer, offer_id)] = offer
+    session.execute_queue = [[event]]
+    session.scalar_queue = [shift, None, 0]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        provider=SuccessProvider(),
+        now=now,
+        limit=10,
+    )
+
+    attempts = [obj for obj in session.added if isinstance(obj, CoverageContactAttempt)]
+    assert result["claimed_count"] == 1
+    assert result["failed_count"] == 1
+    assert event.status == OutboxStatus.cancelled
+    assert event.error_message == "destination_suppressed"
+    assert offer.status == OfferStatus.failed
+    assert attempts[0].status == CoverageAttemptStatus.failed
+    assert event.result_payload["suppressed"] is True
 
 
 @pytest.mark.asyncio
@@ -871,3 +1077,28 @@ async def test_handle_twilio_inbound_reply_accepts_latest_offer(monkeypatch):
     assert message.startswith("You're confirmed")
     assert captured["offer_id"] == offer.id
     assert captured["payload"].response == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_handle_twilio_inbound_reply_returns_stop_confirmation(monkeypatch):
+    async def fake_handle_command(session, *, from_phone, body, raw_payload=None):
+        return delivery.communication_suppressions.SMSCommandResult(
+            handled=True,
+            response_text="Backfill SMS alerts are off for this number. Reply START to opt back in.",
+            action="suppressed",
+            created=True,
+        )
+
+    monkeypatch.setattr(
+        "app.services.delivery.communication_suppressions.handle_inbound_sms_command",
+        fake_handle_command,
+    )
+
+    message = await delivery.handle_twilio_inbound_reply(
+        FakeDeliverySession(),
+        from_phone="+15555550100",
+        body="STOP",
+        raw_payload={"Body": "STOP"},
+    )
+
+    assert "Reply START to opt back in." in message

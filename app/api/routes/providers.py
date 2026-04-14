@@ -85,5 +85,10 @@ async def twilio_sms_inbound(
         event_type="sms_inbound",
         provider_event_id=str(form_params.get("SmsSid") or form_params.get("MessageSid") or "").strip() or None,
     )
-    await session.commit()
+    result = await provider_callbacks.process_callback_entry_synchronously(
+        session,
+        callback_entry,
+    )
+    if result.response_kind == "twiml":
+        return _twiml(result.response_text or _INBOUND_ACK_MESSAGE)
     return _twiml(_INBOUND_ACK_MESSAGE)
