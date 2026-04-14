@@ -34,6 +34,8 @@ import {
   GripVertical,
   Info,
   CalendarDays,
+  Lock,
+  LockOpen,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -149,6 +151,9 @@ type DayWeather = {
   label: string;
 };
 
+type ShiftPublishState = 'published' | 'amended' | null;
+type EmployeePublishState = 'published' | 'amended' | null;
+
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
 /* ─── Role colors ─── */
@@ -203,6 +208,23 @@ function describeShiftDeletionError(error: unknown) {
     return 'Published shifts cannot be removed directly. Make draft changes for the week and republish them.';
   }
   return error.message;
+}
+
+function formatPublishedDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  const publishedAt = new Date(value);
+  if (Number.isNaN(publishedAt.getTime())) {
+    return null;
+  }
+  return publishedAt.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function getShiftDescriptor(start: number, end: number): { label: string; icon: typeof Sunrise } {
@@ -623,6 +645,7 @@ function DraggableShiftChip({
   onAddShift,
   onDragCopy,
   onDragCopyPreview,
+  publishState = null,
   dark = false,
   draggable = true,
 }: {
@@ -633,6 +656,7 @@ function DraggableShiftChip({
   onAddShift: () => void;
   onDragCopy?: (targetDays: number[]) => void;
   onDragCopyPreview?: (days: number[] | null) => void;
+  publishState?: ShiftPublishState;
   dark?: boolean;
   draggable?: boolean;
 }) {
@@ -643,6 +667,8 @@ function DraggableShiftChip({
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
+  const ShiftStateIcon = publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
+  const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
 
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: DRAG_TYPE,
@@ -727,9 +753,14 @@ function DraggableShiftChip({
             <p className={`text-[9px] mt-0.5 ${theme.textMuted}`} style={{ fontWeight: 420 }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
             </p>
-            <p className={`text-[9px] mt-px ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
-              {dur}h
-            </p>
+            <div className="mt-px flex items-center gap-1">
+              <p className={`text-[9px] ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
+                {dur}h
+              </p>
+              {ShiftStateIcon && shiftStateColor ? (
+                <ShiftStateIcon size={8} className="shrink-0" style={{ color: shiftStateColor }} />
+              ) : null}
+            </div>
           </div>
 
           <AnimatePresence>
@@ -817,9 +848,14 @@ function DraggableShiftChip({
           </div>
         </div>
         {/* Row 2: time span */}
-        <p className={`text-[8px] mt-0.5 truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
-          {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
-        </p>
+        <div className="mt-0.5 flex items-center gap-1">
+          <p className={`text-[8px] truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
+            {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
+          </p>
+          {ShiftStateIcon && shiftStateColor ? (
+            <ShiftStateIcon size={7} className="shrink-0" style={{ color: shiftStateColor }} />
+          ) : null}
+        </div>
       </div>
 
       <AnimatePresence>
@@ -976,6 +1012,8 @@ function SchedulerContent({
   } | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showEditPublishedWarning, setShowEditPublishedWarning] = useState(false);
+  const [pendingPublishedEdit, setPendingPublishedEdit] = useState<Shift | null>(null);
   const [showCalendarSyncModal, setShowCalendarSyncModal] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
@@ -1416,6 +1454,52 @@ function SchedulerContent({
     [roleColorById, shifts],
   );
 
+  const publishSummary = board?.publish_summary;
+  const publishedShiftIds = useMemo(
+    () => new Set(publishSummary?.published_shift_ids ?? []),
+    [publishSummary?.published_shift_ids],
+  );
+  const amendedShiftIds = useMemo(
+    () => new Set(publishSummary?.amended_shift_ids ?? []),
+    [publishSummary?.amended_shift_ids],
+  );
+  const publishedEmployeeIds = useMemo(
+    () => new Set(publishSummary?.published_employee_ids ?? []),
+    [publishSummary?.published_employee_ids],
+  );
+  const amendedEmployeeIds = useMemo(
+    () => new Set(publishSummary?.amended_employee_ids ?? []),
+    [publishSummary?.amended_employee_ids],
+  );
+  const publishedDateLabel = useMemo(
+    () => formatPublishedDate(publishSummary?.published_at),
+    [publishSummary?.published_at],
+  );
+  const weekPublishState = publishSummary?.state ?? 'draft';
+  const isWeekPublished = weekPublishState === 'published';
+  const isWeekAmended = weekPublishState === 'amended';
+  const canPublishWeek = displayShifts.some((shift) => shift.lifecycleStatus === 'draft') || isWeekAmended;
+
+  const shiftPublishState = useCallback((shift: Shift): ShiftPublishState => {
+    if (amendedShiftIds.has(shift.id) || shift.lifecycleStatus === 'draft') {
+      return isWeekAmended ? 'amended' : null;
+    }
+    if (publishedShiftIds.has(shift.id) || shift.lifecycleStatus === 'scheduled') {
+      return publishSummary?.published_at ? 'published' : null;
+    }
+    return null;
+  }, [amendedShiftIds, isWeekAmended, publishSummary?.published_at, publishedShiftIds]);
+
+  const employeePublishState = useCallback((employeeId: string): EmployeePublishState => {
+    if (amendedEmployeeIds.has(employeeId)) {
+      return 'amended';
+    }
+    if (publishedEmployeeIds.has(employeeId)) {
+      return 'published';
+    }
+    return null;
+  }, [amendedEmployeeIds, publishedEmployeeIds]);
+
   const removeEmployee = useCallback((employeeId: string) => {
     const employee = schedulerEmployees.find((item) => item.id === employeeId);
     if (!employee) {
@@ -1557,6 +1641,15 @@ function SchedulerContent({
       throw error;
     }
   };
+
+  const openShiftEditor = useCallback((shift: Shift) => {
+    if (isWeekPublished && shiftPublishState(shift) === 'published') {
+      setPendingPublishedEdit(shift);
+      setShowEditPublishedWarning(true);
+      return;
+    }
+    setEditingShift(shift);
+  }, [isWeekPublished, shiftPublishState]);
 
   const deleteShift = useCallback((id: string) => {
     void (async () => {
@@ -2346,9 +2439,40 @@ function SchedulerContent({
               >
                 <ChevronLeft size={15} className={theme.textMuted} />
               </button>
-              <span className={`text-[12px] hidden md:inline ${theme.textPrimary}`} style={{ fontWeight: 520 }}>
-                {weekLabel}
-              </span>
+              <div
+                className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border ${
+                  isWeekPublished
+                    ? 'border-[#00B893]/20 bg-[#00B893]/[0.08]'
+                    : isWeekAmended
+                      ? 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.08]'
+                      : 'border-transparent'
+                }`}
+              >
+                {isWeekPublished ? <Lock size={11} className="text-[#00B893]" /> : null}
+                {isWeekAmended ? <LockOpen size={11} className="text-[#F59E0B]" /> : null}
+                <span
+                  className={`text-[12px] ${
+                    isWeekPublished
+                      ? 'text-[#00B893]'
+                      : isWeekAmended
+                        ? 'text-[#F59E0B]'
+                        : theme.textPrimary
+                  }`}
+                  style={{ fontWeight: 540 }}
+                >
+                  {weekLabel}
+                </span>
+              </div>
+              {isWeekPublished ? (
+                <div className="md:hidden flex items-center gap-1 px-2 py-1 rounded-full bg-[#00B893]/[0.08] border border-[#00B893]/20">
+                  <Lock size={10} className="text-[#00B893]" />
+                </div>
+              ) : null}
+              {isWeekAmended ? (
+                <div className="md:hidden flex items-center gap-1 px-2 py-1 rounded-full bg-[#F59E0B]/[0.08] border border-[#F59E0B]/20">
+                  <LockOpen size={10} className="text-[#F59E0B]" />
+                </div>
+              ) : null}
               <button
                 onClick={() => setSelectedWeekStart(shiftWeekStartDate(activeWeekStart, 1))}
                 className={`p-1 rounded-lg transition-colors ${theme.ghostButtonClass}`}
@@ -2370,7 +2494,7 @@ function SchedulerContent({
               <motion.button
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setShowPublishModal(true)}
-                disabled={draftShiftsForPublishing.length === 0}
+                disabled={!canPublishWeek}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
                 style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
                 <Zap size={13} />
@@ -2538,6 +2662,11 @@ function SchedulerContent({
                     {!isCollapsed && roleEmps.map(emp => {
                       const empWeekHours = getEmployeeWeekHours(emp.id);
                       const isHovered = hoveredEmployeeId === emp.id;
+                      const publishState = employeePublishState(emp.id);
+                      const EmployeeStateIcon =
+                        publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
+                      const employeeStateColor =
+                        publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
                       return (
                         <motion.div key={emp.id}
                           initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
@@ -2550,9 +2679,14 @@ function SchedulerContent({
                             <img src={emp.avatar} alt={emp.name}
                               className={`w-7 h-7 rounded-full object-cover shrink-0 ring-1 ${isDark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
                             <div className="min-w-0 flex-1">
-                              <p className={`text-[12px] truncate whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
-                                {emp.name}
-                              </p>
+                              <div className="flex items-center gap-1.5">
+                                <p className={`text-[12px] truncate whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                                  {emp.name}
+                                </p>
+                                {EmployeeStateIcon && employeeStateColor ? (
+                                  <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
+                                ) : null}
+                              </div>
                               <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
                                 {empWeekHours}h this week
                               </p>
@@ -2607,7 +2741,8 @@ function SchedulerContent({
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
                                       dark={isDark}
                                       draggable
-                                      onEdit={() => setEditingShift(shift)}
+                                      publishState={shiftPublishState(shift)}
+                                      onEdit={() => openShiftEditor(shift)}
                                       onDelete={() => deleteShift(shift.id)}
                                       onAddShift={() => setCreatingAt({
                                         day: dayIdx,
@@ -2721,10 +2856,12 @@ function SchedulerContent({
                           employee={emp}
                           empWeekHours={empWeekHours}
                           cellShifts={cellShifts}
+                          employeePublishState={employeePublishState(emp.id)}
+                          shiftPublishState={shiftPublishState}
                           isSwiped={isSwiped}
                           onSwipe={(id) => setSwipedEmployeeId(id === swipedEmployeeId ? null : id || null)}
                           onRemove={() => removeEmployee(emp.id)}
-                          onEditShift={(shift) => setEditingShift(shift)}
+                          onEditShift={openShiftEditor}
                           onCreateShift={() =>
                             setCreatingAt({
                               day: mobileDay,
@@ -2838,6 +2975,26 @@ function SchedulerContent({
           )}
         </AnimatePresence>
 
+        <AnimatePresence>
+          {showEditPublishedWarning ? (
+            <PublishedEditWarningModal
+              dark={isDark}
+              publishedDateLabel={publishedDateLabel}
+              onClose={() => {
+                setShowEditPublishedWarning(false);
+                setPendingPublishedEdit(null);
+              }}
+              onContinue={() => {
+                setShowEditPublishedWarning(false);
+                if (pendingPublishedEdit) {
+                  setEditingShift(pendingPublishedEdit);
+                }
+                setPendingPublishedEdit(null);
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
         {/* ─── Copy Schedule Modal ─── */}
         <AnimatePresence>
           {showCopyModal && (
@@ -2860,17 +3017,22 @@ function SchedulerContent({
               weekLabel={weekLabel}
               shifts={draftShiftsForPublishing}
               employees={activeEmployees}
+              isRepublish={Boolean(publishSummary?.published_at)}
+              publishedDateLabel={publishedDateLabel}
               onPublish={publishWeek}
               onClose={() => setShowPublishModal(false)}
               onComplete={(result) => {
                 setShowPublishModal(false);
+                const wasRepublish = Boolean(publishSummary?.published_at);
                 setSchedulerNotice({
                   tone: 'success',
-                  title: 'Schedule published',
+                  title: wasRepublish ? 'Schedule republished' : 'Schedule published',
                   detail:
                     result.published_shift_count > 0
                       ? `${result.published_shift_count} draft shift${result.published_shift_count === 1 ? '' : 's'} published. ${result.notification_enqueued_employee_count} employee notification${result.notification_enqueued_employee_count === 1 ? '' : 's'} enqueued.`
-                      : 'No new draft shifts were available to publish.',
+                      : wasRepublish
+                        ? 'The week was republished successfully.'
+                        : 'No new draft shifts were available to publish.',
                 });
               }}
             />
@@ -3126,6 +3288,8 @@ function MobileEmployeeCard({
   employee,
   empWeekHours,
   cellShifts,
+  employeePublishState,
+  shiftPublishState,
   isSwiped,
   onSwipe,
   onRemove,
@@ -3136,6 +3300,8 @@ function MobileEmployeeCard({
   employee: Employee;
   empWeekHours: number;
   cellShifts: Shift[];
+  employeePublishState: EmployeePublishState;
+  shiftPublishState: (shift: Shift) => ShiftPublishState;
   isSwiped: boolean;
   onSwipe: (id: string) => void;
   onRemove: () => void;
@@ -3145,6 +3311,14 @@ function MobileEmployeeCard({
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const EmployeeStateIcon =
+    employeePublishState === 'published'
+      ? Lock
+      : employeePublishState === 'amended'
+        ? LockOpen
+        : null;
+  const employeeStateColor =
+    employeePublishState === 'published' ? '#00B893' : employeePublishState === 'amended' ? '#F59E0B' : null;
 
   const minSwipeDistance = 50;
 
@@ -3193,7 +3367,12 @@ function MobileEmployeeCard({
         <img src={employee.avatar} alt={employee.name}
           className={`w-8 h-8 rounded-full object-cover shrink-0 ring-1 ${dark ? 'ring-white/[0.08]' : 'ring-[#E5E7EB]'}`} />
         <div className="flex-1 min-w-0">
-          <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
+            {EmployeeStateIcon && employeeStateColor ? (
+              <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
+            ) : null}
+          </div>
           <p className={`text-[10px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
         </div>
         <div className="flex items-center gap-1.5 min-w-0">
@@ -3204,6 +3383,15 @@ function MobileEmployeeCard({
                 const DescIcon = shift.presetKey ? getShiftDefaultIcon(shift.presetKey) : desc.icon;
                 const shiftLabel = shift.presetLabel?.trim() || desc.label;
                 const dur = shiftDuration(shift);
+                const publishState = shiftPublishState(shift);
+                const ShiftStateIcon =
+                  publishState === 'published'
+                    ? Lock
+                    : publishState === 'amended'
+                      ? LockOpen
+                      : null;
+                const shiftStateColor =
+                  publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
                 return (
                   <button
                     key={shift.id}
@@ -3219,6 +3407,9 @@ function MobileEmployeeCard({
                     <DescIcon size={10} style={{ color: shift.color }} className="shrink-0" />
                     <span className="text-[10px] truncate" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
                     <span className={`text-[9px] shrink-0 ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400 }}>{dur}h</span>
+                    {ShiftStateIcon && shiftStateColor ? (
+                      <ShiftStateIcon size={9} className="shrink-0" style={{ color: shiftStateColor }} />
+                    ) : null}
                   </button>
                 );
               })}
@@ -3252,6 +3443,191 @@ function MobileEmployeeCard({
   );
 }
 
+function PublishedEditWarningModal({
+  publishedDateLabel,
+  onClose,
+  onContinue,
+  dark = false,
+}: {
+  publishedDateLabel?: string | null;
+  onClose: () => void;
+  onContinue: () => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const mutedText = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
+  const bodyText = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed left-1/2 top-1/2 z-50 w-[90vw] max-w-[460px] -translate-x-1/2 -translate-y-1/2 rounded-2xl shadow-2xl ${modalClass}`}
+      >
+        <div className={`flex items-center justify-between border-b px-6 py-5 ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F59E0B]/10">
+              <Lock size={20} className="text-[#F59E0B]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Move to Draft</h3>
+              <p className={`mt-0.5 text-[11px] ${mutedText}`} style={{ fontWeight: 440 }}>This will unpublish the schedule</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={mutedText} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className={`mb-4 rounded-lg border p-4 ${dark ? 'border-[#F59E0B]/20 bg-[#F59E0B]/10' : 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.06]'}`}>
+            <div className="flex items-start gap-3">
+              <Lock size={16} className="mt-0.5 shrink-0 text-[#F59E0B]" />
+              <div>
+                <p className={`mb-2 text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                  {publishedDateLabel
+                    ? `This schedule was published on ${publishedDateLabel}.`
+                    : 'This schedule has been published'}
+                </p>
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Making changes will move this schedule back to <strong style={{ fontWeight: 560 }}>Draft</strong> mode. Employees will not be notified of changes until you publish again.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className={`text-[11px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>What happens next</p>
+            <div className="space-y-1.5">
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Schedule status changes to Draft
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  You can make your changes freely
+                </p>
+              </div>
+              <div className="flex items-start gap-2">
+                <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
+                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                  Publish again to notify employees of updates
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`flex gap-2.5 border-t px-6 py-4 ${borderClass}`}>
+          <button
+            onClick={onClose}
+            className={`flex-1 rounded-xl border py-2.5 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 500 }}
+            type="button"
+          >
+            Cancel
+          </button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={onContinue}
+            className="flex-1 rounded-xl py-2.5 text-[12px] text-white transition-all flex items-center justify-center gap-2"
+            style={{ fontWeight: 540, background: 'linear-gradient(135deg, #F59E0B, #D97706)' }}
+            type="button"
+          >
+            Continue Editing
+          </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function PrintScheduleModal({
+  weekLabel,
+  onClose,
+  onPrint,
+  dark = false,
+}: {
+  weekLabel: string;
+  onClose: () => void;
+  onPrint: () => void;
+  dark?: boolean;
+}) {
+  const modalClass = dark ? 'bg-[#0F2E4C] border border-white/[0.08]' : 'bg-white border border-[#E5E7EB]';
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#F0F0F5]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const [printRange, setPrintRange] = useState<'current' | 'next' | 'custom'>('current');
+  const [includeEmployeeInfo, setIncludeEmployeeInfo] = useState(true);
+  const [includeHours, setIncludeHours] = useState(true);
+  const [includeRoles, setIncludeRoles] = useState(true);
+
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 0.3 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[480px] rounded-2xl shadow-2xl ${modalClass}`}
+      >
+        <div className={`px-6 py-5 border-b flex items-center justify-between ${borderClass}`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${dark ? 'bg-[#635BFF]/20' : 'bg-[#635BFF]/10'}`}>
+              <Printer size={20} className="text-[#635BFF]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Print Schedule</h3>
+              <p className={`text-[11px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 440 }}>Choose what to include</p>
+            </div>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
+            <X size={18} className={textSecondary} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5">
+          <div>
+            <label className={`block text-[11px] uppercase tracking-[0.04em] mb-3 ${textSecondary}`} style={{ fontWeight: 500 }}>Date Range</label>
+            <div className="space-y-2">
+              {[
+                { value: 'current', label: 'Current Week', detail: weekLabel },
+                { value: 'next', label: 'Next 2 Weeks', detail: 'Include upcoming schedule' },
+                { value: 'custom', label: 'Custom Range', detail: 'Select specific dates' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => setPrintRange(option.value as typeof printRange)}
+                  className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-all text-left ${
+                    printRange === option.value
+                      ? 'border-[#635BFF] bg-[#635BFF]/[0.04]'
+                      : dark
+                        ? 'border-white/[0.08] hover:border-[#635BFF]/30'
+                        : 'border-[#E5E7EB] hover:border-[#635BFF]/30'
+                  }`}>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all ${
+                    printRange === option.value ? 'border-[#635BFF]' : dark ? 'border-white/[0.12]' : 'border-[#E5E7EB]'
+                  }`}>
+                    {printRange === option.value && <div className="w-2 h-2 rounded-full bg-[#635BFF]" />}
+                  </div>
+                  <div className="flex-1">
+                    <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 500 }}>{option.label}</p>
+                    <p className={`text-[10px] mt-0.5 ${textSecondary}`} style={{ fontWeight: 420 }}>{option.detail}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
 
 
 

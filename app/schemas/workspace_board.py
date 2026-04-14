@@ -4,6 +4,8 @@ from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
 
+from pydantic import Field
+
 from app.schemas.common import BaseSchema
 
 
@@ -64,6 +66,16 @@ class WorkspaceBoardShiftRead(BaseSchema):
     manager_action_required: bool = False
 
 
+class WorkspaceBoardPublishSummaryRead(BaseSchema):
+    state: str = "draft"
+    published_at: Optional[datetime] = None
+    amended_at: Optional[datetime] = None
+    published_shift_ids: list[UUID] = Field(default_factory=list)
+    amended_shift_ids: list[UUID] = Field(default_factory=list)
+    published_employee_ids: list[UUID] = Field(default_factory=list)
+    amended_employee_ids: list[UUID] = Field(default_factory=list)
+
+
 class WorkspaceBoardActionSummaryRead(BaseSchema):
     total: int
     approval_required: int
@@ -93,4 +105,7 @@ class WorkspaceLocationBoardRead(BaseSchema):
     available_roles: list[WorkspaceBoardRoleRead] = []
     workers: list[WorkspaceBoardWorkerRead]
     shifts: list[WorkspaceBoardShiftRead]
+    publish_summary: WorkspaceBoardPublishSummaryRead = Field(
+        default_factory=WorkspaceBoardPublishSummaryRead
+    )
     action_summary: WorkspaceBoardActionSummaryRead

@@ -33,6 +33,8 @@ interface PublishWeekModalProps {
   weekLabel: string;
   shifts: Shift[];
   employees: Employee[];
+  isRepublish?: boolean;
+  publishedDateLabel?: string | null;
   dark?: boolean;
   onClose: () => void;
   onPublish: () => Promise<ScheduleWeekPublishResponse>;
@@ -43,6 +45,8 @@ export function PublishWeekModal({
   weekLabel,
   shifts,
   employees,
+  isRepublish = false,
+  publishedDateLabel = null,
   dark = false,
   onClose,
   onPublish,
@@ -135,15 +139,18 @@ export function PublishWeekModal({
             </div>
             <div>
               <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
-                {stage === "confirm" && "Publish Schedule"}
-                {stage === "publishing" && "Publishing..."}
-                {stage === "success" && "Schedule Published"}
+                {stage === "confirm" && (isRepublish ? "Republish Schedule" : "Publish Schedule")}
+                {stage === "publishing" && (isRepublish ? "Republishing..." : "Publishing...")}
+                {stage === "success" && (isRepublish ? "Schedule Republished" : "Schedule Published")}
               </h3>
               <p className={`mt-0.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {stage === "confirm" &&
                   `${weekLabel} · ${totalShifts} Draft Shifts | ${affectedEmployees.length} Employees`}
                 {stage === "publishing" && "Publishing draft shifts and queuing notifications"}
-                {stage === "success" && "Draft shifts are live and notifications were queued"}
+                {stage === "success" &&
+                  (isRepublish
+                    ? "Draft amendments are live and notifications were queued"
+                    : "Draft shifts are live and notifications were queued")}
               </p>
             </div>
           </div>
@@ -157,6 +164,11 @@ export function PublishWeekModal({
         <div className="px-6 py-5">
           {stage === "confirm" ? (
             <>
+              {publishedDateLabel ? (
+                <div className={`mb-4 rounded-xl border px-3 py-2 text-[12px] ${dark ? "border-[#F59E0B]/25 bg-[#F59E0B]/10 text-[#FDE68A]" : "border-[#FDE68A] bg-[#FFF7D6] text-[#8A6100]"}`}>
+                  This schedule was published on {publishedDateLabel}
+                </div>
+              ) : null}
               {errorMessage ? (
                 <div
                   className={`mb-4 rounded-xl border px-3 py-2 text-[12px] ${

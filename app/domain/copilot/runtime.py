@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -30,6 +31,7 @@ from app.schemas.copilot import (
     CopilotMessageRead,
     CopilotSessionCreate,
     CopilotSessionDetailRead,
+    CopilotSessionEventRead,
     CopilotSessionRead,
     CopilotTurnRead,
     CopilotValidationResultRead,
@@ -63,6 +65,9 @@ class CopilotPlannedToolCall:
     intent: CopilotIntentRead
     tool_arguments: dict[str, Any]
     planner_source: str
+
+
+CopilotLiveEventPublisher = Callable[[CopilotSessionEventRead], Awaitable[None]]
 
 
 def _now() -> datetime:
@@ -199,6 +204,28 @@ def _build_action_run(
     )
 
 
+async def _emit_live_event(
+    publisher: CopilotLiveEventPublisher | None,
+    *,
+    event_type: str,
+    trace_id: str,
+    session_id: UUID,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    if publisher is None:
+        return
+    await publisher(
+        CopilotSessionEventRead(
+            event_id=uuid4(),
+            event_type=event_type,
+            trace_id=trace_id,
+            session_id=session_id,
+            occurred_at=_now(),
+            payload=payload or {},
+        )
+    )
+
+
 async def _append_copilot_event(
     db: AsyncSession,
     *,
@@ -209,6 +236,7 @@ async def _append_copilot_event(
     event_type: str,
     payload: dict,
     request_context: CopilotRequestContext,
+    trace_id: str | None = None,
 ) -> AuditLog:
     membership = auth_service.membership_for_scope(
         auth_ctx,
@@ -229,7 +257,11 @@ async def _append_copilot_event(
         ip_address=request_context.ip_address,
         user_agent=request_context.user_agent,
         payload={**payload, "session": session_state.model_dump(mode="json")},
-        metadata={"channel": session_state.channel_last_seen, "session_id": session_state.id},
+        metadata={
+            "channel": session_state.channel_last_seen,
+            "session_id": session_state.id,
+            **({"trace_id": trace_id} if trace_id else {}),
+        },
     )
 
 
@@ -630,6 +662,7 @@ async def _plan_tool_call(
     session_state: CopilotSessionRead,
     history: list[CopilotMessageRead],
     payload: CopilotMessageCreate,
+    trace_id: str | None = None,
 ) -> CopilotPlannedToolCall:
     current_availability_rules = await _current_availability_rules(
         db,
@@ -651,6 +684,7 @@ async def _plan_tool_call(
         metadata={
             "channel": payload.normalized_channel or session_state.channel_last_seen or "dashboard",
             "copilot_session_id": str(session_state.id),
+            **({"trace_id": trace_id} if trace_id else {}),
         },
     )
     try:
@@ -1165,7 +1199,10 @@ async def create_turn(
     session_id: UUID,
     payload: CopilotMessageCreate,
     request_context: CopilotRequestContext,
+    live_event_publisher: CopilotLiveEventPublisher | None = None,
+    live_trace_id: str | None = None,
 ) -> CopilotTurnRead:
+    trace_id = live_trace_id or str(uuid4())
     detail = await get_session_detail(
         db,
         auth_ctx=auth_ctx,
@@ -1174,14 +1211,6 @@ async def create_turn(
     )
     normalized_channel = (payload.normalized_channel or detail.session.channel_last_seen or "dashboard").strip() or "dashboard"
     effective_location_id = payload.location_id or detail.session.location_id
-    planned_tool_call = await _plan_tool_call(
-        db,
-        auth_ctx=auth_ctx,
-        session_state=detail.session,
-        history=detail.messages,
-        payload=payload,
-    )
-    intent = planned_tool_call.intent
 
     inbound = _build_message(
         session_id=session_id,
@@ -1203,7 +1232,45 @@ async def create_turn(
         event_type=platform_events.PlatformEventType.COPILOT_MESSAGE_RECORDED,
         payload={"message": inbound.model_dump(mode="json")},
         request_context=request_context,
+        trace_id=trace_id,
     )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="user.message.accepted",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={
+            "message": inbound.model_dump(mode="json"),
+            "session": session_after_inbound.model_dump(mode="json"),
+        },
+    )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="assistant.turn.started",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={
+            "session": session_after_inbound.model_dump(mode="json"),
+            "message_id": str(inbound.id),
+        },
+    )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="assistant.progress",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={"state": "thinking", "label": "Understanding your request."},
+    )
+
+    planned_tool_call = await _plan_tool_call(
+        db,
+        auth_ctx=auth_ctx,
+        session_state=detail.session,
+        history=detail.messages,
+        payload=payload,
+        trace_id=trace_id,
+    )
+    intent = planned_tool_call.intent
 
     session_after_intent = _session_with_updates(
         session_after_inbound,
@@ -1223,6 +1290,19 @@ async def create_turn(
             "planner_source": planned_tool_call.planner_source,
         },
         request_context=request_context,
+        trace_id=trace_id,
+    )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="assistant.progress",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={
+            "state": "planning",
+            "label": "Planning the next action.",
+            "resolved_intent": intent.model_dump(mode="json"),
+            "planner_source": planned_tool_call.planner_source,
+        },
     )
 
     validated_tool_call = validate_and_normalize_tool_call(
@@ -1264,6 +1344,14 @@ async def create_turn(
             normalized_channel=normalized_channel,
             last_message_at=outbound.created_at,
         )
+        turn = CopilotTurnRead(
+            session=session_after_outbound,
+            resolved_intent=intent,
+            inbound_message=inbound,
+            outbound_message=outbound,
+            action_run=action_run,
+            tools=list_tools(),
+        )
         await _append_copilot_event(
             db,
             auth_ctx=auth_ctx,
@@ -1273,6 +1361,7 @@ async def create_turn(
             event_type=platform_events.PlatformEventType.COPILOT_ACTION_FAILED,
             payload={"action_run": action_run.model_dump(mode="json")},
             request_context=request_context,
+            trace_id=trace_id,
         )
         await _append_copilot_event(
             db,
@@ -1283,15 +1372,44 @@ async def create_turn(
             event_type=platform_events.PlatformEventType.COPILOT_MESSAGE_RECORDED,
             payload={"message": outbound.model_dump(mode="json")},
             request_context=request_context,
+            trace_id=trace_id,
         )
-        return CopilotTurnRead(
-            session=session_after_outbound,
-            resolved_intent=intent,
-            inbound_message=inbound,
-            outbound_message=outbound,
-            action_run=action_run,
-            tools=list_tools(),
+        await _emit_live_event(
+            live_event_publisher,
+            event_type="assistant.turn.failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            payload={
+                "error": {
+                    "code": validation_result.code,
+                    "message": validation_result.message,
+                },
+                "turn": turn.model_dump(mode="json"),
+            },
         )
+        return turn
+
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="assistant.progress",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={
+            "state": "running_tool",
+            "label": f"Running {intent.tool_name}.",
+        },
+    )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="tool.started",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={
+            "tool_name": intent.tool_name,
+            "input_payload": tool_input,
+            "validation_result": validation_result.model_dump(mode="json"),
+        },
+    )
 
     result_payload, outbound_text = await _execute_tool(
         db,
@@ -1321,6 +1439,14 @@ async def create_turn(
         normalized_channel=normalized_channel,
         last_message_at=outbound.created_at,
     )
+    turn = CopilotTurnRead(
+        session=session_after_outbound,
+        resolved_intent=intent,
+        inbound_message=inbound,
+        outbound_message=outbound,
+        action_run=action_run,
+        tools=list_tools(),
+    )
     await _append_copilot_event(
         db,
         auth_ctx=auth_ctx,
@@ -1330,6 +1456,7 @@ async def create_turn(
         event_type=platform_events.PlatformEventType.COPILOT_ACTION_EXECUTED,
         payload={"action_run": action_run.model_dump(mode="json")},
         request_context=request_context,
+        trace_id=trace_id,
     )
     await _append_copilot_event(
         db,
@@ -1340,12 +1467,20 @@ async def create_turn(
         event_type=platform_events.PlatformEventType.COPILOT_MESSAGE_RECORDED,
         payload={"message": outbound.model_dump(mode="json")},
         request_context=request_context,
+        trace_id=trace_id,
     )
-    return CopilotTurnRead(
-        session=session_after_outbound,
-        resolved_intent=intent,
-        inbound_message=inbound,
-        outbound_message=outbound,
-        action_run=action_run,
-        tools=list_tools(),
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="tool.finished",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={"action_run": action_run.model_dump(mode="json")},
     )
+    await _emit_live_event(
+        live_event_publisher,
+        event_type="assistant.message.completed",
+        trace_id=trace_id,
+        session_id=session_id,
+        payload={"turn": turn.model_dump(mode="json")},
+    )
+    return turn

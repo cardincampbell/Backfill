@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -10,17 +10,20 @@ from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, Location, LocationRole, Role
 from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus
-from app.models.coverage import CoverageCase, CoverageOffer
+from app.models.coverage import AuditLog, CoverageCase, CoverageOffer
+from app.models.events import PlatformEvent
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeRole
 from app.schemas.workspace_board import (
     WorkspaceBoardActionSummaryRead,
+    WorkspaceBoardPublishSummaryRead,
     WorkspaceBoardRoleRead,
     WorkspaceBoardShiftAssignmentRead,
     WorkspaceBoardShiftRead,
     WorkspaceBoardWorkerRead,
     WorkspaceLocationBoardRead,
 )
+from app.services import platform_events
 from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 from app.services import shift_assignments as shift_assignment_service
 
@@ -31,6 +34,18 @@ READ_ROLES = {
     MembershipRole.manager,
     MembershipRole.viewer,
 }
+
+
+def board_window(timezone_name: str, week_start_day: str | date | None, week_start: date | None = None):
+    return schedule_week_window(timezone_name, week_start_day, week_start)
+
+_SCHEDULE_AFFECTING_EMPLOYEE_EVENTS = {
+    "employee.created",
+    "employee.deleted",
+    "employee.enrolled",
+    "employee.updated",
+}
+_SCHEDULE_AFFECTING_EMPLOYEE_UPDATED_FIELDS = {"locations", "roles"}
 
 def _to_float(value: Decimal | float | int | None) -> float:
     if value is None:
@@ -93,6 +108,128 @@ def _manager_action_required(shift: Shift, case: CoverageCase | None) -> bool:
         case.requires_manager_approval
         and case.status in {CoverageCaseStatus.queued, CoverageCaseStatus.running}
         and shift.seats_filled < shift.seats_requested
+    )
+
+
+def _shift_lifecycle_status_value(shift: Shift) -> str:
+    lifecycle_status = shift.lifecycle_status
+    return lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status)
+
+
+def _shift_display_employee_id(shift: Shift) -> UUID | None:
+    current = _best_assignment(shift)
+    if current is not None and current.employee_id is not None:
+        return current.employee_id
+    latest = shift_assignment_service.latest_assignment(shift.assignments or [])
+    return latest.employee_id if latest is not None else None
+
+
+def _latest_timestamp(current: datetime | None, candidate: datetime | None) -> datetime | None:
+    if current is None:
+        return candidate
+    if candidate is None:
+        return current
+    return max(current, candidate)
+
+
+def _audit_log_affects_schedule(log: AuditLog) -> bool:
+    if log.event_name not in _SCHEDULE_AFFECTING_EMPLOYEE_EVENTS:
+        return False
+    if log.event_name != "employee.updated":
+        return True
+    payload = log.payload if isinstance(log.payload, dict) else {}
+    updated_fields = payload.get("updated_fields")
+    if not isinstance(updated_fields, list):
+        return False
+    return any(
+        isinstance(field, str) and field in _SCHEDULE_AFFECTING_EMPLOYEE_UPDATED_FIELDS
+        for field in updated_fields
+    )
+
+
+async def _build_publish_summary(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID,
+    week_start: date,
+    week_end: date,
+    workers: list[WorkspaceBoardWorkerRead],
+    shifts: list[Shift],
+) -> WorkspaceBoardPublishSummaryRead:
+    publish_event_rows = await session.execute(
+        select(PlatformEvent)
+        .where(
+            PlatformEvent.business_id == business_id,
+            PlatformEvent.location_id == location_id,
+            PlatformEvent.event_type == platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
+        )
+        .order_by(PlatformEvent.occurred_at.desc())
+        .limit(50)
+    )
+    publish_events = list(publish_event_rows.scalars().all())
+    published_event = next(
+        (
+            entry
+            for entry in publish_events
+            if isinstance(entry.payload, dict)
+            and entry.payload.get("week_start_date") == week_start.isoformat()
+            and entry.payload.get("week_end_date") == week_end.isoformat()
+        ),
+        None,
+    )
+    if published_event is None:
+        return WorkspaceBoardPublishSummaryRead()
+
+    published_at = published_event.occurred_at
+    published_shift_ids: set[UUID] = set()
+    amended_shift_ids: set[UUID] = set()
+    published_employee_ids: set[UUID] = set()
+    amended_employee_ids: set[UUID] = set()
+    amended_at: datetime | None = None
+
+    for shift in shifts:
+        employee_id = _shift_display_employee_id(shift)
+        if _shift_lifecycle_status_value(shift) == "scheduled":
+            published_shift_ids.add(shift.id)
+            if employee_id is not None:
+                published_employee_ids.add(employee_id)
+            continue
+
+        if _shift_lifecycle_status_value(shift) == "draft":
+            amended_shift_ids.add(shift.id)
+            if employee_id is not None:
+                amended_employee_ids.add(employee_id)
+            amended_at = _latest_timestamp(amended_at, shift.updated_at or shift.created_at)
+
+    employee_log_rows = await session.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.business_id == business_id,
+            AuditLog.location_id == location_id,
+            AuditLog.occurred_at > published_at,
+        )
+        .order_by(AuditLog.occurred_at.desc())
+        .limit(250)
+    )
+    employee_logs = list(employee_log_rows.scalars().all())
+    worker_ids = {worker.employee_id for worker in workers}
+    for log in employee_logs:
+        if not _audit_log_affects_schedule(log):
+            continue
+        amended_at = _latest_timestamp(amended_at, log.occurred_at)
+        if log.target_id in worker_ids:
+            amended_employee_ids.add(log.target_id)
+
+    state = "amended" if amended_at is not None else "published"
+    return WorkspaceBoardPublishSummaryRead(
+        state=state,
+        published_at=published_at,
+        amended_at=amended_at,
+        published_shift_ids=sorted(published_shift_ids, key=str),
+        amended_shift_ids=sorted(amended_shift_ids, key=str),
+        published_employee_ids=sorted(published_employee_ids, key=str),
+        amended_employee_ids=sorted(amended_employee_ids, key=str),
     )
 
 
@@ -307,6 +444,15 @@ async def get_location_board(
             )
         )
 
+    publish_summary = await _build_publish_summary(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=window.week_start,
+        week_end=window.week_end,
+        workers=workers,
+        shifts=shifts,
+    )
     business_name = business.display_name
     location_role_setup_required = not bool(location_roles)
     location_employee_setup_required = not any(worker.can_cover_here for worker in workers)
@@ -334,6 +480,7 @@ async def get_location_board(
         available_roles=available_roles,
         workers=workers,
         shifts=shift_reads,
+        publish_summary=publish_summary,
         action_summary=WorkspaceBoardActionSummaryRead(
             total=approval_required + active_coverage,
             approval_required=approval_required,

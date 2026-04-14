@@ -102,3 +102,22 @@ class CopilotTurnRead(BaseSchema):
     outbound_message: CopilotMessageRead
     action_run: CopilotActionRunRead
     tools: list[CopilotToolRead] = Field(default_factory=list)
+
+
+class CopilotSessionEventRead(BaseSchema):
+    event_id: UUID
+    event_type: Literal[
+        "session.ready",
+        "user.message.accepted",
+        "assistant.turn.started",
+        "assistant.progress",
+        "tool.started",
+        "tool.finished",
+        "assistant.message.completed",
+        "assistant.turn.failed",
+        "session.error",
+    ]
+    trace_id: str
+    session_id: UUID
+    occurred_at: datetime
+    payload: dict = Field(default_factory=dict)

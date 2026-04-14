@@ -187,24 +187,24 @@ async def publish_schedule_week(
                 },
             )
 
-        await platform_events.append(
-            session,
-            event_type=platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
-            target_type="location",
-            target_id=location_id,
-            business_id=business_id,
-            location_id=location_id,
-            actor_type=AuditActorType.user,
-            actor_user_id=auth_ctx.user.id,
-            actor_membership_id=membership.id if membership is not None else None,
-            ip_address=client_ip,
-            user_agent=user_agent,
-            payload=response.model_dump(mode="json"),
-            metadata={
-                "source": payload.source,
-                "note": payload.note,
-            },
-        )
+    await platform_events.append(
+        session,
+        event_type=platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
+        target_type="location",
+        target_id=location_id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=client_ip,
+        user_agent=user_agent,
+        payload=response.model_dump(mode="json"),
+        metadata={
+            "source": payload.source,
+            "note": payload.note,
+        },
+    )
 
     await session.commit()
     return response

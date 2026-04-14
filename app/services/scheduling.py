@@ -398,6 +398,8 @@ async def update_shift(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
+    changed = False
+
     if payload.role_id is not None and payload.role_id != shift.role_id:
         role = await session.get(Role, payload.role_id)
         if role is None or role.business_id != business_id:
@@ -412,30 +414,44 @@ async def update_shift(
         if enabled_role is None:
             raise ValueError("location_role_not_enabled")
         shift.role_id = payload.role_id
+        changed = True
 
-    if payload.timezone is not None:
+    if payload.timezone is not None and payload.timezone != shift.timezone:
         shift.timezone = payload.timezone
-    if payload.starts_at is not None:
+        changed = True
+    if payload.starts_at is not None and payload.starts_at != shift.starts_at:
         shift.starts_at = payload.starts_at
-    if payload.ends_at is not None:
+        changed = True
+    if payload.ends_at is not None and payload.ends_at != shift.ends_at:
         shift.ends_at = payload.ends_at
+        changed = True
     if payload.starts_at is not None or payload.ends_at is not None:
         if shift.ends_at <= shift.starts_at:
             raise ValueError("shift_end_must_be_after_start")
-    if payload.seats_requested is not None:
+    if payload.seats_requested is not None and payload.seats_requested != shift.seats_requested:
         if payload.seats_requested < max(1, shift.seats_filled):
             raise ValueError("seats_requested_below_current_fill")
         shift.seats_requested = payload.seats_requested
-    if payload.requires_manager_approval is not None:
+        changed = True
+    if (
+        payload.requires_manager_approval is not None
+        and payload.requires_manager_approval != shift.requires_manager_approval
+    ):
         shift.requires_manager_approval = payload.requires_manager_approval
-    if payload.premium_cents is not None:
+        changed = True
+    if payload.premium_cents is not None and payload.premium_cents != shift.premium_cents:
         shift.premium_cents = payload.premium_cents
-    if payload.notes is not None:
+        changed = True
+    if payload.notes is not None and payload.notes != shift.notes:
         shift.notes = payload.notes
-    if payload.shift_metadata is not None:
+        changed = True
+    if payload.shift_metadata is not None and payload.shift_metadata != shift.shift_metadata:
         shift.shift_metadata = payload.shift_metadata
+        changed = True
 
     _recompute_shift_ownership_state(shift)
+    if changed and shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
+        shift.lifecycle_status = ShiftLifecycleStatus.draft
 
     await session.flush()
     await session.refresh(shift)
@@ -607,6 +623,8 @@ async def set_shift_assignment(
             "manual_unassigned_source": payload.source,
         }
         _recompute_shift_ownership_state(shift)
+        if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
+            shift.lifecycle_status = ShiftLifecycleStatus.draft
         await session.flush()
         return ShiftAssignmentMutationResult(
             shift=shift,
@@ -668,6 +686,8 @@ async def set_shift_assignment(
     session.add(assignment)
     shift.assignments.append(assignment)
     _recompute_shift_ownership_state(shift)
+    if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
+        shift.lifecycle_status = ShiftLifecycleStatus.draft
     await session.flush()
     return ShiftAssignmentMutationResult(
         shift=shift,
