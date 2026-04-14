@@ -3,6 +3,7 @@ from app.api.routes.calendar_feeds import router as calendar_feeds_router
 from app.api.routes.audit import router as audit_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.businesses import router as businesses_router
+from app.api.routes.communications import router as communications_router
 from app.api.routes.copilot import router as copilot_router
 from app.api.routes.coverage import router as coverage_router
 from app.api.routes.employee_schedules import router as employee_schedules_router
@@ -33,6 +34,7 @@ __all__ = [
     "audit_router",
     "auth_router",
     "businesses_router",
+    "communications_router",
     "copilot_router",
     "coverage_router",
     "employee_schedules_router",

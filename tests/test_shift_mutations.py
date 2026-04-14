@@ -1329,9 +1329,400 @@ async def test_publish_schedule_week_schedules_only_drafts_and_enqueues_notifica
     assert len(result.already_scheduled_shifts) == 1
     assert result.notification_enqueued_assignment_count == 1
     assert result.notification_enqueued_employee_count == 1
-    assert {event.channel.value for event in queued_events} == {"sms", "email"}
+    assert {event.channel.value for event in queued_events} == {"email"}
     assert all(event.payload.get("schedule_url") for event in queued_events)
+    assert all(event.payload.get("unsubscribe_url") for event in queued_events)
     assert all("View your schedule:" in str(event.payload.get("text_body") or "") for event in queued_events)
+    assert all(
+        isinstance(event.payload.get("email_headers"), dict)
+        and "List-Unsubscribe" in event.payload["email_headers"]
+        for event in queued_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_schedule_week_enqueues_sms_only_when_employee_opted_in():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={
+            "notification_preferences": {
+                "schedule_publish_email_enabled": True,
+                "schedule_publish_sms_enabled": True,
+            }
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=uuid4(),
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    draft_shift = Shift(
+        id=assignment.shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    draft_shift.location = location
+    draft_shift.role = role
+    draft_shift.assignments = [assignment]
+    draft_shift.coverage_cases = []
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.execute_queue = [[draft_shift]]
+
+    result = await scheduling.publish_schedule_week(
+        fake_session,
+        business_id,
+        location_id,
+        week_start,
+        scheduling.ScheduleWeekPublishWrite(
+            source="scheduler_ui",
+            notify_channels=["sms", "email"],
+            expected_shift_ids=[draft_shift.id],
+        ),
+    )
+
+    queued_events = [entry for entry in fake_session.added if isinstance(entry, OutboxEvent)]
+    assert result.notification_enqueued_assignment_count == 1
+    assert result.notification_enqueued_employee_count == 1
+    assert {event.channel.value for event in queued_events} == {"sms", "email"}
+
+
+@pytest.mark.asyncio
+async def test_publish_schedule_week_skips_opted_out_email_notifications():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={
+            "notification_preferences": {
+                "schedule_publish_email_enabled": True,
+                "email_opted_out_at": now.isoformat(),
+                "email_opt_out_reason": "employee_request",
+            }
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=uuid4(),
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    draft_shift = Shift(
+        id=assignment.shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    draft_shift.location = location
+    draft_shift.role = role
+    draft_shift.assignments = [assignment]
+    draft_shift.coverage_cases = []
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.execute_queue = [[draft_shift]]
+
+    result = await scheduling.publish_schedule_week(
+        fake_session,
+        business_id,
+        location_id,
+        week_start,
+        scheduling.ScheduleWeekPublishWrite(
+            source="scheduler_ui",
+            notify_channels=["email"],
+            expected_shift_ids=[draft_shift.id],
+        ),
+    )
+
+    queued_events = [entry for entry in fake_session.added if isinstance(entry, OutboxEvent)]
+    assert result.notification_enqueued_assignment_count == 0
+    assert result.notification_enqueued_employee_count == 0
+    assert queued_events == []
+
+
+@pytest.mark.asyncio
+async def test_publish_schedule_week_skips_globally_suppressed_email_notifications(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=uuid4(),
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    draft_shift = Shift(
+        id=assignment.shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    draft_shift.location = location
+    draft_shift.role = role
+    draft_shift.assignments = [assignment]
+    draft_shift.coverage_cases = []
+
+    async def fake_is_destination_suppressed(session, *, channel, destination, scope="global"):
+        return channel == "email" and destination == "taylor@example.com"
+
+    monkeypatch.setattr(
+        "app.services.scheduling.communication_suppressions.is_destination_suppressed",
+        fake_is_destination_suppressed,
+    )
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.execute_queue = [[draft_shift]]
+
+    result = await scheduling.publish_schedule_week(
+        fake_session,
+        business_id,
+        location_id,
+        week_start,
+        scheduling.ScheduleWeekPublishWrite(
+            source="scheduler_ui",
+            notify_channels=["email"],
+            expected_shift_ids=[draft_shift.id],
+        ),
+    )
+
+    queued_events = [entry for entry in fake_session.added if isinstance(entry, OutboxEvent)]
+    assert result.notification_enqueued_assignment_count == 0
+    assert result.notification_enqueued_employee_count == 0
+    assert queued_events == []
 
 
 def test_publish_schedule_week_route_emits_shift_and_week_events():

@@ -60,7 +60,17 @@ def test_twilio_inbound_route_returns_twiml(monkeypatch):
     async def fake_record(*args, **kwargs):
         return CallbackEntry(), True
 
+    class CallbackResult:
+        response_kind = "twiml"
+        response_text = "Backfill SMS alerts are off for this number. Reply START to opt back in."
+
     monkeypatch.setattr("app.api.routes.providers.provider_callbacks.record_raw_callback", fake_record)
+    async def fake_process(session, entry):
+        return CallbackResult()
+    monkeypatch.setattr(
+        "app.api.routes.providers.provider_callbacks.process_callback_entry_synchronously",
+        fake_process,
+    )
 
     app.dependency_overrides[get_db_session] = _override_db
     try:
@@ -74,6 +84,49 @@ def test_twilio_inbound_route_returns_twiml(monkeypatch):
         )
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("application/xml")
-        assert "Thanks, we received your response." in response.text
+        assert "Reply START to opt back in." in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_email_unsubscribe_route_renders_success_page(monkeypatch):
+    class Suppression:
+        id = "supp_123"
+
+    async def fake_suppress(session, *, token, metadata=None, source="email_unsubscribe_link", reason_code="user_unsubscribe"):
+        assert token == "signed-token"
+        return Suppression(), True
+
+    monkeypatch.setattr(
+        "app.api.routes.communications.communication_suppressions.suppress_email_from_token",
+        fake_suppress,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.get("/api/communications/unsubscribe", params={"token": "signed-token"})
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "has been unsubscribed" in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_email_unsubscribe_route_returns_bad_request_for_invalid_token(monkeypatch):
+    async def fake_suppress(session, *, token, metadata=None, source="email_unsubscribe_link", reason_code="user_unsubscribe"):
+        raise ValueError("invalid_unsubscribe_token")
+
+    monkeypatch.setattr(
+        "app.api.routes.communications.communication_suppressions.suppress_email_from_token",
+        fake_suppress,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.get("/api/communications/unsubscribe", params={"token": "bad-token"})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "invalid_unsubscribe_token"
     finally:
         app.dependency_overrides.clear()

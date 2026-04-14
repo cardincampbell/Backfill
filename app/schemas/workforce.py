@@ -24,6 +24,24 @@ class EmployeeCreate(BaseSchema):
     employee_metadata: dict = Field(default_factory=dict)
 
 
+class EmployeeNotificationPreferencesRead(BaseSchema):
+    schedule_publish_email_enabled: bool = True
+    schedule_publish_sms_enabled: bool = False
+    email_opted_out_at: Optional[datetime] = None
+    sms_opted_out_at: Optional[datetime] = None
+    email_opt_out_reason: Optional[str] = None
+    sms_opt_out_reason: Optional[str] = None
+
+
+class EmployeeNotificationPreferencesUpdate(BaseSchema):
+    schedule_publish_email_enabled: Optional[bool] = None
+    schedule_publish_sms_enabled: Optional[bool] = None
+    email_opted_out_at: Optional[datetime] = None
+    sms_opted_out_at: Optional[datetime] = None
+    email_opt_out_reason: Optional[str] = None
+    sms_opt_out_reason: Optional[str] = None
+
+
 class EmployeeRead(BaseSchema):
     id: UUID
     business_id: UUID
@@ -44,6 +62,9 @@ class EmployeeRead(BaseSchema):
     termination_date: Optional[date]
     notes: Optional[str]
     employee_metadata: dict
+    notification_preferences: EmployeeNotificationPreferencesRead = Field(
+        default_factory=EmployeeNotificationPreferencesRead
+    )
     role_ids: list[UUID] = Field(default_factory=list)
     role_names: list[str] = Field(default_factory=list)
     location_ids: list[UUID] = Field(default_factory=list)
@@ -166,6 +187,7 @@ class EmployeeUpdate(BaseSchema):
     termination_date: Optional[date] = None
     notes: Optional[str] = None
     employee_metadata: Optional[dict] = None
+    notification_preferences: Optional[EmployeeNotificationPreferencesUpdate] = None
     roles: Optional[list[EmployeeRoleUpsert]] = None
     locations: Optional[list[EmployeeLocationUpsert]] = None
 

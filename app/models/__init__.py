@@ -1,5 +1,6 @@
 from app.models.ai import LlmGeneration
 from app.models.business import Business, Location, LocationRole, Role
+from app.models.communications import CommunicationSuppression
 from app.models.coverage import (
     AuditLog,
     CoverageCandidate,
@@ -49,6 +50,7 @@ __all__ = [
     "BusinessVerticalRoleArchetype",
     "BusinessVerticalTypeMapping",
     "BillingLedgerEntry",
+    "CommunicationSuppression",
     "CoverageCandidate",
     "CoverageCase",
     "CoverageCaseRun",

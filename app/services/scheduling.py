@@ -34,7 +34,14 @@ from app.schemas.scheduling import (
     ShiftCreate,
     ShiftUpdate,
 )
-from app.services import delivery, employee_schedule_links as employee_schedule_link_service, shift_assignments, worker_runtime
+from app.services import (
+    communication_suppressions,
+    delivery,
+    employee_schedule_links as employee_schedule_link_service,
+    shift_assignments,
+    worker_runtime,
+    workforce,
+)
 from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 
 _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
@@ -175,6 +182,29 @@ def _normalized_notify_channels(channels: list[str]) -> list[str]:
     return normalized
 
 
+def _employee_allows_publish_notification(employee: Employee, channel: str) -> bool:
+    preferences = workforce.normalized_employee_notification_preferences(employee.employee_metadata)
+    if channel == "email":
+        return bool(preferences["schedule_publish_email_enabled"]) and preferences["email_opted_out_at"] is None
+    if channel == "sms":
+        return bool(preferences["schedule_publish_sms_enabled"]) and preferences["sms_opted_out_at"] is None
+    return False
+
+
+async def _employee_is_globally_suppressed(
+    session: AsyncSession,
+    *,
+    employee: Employee,
+    channel: str,
+) -> bool:
+    destination = employee.email if channel == "email" else employee.phone_e164 if channel == "sms" else None
+    return await communication_suppressions.is_destination_suppressed(
+        session,
+        channel=channel,
+        destination=destination,
+    )
+
+
 def _format_shift_notification_line(shift: Shift) -> str:
     timezone_name = shift.timezone or "UTC"
     try:
@@ -193,6 +223,7 @@ def _format_shift_notification_line(shift: Shift) -> str:
 def _schedule_publish_notification_payload(
     *,
     business_id: UUID,
+    business_name: str,
     location_id: UUID,
     location_name: str,
     week_start_date: date,
@@ -206,6 +237,11 @@ def _schedule_publish_notification_payload(
     shift_lines = [_format_shift_notification_line(shift) for shift in shifts]
     subject = f"Your Backfill schedule for {week_label} is live"
     intro = f"Your schedule for {location_name} for the week of {week_label} is now live."
+    unsubscribe_url = (
+        communication_suppressions.build_email_unsubscribe_url(email=employee.email)
+        if employee.email
+        else None
+    )
     text_body = "\n".join(
         [
             f"Hi {employee.full_name},",
@@ -215,6 +251,7 @@ def _schedule_publish_notification_payload(
             *[f"- {line}" for line in shift_lines],
             "",
             f"View your schedule: {schedule_url}",
+            *([f"Unsubscribe from Backfill emails: {unsubscribe_url}"] if unsubscribe_url else []),
             *(["", note] if note else []),
         ]
     )
@@ -224,10 +261,17 @@ def _schedule_publish_notification_payload(
         f"<p>{intro}</p>"
         f"<ul>{html_lines}</ul>"
         f'<p><a href="{schedule_url}">View your schedule</a></p>'
+        + (
+            f'<p style="font-size:13px;color:#5b708b">'
+            f'Prefer not to receive these emails? <a href="{unsubscribe_url}">Unsubscribe</a>.</p>'
+            if unsubscribe_url
+            else ""
+        )
         + (f"<p>{note}</p>" if note else "")
     )
     return {
         "business_id": str(business_id),
+        "business_name": business_name,
         "location_id": str(location_id),
         "employee_id": str(employee.id),
         "employee_name": employee.full_name,
@@ -237,11 +281,17 @@ def _schedule_publish_notification_payload(
         "week_start_date": week_start_date.isoformat(),
         "week_end_date": week_end_date.isoformat(),
         "schedule_url": schedule_url,
+        "unsubscribe_url": unsubscribe_url,
         "shift_ids": [str(shift.id) for shift in shifts],
         "shift_count": len(shifts),
         "text_body": text_body,
         "html_body": html_body,
         "subject": subject,
+        "email_headers": (
+            communication_suppressions.build_email_list_unsubscribe_headers(email=employee.email)
+            if employee.email
+            else {}
+        ),
     }
 
 
@@ -249,6 +299,7 @@ async def _enqueue_schedule_publish_notifications(
     session: AsyncSession,
     *,
     business_id: UUID,
+    business_name: str,
     location_id: UUID,
     location_name: str,
     week_start_date: date,
@@ -270,11 +321,17 @@ async def _enqueue_schedule_publish_notifications(
         employee = current_assignment.employee if current_assignment is not None else None
         if current_assignment is None or employee is None:
             continue
-        available_channels = [
-            channel
-            for channel in normalized_channels
-            if (channel == "sms" and employee.phone_e164) or (channel == "email" and employee.email)
-        ]
+        available_channels: list[str] = []
+        for channel in normalized_channels:
+            if channel == "sms" and not employee.phone_e164:
+                continue
+            if channel == "email" and not employee.email:
+                continue
+            if not _employee_allows_publish_notification(employee, channel):
+                continue
+            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
+                continue
+            available_channels.append(channel)
         if not available_channels:
             continue
         shifts_by_employee.setdefault(employee.id, []).append(shift)
@@ -295,6 +352,7 @@ async def _enqueue_schedule_publish_notifications(
         )
         payload = _schedule_publish_notification_payload(
             business_id=business_id,
+            business_name=business_name,
             location_id=location_id,
             location_name=location_name,
             week_start_date=week_start_date,
@@ -305,9 +363,15 @@ async def _enqueue_schedule_publish_notifications(
             schedule_url=schedule_url,
         )
         for channel in normalized_channels:
-            if channel == "sms" and not employee.phone_e164:
+            if channel == "sms" and (
+                not employee.phone_e164 or not _employee_allows_publish_notification(employee, "sms")
+            ):
                 continue
-            if channel == "email" and not employee.email:
+            if channel == "email" and (
+                not employee.email or not _employee_allows_publish_notification(employee, "email")
+            ):
+                continue
+            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
                 continue
             session.add(
                 OutboxEvent(
@@ -537,6 +601,7 @@ async def publish_schedule_week(
         await _enqueue_schedule_publish_notifications(
             session,
             business_id=business_id,
+            business_name=getattr(business, "display_name", None) or business.name,
             location_id=location_id,
             location_name=getattr(location, "display_name", None) or location.name,
             week_start_date=window.week_start,

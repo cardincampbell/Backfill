@@ -18,7 +18,7 @@ from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.schemas.scheduling import ShiftCreate
-from app.services import businesses, coverage as coverage_service
+from app.services import businesses, communication_suppressions, coverage as coverage_service
 from app.services import delivery, messaging, scheduler_sync, scheduling
 from app.config import settings
 
@@ -408,10 +408,27 @@ async def create_open_shift(session: AsyncSession, args: dict) -> dict:
     return {"status": "shift_created", "shift_id": str(shift.id)}
 
 
-async def send_onboarding_link(phone: str, *, kind: str, location_id: UUID | None = None, platform: str | None = None) -> dict:
+async def send_onboarding_link(
+    session: AsyncSession,
+    phone: str,
+    *,
+    kind: str,
+    location_id: UUID | None = None,
+    platform: str | None = None,
+) -> dict:
     path = "/try"
     if location_id is not None:
         path = f"/try?location_id={location_id}&kind={kind}"
+    if await communication_suppressions.is_destination_suppressed(
+        session,
+        channel="sms",
+        destination=phone,
+    ):
+        return {
+            "status": "suppressed",
+            "path": path,
+            "platform": (platform or "").strip().lower() or None,
+        }
     body = "Backfill: Finish setting up your account here: " + f"{settings.web_base_url}{path}"
     messaging.send_sms(to=phone, body=body)
     return {
@@ -460,6 +477,7 @@ async def dispatch_function_call(session: AsyncSession, name: str, args: dict) -
             raise ValueError("phone_required")
         location_id = _uuid_from_mapping(args, keys=("location_id",))
         return await send_onboarding_link(
+            session,
             phone,
             kind=str(args.get("kind") or "invite"),
             location_id=location_id,

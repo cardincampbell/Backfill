@@ -797,6 +797,10 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
         business_id,
         employee_id,
         workforce.EmployeeUpdate(
+            notification_preferences=workforce.EmployeeNotificationPreferencesUpdate(
+                schedule_publish_sms_enabled=True,
+                sms_opt_out_reason="manager_enabled_after_consent",
+            ),
             roles=[workforce.EmployeeRoleUpsert(role_id=role_id, is_primary=True)],
             locations=[workforce.EmployeeLocationUpsert(location_id=location_id, is_primary=True)],
         ),
@@ -807,6 +811,9 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
     payload = EmployeeProfileRead.model_validate(updated)
     assert payload.roles[0].role_name == "Server"
     assert payload.locations[0].location_name == "Pasadena"
+    assert payload.notification_preferences.schedule_publish_email_enabled is True
+    assert payload.notification_preferences.schedule_publish_sms_enabled is True
+    assert payload.notification_preferences.sms_opt_out_reason == "manager_enabled_after_consent"
 
 
 @pytest.mark.asyncio
