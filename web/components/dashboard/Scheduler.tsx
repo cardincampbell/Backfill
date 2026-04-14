@@ -2911,7 +2911,10 @@ function SchedulerContent({
                 };
               })}
               shifts={displayShifts.map((s) => ({
-                employeeId: s.displayEmployeeId,
+                // Use employeeId (current assignment only), not displayEmployeeId,
+                // which falls back to last_assignment and would attribute an
+                // unassigned shift to whoever previously held it.
+                employeeId: s.employeeId,
                 day: s.day,
                 startHour: s.startHour,
                 endHour: s.endHour,

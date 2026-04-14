@@ -246,29 +246,70 @@ export function buildPrintHTML(opts: PrintOptions): string {
 
 // ─── trigger ─────────────────────────────────────────────────────────────────
 
+/**
+ * Injects the print HTML into the current document as a full-screen overlay,
+ * triggers window.print(), then removes the overlay on afterprint.
+ * Used when window.open() is blocked by the browser.
+ */
+function printViaOverlay(html: string): void {
+  // Extract just the <body> content and <style> from the generated HTML so we
+  // can inject it into the current document without nesting <html>/<body>.
+  const bodyMatch  = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+  const styleMatch = /<style[^>]*>([\s\S]*?)<\/style>/i.exec(html);
+  if (!bodyMatch) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = '__print_overlay__';
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;';
+  overlay.innerHTML = bodyMatch[1];
+
+  const style = document.createElement('style');
+  style.id = '__print_overlay_style__';
+  style.textContent = [
+    styleMatch ? styleMatch[1] : '',
+    // During print, hide everything except the overlay.
+    '@media print { body > *:not(#__print_overlay__) { display:none !important; } }',
+  ].join('\n');
+
+  document.head.appendChild(style);
+  document.body.appendChild(overlay);
+
+  const cleanup = () => {
+    overlay.remove();
+    style.remove();
+    window.removeEventListener('afterprint', cleanup);
+  };
+  window.addEventListener('afterprint', cleanup);
+  window.print();
+}
+
 export function printSchedule(opts: PrintOptions): void {
   const html = buildPrintHTML(opts);
   const win  = window.open('', '_blank', 'width=1100,height=750');
+
   if (!win) {
-    // Popup was blocked — fall back to printing the current page
-    window.print();
+    // Popup blocked — inject into current page instead of printing the live UI.
+    printViaOverlay(html);
     return;
   }
+
   win.document.open();
   win.document.write(html);
   win.document.close();
-  // Give the browser a moment to lay out before printing
-  win.addEventListener('load', () => {
+
+  // Guard so only one of (load event | timeout) fires win.print().
+  let printed = false;
+  const doPrint = () => {
+    if (printed) return;
+    printed = true;
     win.focus();
     win.print();
     win.addEventListener('afterprint', () => win.close());
-  });
-  // Fallback if load already fired (some browsers)
-  setTimeout(() => {
-    if (!win.closed) {
-      win.focus();
-      win.print();
-      win.addEventListener('afterprint', () => win.close());
-    }
-  }, 500);
+  };
+
+  win.addEventListener('load', doPrint);
+  // Timeout handles browsers where document.write() causes load to fire
+  // synchronously before the listener is registered.
+  setTimeout(doPrint, 500);
 }
