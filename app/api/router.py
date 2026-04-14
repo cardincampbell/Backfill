@@ -11,6 +11,7 @@ from app.api.routes import (
     calendar_feeds_router,
     copilot_router,
     coverage_router,
+    employee_schedules_router,
     events_router,
     finance_router,
     identity_router,
@@ -51,6 +52,7 @@ async def meta() -> dict[str, str]:
 
 
 router.include_router(calendar_feeds_router)
+router.include_router(employee_schedules_router)
 router.include_router(identity_router)
 router.include_router(auth_router)
 router.include_router(account_router)

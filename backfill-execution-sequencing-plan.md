@@ -162,8 +162,7 @@ Deliverables:
   eligibility = allowed to be considered
   availability = able to work the exact interval
 - freeze shift state rule:
-  shift lifecycle state and staffing state are conceptually separate
-  the physical schema now stores `lifecycle_status` and `staffing_status` separately on `shifts`
+  shift lifecycle state and staffing state are conceptually separate even though the current repo stores them in one `ShiftStatus` enum
 - freeze assignment state rule:
   `called_out` is not a canonical assignment status
   `checked_in` and `checked_out` are timestamps, not assignment statuses
@@ -187,8 +186,8 @@ Phase 0 contracts to write down explicitly:
   `seats_requested` is compatibility baggage from the current schema, not a canonical coverage primitive
 - shift state semantics:
   target conceptual model is `lifecycle_status` plus `staffing_status`
-  compatibility reads may still expose a derived legacy `status` summary during cutover
-  do not let compatibility reads blur the domain model in services or UI language
+  current physical storage keeps both concerns in `ShiftStatus` as launch compatibility
+  do not let that storage shortcut blur the domain model in services or UI language
 - assignment state semantics:
   use canonical assignment status for ownership history
   treat callouts as triggers or reasons, not assignment statuses

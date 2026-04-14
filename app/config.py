@@ -163,6 +163,10 @@ class Settings:
         os.environ.get("BACKFILL_RETELL_WEBHOOK_LIMIT_PER_MINUTE", "240")
     )
     worker_api_key: str = os.environ.get("BACKFILL_WORKER_API_KEY", "")
+    public_link_signing_secret: str = os.environ.get(
+        "BACKFILL_PUBLIC_LINK_SIGNING_SECRET",
+        os.environ.get("BACKFILL_WORKER_API_KEY", "backfill-dev-public-link-secret"),
+    )
     run_migrations_on_startup: bool = os.environ.get(
         "BACKFILL_RUN_MIGRATIONS_ON_STARTUP",
         "",

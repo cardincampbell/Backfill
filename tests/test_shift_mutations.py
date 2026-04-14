@@ -1534,6 +1534,8 @@ async def test_publish_schedule_week_schedules_only_drafts_and_enqueues_notifica
     assert result.notification_enqueued_assignment_count == 1
     assert result.notification_enqueued_employee_count == 1
     assert {event.channel.value for event in queued_events} == {"sms", "email"}
+    assert all(event.payload.get("schedule_url") for event in queued_events)
+    assert all("View your schedule:" in str(event.payload.get("text_body") or "") for event in queued_events)
 
 
 def test_publish_schedule_week_route_emits_shift_and_week_events():

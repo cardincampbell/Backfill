@@ -44,20 +44,20 @@ Current codebase note:
 - A shift has two conceptually different state axes:
   - lifecycle state
   - staffing state
-- Lifecycle state:
+- Target lifecycle state:
   - `draft`
   - `scheduled`
   - `in_progress`
   - `completed`
   - `cancelled`
-- Staffing state:
+- Target staffing state:
   - `open`
   - `filling`
   - `covered`
   - `no_fill`
 - Current repo note:
-  - the physical `shifts` schema now stores `lifecycle_status` and `staffing_status` separately
-  - some compatibility reads may still expose a derived legacy `status` summary during the cutover period
+  - the physical `ShiftStatus` enum currently conflates lifecycle and staffing state in one field
+  - treat that as launch compatibility, not the ideal long-term conceptual model
 - UI note:
   - product copy may say `published` if desired
   - storage and backend semantics remain `scheduled` until a deliberate migration says otherwise

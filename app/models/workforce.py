@@ -53,6 +53,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="EmployeeLocation.created_at.asc()",
     )
+    schedule_access_link: Mapped[Optional["EmployeeScheduleAccessLink"]] = relationship(
+        back_populates="employee",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     availability_rules: Mapped[list["EmployeeAvailabilityRule"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
     availability_exceptions: Mapped[list["EmployeeAvailabilityException"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
     assignments: Mapped[list["ShiftAssignment"]] = relationship(back_populates="employee")
@@ -222,6 +227,26 @@ class EmployeeLocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         if "location" in state.unloaded:
             return None
         return self.location.slug if self.location is not None else None
+
+
+class EmployeeScheduleAccessLink(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "employee_schedule_access_links"
+    __table_args__ = (
+        UniqueConstraint("employee_id", name="uq_employee_schedule_access_links_employee_id"),
+        Index("ix_employee_schedule_access_links_business_id", "business_id"),
+        Index("ix_employee_schedule_access_links_revoked_at", "revoked_at"),
+    )
+
+    business_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    rotated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    link_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+
+    business: Mapped["Business"] = relationship()
+    employee: Mapped["Employee"] = relationship(back_populates="schedule_access_link")
 
 
 class EmployeeAvailabilityRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
