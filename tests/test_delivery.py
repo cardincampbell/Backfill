@@ -172,7 +172,8 @@ async def test_process_outbox_batch_sends_schedule_publish_sms(monkeypatch):
         payload={
             "business_id": str(uuid4()),
             "phone_e164": "+15555550100",
-            "text_body": "Your schedule is live.",
+            "text_body": "EMAIL BODY SHOULD NOT BE USED",
+            "sms_body": "Your schedule is live.",
         },
     )
     captured: dict[str, str | None] = {}
@@ -199,6 +200,54 @@ async def test_process_outbox_batch_sends_schedule_publish_sms(monkeypatch):
     assert event.status == OutboxStatus.sent
     assert captured["to"] == "+15555550100"
     assert captured["body"] == "Your schedule is live."
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_sends_schedule_publish_email(monkeypatch):
+    now = datetime.now(timezone.utc)
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="schedule_publish",
+        aggregate_id=uuid4(),
+        topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+        channel="email",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={
+            "business_id": str(uuid4()),
+            "email": "worker@example.com",
+            "subject": "Your Backfill schedule is live",
+            "text_body": "Plain text schedule body",
+            "html_body": "<div>Styled schedule email</div>",
+        },
+    )
+    captured: dict[str, str] = {}
+
+    def fake_send_email(*, to: str, subject: str, text_body: str, html_body: str | None = None):
+        captured["to"] = to
+        captured["subject"] = subject
+        captured["text_body"] = text_body
+        captured["html_body"] = html_body or ""
+        return "SG-PUBLISH"
+
+    monkeypatch.setattr("app.services.messaging.send_email", fake_send_email)
+
+    session = FakeDeliverySession()
+    session.execute_queue = [[event]]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        now=now,
+        limit=10,
+    )
+
+    assert result["claimed_count"] == 1
+    assert result["sent_count"] == 1
+    assert event.status == OutboxStatus.sent
+    assert captured["to"] == "worker@example.com"
+    assert captured["subject"] == "Your Backfill schedule is live"
+    assert captured["text_body"] == "Plain text schedule body"
+    assert captured["html_body"] == "<div>Styled schedule email</div>"
 
 
 @pytest.mark.asyncio

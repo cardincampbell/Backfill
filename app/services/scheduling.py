@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from html import escape
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -328,9 +329,107 @@ def _format_shift_notification_line(shift: Shift) -> str:
     return f"{date_label} {start_label}-{end_label} · {role_name}"
 
 
+def _schedule_publish_week_label(week_start_date: date, week_end_date: date) -> str:
+    return (
+        f"{week_start_date.strftime('%b %d').replace(' 0', ' ')}"
+        f" – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
+    )
+
+
+def _build_schedule_publish_email_html(
+    *,
+    business_name: str,
+    location_name: str,
+    employee_name: str,
+    week_label: str,
+    shift_lines: list[str],
+    schedule_url: str,
+    note: str | None,
+) -> str:
+    headline = escape(f"Your schedule for {week_label} is live")
+    intro = escape(
+        f"{business_name} published your schedule for {location_name} for the week of {week_label}."
+    )
+    summary = escape(
+        f"You have {len(shift_lines)} scheduled shift{'s' if len(shift_lines) != 1 else ''}."
+    )
+    greeting = escape(f"Hi {employee_name},")
+    schedule_url_html = escape(schedule_url)
+    note_html = (
+        f"""
+          <tr>
+            <td style="padding:18px 0 0 0;">
+              <div style="padding:16px 18px;border-radius:14px;background:#EEF2FF;border:1px solid #D9E0FF;">
+                <div style="font-size:12px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;color:#635BFF;padding:0 0 8px 0;">Manager note</div>
+                <div style="font-size:15px;line-height:1.6;color:#334155;">{escape(note)}</div>
+              </div>
+            </td>
+          </tr>
+        """.strip()
+        if note
+        else ""
+    )
+    shift_items = "".join(
+        f"""
+          <tr>
+            <td style="padding:0 0 10px 0;">
+              <div style="padding:14px 16px;border-radius:14px;background:#F8FAFC;border:1px solid #E2E8F0;font-size:15px;line-height:1.5;color:#0A2540;">
+                {escape(line)}
+              </div>
+            </td>
+          </tr>
+        """.strip()
+        for line in shift_lines
+    )
+    return f"""
+<div style="margin:0;padding:24px 0;background:#ffffff;font-family:Helvetica Neue,Arial,sans-serif;color:#111111;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;margin:0 auto;padding:0 16px;">
+    <tr>
+      <td align="left" style="padding:0 0 28px 0;font-size:32px;font-weight:800;letter-spacing:-0.04em;">Backfill</td>
+      <td align="right" style="padding:0 0 28px 0;font-size:14px;font-weight:600;color:#666666;white-space:nowrap;">Callouts covered.</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F3F5F8;border:1px solid #DFE4EA;border-radius:18px;padding:32px;">
+          <tr>
+            <td style="font-size:44px;line-height:1.02;font-weight:800;letter-spacing:-0.06em;padding:0 0 18px 0;">{headline}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 8px 0;">{greeting}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 10px 0;">{intro}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 24px 0;">{summary}</td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 18px 0;">
+              <a href="{schedule_url_html}" style="display:inline-block;padding:16px 30px;background:#111111;color:#ffffff;text-decoration:none;border-radius:14px;font-size:18px;font-weight:700;">View schedule</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 10px 0;font-size:12px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;color:#635BFF;">This week's shifts</td>
+          </tr>
+          {shift_items}
+          {note_html}
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" style="padding:22px 0 0 0;font-size:13px;line-height:1.55;color:#8A8A8A;">
+        This secure link always shows the latest published schedule. If you believe this message was sent in error, you can ignore it.
+      </td>
+    </tr>
+  </table>
+</div>
+""".strip()
+
+
 def _schedule_publish_notification_payload(
     *,
     business_id: UUID,
+    business_name: str,
     location_id: UUID,
     location_name: str,
     week_start_date: date,
@@ -340,10 +439,14 @@ def _schedule_publish_notification_payload(
     note: str | None,
     schedule_url: str,
 ) -> dict:
-    week_label = f"{week_start_date.strftime('%b %d').replace(' 0', ' ')} – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
+    week_label = _schedule_publish_week_label(week_start_date, week_end_date)
     shift_lines = [_format_shift_notification_line(shift) for shift in shifts]
     subject = f"Your Backfill schedule for {week_label} is live"
     intro = f"Your schedule for {location_name} for the week of {week_label} is now live."
+    sms_body = (
+        f"Backfill: Your {location_name} schedule for {week_label} is live. "
+        f"View it here: {schedule_url}"
+    )
     text_body = "\n".join(
         [
             f"Hi {employee.full_name},",
@@ -356,16 +459,18 @@ def _schedule_publish_notification_payload(
             *(["", note] if note else []),
         ]
     )
-    html_lines = "".join(f"<li>{line}</li>" for line in shift_lines)
-    html_body = (
-        f"<p>Hi {employee.full_name},</p>"
-        f"<p>{intro}</p>"
-        f"<ul>{html_lines}</ul>"
-        f'<p><a href="{schedule_url}">View your schedule</a></p>'
-        + (f"<p>{note}</p>" if note else "")
+    html_body = _build_schedule_publish_email_html(
+        business_name=business_name,
+        location_name=location_name,
+        employee_name=employee.full_name,
+        week_label=week_label,
+        shift_lines=shift_lines,
+        schedule_url=schedule_url,
+        note=note,
     )
     return {
         "business_id": str(business_id),
+        "business_name": business_name,
         "location_id": str(location_id),
         "employee_id": str(employee.id),
         "employee_name": employee.full_name,
@@ -377,6 +482,7 @@ def _schedule_publish_notification_payload(
         "schedule_url": schedule_url,
         "shift_ids": [str(shift.id) for shift in shifts],
         "shift_count": len(shifts),
+        "sms_body": sms_body,
         "text_body": text_body,
         "html_body": html_body,
         "subject": subject,
@@ -387,6 +493,7 @@ async def _enqueue_schedule_publish_notifications(
     session: AsyncSession,
     *,
     business_id: UUID,
+    business_name: str,
     location_id: UUID,
     location_name: str,
     week_start_date: date,
@@ -433,6 +540,7 @@ async def _enqueue_schedule_publish_notifications(
         )
         payload = _schedule_publish_notification_payload(
             business_id=business_id,
+            business_name=business_name,
             location_id=location_id,
             location_name=location_name,
             week_start_date=week_start_date,
@@ -732,6 +840,7 @@ async def publish_schedule_week(
         await _enqueue_schedule_publish_notifications(
             session,
             business_id=business_id,
+            business_name=getattr(business, "display_name", None) or business.name,
             location_id=location_id,
             location_name=getattr(location, "display_name", None) or location.name,
             week_start_date=window.week_start,

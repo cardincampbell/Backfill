@@ -222,12 +222,13 @@ async def _send_schedule_publish_notification(
 
     subject = str(outbox_event.payload.get("subject") or "Your Backfill schedule is live")
     text_body = str(outbox_event.payload.get("text_body") or "").strip()
+    sms_body = str(outbox_event.payload.get("sms_body") or text_body).strip()
     html_body_raw = outbox_event.payload.get("html_body")
     html_body = str(html_body_raw) if isinstance(html_body_raw, str) and html_body_raw.strip() else None
     now = datetime.now(timezone.utc)
 
     if channel_value == "sms":
-        message = messaging.send_sms(to=destination, body=text_body)
+        message = messaging.send_sms(to=destination, body=sms_body)
         return DeliverySendResult(
             success=True,
             provider="twilio",
