@@ -102,6 +102,8 @@ async def get_or_create_schedule_access_link(
             revoked_at=None,
             last_accessed_at=None,
             link_metadata={},
+            created_at=now,
+            updated_at=now,
         )
         session.add(link)
         await session.flush()

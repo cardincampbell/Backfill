@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -41,21 +42,22 @@ class FakeExecuteResult:
 
 
 class FakeEmployeeScheduleSession:
-    def __init__(self):
+    def __init__(self, *, populate_timestamps: bool = True):
         self.get_map: dict[tuple[type, object], object] = {}
         self.scalar_queue: list[object] = []
         self.execute_queue: list[list[object]] = []
         self.added: list[object] = []
         self.flushed = 0
         self.commits = 0
+        self.populate_timestamps = populate_timestamps
 
     def add(self, obj):
         now = datetime.now(timezone.utc)
         if getattr(obj, "id", None) is None:
             obj.id = uuid4()
-        if getattr(obj, "created_at", None) is None:
+        if self.populate_timestamps and getattr(obj, "created_at", None) is None:
             obj.created_at = now
-        if getattr(obj, "updated_at", None) is None:
+        if self.populate_timestamps and getattr(obj, "updated_at", None) is None:
             obj.updated_at = now
         self.added.append(obj)
         self.get_map[(type(obj), obj.id)] = obj
@@ -258,6 +260,25 @@ def test_schedule_link_includes_week_and_location():
     assert "/schedule/" in url
     assert "week_start=2026-04-13" in url
     assert str(location_id) in url
+
+
+def test_get_or_create_schedule_access_link_sets_timestamps_without_db_defaults():
+    fake_session = FakeEmployeeScheduleSession(populate_timestamps=False)
+    business_id = uuid4()
+    employee = _make_employee(business_id=business_id, employee_id=uuid4())
+
+    link, created = asyncio.run(
+        svc.get_or_create_schedule_access_link(
+            fake_session,
+            business_id=business_id,
+            employee=employee,
+        )
+    )
+
+    assert created is True
+    assert link.created_at is not None
+    assert link.updated_at is not None
+    assert fake_session.flushed == 1
 
 
 def test_get_employee_schedule_link_route_creates_and_commits():
