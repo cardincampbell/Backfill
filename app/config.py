@@ -163,6 +163,16 @@ class Settings:
         os.environ.get("BACKFILL_RETELL_WEBHOOK_LIMIT_PER_MINUTE", "240")
     )
     worker_api_key: str = os.environ.get("BACKFILL_WORKER_API_KEY", "")
+    service_mode: str = os.environ.get("BACKFILL_SERVICE_MODE", "api").strip().lower()
+    worker_poll_seconds: float = float(os.environ.get("BACKFILL_WORKER_POLL_SECONDS", "10"))
+    worker_batch_limit: int = int(os.environ.get("BACKFILL_WORKER_BATCH_LIMIT", "20"))
+    worker_error_backoff_seconds: float = float(
+        os.environ.get("BACKFILL_WORKER_ERROR_BACKOFF_SECONDS", "15")
+    )
+    worker_run_once: bool = os.environ.get(
+        "BACKFILL_WORKER_RUN_ONCE",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     public_link_signing_secret: str = os.environ.get(
         "BACKFILL_PUBLIC_LINK_SIGNING_SECRET",
         os.environ.get("BACKFILL_WORKER_API_KEY", "backfill-dev-public-link-secret"),

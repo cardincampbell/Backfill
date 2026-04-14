@@ -4,6 +4,7 @@ This repo is already split correctly for production:
 
 - `usebackfill.com` serves the Next.js frontend from Vercel.
 - `api.usebackfill.com` should serve the FastAPI backend from a container host.
+- a second non-public worker service should run the runtime loop that drains outbox events and background work.
 
 Do not point Retell at `https://usebackfill.com/webhooks/retell` unless the backend is actually mounted there. Right now the clean deployment shape is a separate backend origin.
 
@@ -11,6 +12,7 @@ Do not point Retell at `https://usebackfill.com/webhooks/retell` unless the back
 
 - Frontend: `https://usebackfill.com`
 - Backend API: `https://api.usebackfill.com`
+- Backend worker: separate private service from the same image with `BACKFILL_SERVICE_MODE=worker`
 - Retell webhook: `https://api.usebackfill.com/webhooks/retell`
 - Optional split-mode Twilio SMS webhook: `https://api.usebackfill.com/webhooks/twilio/sms`
 
@@ -55,12 +57,41 @@ docker build -t backfill-api .
 docker run -p 8000:8000 --env-file .env backfill-api
 ```
 
-The container serves:
+API mode (`BACKFILL_SERVICE_MODE=api`, default) serves:
 
 - API routes under `/api/*`
 - Retell webhook under `/webhooks/retell`
 - Twilio webhook under `/webhooks/twilio/sms`
 - health check at `/healthz`
+
+Worker mode (`BACKFILL_SERVICE_MODE=worker`) runs the durable background loop directly against Postgres:
+
+- processes schedule publish notification outbox rows
+- processes coverage delivery outbox rows
+- runs provider callback processing
+- runs runtime projection freshness checks
+- runs the coverage runtime tick
+
+Recommended worker env:
+
+```env
+BACKFILL_SERVICE_MODE=worker
+BACKFILL_WORKER_POLL_SECONDS=10
+BACKFILL_WORKER_BATCH_LIMIT=20
+BACKFILL_WORKER_ERROR_BACKOFF_SECONDS=15
+```
+
+Recommended Railway shape:
+
+- `Backfill API` service
+  - public networking enabled
+  - `BACKFILL_SERVICE_MODE=api`
+- `Backfill Worker` service
+  - no public networking required
+  - same repo / same Docker image
+  - `BACKFILL_SERVICE_MODE=worker`
+
+Do not rely on schedule publish notifications, feed projections, or other outbox-driven workflows unless the worker service is running.
 
 ## DNS
 
