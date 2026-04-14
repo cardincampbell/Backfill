@@ -249,6 +249,9 @@ export type WorkspaceBoard = {
     delivered_offer_count: number;
     standby_depth: number;
     manager_action_required: boolean;
+    amended_from_published: boolean;
+    amendment_reason_code?: string | null;
+    schedule_break: boolean;
   }>;
   action_summary: {
     total: number;
@@ -337,6 +340,27 @@ export type ScheduleWeekPublishResponse = {
   notification_enqueued_employee_count: number;
   published_shift_ids: string[];
   already_scheduled_shift_ids: string[];
+};
+
+export type PublishedShiftAmendmentPayload = {
+  action: "cancel_shift" | "unassign_shift" | "reassign_shift";
+  reason_code: "cancelled" | "callout" | "no_show";
+  target_employee_id?: string | null;
+  source: "scheduler_ui" | "copilot" | "retell_voice" | "sms_automation";
+  note?: string;
+};
+
+export type PublishedShiftAmendmentResponse = {
+  shift_id: string;
+  action: PublishedShiftAmendmentPayload["action"];
+  reason_code: PublishedShiftAmendmentPayload["reason_code"];
+  amended_from_published: boolean;
+  schedule_break: boolean;
+  lifecycle_status: string;
+  staffing_status: string;
+  status: string;
+  week_publish_state: "amended";
+  current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
 };
 
 export class ShiftAssignmentConflictError extends Error {
@@ -868,6 +892,25 @@ export async function assignShift(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as ShiftAssignmentMutationResponse;
+}
+
+export async function amendPublishedShift(
+  businessId: string,
+  shiftId: string,
+  payload: PublishedShiftAmendmentPayload,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shifts/${shiftId}/published-amendment`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as PublishedShiftAmendmentResponse;
 }
 
 export async function publishScheduleWeek(

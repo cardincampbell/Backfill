@@ -52,6 +52,7 @@ import {
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
+  amendPublishedShift,
   assignShift as assignWorkspaceShift,
   createShift as createWorkspaceShift,
   deleteLocation as deleteWorkspaceLocation,
@@ -134,6 +135,9 @@ interface Shift {
   currentAssignmentId?: string | null;
   lifecycleStatus: string;
   staffingStatus: string;
+  amendedFromPublished: boolean;
+  amendmentReasonCode?: string | null;
+  scheduleBreak: boolean;
   roleId: string;
   day: number;
   startHour: number;
@@ -153,6 +157,11 @@ type DayWeather = {
 
 type ShiftPublishState = 'published' | 'amended' | null;
 type EmployeePublishState = 'published' | 'amended' | null;
+type PublishedShiftReason = 'cancelled' | 'callout' | 'no_show';
+type PublishedChangeAction =
+  | { kind: 'edit'; shift: Shift; targetDay?: number }
+  | { kind: 'delete'; shift: Shift }
+  | { kind: 'reassign'; shift: Shift; targetEmployeeId: string; targetDay: number };
 
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
@@ -208,6 +217,11 @@ function describeShiftDeletionError(error: unknown) {
     return 'Published shifts cannot be removed directly. Make draft changes for the week and republish them.';
   }
   return error.message;
+}
+
+function isLivePublishedShift(shift: Shift, publishState: ShiftPublishState) {
+  return publishState === 'published'
+    && (shift.lifecycleStatus === 'scheduled' || shift.lifecycleStatus === 'in_progress');
 }
 
 function formatPublishedDate(value: string | null | undefined) {
@@ -487,6 +501,9 @@ function boardShiftToSchedulerShift(
     currentAssignmentId: shift.current_assignment?.assignment_id ?? null,
     lifecycleStatus: shift.lifecycle_status,
     staffingStatus: shift.staffing_status,
+    amendedFromPublished: shift.amended_from_published,
+    amendmentReasonCode: shift.amendment_reason_code ?? null,
+    scheduleBreak: shift.schedule_break,
     roleId: shift.role_id,
     day,
     startHour,
@@ -667,6 +684,7 @@ function DraggableShiftChip({
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
+  const hasScheduleBreak = shift.scheduleBreak;
   const ShiftStateIcon = publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
   const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
 
@@ -736,11 +754,11 @@ function DraggableShiftChip({
           draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
         } ${
           isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
-        }`}
+        } ${hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
         style={{ minHeight: 52 }}
       >
-        <div className="absolute inset-0 rounded-lg" style={{ background: shift.color, opacity: 0.08 }} />
-        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shift.color }} />
+        <div className="absolute inset-0 rounded-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color, opacity: 0.08 }} />
+        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color }} />
 
         <div className="relative pl-2.5 pr-2 py-2 flex items-start gap-1.5">
           <div className="flex-1 min-w-0">
@@ -757,6 +775,9 @@ function DraggableShiftChip({
               <p className={`text-[9px] ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
                 {dur}h
               </p>
+              {hasScheduleBreak ? (
+                <AlertTriangle size={8} className="shrink-0 text-[#E5484D]" />
+              ) : null}
               {ShiftStateIcon && shiftStateColor ? (
                 <ShiftStateIcon size={8} className="shrink-0" style={{ color: shiftStateColor }} />
               ) : null}
@@ -811,11 +832,11 @@ function DraggableShiftChip({
         draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
       } ${
         isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
-      }`}
+      } ${hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
       style={{ minHeight: 38 }}
     >
-      <div className="absolute inset-0 rounded-lg" style={{ background: shift.color, opacity: 0.08 }} />
-      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shift.color }} />
+      <div className="absolute inset-0 rounded-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color, opacity: 0.08 }} />
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color }} />
 
       <div className="relative pl-2.5 pr-2 py-1.5">
         {/* Row 1: label + hours top-right */}
@@ -852,6 +873,9 @@ function DraggableShiftChip({
           <p className={`text-[8px] truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
             {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
           </p>
+          {hasScheduleBreak ? (
+            <AlertTriangle size={7} className="shrink-0 text-[#E5484D]" />
+          ) : null}
           {ShiftStateIcon && shiftStateColor ? (
             <ShiftStateIcon size={7} className="shrink-0" style={{ color: shiftStateColor }} />
           ) : null}
@@ -1012,8 +1036,9 @@ function SchedulerContent({
   } | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
-  const [showEditPublishedWarning, setShowEditPublishedWarning] = useState(false);
-  const [pendingPublishedEdit, setPendingPublishedEdit] = useState<Shift | null>(null);
+  const [pendingPublishedChange, setPendingPublishedChange] = useState<PublishedChangeAction | null>(null);
+  const [selectedPublishedReason, setSelectedPublishedReason] = useState<PublishedShiftReason | null>(null);
+  const [isSubmittingPublishedChange, setIsSubmittingPublishedChange] = useState(false);
   const [showCalendarSyncModal, setShowCalendarSyncModal] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
@@ -1500,6 +1525,39 @@ function SchedulerContent({
     return null;
   }, [amendedEmployeeIds, publishedEmployeeIds]);
 
+  const openPublishedChangeAlert = useCallback((change: PublishedChangeAction) => {
+    setPendingPublishedChange(change);
+    setSelectedPublishedReason(null);
+  }, []);
+
+  const closePublishedChangeAlert = useCallback(() => {
+    if (isSubmittingPublishedChange) {
+      return;
+    }
+    setPendingPublishedChange(null);
+    setSelectedPublishedReason(null);
+  }, [isSubmittingPublishedChange]);
+
+  const publishedChangeReasonOptions = useMemo(() => {
+    if (!pendingPublishedChange) {
+      return [] as Array<{ label: string; value: PublishedShiftReason }>;
+    }
+    if (pendingPublishedChange.kind === 'delete') {
+      return [
+        { label: 'No Show', value: 'no_show' as const },
+        { label: 'Callout', value: 'callout' as const },
+        { label: 'Cancelled', value: 'cancelled' as const },
+      ];
+    }
+    if (pendingPublishedChange.kind === 'reassign') {
+      return [
+        { label: 'No Show', value: 'no_show' as const },
+        { label: 'Callout', value: 'callout' as const },
+      ];
+    }
+    return [] as Array<{ label: string; value: PublishedShiftReason }>;
+  }, [pendingPublishedChange]);
+
   const removeEmployee = useCallback((employeeId: string) => {
     const employee = schedulerEmployees.find((item) => item.id === employeeId);
     if (!employee) {
@@ -1643,18 +1701,21 @@ function SchedulerContent({
   };
 
   const openShiftEditor = useCallback((shift: Shift) => {
-    if (isWeekPublished && shiftPublishState(shift) === 'published') {
-      setPendingPublishedEdit(shift);
-      setShowEditPublishedWarning(true);
+    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+      openPublishedChangeAlert({ kind: 'edit', shift });
       return;
     }
     setEditingShift(shift);
-  }, [isWeekPublished, shiftPublishState]);
+  }, [openPublishedChangeAlert, shiftPublishState]);
 
-  const deleteShift = useCallback((id: string) => {
+  const deleteShift = useCallback((shift: Shift) => {
+    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+      openPublishedChangeAlert({ kind: 'delete', shift });
+      return;
+    }
     void (async () => {
       try {
-        await deleteWorkspaceShift(location.business_id, id);
+        await deleteWorkspaceShift(location.business_id, shift.id);
         await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'success',
@@ -1668,7 +1729,7 @@ function SchedulerContent({
         });
       }
     })();
-  }, [location.business_id, refreshSchedulerData]);
+  }, [location.business_id, openPublishedChangeAlert, refreshSchedulerData, shiftPublishState]);
 
   const updateShift = useCallback((updated: Shift) => {
     const weekDate = weekDates[updated.day];
@@ -1730,6 +1791,122 @@ function SchedulerContent({
     });
   }, [location.business_id]);
 
+  const applyPublishedChange = useCallback(() => {
+    if (!pendingPublishedChange) {
+      return;
+    }
+
+    if (pendingPublishedChange.kind === 'edit') {
+      const targetDay = pendingPublishedChange.targetDay;
+      if (targetDay == null) {
+        const shiftToEdit = pendingPublishedChange.shift;
+        setPendingPublishedChange(null);
+        setSelectedPublishedReason(null);
+        setEditingShift(shiftToEdit);
+        return;
+      }
+
+      setIsSubmittingPublishedChange(true);
+      void (async () => {
+        try {
+          await moveShiftToDay(pendingPublishedChange.shift, targetDay);
+          await refreshSchedulerData({ force: true });
+          setSchedulerNotice({
+            tone: 'success',
+            title: 'Shift updated',
+          });
+        } catch (error) {
+          setSchedulerNotice({
+            tone: 'error',
+            title: 'Could not update shift',
+            detail: error instanceof Error ? error.message : 'Please try again.',
+          });
+        } finally {
+          setIsSubmittingPublishedChange(false);
+          setPendingPublishedChange(null);
+          setSelectedPublishedReason(null);
+        }
+      })();
+      return;
+    }
+
+    if (!selectedPublishedReason) {
+      return;
+    }
+
+    setIsSubmittingPublishedChange(true);
+    void (async () => {
+      try {
+        if (pendingPublishedChange.kind === 'delete') {
+          await amendPublishedShift(location.business_id, pendingPublishedChange.shift.id, {
+            action: selectedPublishedReason === 'cancelled' ? 'cancel_shift' : 'unassign_shift',
+            reason_code: selectedPublishedReason,
+            target_employee_id: null,
+            source: 'scheduler_ui',
+          });
+          await refreshSchedulerData({ force: true });
+          setSchedulerNotice({
+            tone: 'success',
+            title:
+              selectedPublishedReason === 'cancelled'
+                ? 'Shift cancelled'
+                : selectedPublishedReason === 'callout'
+                  ? 'Shift flagged as callout'
+                  : 'Shift flagged as no show',
+            detail:
+              selectedPublishedReason === 'cancelled'
+                ? 'The shift was removed from the published schedule and now requires republish.'
+                : 'The employee was removed and the shift is now open for coverage.',
+          });
+        } else {
+          await amendPublishedShift(location.business_id, pendingPublishedChange.shift.id, {
+            action: 'reassign_shift',
+            reason_code: selectedPublishedReason,
+            target_employee_id: pendingPublishedChange.targetEmployeeId,
+            source: 'scheduler_ui',
+          });
+          let moveFailed = false;
+          if (pendingPublishedChange.targetDay !== pendingPublishedChange.shift.day) {
+            try {
+              await moveShiftToDay(pendingPublishedChange.shift, pendingPublishedChange.targetDay);
+            } catch {
+              moveFailed = true;
+            }
+          }
+          await refreshSchedulerData({ force: true });
+          setSchedulerNotice({
+            tone: moveFailed ? 'info' : 'success',
+            title: moveFailed ? 'Shift reassigned' : 'Shift reassigned',
+            detail: moveFailed
+              ? 'The reassignment succeeded, but the day change could not be applied. The scheduler was refreshed.'
+              : undefined,
+          });
+        }
+      } catch (error) {
+        await refreshSchedulerData({ force: true });
+        setSchedulerNotice({
+          tone: 'error',
+          title:
+            pendingPublishedChange.kind === 'delete'
+              ? 'Could not remove shift'
+              : 'Could not reassign shift',
+          detail: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setIsSubmittingPublishedChange(false);
+        setPendingPublishedChange(null);
+        setSelectedPublishedReason(null);
+        setEditingShift(null);
+      }
+    })();
+  }, [
+    location.business_id,
+    moveShiftToDay,
+    pendingPublishedChange,
+    refreshSchedulerData,
+    selectedPublishedReason,
+  ]);
+
   const handleShiftDrop = useCallback((shiftId: string, newEmpId: string, newDay: number) => {
     const shift = shifts.find((entry) => entry.id === shiftId);
     if (!shift) {
@@ -1758,6 +1935,26 @@ function SchedulerContent({
           tone: 'error',
           title: 'Role mismatch',
           detail: `${targetEmployee.full_name} does not have the ${shift.role} role.`,
+        });
+        return;
+      }
+    }
+
+    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+      if (assignmentChanged) {
+        openPublishedChangeAlert({
+          kind: 'reassign',
+          shift,
+          targetEmployeeId,
+          targetDay: newDay,
+        });
+        return;
+      }
+      if (dayChanged) {
+        openPublishedChangeAlert({
+          kind: 'edit',
+          shift,
+          targetDay: newDay,
         });
         return;
       }
@@ -1798,7 +1995,7 @@ function SchedulerContent({
         });
       }
     })();
-  }, [applyShiftAssignment, businessEmployees, moveShiftToDay, refreshSchedulerData, shifts]);
+  }, [applyShiftAssignment, businessEmployees, moveShiftToDay, openPublishedChangeAlert, refreshSchedulerData, shiftPublishState, shifts]);
 
   const copySchedule = (targetWeekStart: string) => {
     const targetWeekDates = buildWeekDatesFromWeekStart(targetWeekStart);
@@ -2662,6 +2859,9 @@ function SchedulerContent({
                     {!isCollapsed && roleEmps.map(emp => {
                       const empWeekHours = getEmployeeWeekHours(emp.id);
                       const isHovered = hoveredEmployeeId === emp.id;
+                      const hasScheduleBreak = displayShifts.some(
+                        (shift) => shift.displayEmployeeId === emp.id && shift.scheduleBreak,
+                      );
                       const publishState = employeePublishState(emp.id);
                       const EmployeeStateIcon =
                         publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
@@ -2685,6 +2885,9 @@ function SchedulerContent({
                                 </p>
                                 {EmployeeStateIcon && employeeStateColor ? (
                                   <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
+                                ) : null}
+                                {hasScheduleBreak ? (
+                                  <AlertTriangle size={11} className="shrink-0 text-[#E5484D]" />
                                 ) : null}
                               </div>
                               <p className={`text-[10px] ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
@@ -2743,7 +2946,7 @@ function SchedulerContent({
                                       draggable
                                       publishState={shiftPublishState(shift)}
                                       onEdit={() => openShiftEditor(shift)}
-                                      onDelete={() => deleteShift(shift.id)}
+                                      onDelete={() => deleteShift(shift)}
                                       onAddShift={() => setCreatingAt({
                                         day: dayIdx,
                                         roleId: roleEntry.id,
@@ -2970,27 +3173,23 @@ function SchedulerContent({
               }
               onClose={() => setEditingShift(null)}
               onSave={updateShift}
-              onDelete={() => { deleteShift(editingShift.id); setEditingShift(null); }}
+              onDelete={() => { deleteShift(editingShift); setEditingShift(null); }}
             />
           )}
         </AnimatePresence>
 
         <AnimatePresence>
-          {showEditPublishedWarning ? (
+          {pendingPublishedChange ? (
             <PublishedEditWarningModal
               dark={isDark}
+              mode={pendingPublishedChange.kind}
               publishedDateLabel={publishedDateLabel}
-              onClose={() => {
-                setShowEditPublishedWarning(false);
-                setPendingPublishedEdit(null);
-              }}
-              onContinue={() => {
-                setShowEditPublishedWarning(false);
-                if (pendingPublishedEdit) {
-                  setEditingShift(pendingPublishedEdit);
-                }
-                setPendingPublishedEdit(null);
-              }}
+              selectedReason={selectedPublishedReason}
+              reasonOptions={publishedChangeReasonOptions}
+              isSubmitting={isSubmittingPublishedChange}
+              onSelectReason={setSelectedPublishedReason}
+              onClose={closePublishedChangeAlert}
+              onContinue={applyPublishedChange}
             />
           ) : null}
         </AnimatePresence>
@@ -3319,6 +3518,7 @@ function MobileEmployeeCard({
         : null;
   const employeeStateColor =
     employeePublishState === 'published' ? '#00B893' : employeePublishState === 'amended' ? '#F59E0B' : null;
+  const hasScheduleBreak = cellShifts.some((shift) => shift.scheduleBreak);
 
   const minSwipeDistance = 50;
 
@@ -3371,6 +3571,9 @@ function MobileEmployeeCard({
             <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
             {EmployeeStateIcon && employeeStateColor ? (
               <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
+            ) : null}
+            {hasScheduleBreak ? (
+              <AlertTriangle size={11} className="shrink-0 text-[#E5484D]" />
             ) : null}
           </div>
           <p className={`text-[10px] ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>{empWeekHours}h this week</p>
@@ -3444,12 +3647,22 @@ function MobileEmployeeCard({
 }
 
 function PublishedEditWarningModal({
+  mode,
   publishedDateLabel,
+  selectedReason,
+  reasonOptions,
+  isSubmitting = false,
+  onSelectReason,
   onClose,
   onContinue,
   dark = false,
 }: {
+  mode: PublishedChangeAction['kind'];
   publishedDateLabel?: string | null;
+  selectedReason?: PublishedShiftReason | null;
+  reasonOptions?: Array<{ label: string; value: PublishedShiftReason }>;
+  isSubmitting?: boolean;
+  onSelectReason?: (reason: PublishedShiftReason) => void;
   onClose: () => void;
   onContinue: () => void;
   dark?: boolean;
@@ -3459,6 +3672,14 @@ function PublishedEditWarningModal({
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
   const mutedText = dark ? 'text-[#C1CED8]' : 'text-[#8898AA]';
   const bodyText = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const ctaLabel =
+    mode === 'delete'
+      ? 'Delete Shift'
+      : mode === 'reassign'
+        ? 'Reassign'
+        : 'Continue Editing';
+  const continueDisabled = isSubmitting || ((mode === 'delete' || mode === 'reassign') && !selectedReason);
+  const changesStayLive = mode === 'delete' || mode === 'reassign';
 
   return (
     <>
@@ -3476,8 +3697,16 @@ function PublishedEditWarningModal({
               <Lock size={20} className="text-[#F59E0B]" />
             </div>
             <div>
-              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Move to Draft</h3>
-              <p className={`mt-0.5 text-[11px] ${mutedText}`} style={{ fontWeight: 440 }}>This will unpublish the schedule</p>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>Schedule Change Alert</h3>
+              <p className={`mt-0.5 text-[11px] ${mutedText}`} style={{ fontWeight: 440 }}>
+                {changesStayLive
+                  ? (publishedDateLabel
+                    ? `This will amend the published schedule. Published on ${publishedDateLabel}.`
+                    : 'This will amend the published schedule.')
+                  : (publishedDateLabel
+                    ? `This will unpublish the schedule. Published on ${publishedDateLabel}.`
+                    : 'This will unpublish the schedule.')}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}>
@@ -3486,21 +3715,53 @@ function PublishedEditWarningModal({
         </div>
 
         <div className="px-6 py-5">
-          <div className={`mb-4 rounded-lg border p-4 ${dark ? 'border-[#F59E0B]/20 bg-[#F59E0B]/10' : 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.06]'}`}>
-            <div className="flex items-start gap-3">
-              <Lock size={16} className="mt-0.5 shrink-0 text-[#F59E0B]" />
-              <div>
-                <p className={`mb-2 text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
-                  {publishedDateLabel
-                    ? `This schedule was published on ${publishedDateLabel}.`
-                    : 'This schedule has been published'}
-                </p>
-                <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
-                  Making changes will move this schedule back to <strong style={{ fontWeight: 560 }}>Draft</strong> mode. Employees will not be notified of changes until you publish again.
-                </p>
+          {mode === 'edit' ? (
+            <div className={`mb-4 rounded-lg border p-4 ${dark ? 'border-[#F59E0B]/20 bg-[#F59E0B]/10' : 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.06]'}`}>
+              <div className="flex items-start gap-3">
+                <Lock size={16} className="mt-0.5 shrink-0 text-[#F59E0B]" />
+                <div>
+                  <p className={`mb-2 text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                    {publishedDateLabel
+                      ? `This schedule was published on ${publishedDateLabel}.`
+                      : 'This schedule has been published'}
+                  </p>
+                  <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
+                    Making changes will move this schedule back to <strong style={{ fontWeight: 560 }}>Draft</strong> mode. Employees will not be notified of changes until you publish again.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className={`mb-4 rounded-lg border p-4 ${dark ? 'border-[#F59E0B]/20 bg-[#F59E0B]/10' : 'border-[#F59E0B]/20 bg-[#F59E0B]/[0.06]'}`}>
+              <p className={`mb-3 text-[11px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                {mode === 'delete' ? 'Delete shift reason' : 'Reassignment reason'}
+              </p>
+              <div className="space-y-2">
+                {(reasonOptions ?? []).map((option) => {
+                  const checked = selectedReason === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                        checked
+                          ? 'border-[#635BFF] bg-[#635BFF]/[0.08]'
+                          : dark
+                            ? 'border-white/[0.08] hover:bg-white/[0.04]'
+                            : 'border-[#E5E7EB] hover:bg-[#F7F8FA]'
+                      }`}
+                      onClick={() => onSelectReason?.(option.value)}
+                      type="button"
+                    >
+                      <span className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 520 }}>
+                        {option.label}
+                      </span>
+                      {checked ? <Check size={14} className="text-[#635BFF]" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <p className={`text-[11px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>What happens next</p>
@@ -3508,13 +3769,13 @@ function PublishedEditWarningModal({
               <div className="flex items-start gap-2">
                 <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
                 <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
-                  Schedule status changes to Draft
+                  {changesStayLive ? 'Schedule status changes to Amended' : 'Schedule status changes to Draft'}
                 </p>
               </div>
               <div className="flex items-start gap-2">
                 <div className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dark ? 'bg-[#C1CED8]' : 'bg-[#8898AA]'}`} />
                 <p className={`text-[12px] ${bodyText}`} style={{ fontWeight: 440 }}>
-                  You can make your changes freely
+                  {changesStayLive ? 'The published week stays live while this change is tracked' : 'You can make your changes freely'}
                 </p>
               </div>
               <div className="flex items-start gap-2">
@@ -3533,17 +3794,19 @@ function PublishedEditWarningModal({
             className={`flex-1 rounded-xl border py-2.5 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
             style={{ fontWeight: 500 }}
             type="button"
+            disabled={isSubmitting}
           >
             Cancel
           </button>
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={onContinue}
-            className="flex-1 rounded-xl py-2.5 text-[12px] text-white transition-all flex items-center justify-center gap-2"
+            className="flex-1 rounded-xl py-2.5 text-[12px] text-white transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
             style={{ fontWeight: 540, background: 'linear-gradient(135deg, #F59E0B, #D97706)' }}
             type="button"
+            disabled={continueDisabled}
           >
-            Continue Editing
+            {isSubmitting ? 'Saving…' : ctaLabel}
           </motion.button>
         </div>
       </motion.div>

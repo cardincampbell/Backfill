@@ -83,6 +83,27 @@ class ShiftAssignmentMutationResponse(BaseSchema):
     current_assignment: Optional[ShiftAssignmentRead] = None
 
 
+class PublishedShiftAmendmentWrite(BaseSchema):
+    action: Literal["cancel_shift", "unassign_shift", "reassign_shift"]
+    reason_code: Literal["cancelled", "callout", "no_show"]
+    target_employee_id: Optional[UUID] = None
+    source: Literal["scheduler_ui", "copilot", "retell_voice", "sms_automation"]
+    note: Optional[str] = None
+
+
+class PublishedShiftAmendmentRead(BaseSchema):
+    shift_id: UUID
+    action: Literal["cancel_shift", "unassign_shift", "reassign_shift"]
+    reason_code: Literal["cancelled", "callout", "no_show"]
+    amended_from_published: bool
+    schedule_break: bool
+    lifecycle_status: str
+    staffing_status: str
+    status: str
+    week_publish_state: Literal["amended"]
+    current_assignment: Optional[ShiftAssignmentRead] = None
+
+
 class ScheduleWeekPublishWrite(BaseSchema):
     source: Literal["scheduler_ui", "copilot"]
     notify_channels: list[Literal["sms", "email"]] = Field(default_factory=list)

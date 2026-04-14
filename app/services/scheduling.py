@@ -26,6 +26,8 @@ from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOf
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.scheduling import (
+    PublishedShiftAmendmentRead,
+    PublishedShiftAmendmentWrite,
     ScheduleWeekPublishRead,
     ScheduleWeekPublishWrite,
     ShiftAssignmentMutationResponse,
@@ -41,6 +43,13 @@ _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
 _ACTIVE_OFFER_STATUSES = {OfferStatus.pending, OfferStatus.delivered}
 _ACTIVE_RUN_STATUSES = {CoverageRunStatus.queued, CoverageRunStatus.running}
 _USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
+_LIVE_SHIFT_LIFECYCLE_STATUSES = {
+    ShiftLifecycleStatus.scheduled,
+    ShiftLifecycleStatus.in_progress,
+}
+_PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+
+
 class ShiftAssignmentConflictError(Exception):
     def __init__(self, current_assignment: ShiftAssignment | None):
         super().__init__("stale_assignment_conflict")
@@ -85,6 +94,20 @@ class ScheduleWeekPublishResult:
     already_scheduled_shifts: list[Shift]
     notification_enqueued_assignment_count: int
     notification_enqueued_employee_count: int
+
+
+@dataclass
+class PublishedShiftAmendmentResult:
+    shift: Shift
+    action: str
+    reason_code: str
+    source: str
+    previous_assignment: ShiftAssignment | None
+    current_assignment: ShiftAssignment | None
+    cancelled_cases: list[CoverageCase]
+    cancelled_offers: list[CoverageOffer]
+    week_start_date: date
+    week_end_date: date
 
 
 def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
@@ -161,6 +184,121 @@ def build_schedule_week_publish_response(
         published_shift_ids=[shift.id for shift in result.published_shifts],
         already_scheduled_shift_ids=[shift.id for shift in result.already_scheduled_shifts],
     )
+
+
+def build_published_shift_amendment_response(
+    result: PublishedShiftAmendmentResult,
+) -> PublishedShiftAmendmentRead:
+    return PublishedShiftAmendmentRead(
+        shift_id=result.shift.id,
+        action=result.action,
+        reason_code=result.reason_code,
+        amended_from_published=_shift_amended_from_published(result.shift),
+        schedule_break=_shift_schedule_break(result.shift),
+        lifecycle_status=(
+            result.shift.lifecycle_status.value
+            if hasattr(result.shift.lifecycle_status, "value")
+            else str(result.shift.lifecycle_status)
+        ),
+        staffing_status=(
+            result.shift.staffing_status.value
+            if hasattr(result.shift.staffing_status, "value")
+            else str(result.shift.staffing_status)
+        ),
+        status=result.shift.status.value if hasattr(result.shift.status, "value") else str(result.shift.status),
+        week_publish_state="amended",
+        current_assignment=_assignment_read(result.current_assignment),
+    )
+
+
+def _shift_amendment_metadata(shift: Shift) -> dict:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    raw = shift_metadata.get(_PUBLISHED_AMENDMENT_METADATA_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _set_shift_amendment_metadata(shift: Shift, metadata: dict) -> None:
+    shift_metadata = dict(shift.shift_metadata or {})
+    shift_metadata[_PUBLISHED_AMENDMENT_METADATA_KEY] = metadata
+    shift.shift_metadata = shift_metadata
+
+
+def _shift_amended_from_published(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("amended_from_published"))
+
+
+def _shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_metadata(shift).get("reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _shift_schedule_break(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("schedule_break"))
+
+
+def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
+    raw_value = _shift_amendment_metadata(shift).get("amended_employee_ids")
+    if not isinstance(raw_value, list):
+        return []
+    employee_ids: list[UUID] = []
+    for raw_id in raw_value:
+        try:
+            employee_ids.append(raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id)))
+        except (TypeError, ValueError):
+            continue
+    return employee_ids
+
+
+def _mark_shift_amended_from_published(
+    shift: Shift,
+    *,
+    action: str,
+    reason_code: str | None,
+    schedule_break: bool,
+    source: str,
+    note: str | None,
+    amended_at: datetime,
+    old_employee_id: UUID | None,
+    new_employee_id: UUID | None,
+) -> None:
+    amended_employee_ids = [
+        str(employee_id)
+        for employee_id in [old_employee_id, new_employee_id]
+        if employee_id is not None
+    ]
+    metadata = {
+        **_shift_amendment_metadata(shift),
+        "action": action,
+        "reason_code": reason_code,
+        "schedule_break": schedule_break,
+        "source": source,
+        "note": note,
+        "amended_at": amended_at.isoformat(),
+        "old_employee_id": str(old_employee_id) if old_employee_id is not None else None,
+        "new_employee_id": str(new_employee_id) if new_employee_id is not None else None,
+        "amended_employee_ids": amended_employee_ids,
+        "amended_from_published": True,
+    }
+    _set_shift_amendment_metadata(shift, metadata)
+
+
+def _clear_shift_amended_from_published(shift: Shift) -> None:
+    metadata = _shift_amendment_metadata(shift)
+    if not metadata:
+        return
+    metadata["amended_from_published"] = False
+    metadata["schedule_break"] = False
+    metadata["reason_code"] = None
+    metadata["action"] = None
+    metadata["note"] = None
+    metadata["source"] = None
+    metadata["old_employee_id"] = None
+    metadata["new_employee_id"] = None
+    metadata["amended_at"] = None
+    metadata["amended_employee_ids"] = []
+    _set_shift_amendment_metadata(shift, metadata)
 
 
 def _normalized_notify_channels(channels: list[str]) -> list[str]:
@@ -340,6 +478,44 @@ async def list_shifts(
         stmt = stmt.where(Shift.starts_at <= ends_at)
     result = await session.execute(stmt.order_by(Shift.starts_at.asc()))
     return list(result.scalars().all())
+
+
+async def get_shift(session: AsyncSession, business_id: UUID, shift_id: UUID) -> Shift:
+    shift = await session.get(Shift, shift_id)
+    if shift is None or shift.business_id != business_id:
+        raise LookupError("shift_not_found")
+    return shift
+
+
+async def _shift_week_window(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    shift: Shift,
+) -> tuple[date, date]:
+    business = await session.get(Business, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
+    location = shift.location
+    if location is None:
+        location = await session.get(Location, shift.location_id)
+    if location is None or location.business_id != business_id:
+        raise LookupError("business_or_location_not_found")
+    business_settings = business.settings if isinstance(business.settings, dict) else {}
+    location_settings = location.settings if isinstance(location.settings, dict) else {}
+    week_window = schedule_week_window(
+        location.timezone,
+        effective_week_start_day(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
+        shift.starts_at.astimezone(ZoneInfo(location.timezone)).date(),
+    )
+    return week_window.week_start, week_window.week_end
+
+
+def _is_live_shift(shift: Shift) -> bool:
+    return shift.lifecycle_status in _LIVE_SHIFT_LIFECYCLE_STATUSES
 
 
 async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftCreate) -> Shift:
@@ -546,6 +722,9 @@ async def publish_schedule_week(
                 already_scheduled_shift_count=len(already_scheduled_shifts),
             )
 
+    for shift in shifts:
+        _clear_shift_amended_from_published(shift)
+
     for shift in draft_shifts:
         shift.lifecycle_status = ShiftLifecycleStatus.scheduled
 
@@ -576,6 +755,203 @@ async def publish_schedule_week(
     )
 
 
+async def apply_published_shift_amendment(
+    session: AsyncSession,
+    business_id: UUID,
+    shift_id: UUID,
+    payload: PublishedShiftAmendmentWrite,
+    *,
+    assigned_by_user_id: UUID | None = None,
+) -> PublishedShiftAmendmentResult:
+    shift = await _load_shift_for_assignment(session, business_id, shift_id)
+    if not _is_live_shift(shift):
+        raise ValueError("published_shift_amendment_requires_live_shift")
+    if payload.action == "reassign_shift":
+        if payload.target_employee_id is None:
+            raise ValueError("published_shift_reassignment_requires_target_employee")
+    elif payload.target_employee_id is not None:
+        raise ValueError("published_shift_amendment_target_employee_must_be_null")
+
+    current = shift_assignments.current_assignment(shift.assignments or [])
+    now = datetime.now(timezone.utc)
+    week_start_date, week_end_date = await _shift_week_window(
+        session,
+        business_id=business_id,
+        shift=shift,
+    )
+
+    if payload.action == "cancel_shift":
+        if payload.reason_code != "cancelled":
+            raise ValueError("published_shift_cancel_requires_cancelled_reason")
+        cancelled_cases, cancelled_offers = await _cancel_active_automation(
+            session,
+            shift,
+            reason="published_shift_cancelled",
+        )
+        if current is not None:
+            current.status = AssignmentStatus.cancelled
+            current.cancelled_at = now
+            current.assignment_metadata = {
+                **(current.assignment_metadata or {}),
+                "published_amendment_action": payload.action,
+                "published_amendment_reason_code": payload.reason_code,
+                "published_amendment_source": payload.source,
+                "published_amendment_note": payload.note,
+                "published_amendment_at": now.isoformat(),
+            }
+        shift.seats_filled = 0
+        shift.lifecycle_status = ShiftLifecycleStatus.cancelled
+        shift.staffing_status = ShiftStaffingStatus.open
+        _mark_shift_amended_from_published(
+            shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            schedule_break=False,
+            source=payload.source,
+            note=payload.note,
+            amended_at=now,
+            old_employee_id=current.employee_id if current is not None else None,
+            new_employee_id=None,
+        )
+        await session.flush()
+        return PublishedShiftAmendmentResult(
+            shift=shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            source=payload.source,
+            previous_assignment=current,
+            current_assignment=None,
+            cancelled_cases=cancelled_cases,
+            cancelled_offers=cancelled_offers,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date,
+        )
+
+    if current is None:
+        raise ValueError("published_shift_requires_current_assignment")
+
+    if payload.action == "unassign_shift":
+        if payload.reason_code not in {"callout", "no_show"}:
+            raise ValueError("published_shift_unassign_requires_operational_reason")
+        cancelled_cases, cancelled_offers = await _cancel_active_automation(
+            session,
+            shift,
+            reason="published_shift_unassigned",
+        )
+        current.status = (
+            AssignmentStatus.no_show
+            if payload.reason_code == "no_show"
+            else AssignmentStatus.cancelled
+        )
+        current.cancelled_at = now
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_source": payload.source,
+            "published_amendment_note": payload.note,
+            "published_amendment_at": now.isoformat(),
+        }
+        _recompute_shift_ownership_state(shift)
+        _mark_shift_amended_from_published(
+            shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            schedule_break=True,
+            source=payload.source,
+            note=payload.note,
+            amended_at=now,
+            old_employee_id=current.employee_id,
+            new_employee_id=None,
+        )
+        await session.flush()
+        return PublishedShiftAmendmentResult(
+            shift=shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            source=payload.source,
+            previous_assignment=current,
+            current_assignment=None,
+            cancelled_cases=cancelled_cases,
+            cancelled_offers=cancelled_offers,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date,
+        )
+
+    if payload.reason_code not in {"callout", "no_show"}:
+        raise ValueError("published_shift_reassign_requires_operational_reason")
+    employee = await _load_employee_for_assignment(session, business_id, payload.target_employee_id)
+    _validate_employee_eligibility(employee, shift)
+    if current.employee_id == employee.id:
+        raise ValueError("published_shift_reassignment_requires_different_employee")
+
+    cancelled_cases, cancelled_offers = await _cancel_active_automation(
+        session,
+        shift,
+        reason="published_shift_reassigned",
+    )
+    current.status = (
+        AssignmentStatus.no_show
+        if payload.reason_code == "no_show"
+        else AssignmentStatus.cancelled
+    )
+    current.cancelled_at = now
+    current.assignment_metadata = {
+        **(current.assignment_metadata or {}),
+        "published_amendment_action": payload.action,
+        "published_amendment_reason_code": payload.reason_code,
+        "published_amendment_source": payload.source,
+        "published_amendment_note": payload.note,
+        "published_amendment_at": now.isoformat(),
+    }
+    next_sequence_no = _next_assignment_sequence_no(shift)
+    assignment = ShiftAssignment(
+        shift_id=shift.id,
+        employee_id=employee.id,
+        assigned_by_user_id=assigned_by_user_id,
+        replaced_assignment_id=current.id,
+        assigned_via=payload.source,
+        status=AssignmentStatus.assigned,
+        sequence_no=next_sequence_no,
+        assignment_metadata={
+            "note": payload.note,
+            "source": payload.source,
+            "employee_name": employee.full_name,
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_at": now.isoformat(),
+        },
+    )
+    assignment.employee = employee
+    session.add(assignment)
+    shift.assignments.append(assignment)
+    _recompute_shift_ownership_state(shift)
+    _mark_shift_amended_from_published(
+        shift,
+        action=payload.action,
+        reason_code=payload.reason_code,
+        schedule_break=False,
+        source=payload.source,
+        note=payload.note,
+        amended_at=now,
+        old_employee_id=current.employee_id,
+        new_employee_id=employee.id,
+    )
+    await session.flush()
+    return PublishedShiftAmendmentResult(
+        shift=shift,
+        action=payload.action,
+        reason_code=payload.reason_code,
+        source=payload.source,
+        previous_assignment=current,
+        current_assignment=assignment,
+        cancelled_cases=cancelled_cases,
+        cancelled_offers=cancelled_offers,
+        week_start_date=week_start_date,
+        week_end_date=week_end_date,
+    )
+
+
 async def set_shift_assignment(
     session: AsyncSession,
     business_id: UUID,
@@ -585,6 +961,8 @@ async def set_shift_assignment(
     assigned_by_user_id: UUID | None = None,
 ) -> ShiftAssignmentMutationResult:
     shift = await _load_shift_for_assignment(session, business_id, shift_id)
+    if _is_live_shift(shift):
+        raise ValueError("published_shift_assignment_requires_amendment")
     current = shift_assignments.current_assignment(shift.assignments or [])
 
     if int(shift.seats_requested or 1) != 1:

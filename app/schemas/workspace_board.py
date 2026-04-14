@@ -64,6 +64,9 @@ class WorkspaceBoardShiftRead(BaseSchema):
     delivered_offer_count: int = 0
     standby_depth: int = 0
     manager_action_required: bool = False
+    amended_from_published: bool = False
+    amendment_reason_code: Optional[str] = None
+    schedule_break: bool = False
 
 
 class WorkspaceBoardPublishSummaryRead(BaseSchema):

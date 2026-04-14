@@ -19,7 +19,9 @@ PLATFORM_EVENT_PAYLOAD_KEY = "_platform_event"
 
 class PlatformEventType:
     SCHEDULE_WEEK_PUBLISHED = "schedule.week.published"
+    SCHEDULE_WEEK_AMENDED = "schedule.week.amended"
     SCHEDULE_SHIFT_PUBLISHED = "schedule.shift.published"
+    SCHEDULE_SHIFT_AMENDED = "schedule.shift.amended"
     SCHEDULE_SHIFT_ASSIGNED = "schedule.shift.assigned"
     SCHEDULE_SHIFT_REASSIGNED = "schedule.shift.reassigned"
     SCHEDULE_SHIFT_UNASSIGNED = "schedule.shift.unassigned"

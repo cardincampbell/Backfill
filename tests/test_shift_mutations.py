@@ -977,7 +977,8 @@ async def test_set_shift_assignment_reassigns_and_cancels_active_automation():
         timezone="America/Los_Angeles",
         starts_at=now,
         ends_at=now + timedelta(hours=8),
-        status=ShiftStatus.filling,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.filling,
         seats_requested=1,
         seats_filled=1,
         requires_manager_approval=False,
@@ -1038,7 +1039,8 @@ async def test_set_shift_assignment_rejects_multi_seat_shift():
         timezone="America/Los_Angeles",
         starts_at=now,
         ends_at=now + timedelta(hours=8),
-        status=ShiftStatus.open,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
         seats_requested=2,
         seats_filled=0,
         requires_manager_approval=False,
@@ -1270,7 +1272,7 @@ async def test_update_shift_keeps_scheduled_lifecycle_when_nothing_changed():
 
 
 @pytest.mark.asyncio
-async def test_set_shift_assignment_demotes_scheduled_shift_to_draft_after_real_change():
+async def test_apply_published_shift_amendment_reassigns_live_shift_without_demoting_lifecycle():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
     business_id = uuid4()
@@ -1364,25 +1366,339 @@ async def test_set_shift_assignment_demotes_scheduled_shift_to_draft_after_real_
     )
     shift.location = location
     shift.role = role
-    shift.assignments = []
+    current_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=uuid4(),
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jordan Current"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = [current_assignment]
     shift.coverage_cases = []
     fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Business, business_id)] = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
     fake_session.get_map[(Employee, employee_id)] = employee
 
-    result = await scheduling.set_shift_assignment(
+    result = await scheduling.apply_published_shift_amendment(
         fake_session,
         business_id,
         shift_id,
-        scheduling.ShiftAssignmentWrite(
-            employee_id=employee_id,
+        scheduling.PublishedShiftAmendmentWrite(
+            action="reassign_shift",
+            reason_code="callout",
+            target_employee_id=employee_id,
             source="scheduler_ui",
-            expected_assignment_id=None,
         ),
     )
 
     assert result.current_assignment is not None
-    assert shift.lifecycle_status == ShiftLifecycleStatus.draft
+    assert shift.lifecycle_status == ShiftLifecycleStatus.scheduled
     assert shift.staffing_status == ShiftStaffingStatus.covered
+
+
+@pytest.mark.asyncio
+async def test_set_shift_assignment_rejects_live_shift():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = []
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    with pytest.raises(ValueError, match="published_shift_assignment_requires_amendment"):
+        await scheduling.set_shift_assignment(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.ShiftAssignmentWrite(
+                employee_id=uuid4(),
+                source="scheduler_ui",
+                expected_assignment_id=None,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_published_shift_amendment_unassigns_callout_and_marks_schedule_break():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    result = await scheduling.apply_published_shift_amendment(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.PublishedShiftAmendmentWrite(
+            action="unassign_shift",
+            reason_code="callout",
+            target_employee_id=None,
+            source="scheduler_ui",
+        ),
+    )
+
+    assert result.previous_assignment is assignment
+    assert result.current_assignment is None
+    assert assignment.status == AssignmentStatus.cancelled
+    assert shift.lifecycle_status == ShiftLifecycleStatus.scheduled
+    assert shift.staffing_status == ShiftStaffingStatus.open
+    amendment = shift.shift_metadata["published_amendment"]
+    assert amendment["amended_from_published"] is True
+    assert amendment["reason_code"] == "callout"
+    assert amendment["schedule_break"] is True
+    assert amendment["amended_employee_ids"] == [str(employee_id)]
+
+
+@pytest.mark.asyncio
+async def test_apply_published_shift_amendment_cancels_shift():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    result = await scheduling.apply_published_shift_amendment(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.PublishedShiftAmendmentWrite(
+            action="cancel_shift",
+            reason_code="cancelled",
+            target_employee_id=None,
+            source="scheduler_ui",
+        ),
+    )
+
+    assert result.current_assignment is None
+    assert assignment.status == AssignmentStatus.cancelled
+    assert shift.lifecycle_status == ShiftLifecycleStatus.cancelled
+    assert shift.seats_filled == 0
+    amendment = shift.shift_metadata["published_amendment"]
+    assert amendment["amended_from_published"] is True
+    assert amendment["reason_code"] == "cancelled"
+    assert amendment["schedule_break"] is False
 
 
 @pytest.mark.asyncio
@@ -1788,4 +2104,154 @@ def test_publish_schedule_week_route_allows_target_location_manager():
         assert response.json()["week_start_date"] == week_start.isoformat()
     finally:
         scheduling.publish_schedule_week = original
+        app.dependency_overrides.clear()
+
+
+def test_published_amendment_route_emits_amendment_and_assignment_events():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    previous_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=uuid4(),
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=uuid4(),
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": True,
+                "reason_code": "callout",
+                "schedule_break": True,
+                "amended_employee_ids": [str(previous_assignment.employee_id)],
+            }
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    async def fake_apply_published_shift_amendment(*_args, **_kwargs):
+        return scheduling.PublishedShiftAmendmentResult(
+            shift=shift,
+            action="unassign_shift",
+            reason_code="callout",
+            source="scheduler_ui",
+            previous_assignment=previous_assignment,
+            current_assignment=None,
+            cancelled_cases=[],
+            cancelled_offers=[],
+            week_start_date=now.date(),
+            week_end_date=(now + timedelta(days=6)).date(),
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.apply_published_shift_amendment
+    scheduling.apply_published_shift_amendment = fake_apply_published_shift_amendment
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/published-amendment",
+            json={
+                "action": "unassign_shift",
+                "reason_code": "callout",
+                "target_employee_id": None,
+                "source": "scheduler_ui",
+            },
+        )
+        assert response.status_code == 200
+        event_types = [
+            entry.event_type
+            for entry in fake_session.added
+            if isinstance(entry, PlatformEvent)
+        ]
+        assert "schedule.shift.unassigned" in event_types
+        assert "schedule.shift.amended" in event_types
+        assert "schedule.week.amended" in event_types
+    finally:
+        scheduling.apply_published_shift_amendment = original
+        app.dependency_overrides.clear()
+
+
+def test_published_amendment_route_requires_target_location_access():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    target_location_id = uuid4()
+    other_location_id = uuid4()
+    shift_id = uuid4()
+    fake_session.get_map[(Shift, shift_id)] = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=target_location_id,
+        role_id=uuid4(),
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=other_location_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/published-amendment",
+            json={
+                "action": "unassign_shift",
+                "reason_code": "callout",
+                "target_employee_id": None,
+                "source": "scheduler_ui",
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "location_access_denied"
+    finally:
         app.dependency_overrides.clear()
