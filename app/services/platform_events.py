@@ -115,6 +115,7 @@ async def append(
 ) -> AuditLog:
     event_name = compatibility_event_name or event_type
     event_payload = dict(payload or {})
+    resolved_actor_user_id = await audit_service.resolve_actor_user_id(session, actor_user_id)
     envelope = _platform_event_envelope(
         event_type=event_type,
         compatibility_event_name=event_name,
@@ -135,7 +136,7 @@ async def append(
             entity_type=target_type,
             entity_id=target_id,
             actor_type=actor_type,
-            actor_user_id=actor_user_id,
+            actor_user_id=resolved_actor_user_id,
             actor_membership_id=actor_membership_id,
             trace_id=str(event_metadata.get("trace_id") or uuid4()),
             ip_address=ip_address,
@@ -153,7 +154,7 @@ async def append(
         business_id=business_id,
         location_id=location_id,
         actor_type=actor_type,
-        actor_user_id=actor_user_id,
+        actor_user_id=resolved_actor_user_id,
         actor_membership_id=actor_membership_id,
         ip_address=ip_address,
         user_agent=user_agent,

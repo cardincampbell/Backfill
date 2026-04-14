@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.common import AuditActorType
 from app.models.coverage import AuditLog
+from app.models.identity import User
 
 
 def request_client_ip(request: Request) -> Optional[str]:
@@ -68,11 +69,12 @@ async def append(
     payload: Optional[dict] = None,
     occurred_at: datetime | None = None,
 ) -> AuditLog:
+    resolved_actor_user_id = await resolve_actor_user_id(session, actor_user_id)
     entry = AuditLog(
         business_id=business_id,
         location_id=location_id,
         actor_type=actor_type,
-        actor_user_id=actor_user_id,
+        actor_user_id=resolved_actor_user_id,
         actor_membership_id=actor_membership_id,
         event_name=event_name,
         target_type=target_type,
@@ -87,6 +89,21 @@ async def append(
 
     await webhooks.enqueue_audit_event(session, entry)
     return entry
+
+
+async def resolve_actor_user_id(
+    session: AsyncSession,
+    actor_user_id: UUID | None,
+) -> UUID | None:
+    if actor_user_id is None:
+        return None
+    scalar = getattr(session, "scalar", None)
+    if scalar is None:
+        return actor_user_id
+    existing_user_id = await scalar(
+        select(User.id).where(User.id == actor_user_id).limit(1)
+    )
+    return existing_user_id if existing_user_id is not None else None
 
 
 async def list_logs(
