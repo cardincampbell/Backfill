@@ -484,7 +484,10 @@ async def mark_offer_attempt_outcome(
     if base_time is not None:
         attempt.response_time_seconds = max(0, int((occurred_at - base_time).total_seconds()))
     if response_payload:
-        attempt.attempt_metadata = {**attempt.attempt_metadata, "response_payload": response_payload}
+        attempt.attempt_metadata = {
+            **(attempt.attempt_metadata or {}),
+            "response_payload": response_payload,
+        }
     await session.flush()
     return attempt
 
@@ -729,7 +732,7 @@ async def process_outbox_batch(
                 attempt.status = CoverageAttemptStatus.failed
                 attempt.responded_at = reference_time
                 attempt.attempt_metadata = {
-                    **attempt.attempt_metadata,
+                    **(attempt.attempt_metadata or {}),
                     "worker_error": error_message,
                 }
                 offer.status = OfferStatus.pending
@@ -773,7 +776,10 @@ async def process_outbox_batch(
             attempt.provider_message_id = result.provider_message_id
             attempt.sent_at = sent_at
             attempt.delivered_at = delivered_at
-            attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
+            attempt.attempt_metadata = {
+                **(attempt.attempt_metadata or {}),
+                **result.result_payload,
+            }
 
             worker_runtime.mark_outbox_event_sent(
                 event,
@@ -799,7 +805,10 @@ async def process_outbox_batch(
             if retryable:
                 attempt.status = CoverageAttemptStatus.failed
                 attempt.responded_at = reference_time
-                attempt.attempt_metadata = {**attempt.attempt_metadata, **result.result_payload}
+                attempt.attempt_metadata = {
+                    **(attempt.attempt_metadata or {}),
+                    **result.result_payload,
+                }
                 offer.status = OfferStatus.pending
                 worker_runtime.mark_outbox_event_retry(
                     event,
@@ -875,7 +884,7 @@ async def _handle_terminal_offer_failure(
         attempt.status = CoverageAttemptStatus.failed
         attempt.responded_at = reference_time
         attempt.attempt_metadata = {
-            **attempt.attempt_metadata,
+            **(attempt.attempt_metadata or {}),
             **(result_payload or {}),
             "worker_error": error_message,
         }
@@ -1009,7 +1018,7 @@ async def apply_twilio_status_callback(
             if normalized_status == "delivered":
                 attempt.delivered_at = reference_time
             attempt.attempt_metadata = {
-                **attempt.attempt_metadata,
+                **(attempt.attempt_metadata or {}),
                 "callback": raw_payload or {},
             }
     elif terminal_failure:
@@ -1018,7 +1027,7 @@ async def apply_twilio_status_callback(
             attempt.status = CoverageAttemptStatus.failed
             attempt.responded_at = reference_time
             attempt.attempt_metadata = {
-                **attempt.attempt_metadata,
+                **(attempt.attempt_metadata or {}),
                 "callback": raw_payload or {},
                 "error_code": error_code,
                 "error_message": error_message,

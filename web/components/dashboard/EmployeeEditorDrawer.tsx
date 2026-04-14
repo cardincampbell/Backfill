@@ -776,7 +776,6 @@ export function EmployeeEditorDrawer({
         setFormData(buildAssignmentStateFromProfile(nextProfile));
         setEmail(nextProfile.email ?? "");
         setPhone(nextProfile.phone_e164 ?? "");
-        await onSaved(nextProfile);
       }
 
       if (hasAvailabilityChanges) {
@@ -820,6 +819,10 @@ export function EmployeeEditorDrawer({
           });
           return;
         }
+      }
+
+      if ((hasProfileChanges || hasAvailabilityChanges) && nextProfile) {
+        await onSaved(nextProfile);
       }
 
       setFeedback({

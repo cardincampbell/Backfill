@@ -1581,6 +1581,199 @@ async def test_apply_published_shift_amendment_unassigns_callout_and_marks_sched
 
 
 @pytest.mark.asyncio
+async def test_apply_published_shift_amendment_unassigns_callout_with_legacy_null_attempt_metadata():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    outbox_event_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+
+    outbox_event = OutboxEvent(
+        id=outbox_event_id,
+        aggregate_type="coverage_offer",
+        aggregate_id=uuid4(),
+        topic="coverage.offer.created",
+        channel=OutboxChannel.sms,
+        status=OutboxStatus.pending,
+        attempt_count=0,
+        payload={},
+        result_payload={},
+        created_at=now,
+        updated_at=now,
+    )
+    offer = CoverageOffer(
+        id=outbox_event.aggregate_id,
+        coverage_case_id=uuid4(),
+        coverage_case_run_id=uuid4(),
+        employee_id=employee_id,
+        channel=OutboxChannel.sms,
+        status=OfferStatus.pending,
+        idempotency_key="offer-key",
+        offer_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    attempt = CoverageContactAttempt(
+        id=uuid4(),
+        coverage_offer_id=offer.id,
+        coverage_case_id=offer.coverage_case_id,
+        coverage_case_run_id=offer.coverage_case_run_id,
+        outbox_event_id=outbox_event_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        employee_id=employee_id,
+        channel=OutboxChannel.sms,
+        status=CoverageAttemptStatus.pending,
+        attempt_no=1,
+        requested_at=now - timedelta(minutes=5),
+        attempt_metadata=None,
+        created_at=now,
+        updated_at=now,
+    )
+    attempt.outbox_event = outbox_event
+    offer.attempts = [attempt]
+
+    run = CoverageCaseRun(
+        id=offer.coverage_case_run_id,
+        coverage_case_id=offer.coverage_case_id,
+        phase_no=1,
+        strategy="phase_1",
+        status=CoverageRunStatus.running,
+        run_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    coverage_case = CoverageCase(
+        id=offer.coverage_case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    coverage_case.offers = [offer]
+    coverage_case.runs = [run]
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = [assignment]
+    shift.coverage_cases = [coverage_case]
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.scalar_queue = [attempt]
+    fake_session.execute_queue = [[outbox_event]]
+
+    result = await scheduling.apply_published_shift_amendment(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.PublishedShiftAmendmentWrite(
+            action="unassign_shift",
+            reason_code="callout",
+            target_employee_id=None,
+            source="scheduler_ui",
+        ),
+    )
+
+    assert result.current_assignment is None
+    assert attempt.status == CoverageAttemptStatus.cancelled
+    assert attempt.attempt_metadata["response_payload"]["manual_override_reason"] == "published_shift_unassigned"
+    assert shift.shift_metadata["published_amendment"]["schedule_break"] is True
+
+
+@pytest.mark.asyncio
 async def test_apply_published_shift_amendment_cancels_shift():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)

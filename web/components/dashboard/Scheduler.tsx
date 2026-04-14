@@ -80,6 +80,7 @@ import {
   preloadSchedulerBootstrap,
   type SchedulerBootstrapData,
 } from '@/lib/scheduler-bootstrap';
+import { DashboardToast } from './DashboardToast';
 import {
   shouldRefreshSchedulerForRealtimeEvent,
   subscribeToRealtimePlatformEvents,
@@ -1078,6 +1079,18 @@ function SchedulerContent({
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorFeedback, setEditorFeedback] = useState<LocationRoleEditorFeedback>(null);
   const [deletingLocationId, setDeletingLocationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!schedulerNotice) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setSchedulerNotice(null);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [schedulerNotice]);
   const [isSavingEditor, setIsSavingEditor] = useState(false);
   const [locationDeleteState, setLocationDeleteState] = useState<LocationDeleteState>({
     canDelete: false,
@@ -3405,40 +3418,11 @@ function SchedulerContent({
           ) : null}
         </AnimatePresence>
 
-        {/* ─── Toasts ─── */}
-        <AnimatePresence>
-          {schedulerNotice && (
-            <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
-              className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl ${theme.toastClass}`}>
-              <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
-                schedulerNotice.tone === 'success'
-                  ? 'bg-[#00B893]/20'
-                  : schedulerNotice.tone === 'error'
-                    ? 'bg-[#E5484D]/20'
-                    : 'bg-[#635BFF]/20'
-              }`}>
-                {schedulerNotice.tone === 'success' ? (
-                  <Check size={14} className="text-[#00B893]" />
-                ) : schedulerNotice.tone === 'error' ? (
-                  <AlertTriangle size={14} className="text-[#E5484D]" />
-                ) : (
-                  <Info size={14} className="text-[#635BFF]" />
-                )}
-              </div>
-              <div>
-                <p className="text-[12px] text-white" style={{ fontWeight: 520 }}>{schedulerNotice.title}</p>
-                {schedulerNotice.detail ? (
-                  <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`} style={{ fontWeight: 420 }}>
-                    {schedulerNotice.detail}
-                  </p>
-                ) : null}
-              </div>
-              <button onClick={() => setSchedulerNotice(null)} className="p-1 rounded-lg hover:bg-white/10 transition-colors ml-2">
-                <X size={12} className={theme.textSecondary} />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <DashboardToast
+          detail={schedulerNotice?.detail ?? null}
+          title={schedulerNotice?.title ?? null}
+          tone={schedulerNotice?.tone ?? 'success'}
+        />
 
         <AnimatePresence>
         {editorLocation ? (
