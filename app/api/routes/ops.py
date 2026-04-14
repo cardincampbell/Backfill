@@ -6,13 +6,16 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.business import Location
+from app.models.workforce import Employee
 from app.models.common import MembershipRole
+from app.schemas.employee_schedule import EmployeeScheduleLinkRead
 from app.schemas.events import PlatformEventRead
 from app.schemas.finance import BillingLedgerEntryRead, CostLedgerEntryRead
 from app.schemas.llm import LlmGenerationSummaryRead
 from app.schemas.ops import BusinessTraceRead, CalendarFeedRead, ProjectionStatusRead
 from app.services import auth as auth_service
 from app.services import calendar_feed as calendar_feed_service
+from app.services import employee_schedule_links as employee_schedule_link_service
 from app.services import feed_projections, ops_reporting
 
 router = APIRouter(prefix="/ops", tags=["ops"])
@@ -104,6 +107,64 @@ async def get_calendar_feed(
     return CalendarFeedRead(
         feed_url=calendar_feed_service.feed_url_for_token(token),
         rotated_at=rotated_at,
+    )
+
+
+@router.get(
+    "/businesses/{business_id}/employees/{employee_id}/schedule-link",
+    response_model=EmployeeScheduleLinkRead,
+)
+async def get_employee_schedule_link(
+    business_id: UUID,
+    employee_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=403, detail="business_access_denied")
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.business_id != business_id:
+        raise HTTPException(status_code=404, detail="employee_not_found")
+    link, created = await employee_schedule_link_service.get_or_create_schedule_access_link(
+        session,
+        business_id=business_id,
+        employee=employee,
+    )
+    if created:
+        await session.commit()
+    token = employee_schedule_link_service.build_employee_schedule_token(link)
+    return EmployeeScheduleLinkRead(
+        schedule_url=employee_schedule_link_service.build_employee_schedule_link(token),
+        rotated_at=link.rotated_at,
+    )
+
+
+@router.post(
+    "/businesses/{business_id}/employees/{employee_id}/schedule-link/rotate",
+    response_model=EmployeeScheduleLinkRead,
+)
+async def rotate_employee_schedule_link(
+    business_id: UUID,
+    employee_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=403, detail="business_access_denied")
+    employee = await session.get(Employee, employee_id)
+    if employee is None or employee.business_id != business_id:
+        raise HTTPException(status_code=404, detail="employee_not_found")
+    link, _ = await employee_schedule_link_service.get_or_create_schedule_access_link(
+        session,
+        business_id=business_id,
+        employee=employee,
+    )
+    link = await employee_schedule_link_service.rotate_schedule_access_link(session, link=link)
+    await session.commit()
+    token = employee_schedule_link_service.build_employee_schedule_token(link)
+    return EmployeeScheduleLinkRead(
+        schedule_url=employee_schedule_link_service.build_employee_schedule_link(token),
+        rotated_at=link.rotated_at,
     )
 
 

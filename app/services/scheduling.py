@@ -34,7 +34,7 @@ from app.schemas.scheduling import (
     ShiftCreate,
     ShiftUpdate,
 )
-from app.services import delivery, shift_assignments, worker_runtime
+from app.services import delivery, employee_schedule_links as employee_schedule_link_service, shift_assignments, worker_runtime
 from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 
 _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
@@ -200,6 +200,7 @@ def _schedule_publish_notification_payload(
     employee: Employee,
     shifts: list[Shift],
     note: str | None,
+    schedule_url: str,
 ) -> dict:
     week_label = f"{week_start_date.strftime('%b %d').replace(' 0', ' ')} – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
     shift_lines = [_format_shift_notification_line(shift) for shift in shifts]
@@ -212,6 +213,8 @@ def _schedule_publish_notification_payload(
             intro,
             "",
             *[f"- {line}" for line in shift_lines],
+            "",
+            f"View your schedule: {schedule_url}",
             *(["", note] if note else []),
         ]
     )
@@ -220,6 +223,7 @@ def _schedule_publish_notification_payload(
         f"<p>Hi {employee.full_name},</p>"
         f"<p>{intro}</p>"
         f"<ul>{html_lines}</ul>"
+        f'<p><a href="{schedule_url}">View your schedule</a></p>'
         + (f"<p>{note}</p>" if note else "")
     )
     return {
@@ -232,6 +236,7 @@ def _schedule_publish_notification_payload(
         "location_name": location_name,
         "week_start_date": week_start_date.isoformat(),
         "week_end_date": week_end_date.isoformat(),
+        "schedule_url": schedule_url,
         "shift_ids": [str(shift.id) for shift in shifts],
         "shift_count": len(shifts),
         "text_body": text_body,
@@ -278,6 +283,16 @@ async def _enqueue_schedule_publish_notifications(
 
     for employee_id, employee_shifts in shifts_by_employee.items():
         employee = employees_by_id[employee_id]
+        access_link, _ = await employee_schedule_link_service.get_or_create_schedule_access_link(
+            session,
+            business_id=business_id,
+            employee=employee,
+        )
+        schedule_url = employee_schedule_link_service.build_employee_schedule_link(
+            employee_schedule_link_service.build_employee_schedule_token(access_link),
+            week_start_date=week_start_date,
+            location_id=location_id,
+        )
         payload = _schedule_publish_notification_payload(
             business_id=business_id,
             location_id=location_id,
@@ -287,6 +302,7 @@ async def _enqueue_schedule_publish_notifications(
             employee=employee,
             shifts=employee_shifts,
             note=note,
+            schedule_url=schedule_url,
         )
         for channel in normalized_channels:
             if channel == "sms" and not employee.phone_e164:

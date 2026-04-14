@@ -11,6 +11,7 @@ from app.api.routes import (
     calendar_feeds_router,
     copilot_router,
     coverage_router,
+    employee_schedules_router,
     events_router,
     finance_router,
     identity_router,
@@ -22,6 +23,7 @@ from app.api.routes import (
     ops_router,
     places_router,
     providers_router,
+    realtime_router,
     retell_provider_router,
     scheduler_integrations_router,
     scheduler_provider_webhooks_router,
@@ -50,6 +52,7 @@ async def meta() -> dict[str, str]:
 
 
 router.include_router(calendar_feeds_router)
+router.include_router(employee_schedules_router)
 router.include_router(identity_router)
 router.include_router(auth_router)
 router.include_router(account_router)
@@ -60,6 +63,7 @@ router.include_router(invites_router)
 router.include_router(onboarding_router)
 router.include_router(places_router)
 router.include_router(providers_router)
+router.include_router(realtime_router)
 router.include_router(retell_provider_router)
 router.include_router(scheduler_integrations_router)
 router.include_router(scheduler_provider_webhooks_router)

@@ -37,6 +37,7 @@ from app.models.workforce import (
     EmployeeAvailabilityRule,
     EmployeeLocation,
     EmployeeRole,
+    EmployeeScheduleAccessLink,
 )
 
 __all__ = [
@@ -60,6 +61,7 @@ __all__ = [
     "EmployeeAvailabilityRule",
     "EmployeeLocation",
     "EmployeeRole",
+    "EmployeeScheduleAccessLink",
     "FeedProjection",
     "LlmGeneration",
     "Location",

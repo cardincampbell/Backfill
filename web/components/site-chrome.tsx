@@ -18,6 +18,7 @@ export function SiteChrome({ children }: SiteChromeProps) {
     pathname.startsWith("/team/") ||
     pathname === "/activity" ||
     pathname.startsWith("/activity/") ||
+    pathname.startsWith("/schedule/") ||
     pathname.startsWith("/location/") ||
     pathname.startsWith("/scheduler/") ||
     pathname === "/settings" ||

@@ -40,11 +40,6 @@ class ProviderCallbackLogRead(BaseSchema):
     updated_at: datetime
 
 
-class CalendarFeedRead(BaseSchema):
-    feed_url: str
-    rotated_at: Optional[datetime]
-
-
 class BusinessTraceRead(BaseSchema):
     trace_id: str
     platform_event_count: int
@@ -57,3 +52,8 @@ class BusinessTraceRead(BaseSchema):
     llm_generations: list[LlmGenerationSummaryRead]
     cost_entries: list[CostLedgerEntryRead]
     billing_entries: list[BillingLedgerEntryRead]
+
+
+class CalendarFeedRead(BaseSchema):
+    feed_url: str
+    rotated_at: Optional[datetime]

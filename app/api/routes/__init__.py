@@ -5,6 +5,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.businesses import router as businesses_router
 from app.api.routes.copilot import router as copilot_router
 from app.api.routes.coverage import router as coverage_router
+from app.api.routes.employee_schedules import router as employee_schedules_router
 from app.api.routes.events import router as events_router
 from app.api.routes.finance import router as finance_router
 from app.api.routes.identity import router as identity_router
@@ -16,6 +17,7 @@ from app.api.routes.onboarding import router as onboarding_router
 from app.api.routes.ops import router as ops_router
 from app.api.routes.places import places_router
 from app.api.routes.providers import router as providers_router
+from app.api.routes.realtime import router as realtime_router
 from app.api.routes.retell_provider import router as retell_provider_router
 from app.api.routes.scheduler_integrations import router as scheduler_integrations_router
 from app.api.routes.scheduler_provider_webhooks import router as scheduler_provider_webhooks_router
@@ -33,6 +35,7 @@ __all__ = [
     "businesses_router",
     "copilot_router",
     "coverage_router",
+    "employee_schedules_router",
     "events_router",
     "finance_router",
     "identity_router",
@@ -44,6 +47,7 @@ __all__ = [
     "ops_router",
     "places_router",
     "providers_router",
+    "realtime_router",
     "retell_provider_router",
     "scheduler_integrations_router",
     "scheduler_provider_webhooks_router",
