@@ -1613,6 +1613,52 @@ async def test_set_shift_assignment_rejects_live_shift():
 
 
 @pytest.mark.asyncio
+async def test_set_shift_assignment_rejects_cancelled_shift():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.cancelled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = []
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    with pytest.raises(ValueError, match="non_draft_shift_assignment_not_allowed"):
+        await scheduling.set_shift_assignment(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.ShiftAssignmentWrite(
+                employee_id=uuid4(),
+                source="scheduler_ui",
+                expected_assignment_id=None,
+            ),
+        )
+
+
+@pytest.mark.asyncio
 async def test_apply_published_shift_amendment_unassigns_callout_and_marks_schedule_break():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)

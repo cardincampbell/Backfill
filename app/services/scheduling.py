@@ -1134,6 +1134,8 @@ async def set_shift_assignment(
     shift = await _load_shift_for_assignment(session, business_id, shift_id)
     if _is_live_shift(shift):
         raise ValueError("published_shift_assignment_requires_amendment")
+    if shift.lifecycle_status != ShiftLifecycleStatus.draft:
+        raise ValueError("non_draft_shift_assignment_not_allowed")
     current = shift_assignments.current_assignment(shift.assignments or [])
 
     if int(shift.seats_requested or 1) != 1:

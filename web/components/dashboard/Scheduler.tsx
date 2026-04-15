@@ -220,9 +220,15 @@ function describeShiftDeletionError(error: unknown) {
   return error.message;
 }
 
-function isLivePublishedShift(shift: Shift, publishState: ShiftPublishState) {
-  return publishState === 'published'
+function isAmendableLiveShift(shift: Shift, publishState: ShiftPublishState) {
+  return (publishState === 'published' || publishState === 'amended')
     && (shift.lifecycleStatus === 'scheduled' || shift.lifecycleStatus === 'in_progress');
+}
+
+function isNonDraftHistoricalShift(shift: Shift) {
+  return shift.lifecycleStatus !== 'draft'
+    && shift.lifecycleStatus !== 'scheduled'
+    && shift.lifecycleStatus !== 'in_progress';
 }
 
 function formatPublishedDate(value: string | null | undefined) {
@@ -1714,16 +1720,40 @@ function SchedulerContent({
   };
 
   const openShiftEditor = useCallback((shift: Shift) => {
-    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+    const publishState = shiftPublishState(shift);
+    if (isAmendableLiveShift(shift, publishState)) {
       openPublishedChangeAlert({ kind: 'edit', shift });
+      return;
+    }
+    if (isNonDraftHistoricalShift(shift)) {
+      setSchedulerNotice({
+        tone: 'info',
+        title: 'Shift cannot be edited',
+        detail:
+          shift.lifecycleStatus === 'cancelled'
+            ? 'This shift is already cancelled. Create a new shift if you still need coverage.'
+            : 'Only draft shifts can be edited directly right now.',
+      });
       return;
     }
     setEditingShift(shift);
   }, [openPublishedChangeAlert, shiftPublishState]);
 
   const deleteShift = useCallback((shift: Shift) => {
-    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+    const publishState = shiftPublishState(shift);
+    if (isAmendableLiveShift(shift, publishState)) {
       openPublishedChangeAlert({ kind: 'delete', shift });
+      return;
+    }
+    if (isNonDraftHistoricalShift(shift)) {
+      setSchedulerNotice({
+        tone: 'info',
+        title: 'Shift cannot be removed',
+        detail:
+          shift.lifecycleStatus === 'cancelled'
+            ? 'This shift is already cancelled. Create a new shift if you still need coverage.'
+            : 'Only draft shifts can be removed directly right now.',
+      });
       return;
     }
     void (async () => {
@@ -1953,7 +1983,8 @@ function SchedulerContent({
       }
     }
 
-    if (isLivePublishedShift(shift, shiftPublishState(shift))) {
+    const publishState = shiftPublishState(shift);
+    if (isAmendableLiveShift(shift, publishState)) {
       if (assignmentChanged) {
         openPublishedChangeAlert({
           kind: 'reassign',
@@ -1971,6 +2002,17 @@ function SchedulerContent({
         });
         return;
       }
+    }
+    if (isNonDraftHistoricalShift(shift)) {
+      setSchedulerNotice({
+        tone: 'info',
+        title: assignmentChanged ? 'Shift cannot be reassigned' : 'Shift cannot be moved',
+        detail:
+          shift.lifecycleStatus === 'cancelled'
+            ? 'This shift is already cancelled. Create a new shift if you still need coverage.'
+            : 'Only draft shifts can be moved directly right now.',
+      });
+      return;
     }
 
     void (async () => {
@@ -2004,7 +2046,12 @@ function SchedulerContent({
         setSchedulerNotice({
           tone: 'error',
           title: 'Could not move shift',
-          detail: error instanceof Error ? error.message : 'Please try again.',
+          detail:
+            error instanceof Error && error.message === 'non_draft_shift_assignment_not_allowed'
+              ? 'Cancelled or completed shifts cannot be reassigned directly. Create a new shift instead.'
+              : error instanceof Error
+                ? error.message
+                : 'Please try again.',
         });
       }
     })();
