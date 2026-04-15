@@ -252,6 +252,7 @@ export type WorkspaceBoard = {
     amended_from_published: boolean;
     amendment_reason_code?: string | null;
     schedule_break: boolean;
+    historical_display: boolean;
   }>;
   action_summary: {
     total: number;

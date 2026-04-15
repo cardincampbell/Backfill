@@ -31,8 +31,10 @@ function shiftDuration(shift: Shift) {
 
 interface PublishWeekModalProps {
   weekLabel: string;
-  shifts: Shift[];
+  publishableShifts: Shift[];
+  weekShifts: Shift[];
   employees: Employee[];
+  notificationEmployees?: Employee[];
   isRepublish?: boolean;
   publishedDateLabel?: string | null;
   dark?: boolean;
@@ -43,8 +45,10 @@ interface PublishWeekModalProps {
 
 export function PublishWeekModal({
   weekLabel,
-  shifts,
+  publishableShifts,
+  weekShifts,
   employees,
+  notificationEmployees,
   isRepublish = false,
   publishedDateLabel = null,
   dark = false,
@@ -56,17 +60,18 @@ export function PublishWeekModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<ScheduleWeekPublishResponse | null>(null);
 
-  const affectedEmployees = Array.from(
-    new Set(
-      shifts
-        .map((shift) => shift.employeeId)
-        .filter((employeeId): employeeId is string => Boolean(employeeId)),
-    ),
-  )
-    .map((id) => employees.find((employee) => employee.id === id))
-    .filter(Boolean) as Employee[];
+  const affectedEmployees = notificationEmployees
+    ?? Array.from(
+      new Set(
+        publishableShifts
+          .map((shift) => shift.employeeId)
+          .filter((employeeId): employeeId is string => Boolean(employeeId)),
+      ),
+    )
+      .map((id) => employees.find((employee) => employee.id === id))
+      .filter(Boolean) as Employee[];
 
-  const totalShifts = shifts.length;
+  const totalShifts = publishableShifts.length;
   const modalClass = dark
     ? "bg-[#0F2E4C] border border-white/[0.08]"
     : "bg-white border border-[#E5E7EB]";
@@ -197,7 +202,7 @@ export function PublishWeekModal({
                     {
                       icon: "📨",
                       text: "Assigned staff notifications are queued",
-                      detail: "SMS and email are enqueued asynchronously",
+                      detail: "Email notifications are enqueued asynchronously",
                     },
                   ].map((item) => (
                     <div key={item.text} className={`flex items-start gap-3 rounded-lg p-3 ${subtleSurfaceClass}`}>
@@ -224,7 +229,7 @@ export function PublishWeekModal({
                 </p>
                 <div className="max-h-[180px] space-y-1.5 overflow-y-auto pr-1">
                   {affectedEmployees.map((employee) => {
-                    const employeeShifts = shifts.filter((shift) => shift.employeeId === employee.id);
+                    const employeeShifts = weekShifts.filter((shift) => shift.employeeId === employee.id);
                     const employeeHours = employeeShifts.reduce(
                       (sum, shift) => sum + shiftDuration(shift),
                       0,
@@ -262,7 +267,7 @@ export function PublishWeekModal({
                   })}
                   {affectedEmployees.length === 0 ? (
                     <div className={`rounded-lg p-3 text-[12px] ${subtleSurfaceClass} ${textSecondary}`}>
-                      No assigned employees on the remaining draft shifts. Publish will still move them live.
+                      No employees are queued to receive email updates from this publish action.
                     </div>
                   ) : null}
                 </div>

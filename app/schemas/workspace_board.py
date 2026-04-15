@@ -67,6 +67,7 @@ class WorkspaceBoardShiftRead(BaseSchema):
     amended_from_published: bool = False
     amendment_reason_code: Optional[str] = None
     schedule_break: bool = False
+    historical_display: bool = False
 
 
 class WorkspaceBoardPublishSummaryRead(BaseSchema):

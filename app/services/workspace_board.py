@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,7 @@ READ_ROLES = {
     MembershipRole.viewer,
 }
 _PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+_SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
 
 
 def board_window(timezone_name: str, week_start_day: str | date | None, week_start: date | None = None):
@@ -151,12 +152,118 @@ def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
     return employee_ids
 
 
+def _shift_historical_artifacts(shift: Shift) -> list[dict]:
+    raw_value = _shift_amendment_metadata(shift).get(_SHIFT_HISTORICAL_ARTIFACTS_KEY)
+    if not isinstance(raw_value, list):
+        return []
+    return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
+
+
+def _shift_historical_artifact_employee_ids(shift: Shift) -> list[UUID]:
+    employee_ids: list[UUID] = []
+    for artifact in _shift_historical_artifacts(shift):
+        raw_employee_id = artifact.get("employee_id")
+        if raw_employee_id is None:
+            continue
+        try:
+            employee_ids.append(raw_employee_id if isinstance(raw_employee_id, UUID) else UUID(str(raw_employee_id)))
+        except (TypeError, ValueError):
+            continue
+    return employee_ids
+
+
 def _latest_timestamp(current: datetime | None, candidate: datetime | None) -> datetime | None:
     if current is None:
         return candidate
     if candidate is None:
         return current
     return max(current, candidate)
+
+
+def _shift_historical_display(shift: Shift) -> bool:
+    return (
+        _shift_lifecycle_status_value(shift) == ShiftLifecycleStatus.cancelled.value
+        and _shift_amendment_reason_code(shift) == "cancelled"
+    )
+
+
+def _historical_artifact_shift_reads(shift: Shift) -> list[WorkspaceBoardShiftRead]:
+    shift_reads: list[WorkspaceBoardShiftRead] = []
+    for index, artifact in enumerate(_shift_historical_artifacts(shift)):
+        raw_starts_at = artifact.get("starts_at")
+        raw_ends_at = artifact.get("ends_at")
+        raw_reason_code = artifact.get("reason_code")
+        if not isinstance(raw_starts_at, str) or not isinstance(raw_ends_at, str):
+            continue
+        if not isinstance(raw_reason_code, str) or not raw_reason_code:
+            continue
+        try:
+            starts_at = datetime.fromisoformat(raw_starts_at)
+            ends_at = datetime.fromisoformat(raw_ends_at)
+        except ValueError:
+            continue
+        raw_employee_id = artifact.get("employee_id")
+        employee_id: UUID | None = None
+        if raw_employee_id is not None:
+            try:
+                employee_id = raw_employee_id if isinstance(raw_employee_id, UUID) else UUID(str(raw_employee_id))
+            except (TypeError, ValueError):
+                employee_id = None
+        employee_name = artifact.get("employee_name") if isinstance(artifact.get("employee_name"), str) else None
+        role_id = shift.role_id
+        raw_role_id = artifact.get("role_id")
+        if raw_role_id is not None:
+            try:
+                role_id = raw_role_id if isinstance(raw_role_id, UUID) else UUID(str(raw_role_id))
+            except (TypeError, ValueError):
+                role_id = shift.role_id
+        role_code = artifact.get("role_code") if isinstance(artifact.get("role_code"), str) else shift.role.code
+        role_name = artifact.get("role_name") if isinstance(artifact.get("role_name"), str) else shift.role.name
+        artifact_token = artifact.get("artifact_id") if isinstance(artifact.get("artifact_id"), str) else str(index)
+        artifact_shift_id = uuid5(shift.id, f"historical:{artifact_token}")
+        artifact_assignment_id = uuid5(artifact_shift_id, "last-assignment")
+        shift_reads.append(
+            WorkspaceBoardShiftRead(
+                shift_id=artifact_shift_id,
+                role_id=role_id,
+                role_code=role_code,
+                role_name=role_name,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                lifecycle_status=ShiftLifecycleStatus.cancelled.value,
+                staffing_status=(
+                    shift.staffing_status.value
+                    if hasattr(shift.staffing_status, "value")
+                    else str(shift.staffing_status)
+                ),
+                status=shift.status.value,
+                seats_requested=shift.seats_requested,
+                seats_filled=0,
+                requires_manager_approval=shift.requires_manager_approval,
+                premium_cents=shift.premium_cents,
+                notes=shift.notes,
+                current_assignment=None,
+                last_assignment=WorkspaceBoardShiftAssignmentRead(
+                    assignment_id=artifact_assignment_id,
+                    employee_id=employee_id,
+                    employee_name=employee_name,
+                    status="no_show" if raw_reason_code == "no_show" else "cancelled",
+                    assigned_via="published_amendment",
+                    accepted_at=None,
+                ),
+                coverage_case_id=None,
+                coverage_case_status=None,
+                pending_offer_count=0,
+                delivered_offer_count=0,
+                standby_depth=0,
+                manager_action_required=False,
+                amended_from_published=False,
+                amendment_reason_code=raw_reason_code,
+                schedule_break=False,
+                historical_display=True,
+            )
+        )
+    return shift_reads
 
 
 async def _build_publish_summary(
@@ -239,6 +346,13 @@ async def _build_publish_summary(
             ShiftLifecycleStatus.in_progress.value,
         }:
             published_shift_ids.add(shift.id)
+            if employee_id is not None:
+                published_employee_ids.add(employee_id)
+            for historical_employee_id in _shift_historical_artifact_employee_ids(shift):
+                published_employee_ids.add(historical_employee_id)
+            continue
+
+        if _shift_historical_display(shift):
             if employee_id is not None:
                 published_employee_ids.add(employee_id)
             continue
@@ -472,8 +586,12 @@ async def get_location_board(
                 amended_from_published=_shift_amended_from_published(shift),
                 amendment_reason_code=_shift_amendment_reason_code(shift),
                 schedule_break=_shift_schedule_break(shift),
+                historical_display=_shift_historical_display(shift),
             )
         )
+        shift_reads.extend(_historical_artifact_shift_reads(shift))
+
+    shift_reads.sort(key=lambda item: (item.starts_at, item.role_name, str(item.shift_id)))
 
     publish_summary = await _build_publish_summary(
         session,

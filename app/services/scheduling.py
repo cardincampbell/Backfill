@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from html import escape
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -56,6 +56,7 @@ _LIVE_SHIFT_LIFECYCLE_STATUSES = {
     ShiftLifecycleStatus.in_progress,
 }
 _PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+_SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
 
 
 class ShiftAssignmentConflictError(Exception):
@@ -259,6 +260,60 @@ def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
     return employee_ids
 
 
+def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    try:
+        employee = assignment.employee
+    except Exception:
+        employee = None
+    if employee is not None and employee.full_name:
+        return employee.full_name
+    metadata = assignment.assignment_metadata or {}
+    if isinstance(metadata, dict):
+        raw_name = metadata.get("employee_name")
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    return None
+
+
+def _shift_historical_artifacts(shift: Shift) -> list[dict]:
+    raw_value = _shift_amendment_metadata(shift).get(_SHIFT_HISTORICAL_ARTIFACTS_KEY)
+    if not isinstance(raw_value, list):
+        return []
+    return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
+
+
+def _append_shift_historical_artifact(
+    shift: Shift,
+    *,
+    employee_id: UUID | None,
+    employee_name: str | None,
+    reason_code: str,
+) -> None:
+    artifacts = _shift_historical_artifacts(shift)
+    artifacts.append(
+        {
+            "artifact_id": str(uuid4()),
+            "employee_id": str(employee_id) if employee_id is not None else None,
+            "employee_name": employee_name,
+            "reason_code": reason_code,
+            "starts_at": shift.starts_at.isoformat(),
+            "ends_at": shift.ends_at.isoformat(),
+            "role_id": str(shift.role_id),
+            "role_code": shift.role.code if shift.role is not None else None,
+            "role_name": shift.role.name if shift.role is not None else None,
+        }
+    )
+    metadata = {
+        **_shift_amendment_metadata(shift),
+        _SHIFT_HISTORICAL_ARTIFACTS_KEY: artifacts,
+    }
+    _set_shift_amendment_metadata(shift, metadata)
+
+
 def _mark_shift_amended_from_published(
     shift: Shift,
     *,
@@ -297,14 +352,6 @@ def _clear_shift_amended_from_published(shift: Shift) -> None:
     if not metadata:
         return
     metadata["amended_from_published"] = False
-    metadata["schedule_break"] = False
-    metadata["reason_code"] = None
-    metadata["action"] = None
-    metadata["note"] = None
-    metadata["source"] = None
-    metadata["old_employee_id"] = None
-    metadata["new_employee_id"] = None
-    metadata["amended_at"] = None
     metadata["amended_employee_ids"] = []
     _set_shift_amendment_metadata(shift, metadata)
 
@@ -551,6 +598,7 @@ async def _enqueue_schedule_publish_notifications(
     shifts: list[Shift],
     notify_channels: list[str],
     note: str | None,
+    candidate_employee_ids: set[UUID] | None = None,
 ) -> tuple[int, int]:
     normalized_channels = _normalized_notify_channels(notify_channels)
     if not normalized_channels:
@@ -582,8 +630,34 @@ async def _enqueue_schedule_publish_notifications(
         employees_by_id[employee.id] = employee
         enqueued_assignment_count += 1
 
-    for employee_id, employee_shifts in shifts_by_employee.items():
-        employee = employees_by_id[employee_id]
+    if candidate_employee_ids is None:
+        notification_employee_ids = set(shifts_by_employee.keys())
+    else:
+        notification_employee_ids = set(candidate_employee_ids)
+
+    notified_employee_count = 0
+
+    for employee_id in sorted(notification_employee_ids, key=str):
+        employee = employees_by_id.get(employee_id)
+        if employee is None:
+            loaded_employee = await session.get(Employee, employee_id)
+            if loaded_employee is None or loaded_employee.business_id != business_id:
+                continue
+            employee = loaded_employee
+        available_channels: list[str] = []
+        for channel in normalized_channels:
+            if channel == "sms" and not employee.phone_e164:
+                continue
+            if channel == "email" and not employee.email:
+                continue
+            if not _employee_allows_publish_notification(employee, channel):
+                continue
+            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
+                continue
+            available_channels.append(channel)
+        if not available_channels:
+            continue
+        employee_shifts = shifts_by_employee.get(employee_id, [])
         access_link, _ = await employee_schedule_link_service.get_or_create_schedule_access_link(
             session,
             business_id=business_id,
@@ -606,17 +680,7 @@ async def _enqueue_schedule_publish_notifications(
             note=note,
             schedule_url=schedule_url,
         )
-        for channel in normalized_channels:
-            if channel == "sms" and (
-                not employee.phone_e164 or not _employee_allows_publish_notification(employee, "sms")
-            ):
-                continue
-            if channel == "email" and (
-                not employee.email or not _employee_allows_publish_notification(employee, "email")
-            ):
-                continue
-            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
-                continue
+        for channel in available_channels:
             session.add(
                 OutboxEvent(
                     aggregate_type="schedule_publish",
@@ -627,8 +691,9 @@ async def _enqueue_schedule_publish_notifications(
                     result_payload={},
                 )
             )
+        notified_employee_count += 1
 
-    return enqueued_assignment_count, len(shifts_by_employee)
+    return enqueued_assignment_count, notified_employee_count
 
 
 async def list_shifts(
@@ -904,6 +969,15 @@ async def publish_schedule_week(
                 already_scheduled_shift_count=len(already_scheduled_shifts),
             )
 
+    notification_candidate_employee_ids: set[UUID] = set()
+    for shift in shifts:
+        if _shift_amended_from_published(shift):
+            notification_candidate_employee_ids.update(_shift_amended_employee_ids(shift))
+    for shift in draft_shifts:
+        current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+        if current_assignment is not None and current_assignment.employee_id is not None:
+            notification_candidate_employee_ids.add(current_assignment.employee_id)
+
     for shift in shifts:
         _clear_shift_amended_from_published(shift)
 
@@ -919,9 +993,10 @@ async def publish_schedule_week(
             location_name=getattr(location, "display_name", None) or location.name,
             week_start_date=window.week_start,
             week_end_date=window.week_end,
-            shifts=draft_shifts,
+            shifts=shifts,
             notify_channels=payload.notify_channels,
             note=payload.note,
+            candidate_employee_ids=notification_candidate_employee_ids,
         )
     )
 
@@ -1080,6 +1155,19 @@ async def apply_published_shift_amendment(
         shift,
         reason="published_shift_reassigned",
     )
+    prior_reason_code = _shift_amendment_reason_code(shift)
+    previous_assignment = current if current is not None else latest_assignment
+    if (
+        _shift_schedule_break(shift)
+        and previous_assignment is not None
+        and prior_reason_code in {"callout", "no_show"}
+    ):
+        _append_shift_historical_artifact(
+            shift,
+            employee_id=previous_assignment.employee_id,
+            employee_name=_assignment_employee_name(previous_assignment),
+            reason_code=prior_reason_code,
+        )
     if current is not None:
         current.status = AssignmentStatus.cancelled
         current.cancelled_at = now
