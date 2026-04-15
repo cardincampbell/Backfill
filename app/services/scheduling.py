@@ -1257,6 +1257,7 @@ async def _load_shift_for_assignment(
     shift = await session.get(
         Shift,
         shift_id,
+        populate_existing=True,
         options=(
             selectinload(Shift.location),
             selectinload(Shift.role),
@@ -1281,6 +1282,7 @@ async def _load_employee_for_assignment(
     employee = await session.get(
         Employee,
         employee_id,
+        populate_existing=True,
         options=(
             selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
             selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
