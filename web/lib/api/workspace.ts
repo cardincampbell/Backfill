@@ -796,9 +796,17 @@ export async function getLocationBoard(
   weekStart?: string,
 ): Promise<WorkspaceBoard | null> {
   const qs = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
-  const board = await fetchAppJson<WorkspaceBoard>(
+  const response = await apiFetchApp(
     `${API_PREFIX}/workspace/businesses/${businessId}/locations/${locationId}/board${qs}`,
+    {
+      cache: "no-store",
+      next: { revalidate: 0 },
+    },
   );
+  if (!response.ok) {
+    return null;
+  }
+  const board = (await response.json()) as WorkspaceBoard;
   if (!board) {
     return null;
   }

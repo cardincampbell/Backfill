@@ -146,6 +146,7 @@ def test_location_board_route_returns_snapshot(monkeypatch):
             f"/api/workspace/businesses/{business_id}/locations/{location_id}/board"
         )
         assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "private, no-store"
         payload = response.json()
         assert payload["business_name"] == "Casa Vega"
         assert payload["location_name"] == "West Hollywood"
