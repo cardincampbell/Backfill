@@ -796,8 +796,20 @@ async def update_shift(
         changed = True
 
     _recompute_shift_ownership_state(shift)
-    if changed and shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
-        shift.lifecycle_status = ShiftLifecycleStatus.draft
+    if changed and _is_live_shift(shift):
+        current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+        current_employee_id = current_assignment.employee_id if current_assignment is not None else None
+        _mark_shift_amended_from_published(
+            shift,
+            action="update_shift",
+            reason_code="amendment",
+            schedule_break=False,
+            source="scheduler_ui",
+            note=None,
+            amended_at=datetime.now(timezone.utc),
+            old_employee_id=current_employee_id,
+            new_employee_id=current_employee_id,
+        )
 
     await session.flush()
     await session.refresh(shift)
@@ -1049,8 +1061,8 @@ async def apply_published_shift_amendment(
             week_end_date=week_end_date,
         )
 
-    if payload.reason_code not in {"callout", "no_show"}:
-        raise ValueError("published_shift_reassign_requires_operational_reason")
+    if payload.reason_code != "reassignment":
+        raise ValueError("published_shift_reassign_requires_reassignment_reason")
     employee = await _load_employee_for_assignment(session, business_id, payload.target_employee_id)
     _validate_employee_eligibility(employee, shift)
     if current.employee_id == employee.id:
@@ -1061,11 +1073,7 @@ async def apply_published_shift_amendment(
         shift,
         reason="published_shift_reassigned",
     )
-    current.status = (
-        AssignmentStatus.no_show
-        if payload.reason_code == "no_show"
-        else AssignmentStatus.cancelled
-    )
+    current.status = AssignmentStatus.cancelled
     current.cancelled_at = now
     current.assignment_metadata = {
         **(current.assignment_metadata or {}),

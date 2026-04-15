@@ -1190,7 +1190,7 @@ async def test_set_shift_assignment_keeps_draft_lifecycle_until_publish():
 
 
 @pytest.mark.asyncio
-async def test_update_shift_demotes_scheduled_shift_to_draft_after_real_change():
+async def test_update_shift_marks_live_shift_as_amendment_after_real_change():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
     business_id = uuid4()
@@ -1229,8 +1229,10 @@ async def test_update_shift_demotes_scheduled_shift_to_draft_after_real_change()
         scheduling.ShiftUpdate(notes="Updated after publish"),
     )
 
-    assert updated.lifecycle_status == ShiftLifecycleStatus.draft
+    assert updated.lifecycle_status == ShiftLifecycleStatus.scheduled
     assert updated.notes == "Updated after publish"
+    assert updated.shift_metadata["published_amendment"]["reason_code"] == "amendment"
+    assert updated.shift_metadata["published_amendment"]["schedule_break"] is False
 
 
 @pytest.mark.asyncio
@@ -1274,6 +1276,70 @@ async def test_update_shift_keeps_scheduled_lifecycle_when_nothing_changed():
     )
 
     assert updated.lifecycle_status == ShiftLifecycleStatus.scheduled
+
+
+@pytest.mark.asyncio
+async def test_update_shift_marks_live_reassigned_shift_as_amendment_on_further_edit():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jordan Draft"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": True,
+                "reason_code": "reassignment",
+                "schedule_break": False,
+                "amended_employee_ids": [str(employee_id)],
+            }
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    updated = await scheduling.update_shift(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.ShiftUpdate(notes="Moved after reassignment"),
+    )
+
+    assert updated.lifecycle_status == ShiftLifecycleStatus.scheduled
+    assert updated.shift_metadata["published_amendment"]["reason_code"] == "amendment"
+    assert updated.shift_metadata["published_amendment"]["schedule_break"] is False
 
 
 @pytest.mark.asyncio
@@ -1405,7 +1471,7 @@ async def test_apply_published_shift_amendment_reassigns_live_shift_without_demo
         shift_id,
         scheduling.PublishedShiftAmendmentWrite(
             action="reassign_shift",
-            reason_code="callout",
+            reason_code="reassignment",
             target_employee_id=employee_id,
             source="scheduler_ui",
         ),
@@ -1414,6 +1480,145 @@ async def test_apply_published_shift_amendment_reassigns_live_shift_without_demo
     assert result.current_assignment is not None
     assert shift.lifecycle_status == ShiftLifecycleStatus.scheduled
     assert shift.staffing_status == ShiftStaffingStatus.covered
+    assert shift.shift_metadata["published_amendment"]["reason_code"] == "reassignment"
+
+
+@pytest.mark.asyncio
+async def test_apply_published_shift_amendment_reassign_requires_reassignment_reason():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Draft",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = [
+        ShiftAssignment(
+            id=uuid4(),
+            shift_id=shift_id,
+            employee_id=uuid4(),
+            assigned_via="scheduler_ui",
+            status=AssignmentStatus.assigned,
+            sequence_no=1,
+            assignment_metadata={"employee_name": "Jordan Current"},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Business, business_id)] = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Employee, employee_id)] = employee
+
+    with pytest.raises(ValueError, match="published_shift_reassign_requires_reassignment_reason"):
+        await scheduling.apply_published_shift_amendment(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.PublishedShiftAmendmentWrite(
+                action="reassign_shift",
+                reason_code="callout",
+                target_employee_id=employee_id,
+                source="scheduler_ui",
+            ),
+        )
 
 
 @pytest.mark.asyncio

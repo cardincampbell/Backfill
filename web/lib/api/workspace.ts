@@ -344,7 +344,7 @@ export type ScheduleWeekPublishResponse = {
 
 export type PublishedShiftAmendmentPayload = {
   action: "cancel_shift" | "unassign_shift" | "reassign_shift";
-  reason_code: "cancelled" | "callout" | "no_show";
+  reason_code: "cancelled" | "callout" | "no_show" | "reassignment" | "amendment";
   target_employee_id?: string | null;
   source: "scheduler_ui" | "copilot" | "retell_voice" | "sms_automation";
   note?: string;

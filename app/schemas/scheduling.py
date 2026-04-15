@@ -85,7 +85,7 @@ class ShiftAssignmentMutationResponse(BaseSchema):
 
 class PublishedShiftAmendmentWrite(BaseSchema):
     action: Literal["cancel_shift", "unassign_shift", "reassign_shift"]
-    reason_code: Literal["cancelled", "callout", "no_show"]
+    reason_code: Literal["cancelled", "callout", "no_show", "reassignment", "amendment"]
     target_employee_id: Optional[UUID] = None
     source: Literal["scheduler_ui", "copilot", "retell_voice", "sms_automation"]
     note: Optional[str] = None
@@ -94,7 +94,7 @@ class PublishedShiftAmendmentWrite(BaseSchema):
 class PublishedShiftAmendmentRead(BaseSchema):
     shift_id: UUID
     action: Literal["cancel_shift", "unassign_shift", "reassign_shift"]
-    reason_code: Literal["cancelled", "callout", "no_show"]
+    reason_code: Literal["cancelled", "callout", "no_show", "reassignment", "amendment"]
     amended_from_published: bool
     schedule_break: bool
     lifecycle_status: str
