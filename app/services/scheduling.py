@@ -956,6 +956,7 @@ async def apply_published_shift_amendment(
         raise ValueError("published_shift_amendment_target_employee_must_be_null")
 
     current = shift_assignments.current_assignment(shift.assignments or [])
+    latest_assignment = shift_assignments.latest_assignment(shift.assignments or [])
     now = datetime.now(timezone.utc)
     week_start_date, week_end_date = await _shift_week_window(
         session,
@@ -993,7 +994,11 @@ async def apply_published_shift_amendment(
             source=payload.source,
             note=payload.note,
             amended_at=now,
-            old_employee_id=current.employee_id if current is not None else None,
+            old_employee_id=(
+                current.employee_id
+                if current is not None
+                else latest_assignment.employee_id if latest_assignment is not None else None
+            ),
             new_employee_id=None,
         )
         await session.flush()
@@ -1002,7 +1007,7 @@ async def apply_published_shift_amendment(
             action=payload.action,
             reason_code=payload.reason_code,
             source=payload.source,
-            previous_assignment=current,
+            previous_assignment=current if current is not None else latest_assignment,
             current_assignment=None,
             cancelled_cases=cancelled_cases,
             cancelled_offers=cancelled_offers,
@@ -1010,7 +1015,7 @@ async def apply_published_shift_amendment(
             week_end_date=week_end_date,
         )
 
-    if current is None:
+    if current is None and not _shift_schedule_break(shift):
         raise ValueError("published_shift_requires_current_assignment")
 
     if payload.action == "unassign_shift":
@@ -1065,30 +1070,37 @@ async def apply_published_shift_amendment(
         raise ValueError("published_shift_reassign_requires_reassignment_reason")
     employee = await _load_employee_for_assignment(session, business_id, payload.target_employee_id)
     _validate_employee_eligibility(employee, shift)
-    if current.employee_id == employee.id:
+    if current is not None and current.employee_id == employee.id:
         raise ValueError("published_shift_reassignment_requires_different_employee")
+    if current is None and latest_assignment is None:
+        raise ValueError("published_shift_requires_current_assignment")
 
     cancelled_cases, cancelled_offers = await _cancel_active_automation(
         session,
         shift,
         reason="published_shift_reassigned",
     )
-    current.status = AssignmentStatus.cancelled
-    current.cancelled_at = now
-    current.assignment_metadata = {
-        **(current.assignment_metadata or {}),
-        "published_amendment_action": payload.action,
-        "published_amendment_reason_code": payload.reason_code,
-        "published_amendment_source": payload.source,
-        "published_amendment_note": payload.note,
-        "published_amendment_at": now.isoformat(),
-    }
+    if current is not None:
+        current.status = AssignmentStatus.cancelled
+        current.cancelled_at = now
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_source": payload.source,
+            "published_amendment_note": payload.note,
+            "published_amendment_at": now.isoformat(),
+        }
     next_sequence_no = _next_assignment_sequence_no(shift)
     assignment = ShiftAssignment(
         shift_id=shift.id,
         employee_id=employee.id,
         assigned_by_user_id=assigned_by_user_id,
-        replaced_assignment_id=current.id,
+        replaced_assignment_id=(
+            current.id
+            if current is not None
+            else latest_assignment.id if latest_assignment is not None else None
+        ),
         assigned_via=payload.source,
         status=AssignmentStatus.assigned,
         sequence_no=next_sequence_no,
@@ -1113,7 +1125,11 @@ async def apply_published_shift_amendment(
         source=payload.source,
         note=payload.note,
         amended_at=now,
-        old_employee_id=current.employee_id,
+        old_employee_id=(
+            current.employee_id
+            if current is not None
+            else latest_assignment.employee_id if latest_assignment is not None else None
+        ),
         new_employee_id=employee.id,
     )
     await session.flush()
@@ -1122,7 +1138,7 @@ async def apply_published_shift_amendment(
         action=payload.action,
         reason_code=payload.reason_code,
         source=payload.source,
-        previous_assignment=current,
+        previous_assignment=current if current is not None else latest_assignment,
         current_assignment=assignment,
         cancelled_cases=cancelled_cases,
         cancelled_offers=cancelled_offers,

@@ -1931,27 +1931,20 @@ function SchedulerContent({
     targetEmployeeId: string;
     targetDay: number;
   }) => {
-    if (targetDay !== shift.day) {
-      await saveShiftToDay(shift, targetDay);
-    }
-    try {
-      await amendPublishedShift(location.business_id, shift.id, {
-        action: 'reassign_shift',
-        reason_code: 'reassignment',
-        target_employee_id: targetEmployeeId,
-        source: 'scheduler_ui',
-      });
-    } catch (error) {
-      if (targetDay !== shift.day) {
-        try {
-          await saveShiftToDay(shift, shift.day);
-        } catch {
-          // The caller will surface the reassignment failure after forcing a refresh.
-        }
-      }
-      throw error;
-    }
+    await amendPublishedShift(location.business_id, shift.id, {
+      action: 'reassign_shift',
+      reason_code: 'reassignment',
+      target_employee_id: targetEmployeeId,
+      source: 'scheduler_ui',
+    });
     let moveFailed = false;
+    if (targetDay !== shift.day) {
+      try {
+        await saveShiftToDay(shift, targetDay);
+      } catch {
+        moveFailed = true;
+      }
+    }
     await refreshSchedulerData({ force: true });
     return { moveFailed };
   }, [location.business_id, refreshSchedulerData, saveShiftToDay]);
