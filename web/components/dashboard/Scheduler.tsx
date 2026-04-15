@@ -31,6 +31,7 @@ import {
   UserMinus,
   UserPlus,
   AlertTriangle,
+  Siren,
   GripVertical,
   Info,
   CalendarDays,
@@ -208,6 +209,10 @@ function formatHour(h: number) {
 
 function shiftDuration(s: Shift) {
   return s.endHour > s.startHour ? s.endHour - s.startHour : 24 - s.startHour + s.endHour;
+}
+
+function isOperationalScheduleBreak(shift: Pick<Shift, 'scheduleBreak' | 'amendmentReasonCode'>) {
+  return shift.scheduleBreak && (shift.amendmentReasonCode === 'callout' || shift.amendmentReasonCode === 'no_show');
 }
 
 function describeShiftDeletionError(error: unknown) {
@@ -691,8 +696,10 @@ function DraggableShiftChip({
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
+  const hasOperationalBreak = isOperationalScheduleBreak(shift);
   const hasScheduleBreak = shift.scheduleBreak;
-  const ShiftStateIcon = publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
+  const showGenericBreakIndicator = hasScheduleBreak && !hasOperationalBreak;
+  const ShiftStateIcon = hasOperationalBreak ? null : publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
   const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
 
   const [{ isDragging }, dragRef] = useDrag(() => ({
@@ -761,28 +768,38 @@ function DraggableShiftChip({
           draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
         } ${
           isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
-        } ${hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
+        } ${hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
         style={{ minHeight: 52 }}
       >
-        <div className="absolute inset-0 rounded-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color, opacity: 0.08 }} />
-        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color }} />
+        <div className="absolute inset-0 rounded-lg" style={{ background: hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color, opacity: hasOperationalBreak ? 0.12 : 0.08 }} />
+        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color }} />
+        {hasOperationalBreak ? (
+          <div
+            className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
+            style={{
+              backgroundImage: 'repeating-linear-gradient(45deg, #DC2626 0, #DC2626 2px, transparent 2px, transparent 8px)',
+            }}
+          />
+        ) : null}
 
         <div className="relative pl-2.5 pr-2 py-2 flex items-start gap-1.5">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1">
-              <DescIcon size={11} style={{ color: shift.color }} className="shrink-0" />
-              <span className="text-[10px] truncate" style={{ fontWeight: 560, color: shift.color }}>
+              <DescIcon size={11} style={{ color: hasOperationalBreak ? '#DC2626' : shift.color }} className="shrink-0" />
+              <span className={`text-[10px] truncate ${hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 560, color: hasOperationalBreak ? '#DC2626' : shift.color }}>
                 {shiftLabel}
               </span>
             </div>
-            <p className={`text-[9px] mt-0.5 ${theme.textMuted}`} style={{ fontWeight: 420 }}>
+            <p className={`text-[9px] mt-0.5 ${hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: hasOperationalBreak ? '#DC2626' : undefined }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
             </p>
             <div className="mt-px flex items-center gap-1">
-              <p className={`text-[9px] ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
+              <p className={`text-[9px] ${hasOperationalBreak ? 'line-through opacity-60' : theme.textSubtle}`} style={{ fontWeight: 400, color: hasOperationalBreak ? '#DC2626' : undefined }}>
                 {dur}h
               </p>
-              {hasScheduleBreak ? (
+              {hasOperationalBreak ? (
+                <Siren size={8} className="shrink-0 text-[#DC2626]" />
+              ) : showGenericBreakIndicator ? (
                 <AlertTriangle size={8} className="shrink-0 text-[#E5484D]" />
               ) : null}
               {ShiftStateIcon && shiftStateColor ? (
@@ -839,23 +856,31 @@ function DraggableShiftChip({
         draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
       } ${
         isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
-      } ${hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
+      } ${hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
       style={{ minHeight: 38 }}
     >
-      <div className="absolute inset-0 rounded-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color, opacity: 0.08 }} />
-      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasScheduleBreak ? '#E5484D' : shift.color }} />
+      <div className="absolute inset-0 rounded-lg" style={{ background: hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color, opacity: hasOperationalBreak ? 0.12 : 0.08 }} />
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color }} />
+      {hasOperationalBreak ? (
+        <div
+          className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
+          style={{
+            backgroundImage: 'repeating-linear-gradient(45deg, #DC2626 0, #DC2626 2px, transparent 2px, transparent 8px)',
+          }}
+        />
+      ) : null}
 
       <div className="relative pl-2.5 pr-2 py-1.5">
         {/* Row 1: label + hours top-right */}
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-1 min-w-0">
-            <DescIcon size={9} style={{ color: shift.color }} className="shrink-0" />
-            <span className="text-[9px] truncate" style={{ fontWeight: 540, color: shift.color }}>
+            <DescIcon size={9} style={{ color: hasOperationalBreak ? '#DC2626' : shift.color }} className="shrink-0" />
+            <span className={`text-[9px] truncate ${hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 540, color: hasOperationalBreak ? '#DC2626' : shift.color }}>
               {shiftLabel}
             </span>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
-            <span className={`text-[8px] ${theme.textSubtle}`} style={{ fontWeight: 420 }}>
+            <span className={`text-[8px] ${hasOperationalBreak ? 'line-through opacity-60' : theme.textSubtle}`} style={{ fontWeight: 420, color: hasOperationalBreak ? '#DC2626' : undefined }}>
               {dur}h
             </span>
             <AnimatePresence>
@@ -877,10 +902,12 @@ function DraggableShiftChip({
         </div>
         {/* Row 2: time span */}
         <div className="mt-0.5 flex items-center gap-1">
-          <p className={`text-[8px] truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
+          <p className={`text-[8px] truncate ${hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: hasOperationalBreak ? '#DC2626' : undefined }}>
             {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
           </p>
-          {hasScheduleBreak ? (
+          {hasOperationalBreak ? (
+            <Siren size={7} className="shrink-0 text-[#DC2626]" />
+          ) : showGenericBreakIndicator ? (
             <AlertTriangle size={7} className="shrink-0 text-[#E5484D]" />
           ) : null}
           {ShiftStateIcon && shiftStateColor ? (
@@ -2919,6 +2946,9 @@ function SchedulerContent({
                     {!isCollapsed && roleEmps.map(emp => {
                       const empWeekHours = getEmployeeWeekHours(emp.id);
                       const isHovered = hoveredEmployeeId === emp.id;
+                      const hasOperationalBreak = displayShifts.some(
+                        (shift) => shift.displayEmployeeId === emp.id && isOperationalScheduleBreak(shift),
+                      );
                       const hasScheduleBreak = displayShifts.some(
                         (shift) => shift.displayEmployeeId === emp.id && shift.scheduleBreak,
                       );
@@ -2943,10 +2973,12 @@ function SchedulerContent({
                                 <p className={`text-[12px] truncate whitespace-nowrap ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
                                   {emp.name}
                                 </p>
-                                {EmployeeStateIcon && employeeStateColor ? (
+                                {!hasOperationalBreak && EmployeeStateIcon && employeeStateColor ? (
                                   <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
                                 ) : null}
-                                {hasScheduleBreak ? (
+                                {hasOperationalBreak ? (
+                                  <Siren size={11} className="shrink-0 text-[#DC2626]" />
+                                ) : hasScheduleBreak ? (
                                   <AlertTriangle size={11} className="shrink-0 text-[#E5484D]" />
                                 ) : null}
                               </div>
@@ -3549,6 +3581,7 @@ function MobileEmployeeCard({
         : null;
   const employeeStateColor =
     employeePublishState === 'published' ? '#00B893' : employeePublishState === 'amended' ? '#F59E0B' : null;
+  const hasOperationalBreak = cellShifts.some((shift) => isOperationalScheduleBreak(shift));
   const hasScheduleBreak = cellShifts.some((shift) => shift.scheduleBreak);
 
   const minSwipeDistance = 50;
@@ -3600,10 +3633,12 @@ function MobileEmployeeCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
             <p className={`text-[12px] truncate ${dark ? 'text-white' : 'text-[#0A2540]'}`} style={{ fontWeight: 500 }}>{employee.name}</p>
-            {EmployeeStateIcon && employeeStateColor ? (
+            {!hasOperationalBreak && EmployeeStateIcon && employeeStateColor ? (
               <EmployeeStateIcon size={11} className="shrink-0" style={{ color: employeeStateColor }} />
             ) : null}
-            {hasScheduleBreak ? (
+            {hasOperationalBreak ? (
+              <Siren size={11} className="shrink-0 text-[#DC2626]" />
+            ) : hasScheduleBreak ? (
               <AlertTriangle size={11} className="shrink-0 text-[#E5484D]" />
             ) : null}
           </div>
@@ -3618,8 +3653,11 @@ function MobileEmployeeCard({
                 const shiftLabel = shift.presetLabel?.trim() || desc.label;
                 const dur = shiftDuration(shift);
                 const publishState = shiftPublishState(shift);
+                const hasOperationalBreak = isOperationalScheduleBreak(shift);
                 const ShiftStateIcon =
-                  publishState === 'published'
+                  hasOperationalBreak
+                    ? null
+                    : publishState === 'published'
                     ? Lock
                     : publishState === 'amended'
                       ? LockOpen
@@ -3634,13 +3672,24 @@ function MobileEmployeeCard({
                         onEditShift(shift);
                       }
                     }}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all min-w-0"
-                    style={{ background: `${shift.color}10` }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all min-w-0 relative overflow-hidden ${hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : ''}`}
+                    style={{ background: hasOperationalBreak ? '#DC262610' : `${shift.color}10` }}
                     type="button"
                   >
-                    <DescIcon size={10} style={{ color: shift.color }} className="shrink-0" />
-                    <span className="text-[10px] truncate" style={{ fontWeight: 520, color: shift.color }}>{shiftLabel}</span>
-                    <span className={`text-[9px] shrink-0 ${dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400 }}>{dur}h</span>
+                    {hasOperationalBreak ? (
+                      <div
+                        className="absolute inset-0 opacity-10 pointer-events-none"
+                        style={{
+                          backgroundImage: 'repeating-linear-gradient(45deg, #DC2626 0, #DC2626 2px, transparent 2px, transparent 8px)',
+                        }}
+                      />
+                    ) : null}
+                    <DescIcon size={10} style={{ color: hasOperationalBreak ? '#DC2626' : shift.color }} className="shrink-0" />
+                    <span className={`text-[10px] truncate ${hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 520, color: hasOperationalBreak ? '#DC2626' : shift.color }}>{shiftLabel}</span>
+                    <span className={`text-[9px] shrink-0 ${hasOperationalBreak ? 'line-through opacity-60' : dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400, color: hasOperationalBreak ? '#DC2626' : undefined }}>{dur}h</span>
+                    {hasOperationalBreak ? (
+                      <Siren size={9} className="shrink-0 text-[#DC2626]" />
+                    ) : null}
                     {ShiftStateIcon && shiftStateColor ? (
                       <ShiftStateIcon size={9} className="shrink-0" style={{ color: shiftStateColor }} />
                     ) : null}
