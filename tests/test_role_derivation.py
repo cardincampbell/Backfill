@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -72,6 +73,15 @@ class FakeSession:
 
     async def get(self, model, object_id):
         return self.get_map.get((model, object_id))
+
+
+@pytest.fixture(autouse=True)
+def disable_llm_refinement_by_default(monkeypatch):
+    monkeypatch.setattr(
+        role_derivation,
+        "settings",
+        SimpleNamespace(role_derivation_model="", openai_api_key=""),
+    )
 
 
 def _make_location(*, business_id, primary_type: str, types: list[str], hours: dict | None = None) -> Location:
@@ -190,6 +200,15 @@ def _make_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
             "delivery_coordinator": role_derivation.BusinessRoleArchetypeDefinition("Delivery Coordinator", "operations"),
             "expeditor": role_derivation.BusinessRoleArchetypeDefinition("Expeditor", "operations"),
             "inventory_lead": role_derivation.BusinessRoleArchetypeDefinition("Inventory Lead", "inventory"),
+        },
+        active_vertical_codes=("bakery", "bar", "cafe", "mixed_unknown", "restaurant", "retail"),
+        subverticals_by_vertical={
+            "restaurant": ("full_service_restaurant",),
+            "bar": ("bar",),
+            "cafe": ("cafe", "coffee_shop"),
+            "bakery": ("bakery",),
+            "retail": (),
+            "mixed_unknown": (),
         },
     )
 
@@ -314,6 +333,90 @@ async def test_sync_business_role_catalog_persists_classification_and_roles():
     bartender = next(role for role in created_roles if role.code == "bartender")
     assert bartender.metadata_json["derivation"]["support_location_count"] == 1
     assert derivation.classification.vertical == "restaurant"
+
+
+@pytest.mark.asyncio
+async def test_sync_business_role_catalog_applies_high_confidence_llm_refinement(monkeypatch):
+    business = _make_business(place_metadata={"primary_type": "coffee_shop", "types": ["cafe", "coffee_shop"]})
+    location = _make_location(
+        business_id=business.id,
+        primary_type="coffee_shop",
+        types=["cafe", "coffee_shop", "bakery"],
+        hours={"periods": [{"open": {"time": "0600"}}]},
+    )
+    session = FakeSession()
+    session.execute_queue = [*_make_taxonomy_execute_queue(), []]
+
+    async def fake_generate(_session, *, request):
+        assert request.provider == role_derivation.llm_gateway.LlmProvider.OPENAI
+        assert request.model == "gpt-derive"
+        return role_derivation.llm_gateway.LlmGenerationResult(
+            provider=request.provider or "",
+            model=request.model or "",
+            output_text=(
+                '{"vertical":"bakery","subvertical":"bakery",'
+                '"additional_role_keys":["delivery_coordinator"],'
+                '"confidence":0.88,'
+                '"reason":"Bakery signal is strong and delivery support looks relevant."}'
+            ),
+        )
+
+    monkeypatch.setattr("app.services.role_derivation.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr(
+        role_derivation,
+        "settings",
+        SimpleNamespace(role_derivation_model="gpt-derive", openai_api_key="test-key"),
+    )
+
+    derivation = await role_derivation.sync_business_role_catalog(session, business, locations=[location])
+
+    assert business.vertical == "bakery"
+    assert business.settings["derived_classification"]["vertical"] == "bakery"
+    assert business.settings["derived_classification"]["llm_refinement"]["applied"] is True
+    assert derivation.classification.vertical == "bakery"
+    created_roles = [obj for obj in session.added if isinstance(obj, Role)]
+    delivery = next(role for role in created_roles if role.code == "delivery_coordinator")
+    assert delivery.metadata_json["derivation"]["derivation_type"] == "llm_modifier"
+
+
+@pytest.mark.asyncio
+async def test_sync_business_role_catalog_ignores_low_confidence_llm_refinement(monkeypatch):
+    business = _make_business(place_metadata={"primary_type": "store", "types": ["store"]})
+    location = _make_location(
+        business_id=business.id,
+        primary_type="store",
+        types=["store"],
+        hours={},
+    )
+    session = FakeSession()
+    session.execute_queue = [*_make_taxonomy_execute_queue(), []]
+
+    async def fake_generate(_session, *, request):
+        return role_derivation.llm_gateway.LlmGenerationResult(
+            provider=request.provider or "",
+            model=request.model or "",
+            output_text=(
+                '{"vertical":"restaurant","subvertical":"full_service_restaurant",'
+                '"additional_role_keys":["bartender"],'
+                '"confidence":0.42,'
+                '"reason":"Weak cross-domain guess."}'
+            ),
+        )
+
+    monkeypatch.setattr("app.services.role_derivation.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr(
+        role_derivation,
+        "settings",
+        SimpleNamespace(role_derivation_model="gpt-derive", openai_api_key="test-key"),
+    )
+
+    derivation = await role_derivation.sync_business_role_catalog(session, business, locations=[location])
+
+    assert business.vertical == "retail"
+    assert derivation.classification.vertical == "retail"
+    assert business.settings["derived_classification"]["llm_refinement"]["applied"] is False
+    created_role_codes = {role.code for role in session.added if isinstance(role, Role)}
+    assert "bartender" not in created_role_codes
 
 
 @pytest.mark.asyncio

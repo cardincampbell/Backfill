@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Iterable, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.business import Business, Location, Role
 from app.models.role_taxonomy import (
     BusinessRoleArchetype,
@@ -14,6 +16,7 @@ from app.models.role_taxonomy import (
     BusinessVerticalRoleArchetype,
     BusinessVerticalTypeMapping,
 )
+from app.services import llm_gateway
 from app.services.utils import role_code_from_name
 
 DERIVATION_VERSION = "places_rules_v2_db_taxonomy"
@@ -64,6 +67,17 @@ class RoleDerivationTaxonomy:
     business_vertical_type_mappings: dict[str, tuple[str, str | None]]
     business_vertical_role_archetypes: dict[str, tuple[str, ...]]
     business_role_archetypes: dict[str, BusinessRoleArchetypeDefinition]
+    active_vertical_codes: tuple[str, ...]
+    subverticals_by_vertical: dict[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class LlmDerivationSuggestion:
+    vertical: str | None = None
+    subvertical: str | None = None
+    role_keys: tuple[str, ...] = ()
+    confidence: float | None = None
+    reason: str | None = None
 
 
 async def load_role_derivation_taxonomy(session: AsyncSession) -> RoleDerivationTaxonomy:
@@ -106,6 +120,15 @@ async def load_role_derivation_taxonomy(session: AsyncSession) -> RoleDerivation
         for row in mapping_rows
         if row.business_vertical_code in active_vertical_codes and row.place_type.strip()
     }
+    subverticals_by_vertical: dict[str, set[str]] = {code: set() for code in active_vertical_codes}
+    for row in mapping_rows:
+        if (
+            row.business_vertical_code not in active_vertical_codes
+            or not row.place_type.strip()
+            or not row.subvertical_code
+        ):
+            continue
+        subverticals_by_vertical.setdefault(row.business_vertical_code, set()).add(row.subvertical_code)
     business_vertical_role_archetypes: dict[str, list[str]] = {
         code: [] for code in active_vertical_codes
     }
@@ -137,6 +160,11 @@ async def load_role_derivation_taxonomy(session: AsyncSession) -> RoleDerivation
             key: tuple(value) for key, value in business_vertical_role_archetypes.items()
         },
         business_role_archetypes=business_role_archetypes,
+        active_vertical_codes=tuple(sorted(active_vertical_codes)),
+        subverticals_by_vertical={
+            key: tuple(sorted(value))
+            for key, value in subverticals_by_vertical.items()
+        },
     )
 
 
@@ -145,6 +173,23 @@ def _as_text(value: object) -> str | None:
         normalized = value.strip()
         return normalized or None
     return None
+
+
+def _extract_json_object(raw_text: str | None) -> dict:
+    if not raw_text:
+        return {}
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(raw_text[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _unique_strings(values: Iterable[str]) -> tuple[str, ...]:
@@ -414,6 +459,227 @@ def derive_business_catalog(
     )
 
 
+def _serializable_location_metadata(location: Location) -> dict:
+    metadata = dict(location.google_place_metadata or {})
+    return {
+        "location_id": str(location.id),
+        "name": location.name,
+        "primary_type": _as_text(metadata.get("primary_type")),
+        "types": [value for value in metadata.get("types", []) if isinstance(value, str)][:20],
+        "website_uri": _as_text(metadata.get("website_uri")),
+        "regular_opening_hours": metadata.get("regular_opening_hours") if isinstance(metadata.get("regular_opening_hours"), dict) else {},
+    }
+
+
+def _build_llm_derivation_prompt(
+    *,
+    business: Business,
+    taxonomy: RoleDerivationTaxonomy,
+    business_place_metadata: dict | None,
+    locations: Sequence[Location],
+    deterministic: DerivationResult,
+) -> str:
+    payload = {
+        "business": {
+            "name": business.display_name or business.name,
+            "current_vertical": business.vertical,
+            "place_metadata": dict(business_place_metadata or {}),
+        },
+        "locations": [_serializable_location_metadata(location) for location in locations[:8]],
+        "deterministic_derivation": {
+            "vertical": deterministic.classification.vertical,
+            "subvertical": deterministic.classification.subvertical,
+            "confidence": deterministic.classification.confidence,
+            "reason_codes": deterministic.classification.reason_codes,
+            "role_keys": [role.role_key for role in deterministic.roles],
+        },
+        "allowed_verticals": list(taxonomy.active_vertical_codes),
+        "allowed_subverticals_by_vertical": {
+            key: list(value) for key, value in taxonomy.subverticals_by_vertical.items()
+        },
+        "allowed_role_catalog": [
+            {
+                "role_key": role_key,
+                "display_name": definition.display_name,
+                "role_family": definition.role_family,
+            }
+            for role_key, definition in sorted(taxonomy.business_role_archetypes.items())
+        ],
+        "instructions": {
+            "goal": "Refine the business vertical/subvertical and suggest extra role archetypes that are likely useful for this business.",
+            "constraints": [
+                "Do not invent new verticals, subverticals, or role keys.",
+                "Only return values from the allowed lists.",
+                "Prefer the deterministic derivation unless there is strong evidence to refine it.",
+                "Only suggest extra role keys that are missing from deterministic_role_keys.",
+            ],
+            "output_schema": {
+                "vertical": "string | null",
+                "subvertical": "string | null",
+                "additional_role_keys": "string[]",
+                "confidence": "number between 0 and 1",
+                "reason": "short string",
+            },
+        },
+    }
+    return json.dumps(payload, ensure_ascii=True)
+
+
+async def _llm_refine_business_catalog(
+    session: AsyncSession,
+    *,
+    business: Business,
+    taxonomy: RoleDerivationTaxonomy,
+    business_place_metadata: dict | None,
+    locations: Sequence[Location],
+    deterministic: DerivationResult,
+) -> LlmDerivationSuggestion | None:
+    if not settings.role_derivation_model or not settings.openai_api_key:
+        return None
+
+    result = await llm_gateway.generate(
+        session,
+        request=llm_gateway.LlmGenerationRequest(
+            purpose="role_derivation_refinement",
+            business_id=business.id,
+            provider=llm_gateway.LlmProvider.OPENAI,
+            model=settings.role_derivation_model,
+            messages=[
+                llm_gateway.LlmMessage(
+                    role="system",
+                    content=(
+                        "You refine business vertical classification and suggest extra role archetypes. "
+                        "Return exactly one JSON object and no other text."
+                    ),
+                ),
+                llm_gateway.LlmMessage(
+                    role="user",
+                    content=_build_llm_derivation_prompt(
+                        business=business,
+                        taxonomy=taxonomy,
+                        business_place_metadata=business_place_metadata,
+                        locations=locations,
+                        deterministic=deterministic,
+                    ),
+                ),
+            ],
+            temperature=0,
+            max_output_tokens=400,
+            metadata={
+                "feature": "role_derivation_refinement",
+                "deterministic_vertical": deterministic.classification.vertical,
+                "deterministic_role_count": len(deterministic.roles),
+            },
+        ),
+    )
+    payload = _extract_json_object(result.output_text)
+    if not payload:
+        return None
+
+    raw_vertical = _as_text(payload.get("vertical"))
+    vertical = raw_vertical.lower() if raw_vertical and raw_vertical.lower() in taxonomy.active_vertical_codes else None
+
+    raw_subvertical = _as_text(payload.get("subvertical"))
+    subvertical = None
+    if vertical and raw_subvertical:
+        allowed_subverticals = set(taxonomy.subverticals_by_vertical.get(vertical, ()))
+        lowered_subvertical = raw_subvertical.lower()
+        if lowered_subvertical in allowed_subverticals:
+            subvertical = lowered_subvertical
+
+    allowed_role_keys = set(taxonomy.business_role_archetypes)
+    deterministic_role_keys = {role.role_key for role in deterministic.roles}
+    additional_role_keys: list[str] = []
+    for value in payload.get("additional_role_keys") or []:
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().lower()
+        if not normalized or normalized not in allowed_role_keys or normalized in deterministic_role_keys:
+            continue
+        if normalized not in additional_role_keys:
+            additional_role_keys.append(normalized)
+
+    try:
+        confidence_value = float(payload.get("confidence"))
+    except (TypeError, ValueError):
+        confidence_value = None
+    confidence = None if confidence_value is None else max(0.0, min(confidence_value, 1.0))
+    reason = _as_text(payload.get("reason"))
+    return LlmDerivationSuggestion(
+        vertical=vertical,
+        subvertical=subvertical,
+        role_keys=tuple(additional_role_keys),
+        confidence=confidence,
+        reason=reason,
+    )
+
+
+async def _apply_llm_refinement(
+    session: AsyncSession,
+    *,
+    business: Business,
+    taxonomy: RoleDerivationTaxonomy,
+    business_place_metadata: dict | None,
+    locations: Sequence[Location],
+    derivation: DerivationResult,
+) -> tuple[DerivationResult, LlmDerivationSuggestion | None]:
+    suggestion = await _llm_refine_business_catalog(
+        session,
+        business=business,
+        taxonomy=taxonomy,
+        business_place_metadata=business_place_metadata,
+        locations=locations,
+        deterministic=derivation,
+    )
+    if suggestion is None:
+        return derivation, None
+
+    if suggestion.confidence is not None and suggestion.confidence < 0.7:
+        return derivation, suggestion
+
+    classification = derivation.classification
+    if suggestion.vertical is not None:
+        classification = DerivedClassification(
+            vertical=suggestion.vertical,
+            subvertical=suggestion.subvertical,
+            confidence=round(max(classification.confidence, suggestion.confidence or classification.confidence), 3),
+            reason_codes=sorted(
+                set(classification.reason_codes)
+                | {"llm.vertical_refinement"}
+                | ({f"llm.vertical.{suggestion.vertical}"} if suggestion.vertical else set())
+            ),
+        )
+
+    roles = list(derivation.roles)
+    for role_key in suggestion.role_keys:
+        definition = taxonomy.business_role_archetypes.get(role_key)
+        if definition is None:
+            continue
+        roles.append(
+            DerivedRole(
+                role_key=role_key,
+                display_name=definition.display_name,
+                role_family=definition.role_family,
+                confidence=round(max(0.72, suggestion.confidence or 0.72), 3),
+                derivation_type="llm_modifier",
+                reason_codes=["llm.additional_role", *(["llm.vertical_refinement"] if suggestion.vertical else [])],
+                support_location_ids=[],
+            )
+        )
+
+    deduped_roles: dict[str, DerivedRole] = {}
+    for role in roles:
+        existing = deduped_roles.get(role.role_key)
+        if existing is None or role.confidence > existing.confidence:
+            deduped_roles[role.role_key] = role
+
+    refined = DerivationResult(
+        classification=classification,
+        roles=sorted(deduped_roles.values(), key=lambda item: (-item.confidence, item.display_name)),
+    )
+    return refined, suggestion
+
+
 async def sync_business_role_catalog(
     session: AsyncSession,
     business: Business,
@@ -431,6 +697,14 @@ async def sync_business_role_catalog(
         business_place_metadata=business.place_metadata,
         locations=locations,
     )
+    derivation, llm_suggestion = await _apply_llm_refinement(
+        session,
+        business=business,
+        taxonomy=taxonomy,
+        business_place_metadata=business.place_metadata,
+        locations=locations,
+        derivation=derivation,
+    )
 
     settings = dict(business.settings or {})
     settings["derived_classification"] = {
@@ -441,6 +715,22 @@ async def sync_business_role_catalog(
         "location_count": len([location for location in locations if location.google_place_metadata]),
         "derivation_version": DERIVATION_VERSION,
     }
+    if llm_suggestion is not None:
+        settings["derived_classification"]["llm_refinement"] = {
+            "vertical": llm_suggestion.vertical,
+            "subvertical": llm_suggestion.subvertical,
+            "additional_role_keys": list(llm_suggestion.role_keys),
+            "confidence": llm_suggestion.confidence,
+            "reason": llm_suggestion.reason,
+            "applied": bool(
+                llm_suggestion.confidence is not None
+                and llm_suggestion.confidence >= 0.7
+                and (
+                    llm_suggestion.vertical is not None
+                    or bool(llm_suggestion.role_keys)
+                )
+            ),
+        }
     vertical_source = settings.get("vertical_source")
     if vertical_source != "manual":
         business.vertical = derivation.classification.vertical

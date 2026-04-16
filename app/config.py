@@ -140,6 +140,11 @@ class Settings:
     anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
     llm_default_provider: str = os.environ.get("BACKFILL_LLM_DEFAULT_PROVIDER", "").strip().lower()
     llm_default_model: str = os.environ.get("BACKFILL_LLM_DEFAULT_MODEL", "").strip()
+    role_normalization_model: str = os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "").strip()
+    role_derivation_model: str = os.environ.get(
+        "BACKFILL_ROLE_DERIVATION_MODEL",
+        os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", ""),
+    ).strip()
     billing_fill_price_cents: int = int(os.environ.get("BACKFILL_BILLING_FILL_PRICE_CENTS", "2000"))
     billing_location_monthly_cap_cents: int = int(
         os.environ.get("BACKFILL_BILLING_LOCATION_MONTHLY_CAP_CENTS", "20000")

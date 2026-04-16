@@ -81,6 +81,14 @@ export type BusinessRoleCreatePayload = {
   metadata_json?: Record<string, unknown>;
 };
 
+export type BusinessRoleCreateResult = {
+  role: BusinessRole;
+  decision: "created_new" | "reused_existing";
+  normalized_name: string;
+  confidence?: number | null;
+  reason?: string | null;
+};
+
 export type LocationRoleCreateAndAssignPayload = BusinessRoleCreatePayload & {
   min_headcount?: number | null;
   max_headcount?: number | null;
@@ -149,7 +157,7 @@ export async function listBusinessRoles(
 export async function createBusinessRole(
   businessId: string,
   payload: BusinessRoleCreatePayload,
-): Promise<BusinessRole> {
+): Promise<BusinessRoleCreateResult> {
   const response = await apiFetchApp(`${API_PREFIX}/businesses/${businessId}/roles`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -158,7 +166,7 @@ export async function createBusinessRole(
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
-  return (await response.json()) as BusinessRole;
+  return (await response.json()) as BusinessRoleCreateResult;
 }
 
 export async function createAndAssignLocationRole(

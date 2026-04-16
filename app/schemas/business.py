@@ -136,6 +136,14 @@ class RoleRead(BaseSchema):
     updated_at: datetime
 
 
+class RoleCreateResultRead(BaseSchema):
+    role: RoleRead
+    decision: Literal["created_new", "reused_existing"]
+    normalized_name: str
+    confidence: Optional[float] = None
+    reason: Optional[str] = None
+
+
 class BusinessRoleDerivationRead(BaseSchema):
     business_id: UUID
     vertical: Optional[str]
