@@ -142,24 +142,51 @@ That endpoint handles:
 - onboarding-link handoff
 - voice and chat agent tool calls
 
+For the phone number itself, also make sure the inbound webhook is set to:
+
+```text
+{BACKFILL_WEBHOOK_URL}/webhooks/retell
+```
+
+Retell uses that inbound webhook before the call connects, which lets Backfill do the caller phone lookup as early as possible and return:
+
+- dynamic variables for the inbound agent
+- metadata like employee_id and shift_id
+- a personalized begin message
+
+If you use `scripts/setup_retell_phone_number.py` with `BACKFILL_WEBHOOK_URL` set, it will configure the inbound phone webhook for you.
+
+If you configure it manually in Retell:
+
+1. Open the Retell dashboard.
+2. Go to Phone Numbers.
+3. Select the Backfill number.
+4. Confirm the inbound voice agent is bound to the number.
+5. Set Inbound Webhook URL to `{BACKFILL_WEBHOOK_URL}/webhooks/retell`.
+6. If you are using Retell-managed SMS, also set the inbound SMS webhook to the same URL.
+
 ## 8a. Current inbound callout flow
 
 The intended inbound worker callout path is:
 
 1. Worker calls the Backfill number.
-2. Retell answers with the inbound callout agent.
-3. The agent calls `lookup_caller`.
-   - The backend resolves the worker by phone number.
-   - It returns the worker plus their currently assigned upcoming shifts.
-4. The agent calls `log_consent`.
+2. Retell sends `call_inbound` to Backfill before the call connects.
+3. Backfill looks up the caller by phone number and returns:
+   - employee context
+   - assigned upcoming shifts
+   - a personalized opening greeting
+4. Retell answers with the inbound callout agent.
+5. The agent uses the preloaded caller context and calls `lookup_caller` only if it needs to re-check or clarify.
+6. The agent calls `log_consent`.
    - This updates Backfill's communication suppression ledger and the employee notification preferences.
-5. The agent calls `create_vacancy`.
+7. The agent calls `create_vacancy`.
    - For a live assigned shift, Backfill first records a published shift amendment with `reason_code=callout`.
    - Then Backfill opens or resumes the coverage case and starts the fill cascade.
 
 Two practical notes:
 
 - `scripts/setup_retell_agents.py` should be rerun any time the tool schema or prompts change, then the returned agent IDs should be copied back into `.env`.
+- `scripts/setup_retell_phone_number.py` should be rerun any time the inbound webhook URL, inbound agent bindings, or SMS agent bindings change.
 - The Retell callback processor now enriches tool arguments from webhook context, so inbound calls do not depend on the LLM perfectly restating the caller phone number or shift metadata.
 
 ## 9. Smoke-test the live path

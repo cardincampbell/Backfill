@@ -127,7 +127,7 @@ After `api.usebackfill.com` is live:
 
 1. Run `python3 scripts/setup_retell_agents.py` so the live Retell agents pick up the current webhook, tool schema, and prompts.
 2. Copy the returned agent IDs into the backend env.
-3. Update the live Retell voice agent webhook to `https://api.usebackfill.com/webhooks/retell`
+3. Run `python3 scripts/setup_retell_phone_number.py` so the Retell phone number is bound to the current inbound/outbound agents and the inbound webhook is set to `https://api.usebackfill.com/webhooks/retell`.
 4. Publish the voice agent
 5. Create or update the Retell SMS chat agent with the same webhook
 6. Bind that chat agent to the Retell phone number for inbound and outbound SMS

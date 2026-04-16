@@ -142,6 +142,46 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_retell_inbound_webhook_returns_personalized_call_context(monkeypatch):
+    async def fake_build_inbound(_session, body):
+        assert body["event"] == "call_inbound"
+        return {
+            "call_inbound": {
+                "override_agent_id": "agent_inbound_123",
+                "metadata": {"employee_id": "emp_123", "shift_id": "shift_123"},
+                "dynamic_variables": {"caller_first_name": "Taylor", "employee_found": "true"},
+                "agent_override": {
+                    "retell_llm": {
+                        "begin_message": "Hi Taylor, this is Backfill's AI assistant. Are you calling about your upcoming shift?"
+                    }
+                },
+            }
+        }
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr(
+        "app.api.routes.retell_provider.provider_callbacks.retell_workflow.build_inbound_webhook_response",
+        fake_build_inbound,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/retell",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "call_inbound",
+                "call_inbound": {"from_number": "+15555550100"},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["call_inbound"]["override_agent_id"] == "agent_inbound_123"
+        assert response.json()["call_inbound"]["metadata"]["employee_id"] == "emp_123"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_retell_function_call_route_returns_conflict_when_duplicate_is_processing(monkeypatch):
     class CallbackEntry:
         id = "cb_retell_3"

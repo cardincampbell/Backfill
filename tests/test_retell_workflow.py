@@ -367,3 +367,64 @@ async def test_create_vacancy_uses_published_callout_amendment_before_coverage(m
         "offers": ["offer_123"],
         "used_published_amendment": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_build_inbound_webhook_response_personalizes_recognized_single_shift(monkeypatch):
+    session = FakeSession()
+    shift_id = uuid4()
+
+    async def fake_lookup(_session, phone: str):
+        assert phone == "+15555550100"
+        return {
+            "phone": phone,
+            "user": None,
+            "employee": {
+                "id": str(uuid4()),
+                "full_name": "Taylor Caller",
+                "business_id": str(uuid4()),
+                "location_id": str(uuid4()),
+            },
+            "assigned_shifts": [
+                {
+                    "id": str(shift_id),
+                    "location_id": str(uuid4()),
+                    "location_name": "Downtown",
+                    "role_id": str(uuid4()),
+                    "role_name": "Barista",
+                    "starts_at": "2026-04-16T18:00:00+00:00",
+                    "ends_at": "2026-04-17T02:00:00+00:00",
+                    "status": "covered",
+                    "lifecycle_status": "scheduled",
+                    "staffing_status": "covered",
+                }
+            ],
+            "actionable_offer_id": None,
+        }
+
+    monkeypatch.setattr(retell_workflow, "lookup_caller", fake_lookup)
+
+    result = await retell_workflow.build_inbound_webhook_response(
+        session,
+        {
+            "event": "call_inbound",
+            "call_inbound": {
+                "from_number": "+15555550100",
+                "agent_id": "agent_inbound_123",
+            },
+        },
+    )
+
+    payload = result["call_inbound"]
+    assert payload["override_agent_id"] == "agent_inbound_123"
+    assert payload["metadata"]["caller_phone"] == "+15555550100"
+    assert payload["metadata"]["employee_found"] is True
+    assert payload["metadata"]["upcoming_shift_count"] == 1
+    assert payload["metadata"]["shift_id"] == str(shift_id)
+    assert payload["dynamic_variables"]["caller_first_name"] == "Taylor"
+    assert payload["dynamic_variables"]["employee_found"] == "true"
+    assert payload["dynamic_variables"]["selected_shift_id"] == str(shift_id)
+    begin_message = payload["agent_override"]["retell_llm"]["begin_message"]
+    assert "Hi Taylor" in begin_message
+    assert "upcoming Barista shift" in begin_message
+    assert "Backfill's AI assistant" in begin_message

@@ -31,6 +31,58 @@ from app.services import delivery, messaging, scheduler_sync, scheduling, shift_
 from app.config import settings
 
 
+def _first_name(full_name: str | None) -> str | None:
+    text = str(full_name or "").strip()
+    if not text:
+        return None
+    return text.split()[0]
+
+
+def _coerce_retell_dynamic_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _format_inbound_shift_phrase(shift: dict[str, Any]) -> str:
+    role_name = str(shift.get("role_name") or "shift").strip()
+    location_name = str(shift.get("location_name") or "").strip()
+    starts_at_raw = str(shift.get("starts_at") or "").strip()
+    try:
+        starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
+    except ValueError:
+        starts_at = None
+    time_text = None
+    if starts_at is not None:
+        time_text = starts_at.astimezone(timezone.utc).strftime("%a %b %-d at %-I:%M %p UTC")
+    parts = [f"your upcoming {role_name} shift"]
+    if location_name:
+        parts.append(f"at {location_name}")
+    if time_text:
+        parts.append(time_text)
+    return " ".join(parts)
+
+
+def _build_begin_message(
+    *,
+    employee_found: bool,
+    caller_first_name: str | None,
+    assigned_shifts: list[dict[str, Any]],
+) -> str:
+    disclosure = (
+        "This is Backfill's AI assistant. We may use this number to call or text you about shift coverage, "
+        "and you can opt out anytime by saying so or replying STOP."
+    )
+    if employee_found and caller_first_name and len(assigned_shifts) == 1:
+        shift_phrase = _format_inbound_shift_phrase(assigned_shifts[0])
+        return f"Hi {caller_first_name}, {disclosure} Are you calling about {shift_phrase}?"
+    if employee_found and caller_first_name and len(assigned_shifts) > 1:
+        return f"Hi {caller_first_name}, {disclosure} Are you calling about one of your upcoming shifts?"
+    return f"Hi, {disclosure} Are you calling about an upcoming shift?"
+
+
 def _conversation_type_from_event(event: str) -> RetellConversationType:
     return RetellConversationType.chat if event.startswith("chat_") else RetellConversationType.call
 
@@ -344,6 +396,95 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
         "assigned_shifts": assigned_shifts,
         "actionable_offer_id": str(context.offer.id) if context is not None else None,
     }
+
+
+async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> dict[str, Any]:
+    event = str(body.get("event") or "").strip().lower()
+    inbound_key = "chat_inbound" if event == "chat_inbound" else "call_inbound"
+    inbound_payload = body.get(inbound_key) if isinstance(body.get(inbound_key), dict) else {}
+    phone = str(
+        inbound_payload.get("from_number")
+        or body.get("from_number")
+        or ""
+    ).strip()
+    lookup = await lookup_caller(session, phone) if phone else {
+        "phone": phone,
+        "user": None,
+        "employee": None,
+        "assigned_shifts": [],
+        "actionable_offer_id": None,
+    }
+    employee = lookup.get("employee") if isinstance(lookup.get("employee"), dict) else None
+    user = lookup.get("user") if isinstance(lookup.get("user"), dict) else None
+    assigned_shifts = list(lookup.get("assigned_shifts") or [])
+    employee_found = employee is not None
+    caller_name = (
+        str((employee or {}).get("full_name") or "").strip()
+        or str((user or {}).get("full_name") or "").strip()
+        or None
+    )
+    caller_first_name = _first_name(caller_name)
+    selected_shift = assigned_shifts[0] if len(assigned_shifts) == 1 else None
+
+    metadata: dict[str, Any] = {
+        "caller_phone": phone,
+        "employee_found": employee_found,
+        "upcoming_shift_count": len(assigned_shifts),
+    }
+    if employee is not None:
+        metadata["employee_id"] = employee.get("id")
+        metadata["business_id"] = employee.get("business_id")
+        if employee.get("location_id"):
+            metadata["location_id"] = employee.get("location_id")
+    if selected_shift is not None:
+        metadata["shift_id"] = selected_shift.get("id")
+        if selected_shift.get("location_id"):
+            metadata["location_id"] = selected_shift.get("location_id")
+
+    dynamic_variables = {
+        "caller_phone": _coerce_retell_dynamic_value(phone),
+        "employee_found": _coerce_retell_dynamic_value(employee_found),
+        "caller_name": _coerce_retell_dynamic_value(caller_name),
+        "caller_first_name": _coerce_retell_dynamic_value(caller_first_name),
+        "upcoming_shift_count": _coerce_retell_dynamic_value(len(assigned_shifts)),
+        "next_shift_role": _coerce_retell_dynamic_value(
+            selected_shift.get("role_name") if selected_shift is not None else None
+        ),
+        "next_shift_location": _coerce_retell_dynamic_value(
+            selected_shift.get("location_name") if selected_shift is not None else None
+        ),
+        "next_shift_starts_at": _coerce_retell_dynamic_value(
+            selected_shift.get("starts_at") if selected_shift is not None else None
+        ),
+        "selected_shift_id": _coerce_retell_dynamic_value(
+            selected_shift.get("id") if selected_shift is not None else None
+        ),
+    }
+    response_payload: dict[str, Any] = {
+        "dynamic_variables": dynamic_variables,
+        "metadata": metadata,
+    }
+    if event == "call_inbound":
+        response_payload["override_agent_id"] = (
+            str(inbound_payload.get("agent_id") or "").strip()
+            or settings.retell_agent_id_inbound
+            or settings.retell_agent_id
+        )
+        response_payload["agent_override"] = {
+            "retell_llm": {
+                "begin_message": _build_begin_message(
+                    employee_found=employee_found,
+                    caller_first_name=caller_first_name,
+                    assigned_shifts=assigned_shifts,
+                )
+            }
+        }
+    if event == "chat_inbound":
+        response_payload["override_agent_id"] = (
+            settings.retell_chat_agent_id_inbound
+            or settings.retell_chat_agent_id
+        )
+    return {inbound_key: response_payload}
 
 
 async def get_open_shifts(session: AsyncSession, location_id: UUID | None = None) -> dict:
