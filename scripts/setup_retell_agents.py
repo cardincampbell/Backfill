@@ -8,7 +8,7 @@ Run once (or re-run to update) after setting RETELL_API_KEY in .env:
 
 Creates two agents:
   1. inbound_callout  — workers calling 1-800-BACKFILL to report absences
-  2. outbound_t1t2    — AI calling workers to offer open shifts
+  2. outbound_t1t2    — AI calling workers to offer open shifts with personalized shift and weekly schedule context
   3. sms_chat         — AI texting workers and managers on the same number
 
 Agent IDs are printed to stdout. Copy them into your .env:
@@ -348,6 +348,8 @@ def main():
     print(f"  ✓ inbound agent_id: {inbound.agent_id}")
 
     print("Creating outbound shift offer agent...")
+    # The outbound prompt expects dynamic variables such as employee name,
+    # offered shift timing, location, and same-week schedule context.
     outbound = _create_agent(
         client,
         name="Backfill Outbound Shift Offer",
