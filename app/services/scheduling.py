@@ -808,6 +808,8 @@ async def update_shift(
     )
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
+    if shift.lifecycle_status == ShiftLifecycleStatus.cancelled:
+        raise ValueError("cancelled_shift_update_not_allowed")
 
     changed = False
 

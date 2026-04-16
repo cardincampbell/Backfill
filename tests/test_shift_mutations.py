@@ -1343,6 +1343,54 @@ async def test_update_shift_marks_live_reassigned_shift_as_amendment_on_further_
 
 
 @pytest.mark.asyncio
+async def test_update_shift_rejects_cancelled_shift_updates():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.cancelled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": False,
+                "reason_code": "cancelled",
+                "schedule_break": False,
+            }
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = []
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    with pytest.raises(ValueError, match="cancelled_shift_update_not_allowed"):
+        await scheduling.update_shift(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.ShiftUpdate(notes="Should not be allowed"),
+        )
+
+
+@pytest.mark.asyncio
 async def test_apply_published_shift_amendment_reassigns_live_shift_without_demoting_lifecycle():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
