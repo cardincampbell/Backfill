@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -648,6 +649,44 @@ async def test_build_inbound_webhook_response_preloads_full_schedule_summary(mon
     begin_message = payload["agent_override"]["retell_llm"]["begin_message"]
     assert "2 upcoming published shifts" in begin_message
     assert "starting with your upcoming Barista shift on Thursday, April 16" in begin_message
+
+
+@pytest.mark.asyncio
+async def test_build_inbound_webhook_response_prefers_env_inbound_agent_id(monkeypatch):
+    session = FakeSession()
+
+    async def fake_lookup(_session, phone: str):
+        return {
+            "phone": phone,
+            "user": None,
+            "employee": None,
+            "assigned_shifts": [],
+            "assigned_shift_schedule_summary": "",
+            "actionable_offer_id": None,
+        }
+
+    monkeypatch.setattr(retell_workflow, "lookup_caller", fake_lookup)
+    monkeypatch.setattr(
+        retell_workflow,
+        "settings",
+        SimpleNamespace(
+            retell_agent_id_inbound="agent_env_123",
+            retell_agent_id="",
+        ),
+    )
+
+    result = await retell_workflow.build_inbound_webhook_response(
+        session,
+        {
+            "event": "call_inbound",
+            "call_inbound": {
+                "from_number": "+15555550100",
+                "agent_id": "agent_payload_456",
+            },
+        },
+    )
+
+    assert result["call_inbound"]["override_agent_id"] == "agent_env_123"
 
 
 @pytest.mark.asyncio

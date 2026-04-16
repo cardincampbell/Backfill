@@ -888,8 +888,8 @@ async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> d
     }
     if event == "call_inbound":
         response_payload["override_agent_id"] = (
-            str(inbound_payload.get("agent_id") or "").strip()
-            or settings.retell_agent_id_inbound
+            settings.retell_agent_id_inbound
+            or str(inbound_payload.get("agent_id") or "").strip()
             or settings.retell_agent_id
         )
         response_payload["agent_override"] = {
