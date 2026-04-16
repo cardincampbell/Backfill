@@ -1120,7 +1120,12 @@ function SchedulerContent({
   const [showClearModal, setShowClearModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
   const [mobileDay, setMobileDay] = useState(() => (new Date().getDay() + 6) % 7);
-  const [removingEmployee, setRemovingEmployee] = useState<{ id: string; name: string; hasShifts: boolean } | null>(null);
+  const [removingEmployee, setRemovingEmployee] = useState<{
+    id: string;
+    name: string;
+    draftShiftIds: string[];
+    activeShiftCount: number;
+  } | null>(null);
   const [isRemovingEmployee, setIsRemovingEmployee] = useState(false);
   const [addEmployeeContext, setAddEmployeeContext] = useState<{
     roleId: string;
@@ -1655,10 +1660,14 @@ function SchedulerContent({
     if (!employee) {
       return;
     }
+    const assignedShifts = shifts.filter((shift) => shift.employeeId === employeeId);
     setRemovingEmployee({
       id: employeeId,
       name: employee.name,
-      hasShifts: shifts.some((shift) => shift.employeeId === employeeId),
+      draftShiftIds: assignedShifts
+        .filter((shift) => shift.lifecycleStatus === 'draft')
+        .map((shift) => shift.id),
+      activeShiftCount: assignedShifts.filter((shift) => isLiveShift(shift)).length,
     });
   }, [schedulerEmployees, shifts]);
 
@@ -1666,11 +1675,11 @@ function SchedulerContent({
     if (!removingEmployee) {
       return;
     }
-    if (removingEmployee.hasShifts) {
+    if (removingEmployee.activeShiftCount > 0) {
       setSchedulerNotice({
         tone: 'info',
         title: 'Remove assigned shifts first',
-        detail: `${removingEmployee.name} still has scheduled shifts. Manual reassignment and shift deletion for assigned shifts are not wired yet.`,
+        detail: `${removingEmployee.name} still has ${removingEmployee.activeShiftCount} active shift${removingEmployee.activeShiftCount === 1 ? '' : 's'}. Resolve live assignments before removing them from this location.`,
       });
       setRemovingEmployee(null);
       setSwipedEmployeeId(null);
@@ -1685,6 +1694,9 @@ function SchedulerContent({
     setIsRemovingEmployee(true);
     void (async () => {
       try {
+        for (const shiftId of removingEmployee.draftShiftIds) {
+          await deleteWorkspaceShift(location.business_id, shiftId);
+        }
         await updateEmployee(location.business_id, employee.id, {
           locations: buildEmployeeLocationAssignments(employee, location.location_id, false),
         });
@@ -1692,13 +1704,19 @@ function SchedulerContent({
         setSchedulerNotice({
           tone: 'success',
           title: 'Employee removed',
-          detail: `${removingEmployee.name} is no longer assigned to this location.`,
+          detail:
+            removingEmployee.draftShiftIds.length > 0
+              ? `${removingEmployee.name} was removed and ${removingEmployee.draftShiftIds.length} draft shift${removingEmployee.draftShiftIds.length === 1 ? '' : 's'} ${removingEmployee.draftShiftIds.length === 1 ? 'was' : 'were'} deleted.`
+              : `${removingEmployee.name} is no longer assigned to this location.`,
         });
       } catch (error) {
         setSchedulerNotice({
           tone: 'error',
           title: 'Could not remove employee',
-          detail: error instanceof Error ? error.message : 'Please try again.',
+          detail:
+            error instanceof Error
+              ? describeShiftDeletionError(error)
+              : 'Please try again.',
         });
       } finally {
         setIsRemovingEmployee(false);
@@ -3747,8 +3765,8 @@ function SchedulerContent({
             <RemoveEmployeeModal
               dark={isDark}
               employeeName={removingEmployee.name}
-              hasShifts={removingEmployee.hasShifts}
-              shiftCount={shifts.filter((shift) => shift.employeeId === removingEmployee.id).length}
+              activeShiftCount={removingEmployee.activeShiftCount}
+              draftShiftCount={removingEmployee.draftShiftIds.length}
               isLoading={isRemovingEmployee}
               onClose={() => setRemovingEmployee(null)}
               onConfirm={confirmRemoveEmployee}
@@ -4509,16 +4527,16 @@ function ClearScheduleModal({
 function RemoveEmployeeModal({
   dark = false,
   employeeName,
-  hasShifts,
-  shiftCount,
+  activeShiftCount,
+  draftShiftCount,
   isLoading = false,
   onClose,
   onConfirm,
 }: {
   dark?: boolean;
   employeeName: string;
-  hasShifts: boolean;
-  shiftCount: number;
+  activeShiftCount: number;
+  draftShiftCount: number;
   isLoading?: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -4527,6 +4545,7 @@ function RemoveEmployeeModal({
   const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
   const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
   const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const hasActiveShifts = activeShiftCount > 0;
 
   return (
     <>
@@ -4538,8 +4557,8 @@ function RemoveEmployeeModal({
         className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[90vw] max-w-[420px] rounded-2xl shadow-2xl border overflow-hidden ${panelClass}`}>
         <div className={`px-6 py-5 border-b flex items-start justify-between ${borderClass}`}>
           <div className="flex items-start gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${hasShifts ? 'bg-orange-50' : 'bg-red-50'}`}>
-              {hasShifts ? (
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${hasActiveShifts ? 'bg-orange-50' : 'bg-red-50'}`}>
+              {hasActiveShifts ? (
                 <AlertTriangle size={18} className="text-orange-500" />
               ) : (
                 <UserMinus size={18} className="text-red-500" />
@@ -4550,9 +4569,11 @@ function RemoveEmployeeModal({
                 Remove {employeeName}?
               </h3>
               <p className={`text-[12px] mt-1 ${dark ? 'text-[#8898AA]' : 'text-[#8898AA]'}`} style={{ fontWeight: 420 }}>
-                {hasShifts
-                  ? `This person has ${shiftCount} scheduled shift${shiftCount !== 1 ? 's' : ''}`
-                  : 'Remove this person from the scheduler'}
+                {hasActiveShifts
+                  ? `This person has ${activeShiftCount} active shift${activeShiftCount !== 1 ? 's' : ''}`
+                  : draftShiftCount > 0
+                    ? `${draftShiftCount} draft shift${draftShiftCount !== 1 ? 's' : ''} will be deleted`
+                    : 'Remove this person from the scheduler'}
               </p>
             </div>
           </div>
@@ -4562,26 +4583,44 @@ function RemoveEmployeeModal({
         </div>
 
         <div className="px-6 py-5">
-          {hasShifts ? (
+          {hasActiveShifts ? (
             <div className="space-y-3">
               <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
-                <span className={`font-medium ${textPrimary}`}>{employeeName}</span> still has assigned shifts.
+                <span className={`font-medium ${textPrimary}`}>{employeeName}</span> still has active assigned shifts.
               </p>
               <ul className="space-y-2 ml-4">
                 <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
                   <span className="text-orange-500 mt-0.5">•</span>
-                  <span>Assigned shifts cannot be removed from this real-data scheduler yet</span>
+                  <span>Only active live shifts block removal. Cancelled and historical shifts are ignored.</span>
                 </li>
                 <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
                   <span className="text-orange-500 mt-0.5">•</span>
-                  <span>Clear or reassign those shifts before removing them from this location</span>
+                  <span>Reassign or resolve those live shifts before removing them from this location.</span>
                 </li>
               </ul>
             </div>
           ) : (
-            <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
-              <span className={`font-medium ${textPrimary}`}>{employeeName}</span> will be removed from this location&apos;s scheduler. You can add them back anytime.
-            </p>
+            <div className="space-y-3">
+              <p className={`text-[13px] ${textSecondary} leading-[1.6]`}>
+                <span className={`font-medium ${textPrimary}`}>{employeeName}</span> will be removed from this location&apos;s scheduler.
+              </p>
+              {draftShiftCount > 0 ? (
+                <ul className="space-y-2 ml-4">
+                  <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
+                    <span className="text-red-500 mt-0.5">•</span>
+                    <span>{draftShiftCount} assigned draft shift{draftShiftCount === 1 ? '' : 's'} will be deleted as part of removal.</span>
+                  </li>
+                  <li className={`text-[12px] ${textSecondary} flex items-start gap-2`}>
+                    <span className="text-red-500 mt-0.5">•</span>
+                    <span>Cancelled and historical shifts will remain as visual history and do not block this action.</span>
+                  </li>
+                </ul>
+              ) : (
+                <p className={`text-[12px] ${textSecondary} leading-[1.6]`}>
+                  You can add them back anytime.
+                </p>
+              )}
+            </div>
           )}
         </div>
 
@@ -4597,13 +4636,13 @@ function RemoveEmployeeModal({
             whileTap={{ scale: 0.97 }}
             onClick={onConfirm}
             className={`flex-1 py-2.5 rounded-xl text-[12px] text-white transition-all flex items-center justify-center gap-2 ${
-              hasShifts ? 'bg-orange-500 hover:bg-orange-600' : 'bg-red-500 hover:bg-red-600'
+              hasActiveShifts ? 'bg-orange-500 hover:bg-orange-600' : 'bg-red-500 hover:bg-red-600'
             }`}
             style={{ fontWeight: 540 }}
             disabled={isLoading}
             type="button">
             <UserMinus size={13} />
-            {isLoading ? 'Removing...' : hasShifts ? 'Understood' : 'Remove'}
+            {isLoading ? 'Removing...' : hasActiveShifts ? 'Understood' : 'Remove'}
           </motion.button>
         </div>
       </motion.div>
