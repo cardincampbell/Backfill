@@ -596,7 +596,7 @@ def _secondary_intent_model() -> str:
     configured_model = configured_model.strip()
     if configured_model:
         return configured_model
-    return "gpt-5-nano"
+    return "gpt-5-mini"
 
 
 def _secondary_intent_messages(conversation: RetellConversation) -> list[llm_gateway.LlmMessage]:
@@ -934,7 +934,7 @@ async def process_inbound_conversation_completion(
 
     if (
         isinstance(intent_signal, dict)
-        and intent_signal.get("confidence") == "low"
+        and intent_signal.get("confidence") in {"low", "medium"}
         and intent_signal.get("intent") is not None
     ):
         secondary_intent_signal = await _secondary_intent_signal(session, conversation)
@@ -944,7 +944,7 @@ async def process_inbound_conversation_completion(
         ):
             intent_agreement_signal = {
                 "provider": "retell_openai_agreement",
-                "source": "retell_low_confidence_openai_confirmation",
+                "source": "retell_non_high_confidence_openai_confirmation",
                 "intent": intent_signal.get("intent"),
                 "confidence": intent_signal.get("confidence"),
                 "secondary_intent": secondary_intent_signal,
@@ -1013,7 +1013,7 @@ async def process_inbound_conversation_completion(
                 confidence=intent_signal.get("confidence"),
                 source=intent_signal.get("source"),
             )
-        elif intent_signal.get("confidence") == "low":
+        elif intent_signal.get("confidence") in {"low", "medium"}:
             callout_result = {
                 "status": (
                     "retell_openai_intent_disagreement"
@@ -1033,7 +1033,7 @@ async def process_inbound_conversation_completion(
                 "source": intent_signal.get("source"),
             }
     elif isinstance(intent_signal, dict):
-        if intent_signal.get("confidence") == "low":
+        if intent_signal.get("confidence") in {"low", "medium"}:
             if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent"):
                 callout_result = {
                     "status": "retell_openai_intent_disagreement",
