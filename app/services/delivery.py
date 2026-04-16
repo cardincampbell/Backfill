@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -12,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models.common import CoverageAttemptStatus, CoverageCaseStatus, OfferStatus, OutboxStatus
+from app.models.business import Business
+from app.models.common import AssignmentStatus, CoverageAttemptStatus, CoverageCaseStatus, OfferStatus, OutboxStatus
 from app.models.coverage import CoverageCandidate, CoverageCase, CoverageCaseRun, CoverageContactAttempt, CoverageOffer, OutboxEvent
-from app.models.scheduling import Shift
+from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.services import (
@@ -25,6 +27,7 @@ from app.services import (
     retell as retell_service,
     worker_runtime,
 )
+from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
 
 
 @dataclass
@@ -124,10 +127,20 @@ class RetellVoiceDeliveryProvider:
                 provider="retell",
                 error_message="missing_destination_phone",
             )
-        metadata = build_coverage_offer_voice_metadata(offer=offer, shift=shift)
+        metadata = build_coverage_offer_voice_metadata(
+            offer=offer,
+            shift=shift,
+            outbox_payload=outbox_event.payload,
+        )
+        dynamic_variables = build_coverage_offer_voice_dynamic_variables(
+            offer=offer,
+            shift=shift,
+            outbox_payload=outbox_event.payload,
+        )
         call_id = await retell_service.create_phone_call(
             to_number=to_number,
             metadata=metadata,
+            dynamic_variables=dynamic_variables,
             agent_kind="outbound",
         )
         now = datetime.now(timezone.utc)
@@ -136,7 +149,7 @@ class RetellVoiceDeliveryProvider:
             provider="retell",
             provider_message_id=call_id,
             sent_at=now,
-            result_payload={"call_id": call_id, "metadata": metadata},
+            result_payload={"call_id": call_id, "metadata": metadata, "dynamic_variables": dynamic_variables},
         )
 
 
@@ -171,9 +184,155 @@ def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
     )
 
 
-def build_coverage_offer_voice_metadata(*, offer: CoverageOffer, shift: Shift) -> dict:
+def _full_name_parts(full_name: str | None) -> tuple[str, str]:
+    text = str(full_name or "").strip()
+    if not text:
+        return "", ""
+    parts = text.split()
+    first_name = parts[0].strip()
+    last_name = " ".join(parts[1:]).strip()
+    return first_name, last_name
+
+
+def _shift_timezone_name(shift: Shift) -> str:
+    return (
+        str(getattr(shift, "timezone", "") or "").strip()
+        or str(getattr(getattr(shift, "location", None), "timezone", "") or "").strip()
+        or "UTC"
+    )
+
+
+def _format_shift_date_label(value: datetime) -> str:
+    return value.strftime("%A, %B %d").replace(" 0", " ")
+
+
+def _format_shift_time_label(value: datetime) -> str:
+    return value.strftime("%I:%M %p %Z").lstrip("0").strip()
+
+
+def _offered_shift_context(*, shift: Shift) -> dict:
+    timezone_name = _shift_timezone_name(shift)
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = timezone.utc
+    local_start = shift.starts_at.astimezone(zone)
+    local_end = shift.ends_at.astimezone(zone)
     location_name = getattr(getattr(shift, "location", None), "name", None) or "your location"
     role_name = getattr(getattr(shift, "role", None), "name", None) or "team member"
+    return {
+        "shift_id": str(shift.id),
+        "location_id": str(shift.location_id),
+        "role_id": str(shift.role_id),
+        "location_name": location_name,
+        "role_name": role_name,
+        "date": _format_shift_date_label(local_start),
+        "start_time": _format_shift_time_label(local_start),
+        "end_time": _format_shift_time_label(local_end),
+        "starts_at": shift.starts_at.isoformat(),
+        "ends_at": shift.ends_at.isoformat(),
+        "timezone": timezone_name,
+    }
+
+
+async def _build_retell_voice_outbound_context(
+    session: AsyncSession,
+    *,
+    offer: CoverageOffer,
+    shift: Shift,
+) -> dict:
+    employee = await session.get(Employee, offer.employee_id)
+    business = await session.get(Business, shift.business_id)
+    timezone_name = _shift_timezone_name(shift)
+    location_settings = getattr(getattr(shift, "location", None), "settings", None)
+    business_settings = getattr(business, "settings", None)
+    week_start_day = effective_week_start_day(
+        business_settings=business_settings if isinstance(business_settings, dict) else None,
+        location_settings=location_settings if isinstance(location_settings, dict) else None,
+    )
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = timezone.utc
+    local_shift_start = shift.starts_at.astimezone(zone)
+    week_window = schedule_week_window(timezone_name, week_start_day, local_shift_start.date())
+
+    weekly_assigned_shifts: list[dict] = []
+    if employee is not None:
+        result = await session.execute(
+            select(Shift)
+            .options(
+                selectinload(Shift.location),
+                selectinload(Shift.role),
+            )
+            .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.id)
+            .where(
+                ShiftAssignment.employee_id == employee.id,
+                ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
+                Shift.ends_at >= week_window.starts_at,
+                Shift.starts_at <= week_window.ends_at,
+            )
+            .order_by(Shift.starts_at.asc())
+        )
+        seen_shift_ids: set[UUID] = set()
+        for assigned_shift in result.scalars().all():
+            if assigned_shift.id in seen_shift_ids:
+                continue
+            seen_shift_ids.add(assigned_shift.id)
+            assigned_timezone_name = _shift_timezone_name(assigned_shift)
+            try:
+                assigned_zone = ZoneInfo(assigned_timezone_name)
+            except Exception:
+                assigned_zone = timezone.utc
+            assigned_local_start = assigned_shift.starts_at.astimezone(assigned_zone)
+            assigned_local_end = assigned_shift.ends_at.astimezone(assigned_zone)
+            weekly_assigned_shifts.append(
+                {
+                    "shift_id": str(assigned_shift.id),
+                    "location_name": getattr(getattr(assigned_shift, "location", None), "name", None) or "your location",
+                    "role_name": getattr(getattr(assigned_shift, "role", None), "name", None) or "team member",
+                    "date": _format_shift_date_label(assigned_local_start),
+                    "start_time": _format_shift_time_label(assigned_local_start),
+                    "end_time": _format_shift_time_label(assigned_local_end),
+                    "starts_at": assigned_shift.starts_at.isoformat(),
+                    "ends_at": assigned_shift.ends_at.isoformat(),
+                    "timezone": assigned_timezone_name,
+                }
+            )
+
+    full_name = getattr(employee, "full_name", None) if employee is not None else (
+        str((offer.offer_metadata or {}).get("employee_name") or "").strip() or None
+    )
+    employee_first_name, employee_last_name = _full_name_parts(full_name)
+    offered_shift = _offered_shift_context(shift=shift)
+    shift_context = {
+        "employee_id": str(offer.employee_id),
+        "employee_first_name": employee_first_name,
+        "employee_last_name": employee_last_name,
+        "week_start_day": week_start_day,
+        "week_start_date": week_window.week_start.isoformat(),
+        "week_end_date": week_window.week_end.isoformat(),
+        "offered_shift": offered_shift,
+        "weekly_assigned_shifts": weekly_assigned_shifts,
+    }
+    return {
+        "employee_first_name": employee_first_name,
+        "employee_last_name": employee_last_name,
+        "location_name": offered_shift["location_name"],
+        "role_name": offered_shift["role_name"],
+        "shift_date": offered_shift["date"],
+        "shift_start_time": offered_shift["start_time"],
+        "shift_end_time": offered_shift["end_time"],
+        "shift_context": shift_context,
+        "shift_context_json": json.dumps(shift_context, separators=(",", ":"), default=str),
+    }
+
+
+def build_coverage_offer_voice_metadata(*, offer: CoverageOffer, shift: Shift, outbox_payload: dict | None = None) -> dict:
+    location_name = getattr(getattr(shift, "location", None), "name", None) or "your location"
+    role_name = getattr(getattr(shift, "role", None), "name", None) or "team member"
+    payload = outbox_payload if isinstance(outbox_payload, dict) else {}
+    shift_context = payload.get("shift_context") if isinstance(payload.get("shift_context"), dict) else None
     return {
         "offer_id": str(offer.id),
         "coverage_case_id": str(offer.coverage_case_id),
@@ -189,6 +348,47 @@ def build_coverage_offer_voice_metadata(*, offer: CoverageOffer, shift: Shift) -
         "shift_ends_at": shift.ends_at.isoformat(),
         "premium_cents": int(offer.offer_metadata.get("premium_cents", 0) or 0),
         "offer_channel": "voice",
+        "employee_first_name": str(payload.get("employee_first_name") or "").strip() or None,
+        "employee_last_name": str(payload.get("employee_last_name") or "").strip() or None,
+        "shift_date": str(payload.get("shift_date") or "").strip() or None,
+        "shift_start_time": str(payload.get("shift_start_time") or "").strip() or None,
+        "shift_end_time": str(payload.get("shift_end_time") or "").strip() or None,
+        "shift_context": shift_context,
+    }
+
+
+def build_coverage_offer_voice_dynamic_variables(
+    *,
+    offer: CoverageOffer,
+    shift: Shift,
+    outbox_payload: dict | None = None,
+) -> dict:
+    payload = outbox_payload if isinstance(outbox_payload, dict) else {}
+    location_name = str(payload.get("location_name") or "").strip() or (
+        getattr(getattr(shift, "location", None), "name", None) or "your location"
+    )
+    role_name = str(payload.get("role_name") or "").strip() or (
+        getattr(getattr(shift, "role", None), "name", None) or "team member"
+    )
+    shift_date = str(payload.get("shift_date") or "").strip()
+    shift_start_time = str(payload.get("shift_start_time") or "").strip()
+    shift_end_time = str(payload.get("shift_end_time") or "").strip()
+    if not shift_date or not shift_start_time or not shift_end_time:
+        offered_shift = _offered_shift_context(shift=shift)
+        shift_date = shift_date or str(offered_shift.get("date") or "")
+        shift_start_time = shift_start_time or str(offered_shift.get("start_time") or "")
+        shift_end_time = shift_end_time or str(offered_shift.get("end_time") or "")
+    return {
+        "employee_first_name": str(payload.get("employee_first_name") or "").strip(),
+        "employee_last_name": str(payload.get("employee_last_name") or "").strip(),
+        "location_name": location_name,
+        "role_name": role_name,
+        "shift_date": shift_date,
+        "shift_start_time": shift_start_time,
+        "shift_end_time": shift_end_time,
+        "shift_context": str(payload.get("shift_context_json") or "").strip(),
+        "offer_id": str(offer.id),
+        "premium_cents": int(offer.offer_metadata.get("premium_cents", 0) or 0),
     }
 
 
@@ -719,6 +919,16 @@ async def process_outbox_batch(
             continue
 
         active_provider = provider or _resolve_provider_for_channel(offer.channel)
+        if channel_value == "voice":
+            retell_context = await _build_retell_voice_outbound_context(
+                session,
+                offer=offer,
+                shift=shift,
+            )
+            event.payload = {
+                **(event.payload or {}),
+                **retell_context,
+            }
         try:
             result = await active_provider.send_coverage_offer(
                 outbox_event=event,

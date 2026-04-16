@@ -55,6 +55,7 @@ async def create_phone_call(
     *,
     to_number: str,
     metadata: dict,
+    dynamic_variables: Optional[dict] = None,
     agent_id: Optional[str] = None,
     agent_kind: str = "outbound",
 ) -> str:
@@ -69,6 +70,7 @@ async def create_phone_call(
         to_number=to_number,
         override_agent_id=effective_agent_id,
         metadata=metadata,
+        retell_llm_dynamic_variables=dynamic_variables or {},
     )
     return response.call_id
 
