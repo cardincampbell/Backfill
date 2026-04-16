@@ -1052,6 +1052,175 @@ async def test_process_inbound_conversation_completion_holds_medium_confidence_r
 
 
 @pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_uses_openai_to_confirm_low_confidence_retell_callout(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    shift_tomorrow = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_low_confidence_openai_agrees",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        conversation_summary="Caller said they cannot work their only shift tomorrow.",
+        transcript_text="user: I can't make my shift tomorrow.",
+        transcript_items=[
+            {"role": "user", "content": "I can't make my shift tomorrow."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "call_intent": "callout",
+                "call_intent_confidence": "low",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shift_schedule_summary": "1. Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+            "assigned_shifts": [
+                {
+                    "id": str(shift_tomorrow),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-17T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        retell_workflow.llm_gateway,
+        "provider_is_configured",
+        lambda provider: provider == retell_workflow.llm_gateway.LlmProvider.OPENAI,
+    )
+
+    async def fake_generate(_session, *, request):
+        assert request.provider == retell_workflow.llm_gateway.LlmProvider.OPENAI
+        assert request.purpose == "intent_resolution"
+        return retell_workflow.llm_gateway.LlmGenerationResult(
+            provider=retell_workflow.llm_gateway.LlmProvider.OPENAI,
+            model="gpt-test",
+            tool_calls=[
+                retell_workflow.llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="resolve_inbound_intent",
+                    arguments={
+                        "intent": "callout",
+                        "confidence": "medium",
+                        "reasoning": "The caller explicitly said they cannot make the shift tomorrow.",
+                    },
+                )
+            ],
+        )
+
+    async def fake_create_vacancy(_session, args):
+        captured.update(args)
+        return {
+            "status": "vacancy_created",
+            "shift_id": args["shift_id"],
+            "coverage_case_id": str(uuid4()),
+            "offers": [],
+            "used_published_amendment": True,
+            "reason_code": args["reason_code"],
+        }
+
+    monkeypatch.setattr(retell_workflow.llm_gateway, "generate", fake_generate)
+    monkeypatch.setattr(retell_workflow, "create_vacancy", fake_create_vacancy)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert captured["shift_id"] == str(shift_tomorrow)
+    assert captured["reason_code"] == "callout"
+    assert result["callout"]["status"] == "vacancy_created"
+    assert result["callout"]["intent"] == "callout"
+    assert result["callout"]["confidence"] == "low"
+    assert result["callout"]["source"] == "retell_low_confidence_openai_confirmation"
+    assert result["callout"]["secondary_intent"]["intent"] == "callout"
+    assert conversation.analysis["backfill_processing"]["secondary_intent"]["intent"] == "callout"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_holds_when_low_confidence_retell_and_openai_disagree(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_low_confidence_openai_disagrees",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        transcript_text="user: What shifts do I have this week?",
+        transcript_items=[
+            {"role": "user", "content": "What shifts do I have this week?"},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "call_intent": "callout",
+                "call_intent_confidence": "low",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    monkeypatch.setattr(
+        retell_workflow.llm_gateway,
+        "provider_is_configured",
+        lambda provider: provider == retell_workflow.llm_gateway.LlmProvider.OPENAI,
+    )
+
+    async def fake_generate(_session, *, request):
+        return retell_workflow.llm_gateway.LlmGenerationResult(
+            provider=retell_workflow.llm_gateway.LlmProvider.OPENAI,
+            model="gpt-test",
+            tool_calls=[
+                retell_workflow.llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="resolve_inbound_intent",
+                    arguments={
+                        "intent": "schedule_question",
+                        "confidence": "high",
+                        "reasoning": "The caller asked about upcoming shifts.",
+                    },
+                )
+            ],
+        )
+
+    monkeypatch.setattr(retell_workflow.llm_gateway, "generate", fake_generate)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert result["callout"]["status"] == "retell_openai_intent_disagreement"
+    assert result["callout"]["intent"] == "callout"
+    assert result["callout"]["confidence"] == "low"
+    assert result["callout"]["secondary_intent"]["intent"] == "schedule_question"
+    assert conversation.analysis["backfill_processing"]["secondary_intent"]["intent"] == "schedule_question"
+
+
+@pytest.mark.asyncio
 async def test_process_inbound_conversation_completion_records_non_callout_retell_intent():
     session = FakeSession()
     employee_id = uuid4()

@@ -28,7 +28,7 @@ from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.schemas.scheduling import PublishedShiftAmendmentWrite, ShiftCreate
 from app.services import businesses, communication_suppressions, coverage as coverage_service
-from app.services import delivery, messaging, scheduler_sync, scheduling, shift_assignments, workforce
+from app.services import delivery, llm_gateway, messaging, scheduler_sync, scheduling, shift_assignments, workforce
 from app.config import settings
 
 _CALL_OUT_PATTERNS = (
@@ -71,6 +71,15 @@ _WEEKDAY_NAMES = (
     "friday",
     "saturday",
     "sunday",
+)
+_OPENAI_INTENT_ENUM = (
+    "callout",
+    "no_show",
+    "opt_out",
+    "schedule_question",
+    "coverage_status_question",
+    "manager_request",
+    "unknown",
 )
 
 
@@ -582,6 +591,150 @@ def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | 
     }
 
 
+def _secondary_intent_model() -> str:
+    configured_model = settings.retell_secondary_intent_model or settings.llm_default_model
+    configured_model = configured_model.strip()
+    if configured_model:
+        return configured_model
+    return "gpt-5-nano"
+
+
+def _secondary_intent_messages(conversation: RetellConversation) -> list[llm_gateway.LlmMessage]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    assigned_schedule_summary = str(metadata.get("assigned_shift_schedule_summary") or "").strip()
+    summary = str(conversation.conversation_summary or "").strip()
+    transcript = str(conversation.transcript_text or "").strip()
+    caller_phone = str(metadata.get("caller_phone") or conversation.phone_from or "").strip()
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip()
+
+    payload_lines = [
+        f"caller_phone: {caller_phone or 'unknown'}",
+        f"employee_id: {employee_id or 'unknown'}",
+        f"conversation_summary: {summary or 'none'}",
+        f"assigned_shift_schedule_summary: {assigned_schedule_summary or 'none'}",
+        "transcript:",
+        transcript or "none",
+    ]
+
+    return [
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "You classify inbound employee calls for Backfill. "
+                "Read the transcript and summary, then choose the single best intent. "
+                "Use callout when the caller says they cannot work a scheduled shift. "
+                "Use no_show when the caller reports they already missed or are currently missing the shift. "
+                "Use opt_out when the caller asks to stop calls or texts. "
+                "Use schedule_question for schedule or shift-info questions. "
+                "Use coverage_status_question for coverage follow-up questions. "
+                "Use manager_request for manager/support/operator requests. "
+                "Use unknown when the transcript is too ambiguous."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="user",
+            content="\n".join(payload_lines),
+        ),
+    ]
+
+
+def _secondary_intent_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
+    return [
+        llm_gateway.LlmToolDefinition(
+            name="resolve_inbound_intent",
+            description="Classify the worker's inbound call intent from the transcript and schedule context.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": list(_OPENAI_INTENT_ENUM),
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Short explanation for the chosen intent.",
+                    },
+                },
+                "required": ["intent", "confidence"],
+                "additionalProperties": False,
+            },
+        )
+    ]
+
+
+async def _secondary_intent_signal(
+    session: AsyncSession,
+    conversation: RetellConversation,
+) -> dict[str, Any] | None:
+    if not llm_gateway.provider_is_configured(llm_gateway.LlmProvider.OPENAI):
+        return None
+
+    try:
+        result = await llm_gateway.generate(
+            session,
+            request=llm_gateway.LlmGenerationRequest(
+                purpose="intent_resolution",
+                business_id=conversation.business_id,
+                location_id=conversation.location_id,
+                coverage_case_id=conversation.coverage_case_id,
+                shift_id=conversation.shift_id,
+                provider=llm_gateway.LlmProvider.OPENAI,
+                model=_secondary_intent_model(),
+                messages=_secondary_intent_messages(conversation),
+                tools=_secondary_intent_tool_definitions(),
+                tool_choice="required",
+                max_output_tokens=256,
+                metadata={
+                    "channel": "retell_post_call",
+                    "retell_conversation_id": str(conversation.id),
+                    "retell_external_id": conversation.external_id,
+                },
+            ),
+        )
+    except Exception as exc:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "failed",
+            "error": str(exc),
+        }
+
+    if not result.tool_calls:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "missing_tool_call",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+
+    selected_call = result.tool_calls[0]
+    intent = _normalize_retell_intent((selected_call.arguments or {}).get("intent"))
+    confidence = _normalize_retell_confidence((selected_call.arguments or {}).get("confidence"))
+    reasoning = str((selected_call.arguments or {}).get("reasoning") or "").strip() or None
+    if intent is None:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "invalid_tool_payload",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+    return {
+        "provider": "openai_intent_resolution",
+        "source": "openai_llm",
+        "intent": intent,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "model": result.model,
+        "provider_generation_id": result.provider_generation_id,
+    }
+
+
 def _metadata_shift_id(conversation: RetellConversation) -> str | None:
     metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
     for key in ("selected_shift_id", "shift_id", "next_assigned_shift_id"):
@@ -686,6 +839,77 @@ def _trimmed_conversation_summary(conversation: RetellConversation) -> str | Non
     return user_text[:500] or None
 
 
+async def _execute_intent_driven_callout(
+    session: AsyncSession,
+    conversation: RetellConversation,
+    *,
+    employee_id: str | None,
+    user_text: str,
+    intent: str,
+    confidence: str | None,
+    source: str | None,
+    secondary_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if employee_id is None:
+        result = {
+            "status": "employee_context_missing",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
+    if selected_shift is None:
+        result = {
+            "status": "shift_reference_unresolved",
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    reason_code = "no_show" if intent == "no_show" else "callout"
+    try:
+        vacancy = await create_vacancy(
+            session,
+            {
+                "shift_id": str(selected_shift.get("id") or "").strip(),
+                "employee_id": employee_id,
+                "conversation_summary": _trimmed_conversation_summary(conversation),
+                "source": "retell_post_call",
+                "reason_code": reason_code,
+            },
+        )
+        result = {
+            **vacancy,
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+    except (LookupError, ValueError) as exc:
+        result = {
+            "status": str(exc),
+            "shift_id": str(selected_shift.get("id") or "").strip() or None,
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+
 async def process_inbound_conversation_completion(
     session: AsyncSession,
     conversation: RetellConversation | None,
@@ -705,6 +929,26 @@ async def process_inbound_conversation_completion(
         str(metadata.get("caller_phone") or conversation.phone_from or "").strip() or None
     )
     intent_signal = _retell_intent_signal(conversation)
+    secondary_intent_signal: dict[str, Any] | None = None
+    intent_agreement_signal: dict[str, Any] | None = None
+
+    if (
+        isinstance(intent_signal, dict)
+        and intent_signal.get("confidence") == "low"
+        and intent_signal.get("intent") is not None
+    ):
+        secondary_intent_signal = await _secondary_intent_signal(session, conversation)
+        if (
+            isinstance(secondary_intent_signal, dict)
+            and secondary_intent_signal.get("intent") == intent_signal.get("intent")
+        ):
+            intent_agreement_signal = {
+                "provider": "retell_openai_agreement",
+                "source": "retell_low_confidence_openai_confirmation",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "secondary_intent": secondary_intent_signal,
+            }
 
     consent_state = processing_state.get("consent") if isinstance(processing_state.get("consent"), dict) else {}
     if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
@@ -712,9 +956,15 @@ async def process_inbound_conversation_completion(
     elif caller_phone and (
         _matches_any_pattern(user_text, _SMS_OPT_OUT_PATTERNS)
         or (
-            isinstance(intent_signal, dict)
-            and intent_signal.get("intent") == "opt_out"
-            and intent_signal.get("confidence") == "high"
+            (
+                isinstance(intent_signal, dict)
+                and intent_signal.get("intent") == "opt_out"
+                and intent_signal.get("confidence") == "high"
+            )
+            or (
+                isinstance(intent_agreement_signal, dict)
+                and intent_agreement_signal.get("intent") == "opt_out"
+            )
         )
     ):
         consent_result = await log_consent(
@@ -732,63 +982,81 @@ async def process_inbound_conversation_completion(
     callout_state = processing_state.get("callout") if isinstance(processing_state.get("callout"), dict) else {}
     if callout_state.get("status") == "vacancy_created":
         callout_result = dict(callout_state)
+    elif isinstance(intent_agreement_signal, dict):
+        if intent_agreement_signal.get("intent") in {"callout", "no_show"}:
+            callout_result = await _execute_intent_driven_callout(
+                session,
+                conversation,
+                employee_id=employee_id,
+                user_text=user_text,
+                intent=str(intent_agreement_signal.get("intent")),
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+        else:
+            callout_result = {
+                "status": "retell_openai_intent_agreement_non_callout",
+                "intent": intent_agreement_signal.get("intent"),
+                "confidence": intent_agreement_signal.get("confidence"),
+                "source": intent_agreement_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
     elif isinstance(intent_signal, dict) and intent_signal.get("intent") in {"callout", "no_show"}:
-        if intent_signal.get("confidence") != "high":
+        if intent_signal.get("confidence") == "high":
+            callout_result = await _execute_intent_driven_callout(
+                session,
+                conversation,
+                employee_id=employee_id,
+                user_text=user_text,
+                intent=str(intent_signal.get("intent")),
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+        elif intent_signal.get("confidence") == "low":
+            callout_result = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
             callout_result = {
                 "status": "retell_intent_requires_secondary_review",
                 "intent": intent_signal.get("intent"),
                 "confidence": intent_signal.get("confidence"),
                 "source": intent_signal.get("source"),
             }
-        elif employee_id is None:
-            callout_result = {
-                "status": "employee_context_missing",
-                "intent": intent_signal.get("intent"),
-                "confidence": intent_signal.get("confidence"),
-            }
-        else:
-            selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
-            if selected_shift is None:
+    elif isinstance(intent_signal, dict):
+        if intent_signal.get("confidence") == "low":
+            if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent"):
                 callout_result = {
-                    "status": "shift_reference_unresolved",
-                    "resolution": resolution,
+                    "status": "retell_openai_intent_disagreement",
                     "intent": intent_signal.get("intent"),
                     "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
                 }
             else:
-                reason_code = "no_show" if intent_signal.get("intent") == "no_show" else "callout"
-                try:
-                    vacancy = await create_vacancy(
-                        session,
-                        {
-                            "shift_id": str(selected_shift.get("id") or "").strip(),
-                            "employee_id": employee_id,
-                            "conversation_summary": _trimmed_conversation_summary(conversation),
-                            "source": "retell_post_call",
-                            "reason_code": reason_code,
-                        },
-                    )
-                    callout_result = {
-                        **vacancy,
-                        "resolution": resolution,
-                        "intent": intent_signal.get("intent"),
-                        "confidence": intent_signal.get("confidence"),
-                    }
-                except (LookupError, ValueError) as exc:
-                    callout_result = {
-                        "status": str(exc),
-                        "shift_id": str(selected_shift.get("id") or "").strip() or None,
-                        "resolution": resolution,
-                        "intent": intent_signal.get("intent"),
-                        "confidence": intent_signal.get("confidence"),
-                    }
-    elif isinstance(intent_signal, dict):
-        callout_result = {
-            "status": "retell_intent_non_callout",
-            "intent": intent_signal.get("intent"),
-            "confidence": intent_signal.get("confidence"),
-            "source": intent_signal.get("source"),
-        }
+                callout_result = {
+                    "status": "retell_intent_requires_secondary_review",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+        else:
+            callout_result = {
+                "status": "retell_intent_non_callout",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
     elif not _matches_any_pattern(user_text, _CALL_OUT_PATTERNS):
         callout_result = {"status": "no_callout_detected"}
     elif employee_id is None:
@@ -826,6 +1094,7 @@ async def process_inbound_conversation_completion(
         **processing_state,
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "intent": intent_signal or {"provider": "heuristic_fallback"},
+        "secondary_intent": secondary_intent_signal,
         "consent": consent_result,
         "callout": callout_result,
     }
