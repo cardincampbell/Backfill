@@ -1399,3 +1399,298 @@ async def test_process_inbound_conversation_completion_records_sms_opt_out(monke
 
     assert result["consent"]["status"] == "consent_revoked"
     assert result["callout"]["status"] == "no_callout_detected"
+
+
+@pytest.mark.asyncio
+async def test_process_outbound_conversation_completion_accepts_high_confidence_retell_intent(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    offer_id = uuid4()
+    shift_id = uuid4()
+    captured: dict[str, object] = {}
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_outbound_accept_high",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="outbound",
+        status="ended",
+        agent_id="agent_outbound_123",
+        phone_from="+18002225345",
+        phone_to="+15555550199",
+        conversation_summary="Worker confirmed they can take the offered shift.",
+        transcript_text="user: Yes, I can take it.",
+        transcript_items=[
+            {"role": "user", "content": "Yes, I can take it."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "outbound_intent": "accept_shift",
+                "outbound_intent_confidence": "high",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "offer_id": str(offer_id),
+            "shift_id": str(shift_id),
+            "location_name": "Pasadena",
+            "role_name": "General Manager",
+            "shift_starts_at": "2026-04-17T21:00:00+00:00",
+            "shift_ends_at": "2026-04-18T01:00:00+00:00",
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_respond_to_offer(_session, *, args, accepted):
+        captured.update(args)
+        captured["accepted"] = accepted
+        return {
+            "status": "accepted",
+            "offer_id": args["offer_id"],
+            "shift_id": args["shift_id"],
+            "assignment_id": str(uuid4()),
+        }
+
+    monkeypatch.setattr(retell_workflow, "_respond_to_offer", fake_respond_to_offer)
+
+    result = await retell_workflow.process_outbound_conversation_completion(session, conversation)
+
+    assert captured["accepted"] is True
+    assert captured["offer_id"] == str(offer_id)
+    assert captured["employee_id"] == str(employee_id)
+    assert result["consent"]["status"] == "no_consent_change"
+    assert result["offer_response"]["status"] == "accepted"
+    assert result["offer_response"]["intent"] == "accept_shift"
+    assert result["offer_response"]["confidence"] == "high"
+    assert conversation.analysis["backfill_processing"]["intent"]["intent"] == "accept_shift"
+
+
+@pytest.mark.asyncio
+async def test_process_outbound_conversation_completion_uses_openai_to_confirm_medium_confidence_accept(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    offer_id = uuid4()
+    shift_id = uuid4()
+    captured: dict[str, object] = {}
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_outbound_accept_medium",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="outbound",
+        status="ended",
+        agent_id="agent_outbound_123",
+        phone_from="+18002225345",
+        phone_to="+15555550199",
+        conversation_summary="Worker sounded willing to take the offered shift.",
+        transcript_text="user: Yes, that works for me.",
+        transcript_items=[
+            {"role": "user", "content": "Yes, that works for me."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "outbound_intent": "accept_shift",
+                "outbound_intent_confidence": "medium",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "offer_id": str(offer_id),
+            "shift_id": str(shift_id),
+            "location_name": "Pasadena",
+            "role_name": "General Manager",
+            "shift_starts_at": "2026-04-17T21:00:00+00:00",
+            "shift_ends_at": "2026-04-18T01:00:00+00:00",
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    monkeypatch.setattr(
+        retell_workflow.llm_gateway,
+        "provider_is_configured",
+        lambda provider: provider == retell_workflow.llm_gateway.LlmProvider.OPENAI,
+    )
+
+    async def fake_generate(_session, *, request):
+        assert request.model == "gpt-5-mini"
+        return retell_workflow.llm_gateway.LlmGenerationResult(
+            provider=retell_workflow.llm_gateway.LlmProvider.OPENAI,
+            model="gpt-5-mini",
+            tool_calls=[
+                retell_workflow.llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="resolve_outbound_intent",
+                    arguments={
+                        "intent": "accept_shift",
+                        "confidence": "high",
+                        "reasoning": "The worker clearly agreed to take the shift.",
+                    },
+                )
+            ],
+        )
+
+    async def fake_respond_to_offer(_session, *, args, accepted):
+        captured.update(args)
+        captured["accepted"] = accepted
+        return {
+            "status": "accepted",
+            "offer_id": args["offer_id"],
+            "shift_id": args["shift_id"],
+            "assignment_id": str(uuid4()),
+        }
+
+    monkeypatch.setattr(retell_workflow.llm_gateway, "generate", fake_generate)
+    monkeypatch.setattr(retell_workflow, "_respond_to_offer", fake_respond_to_offer)
+
+    result = await retell_workflow.process_outbound_conversation_completion(session, conversation)
+
+    assert captured["accepted"] is True
+    assert captured["offer_id"] == str(offer_id)
+    assert result["offer_response"]["status"] == "accepted"
+    assert result["offer_response"]["intent"] == "accept_shift"
+    assert result["offer_response"]["confidence"] == "medium"
+    assert result["offer_response"]["source"] == "retell_non_high_confidence_openai_confirmation"
+    assert result["offer_response"]["secondary_intent"]["intent"] == "accept_shift"
+
+
+@pytest.mark.asyncio
+async def test_process_outbound_conversation_completion_holds_when_retell_and_openai_disagree(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_outbound_disagreement",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="outbound",
+        status="ended",
+        agent_id="agent_outbound_123",
+        phone_from="+18002225345",
+        phone_to="+15555550199",
+        transcript_text="user: I don't think I can do that one.",
+        transcript_items=[
+            {"role": "user", "content": "I don't think I can do that one."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "outbound_intent": "accept_shift",
+                "outbound_intent_confidence": "low",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "offer_id": str(uuid4()),
+            "shift_id": str(uuid4()),
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    monkeypatch.setattr(
+        retell_workflow.llm_gateway,
+        "provider_is_configured",
+        lambda provider: provider == retell_workflow.llm_gateway.LlmProvider.OPENAI,
+    )
+
+    async def fake_generate(_session, *, request):
+        return retell_workflow.llm_gateway.LlmGenerationResult(
+            provider=retell_workflow.llm_gateway.LlmProvider.OPENAI,
+            model="gpt-5-mini",
+            tool_calls=[
+                retell_workflow.llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="resolve_outbound_intent",
+                    arguments={
+                        "intent": "decline_shift",
+                        "confidence": "high",
+                        "reasoning": "The worker declined the offered shift.",
+                    },
+                )
+            ],
+        )
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("_respond_to_offer should not be called on disagreement")
+
+    monkeypatch.setattr(retell_workflow.llm_gateway, "generate", fake_generate)
+    monkeypatch.setattr(retell_workflow, "_respond_to_offer", fail_if_called)
+
+    result = await retell_workflow.process_outbound_conversation_completion(session, conversation)
+
+    assert result["offer_response"]["status"] == "retell_openai_intent_disagreement"
+    assert result["offer_response"]["intent"] == "accept_shift"
+    assert result["offer_response"]["confidence"] == "low"
+    assert result["offer_response"]["secondary_intent"]["intent"] == "decline_shift"
+
+
+@pytest.mark.asyncio
+async def test_process_outbound_conversation_completion_records_opt_out_and_declines_offer(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    offer_id = uuid4()
+    shift_id = uuid4()
+    consent_calls: list[dict[str, object]] = []
+    response_calls: list[dict[str, object]] = []
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_outbound_opt_out",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="outbound",
+        status="ended",
+        agent_id="agent_outbound_123",
+        phone_from="+18002225345",
+        phone_to="+15555550199",
+        transcript_text="user: Please stop calling me about these shifts.",
+        transcript_items=[
+            {"role": "user", "content": "Please stop calling me about these shifts."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "outbound_intent": "opt_out",
+                "outbound_intent_confidence": "high",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "offer_id": str(offer_id),
+            "shift_id": str(shift_id),
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_log_consent(_session, args):
+        consent_calls.append(dict(args))
+        return {"status": "consent_revoked", "phone": args["phone"], "changed": True}
+
+    async def fake_respond_to_offer(_session, *, args, accepted):
+        response_calls.append({**args, "accepted": accepted})
+        return {
+            "status": "declined",
+            "offer_id": args["offer_id"],
+            "shift_id": args["shift_id"],
+            "assignment_id": None,
+        }
+
+    monkeypatch.setattr(retell_workflow, "log_consent", fake_log_consent)
+    monkeypatch.setattr(retell_workflow, "_respond_to_offer", fake_respond_to_offer)
+
+    result = await retell_workflow.process_outbound_conversation_completion(session, conversation)
+
+    assert consent_calls[0]["employee_id"] == str(employee_id)
+    assert consent_calls[0]["phone"] == "+15555550199"
+    assert consent_calls[0]["granted"] is False
+    assert consent_calls[0]["channel"] == "outbound_call"
+    assert response_calls[0]["accepted"] is False
+    assert response_calls[0]["offer_id"] == str(offer_id)
+    assert result["consent"]["status"] == "consent_revoked"
+    assert result["offer_response"]["status"] == "declined"
+    assert result["offer_response"]["intent"] == "opt_out"
+    assert result["offer_response"]["opt_out_applied"] is True

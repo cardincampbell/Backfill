@@ -40,7 +40,7 @@ def _load_prompt(filename: str) -> str:
     return (PROMPTS_DIR / filename).read_text()
 
 
-# ── Function call schemas shared by both agents ───────────────────────────────
+# ── Function call schemas for chat and optional live-call tools ───────────────
 
 FUNCTION_SCHEMAS = [
     {
@@ -267,7 +267,7 @@ FUNCTION_SCHEMAS = [
 ]
 
 INBOUND_FUNCTION_SCHEMAS: list[dict] = []
-OUTBOUND_FUNCTION_SCHEMAS = FUNCTION_SCHEMAS
+OUTBOUND_FUNCTION_SCHEMAS: list[dict] = []
 SMS_CHAT_FUNCTION_SCHEMAS = FUNCTION_SCHEMAS
 
 WEBHOOK_URL = os.environ.get("BACKFILL_WEBHOOK_URL", "http://127.0.0.1:8000") + "/webhooks/retell"

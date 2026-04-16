@@ -759,7 +759,7 @@ async def _process_retell_webhook(
             "chat_analyzed",
         }:
             conversation = await retell_workflow.persist_payload(session, payload)
-            outcome = await retell_workflow.process_inbound_conversation_completion(
+            outcome = await retell_workflow.process_conversation_completion(
                 session,
                 conversation,
             )

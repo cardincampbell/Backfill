@@ -81,6 +81,13 @@ _OPENAI_INTENT_ENUM = (
     "manager_request",
     "unknown",
 )
+_OPENAI_OUTBOUND_INTENT_ENUM = (
+    "accept_shift",
+    "decline_shift",
+    "opt_out",
+    "follow_up_needed",
+    "unknown",
+)
 
 
 def _first_name(full_name: str | None) -> str | None:
@@ -532,6 +539,51 @@ def _normalize_retell_intent(value: Any) -> str | None:
     return token
 
 
+def _normalize_outbound_retell_intent(value: Any) -> str | None:
+    token = _normalized_label(value)
+    if token is None:
+        return None
+    if token in {
+        "accept_shift",
+        "claim_shift",
+        "take_shift",
+        "accept_offer",
+        "take_offer",
+        "yes_take_it",
+        "yes_accept",
+        "standby_accept",
+        "promote_standby",
+        "interested",
+    }:
+        return "accept_shift"
+    if token in {
+        "decline_shift",
+        "decline_offer",
+        "reject_shift",
+        "decline",
+        "not_interested",
+        "pass",
+        "cannot_take",
+        "cant_take",
+        "cancel_standby",
+        "remove_from_queue",
+    }:
+        return "decline_shift"
+    if "opt_out" in token or token in {
+        "optout",
+        "unsubscribe",
+        "do_not_call",
+        "do_not_text",
+        "stop",
+    }:
+        return "opt_out"
+    if token in {"follow_up_needed", "question", "question_or_followup", "needs_followup"}:
+        return "follow_up_needed"
+    if token in {"unknown", "other", "unclear", "none"}:
+        return "unknown"
+    return token
+
+
 def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | None:
     custom = _retell_custom_analysis_data(conversation)
     if not custom:
@@ -577,6 +629,67 @@ def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | 
         )
 
     normalized_intent = _normalize_retell_intent(raw_intent)
+    normalized_confidence = _normalize_retell_confidence(raw_confidence)
+    if normalized_intent is None and normalized_confidence is None:
+        return None
+
+    return {
+        "provider": "retell_custom_analysis",
+        "source": source or "custom_analysis_data",
+        "raw_intent": None if raw_intent in (None, "") else str(raw_intent).strip(),
+        "intent": normalized_intent,
+        "raw_confidence": None if raw_confidence in (None, "") else str(raw_confidence).strip(),
+        "confidence": normalized_confidence,
+    }
+
+
+def _retell_outbound_intent_signal(conversation: RetellConversation) -> dict[str, Any] | None:
+    custom = _retell_custom_analysis_data(conversation)
+    if not custom:
+        return None
+
+    raw_intent: Any = None
+    raw_confidence: Any = None
+    source = None
+    for key in (
+        "outbound_intent",
+        "call_intent",
+        "intent",
+        "primary_intent",
+        "user_intent",
+    ):
+        value = custom.get(key)
+        if value in (None, ""):
+            continue
+        source = f"custom_analysis_data.{key}"
+        if isinstance(value, dict):
+            raw_intent = _pick_value(
+                value,
+                keys=("value", "intent", "label", "name", "selection"),
+            )
+            raw_confidence = _pick_value(
+                value,
+                keys=("confidence", "confidence_level", "certainty"),
+            )
+        else:
+            raw_intent = value
+        break
+
+    if raw_confidence in (None, ""):
+        raw_confidence = _pick_value(
+            custom,
+            keys=(
+                "outbound_intent_confidence",
+                "call_intent_confidence",
+                "intent_confidence",
+                "confidence",
+                "outbound_intent_confidence_level",
+                "call_intent_confidence_level",
+                "intent_confidence_level",
+            ),
+        )
+
+    normalized_intent = _normalize_outbound_retell_intent(raw_intent)
     normalized_confidence = _normalize_retell_confidence(raw_confidence)
     if normalized_intent is None and normalized_confidence is None:
         return None
@@ -666,6 +779,80 @@ def _secondary_intent_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
     ]
 
 
+def _secondary_outbound_intent_messages(
+    conversation: RetellConversation,
+) -> list[llm_gateway.LlmMessage]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    summary = str(conversation.conversation_summary or "").strip()
+    transcript = str(conversation.transcript_text or "").strip()
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip()
+    offer_id = str(metadata.get("offer_id") or conversation.coverage_offer_id or "").strip()
+    location_name = str(metadata.get("location_name") or "").strip()
+    role_name = str(metadata.get("role_name") or "").strip()
+    shift_starts_at = str(metadata.get("shift_starts_at") or "").strip()
+    shift_ends_at = str(metadata.get("shift_ends_at") or "").strip()
+
+    payload_lines = [
+        f"employee_id: {employee_id or 'unknown'}",
+        f"offer_id: {offer_id or 'unknown'}",
+        f"location_name: {location_name or 'unknown'}",
+        f"role_name: {role_name or 'unknown'}",
+        f"shift_starts_at: {shift_starts_at or 'unknown'}",
+        f"shift_ends_at: {shift_ends_at or 'unknown'}",
+        f"conversation_summary: {summary or 'none'}",
+        "transcript:",
+        transcript or "none",
+    ]
+
+    return [
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "You classify outbound Backfill shift-offer calls. "
+                "Read the transcript and summary, then choose the single best intent. "
+                "Use accept_shift when the worker clearly agrees to take the offered shift. "
+                "Use decline_shift when the worker clearly refuses, is unavailable, or passes. "
+                "Use opt_out when the worker asks Backfill to stop calling or texting them. "
+                "Use follow_up_needed when the worker asks a question, gives a conditional answer, "
+                "or the call needs manual follow-up before a yes or no can be acted on. "
+                "Use unknown when the transcript is too ambiguous."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="user",
+            content="\n".join(payload_lines),
+        ),
+    ]
+
+
+def _secondary_outbound_intent_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
+    return [
+        llm_gateway.LlmToolDefinition(
+            name="resolve_outbound_intent",
+            description="Classify the worker's outbound shift-offer call response from the transcript and shift context.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": list(_OPENAI_OUTBOUND_INTENT_ENUM),
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Short explanation for the chosen intent.",
+                    },
+                },
+                "required": ["intent", "confidence"],
+                "additionalProperties": False,
+            },
+        )
+    ]
+
+
 async def _secondary_intent_signal(
     session: AsyncSession,
     conversation: RetellConversation,
@@ -714,6 +901,75 @@ async def _secondary_intent_signal(
 
     selected_call = result.tool_calls[0]
     intent = _normalize_retell_intent((selected_call.arguments or {}).get("intent"))
+    confidence = _normalize_retell_confidence((selected_call.arguments or {}).get("confidence"))
+    reasoning = str((selected_call.arguments or {}).get("reasoning") or "").strip() or None
+    if intent is None:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "invalid_tool_payload",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+    return {
+        "provider": "openai_intent_resolution",
+        "source": "openai_llm",
+        "intent": intent,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "model": result.model,
+        "provider_generation_id": result.provider_generation_id,
+    }
+
+
+async def _secondary_outbound_intent_signal(
+    session: AsyncSession,
+    conversation: RetellConversation,
+) -> dict[str, Any] | None:
+    if not llm_gateway.provider_is_configured(llm_gateway.LlmProvider.OPENAI):
+        return None
+
+    try:
+        result = await llm_gateway.generate(
+            session,
+            request=llm_gateway.LlmGenerationRequest(
+                purpose="intent_resolution",
+                business_id=conversation.business_id,
+                location_id=conversation.location_id,
+                coverage_case_id=conversation.coverage_case_id,
+                shift_id=conversation.shift_id,
+                provider=llm_gateway.LlmProvider.OPENAI,
+                model=_secondary_intent_model(),
+                messages=_secondary_outbound_intent_messages(conversation),
+                tools=_secondary_outbound_intent_tool_definitions(),
+                tool_choice="required",
+                max_output_tokens=256,
+                metadata={
+                    "channel": "retell_outbound_post_call",
+                    "retell_conversation_id": str(conversation.id),
+                    "retell_external_id": conversation.external_id,
+                },
+            ),
+        )
+    except Exception as exc:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "failed",
+            "error": str(exc),
+        }
+
+    if not result.tool_calls:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "missing_tool_call",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+
+    selected_call = result.tool_calls[0]
+    intent = _normalize_outbound_retell_intent((selected_call.arguments or {}).get("intent"))
     confidence = _normalize_retell_confidence((selected_call.arguments or {}).get("confidence"))
     reasoning = str((selected_call.arguments or {}).get("reasoning") or "").strip() or None
     if intent is None:
@@ -1107,6 +1363,312 @@ async def process_inbound_conversation_completion(
     }
 
 
+def _conversation_offer_args(conversation: RetellConversation) -> dict[str, Any]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    args: dict[str, Any] = {}
+
+    offer_id = metadata.get("offer_id") or metadata.get("coverage_offer_id") or conversation.coverage_offer_id
+    coverage_case_id = metadata.get("coverage_case_id") or conversation.coverage_case_id
+    employee_id = metadata.get("employee_id") or metadata.get("worker_id") or conversation.employee_id
+    shift_id = metadata.get("shift_id") or conversation.shift_id
+    phone = conversation.phone_to or metadata.get("phone") or metadata.get("worker_phone")
+
+    if offer_id not in (None, ""):
+        args["offer_id"] = str(offer_id).strip()
+    if coverage_case_id not in (None, ""):
+        args["coverage_case_id"] = str(coverage_case_id).strip()
+    if employee_id not in (None, ""):
+        args["employee_id"] = str(employee_id).strip()
+    if shift_id not in (None, ""):
+        args["shift_id"] = str(shift_id).strip()
+    if phone not in (None, ""):
+        args["phone"] = str(phone).strip()
+
+    summary = _trimmed_conversation_summary(conversation)
+    if summary:
+        args["conversation_summary"] = summary
+    return args
+
+
+async def _execute_intent_driven_offer_response(
+    session: AsyncSession,
+    conversation: RetellConversation,
+    *,
+    intent: str,
+    confidence: str | None,
+    source: str | None,
+    secondary_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if intent not in {"accept_shift", "decline_shift"}:
+        result = {
+            "status": "unsupported_outbound_intent",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    args = _conversation_offer_args(conversation)
+    if not any(args.get(key) for key in ("offer_id", "coverage_case_id", "shift_id", "phone")):
+        result = {
+            "status": "offer_context_missing",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    try:
+        response = await _respond_to_offer(
+            session,
+            args=args,
+            accepted=intent == "accept_shift",
+        )
+        result = {
+            **response,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+    except (LookupError, ValueError) as exc:
+        result = {
+            "status": str(exc),
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+            "offer_id": args.get("offer_id"),
+            "coverage_case_id": args.get("coverage_case_id"),
+            "shift_id": args.get("shift_id"),
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+
+async def process_outbound_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return {"status": "no_conversation"}
+    if conversation.conversation_type != RetellConversationType.call:
+        return {"status": "ignored", "reason": "not_call"}
+    if str(conversation.direction or "").strip().lower() != "outbound":
+        return {"status": "ignored", "reason": "not_outbound"}
+
+    processing_state = _processing_state(conversation)
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip() or None
+    phone = str(conversation.phone_to or metadata.get("phone") or "").strip() or None
+    intent_signal = _retell_outbound_intent_signal(conversation)
+    secondary_intent_signal: dict[str, Any] | None = None
+    intent_agreement_signal: dict[str, Any] | None = None
+
+    if (
+        isinstance(intent_signal, dict)
+        and intent_signal.get("confidence") in {"low", "medium"}
+        and intent_signal.get("intent") is not None
+    ):
+        secondary_intent_signal = await _secondary_outbound_intent_signal(session, conversation)
+        if (
+            isinstance(secondary_intent_signal, dict)
+            and secondary_intent_signal.get("intent") == intent_signal.get("intent")
+        ):
+            intent_agreement_signal = {
+                "provider": "retell_openai_agreement",
+                "source": "retell_non_high_confidence_openai_confirmation",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "secondary_intent": secondary_intent_signal,
+            }
+
+    consent_state = (
+        processing_state.get("consent")
+        if isinstance(processing_state.get("consent"), dict)
+        else {}
+    )
+    opt_out_confirmed = (
+        (isinstance(intent_signal, dict) and intent_signal.get("intent") == "opt_out" and intent_signal.get("confidence") == "high")
+        or (isinstance(intent_agreement_signal, dict) and intent_agreement_signal.get("intent") == "opt_out")
+    )
+    if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
+        consent_result = dict(consent_state)
+    elif opt_out_confirmed and (employee_id or phone):
+        consent_result = await log_consent(
+            session,
+            {
+                "employee_id": employee_id,
+                "phone": phone,
+                "granted": False,
+                "channel": "outbound_call",
+            },
+        )
+    elif opt_out_confirmed:
+        consent_result = {"status": "opt_out_detected_missing_contact_context"}
+    else:
+        consent_result = {"status": "no_consent_change"}
+
+    offer_response_state = (
+        processing_state.get("offer_response")
+        if isinstance(processing_state.get("offer_response"), dict)
+        else {}
+    )
+    finalized_offer_status = str(offer_response_state.get("status") or "").strip().lower()
+    if finalized_offer_status in {"accepted", "declined"}:
+        offer_response = dict(offer_response_state)
+    elif isinstance(intent_agreement_signal, dict):
+        if intent_agreement_signal.get("intent") in {"accept_shift", "decline_shift"}:
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent=str(intent_agreement_signal.get("intent")),
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+        elif intent_agreement_signal.get("intent") == "opt_out":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent="decline_shift",
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+            offer_response["intent"] = "opt_out"
+            offer_response["opt_out_applied"] = True
+        else:
+            offer_response = {
+                "status": "retell_openai_intent_agreement_non_offer_action",
+                "intent": intent_agreement_signal.get("intent"),
+                "confidence": intent_agreement_signal.get("confidence"),
+                "source": intent_agreement_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") in {"accept_shift", "decline_shift"}:
+        if intent_signal.get("confidence") == "high":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent=str(intent_signal.get("intent")),
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+        elif intent_signal.get("confidence") in {"low", "medium"}:
+            offer_response = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
+            offer_response = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") == "opt_out":
+        if intent_signal.get("confidence") == "high":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent="decline_shift",
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+            offer_response["intent"] = "opt_out"
+            offer_response["opt_out_applied"] = True
+        elif intent_signal.get("confidence") in {"low", "medium"}:
+            offer_response = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
+            offer_response = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif isinstance(intent_signal, dict):
+        if intent_signal.get("confidence") in {"low", "medium"}:
+            if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent"):
+                offer_response = {
+                    "status": "retell_openai_intent_disagreement",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+            else:
+                offer_response = {
+                    "status": "retell_intent_requires_secondary_review",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+        else:
+            offer_response = {
+                "status": "retell_intent_non_offer_action",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    else:
+        offer_response = {"status": "no_offer_intent_detected"}
+
+    updated_state = {
+        **processing_state,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "intent": intent_signal or {"provider": "no_retell_outbound_intent"},
+        "secondary_intent": secondary_intent_signal,
+        "consent": consent_result,
+        "offer_response": offer_response,
+    }
+    _set_processing_state(conversation, updated_state)
+    await session.flush()
+    return {
+        "status": "processed",
+        "consent": consent_result,
+        "offer_response": offer_response,
+    }
+
+
+async def process_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return {"status": "no_conversation"}
+    direction = str(conversation.direction or "").strip().lower()
+    if direction == "inbound":
+        return await process_inbound_conversation_completion(session, conversation)
+    if direction == "outbound":
+        return await process_outbound_conversation_completion(session, conversation)
+    return {"status": "ignored", "reason": "unsupported_direction"}
+
+
 async def _resolve_offer_context(
     session: AsyncSession,
     *,
@@ -1185,8 +1747,9 @@ async def _respond_to_offer(
         },
     )
     result = await coverage_service.respond_to_offer(session, business_id, offer.id, payload)
+    offer_status = result.offer.status.value if hasattr(result.offer.status, "value") else str(result.offer.status)
     return {
-        "status": result.offer.status,
+        "status": offer_status,
         "offer_id": str(result.offer.id),
         "shift_id": str(result.shift_id),
         "assignment_id": str(result.assignment_id) if result.assignment_id else None,
