@@ -592,7 +592,7 @@ def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | 
 
 
 def _secondary_intent_model() -> str:
-    configured_model = settings.retell_secondary_intent_model or settings.llm_default_model
+    configured_model = settings.secondary_intent_model or settings.llm_default_model
     configured_model = configured_model.strip()
     if configured_model:
         return configured_model

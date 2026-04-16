@@ -132,9 +132,9 @@ class Settings:
     retell_chat_agent_id_inbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_INBOUND", "")
     retell_chat_agent_id_outbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_OUTBOUND", "")
     retell_from_number: str = os.environ.get("RETELL_FROM_NUMBER", "")
-    retell_secondary_intent_model: str = os.environ.get(
-        "BACKFILL_RETELL_SECONDARY_INTENT_MODEL",
-        "",
+    secondary_intent_model: str = os.environ.get(
+        "BACKFILL_SECONDARY_INTENT_MODEL",
+        os.environ.get("BACKFILL_RETELL_SECONDARY_INTENT_MODEL", ""),
     ).strip()
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
     anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
