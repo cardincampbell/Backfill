@@ -142,6 +142,52 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_retell_call_ended_route_processes_completed_inbound_outcome(monkeypatch):
+    class CallbackEntry:
+        id = "cb_retell_ended"
+        status = "received"
+        result_payload = {}
+
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), True
+
+    async def fake_process(session, entry):
+        assert entry.status == "received"
+        return type(
+            "CallbackResult",
+            (),
+            {
+                "response_kind": "json",
+                "response_payload": {
+                    "status": "ok",
+                    "conversation_id": "conv_123",
+                    "outcome": {"status": "processed", "callout": {"status": "vacancy_created"}},
+                },
+                "response_text": None,
+            },
+        )()
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/retell",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "call_ended",
+                "call": {"call_id": "call_123"},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["outcome"]["callout"]["status"] == "vacancy_created"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_retell_inbound_webhook_returns_personalized_call_context(monkeypatch):
     async def fake_build_inbound(_session, body):
         assert body["event"] == "call_inbound"

@@ -9,11 +9,13 @@ from app.models.business import Location, Role
 from app.models.common import (
     AssignmentStatus,
     EmployeeStatus,
+    RetellConversationType,
     ShiftLifecycleStatus,
     ShiftStaffingStatus,
     ShiftStatus,
 )
 from app.models.identity import User
+from app.models.integrations import RetellConversation
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.services import retell_workflow
@@ -41,6 +43,7 @@ class FakeSession:
         self.execute_queue: list[list[object]] = []
         self.get_map: dict[tuple[type, object], object] = {}
         self.flushed = 0
+        self.added: list[object] = []
 
     async def scalar(self, _query):
         if self.scalar_queue:
@@ -53,6 +56,9 @@ class FakeSession:
 
     async def get(self, model, object_id, **_kwargs):
         return self.get_map.get((model, object_id))
+
+    def add(self, obj):
+        self.added.append(obj)
 
     async def flush(self):
         self.flushed += 1
@@ -642,3 +648,173 @@ async def test_build_inbound_webhook_response_preloads_full_schedule_summary(mon
     begin_message = payload["agent_override"]["retell_llm"]["begin_message"]
     assert "2 upcoming published shifts" in begin_message
     assert "starting with your upcoming Barista shift on Thursday, April 16" in begin_message
+
+
+@pytest.mark.asyncio
+async def test_persist_payload_preserves_existing_transcript_and_metadata_on_call_end():
+    session = FakeSession()
+    call_id = "call_123"
+    existing = RetellConversation(
+        id=uuid4(),
+        external_id=call_id,
+        conversation_type=RetellConversationType.call,
+        event_type="transcript_updated",
+        direction="inbound",
+        status="ongoing",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        transcript_text="user: I can't make it today.",
+        transcript_items=[{"role": "user", "content": "I can't make it today."}],
+        analysis={"backfill_processing": {"callout": {"status": "pending"}}},
+        metadata_json={"employee_id": "emp_123", "assigned_shifts": [{"id": "shift_today"}]},
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.scalar_queue = [existing]
+
+    conversation = await retell_workflow.persist_payload(
+        session,
+        {
+            "event": "call_ended",
+            "call": {
+                "call_id": call_id,
+                "direction": "inbound",
+                "call_status": "ended",
+                "agent_id": "agent_inbound_123",
+                "from_number": "+15555550100",
+                "to_number": "+18002225345",
+                "end_timestamp": "2026-04-16T18:10:00Z",
+            },
+        },
+    )
+
+    assert conversation is existing
+    assert conversation.event_type == "call_ended"
+    assert conversation.status == "ended"
+    assert conversation.transcript_text == "user: I can't make it today."
+    assert conversation.transcript_items == [{"role": "user", "content": "I can't make it today."}]
+    assert conversation.metadata_json["employee_id"] == "emp_123"
+    assert conversation.analysis["backfill_processing"]["callout"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_creates_callout_from_transcript(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    shift_today = uuid4()
+    shift_tomorrow = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_123",
+        conversation_type=RetellConversationType.call,
+        event_type="call_ended",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        conversation_summary="Caller said they cannot make today's shift.",
+        transcript_text="user: I need to call out for today.",
+        transcript_items=[
+            {"role": "agent", "content": "Which shift are you calling about?"},
+            {"role": "user", "content": "I need to call out for today."},
+        ],
+        analysis={},
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [
+                {
+                    "id": str(shift_today),
+                    "role_name": "Barista",
+                    "location_name": "Downtown",
+                    "starts_at": "2026-04-16T18:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "11:00 AM",
+                    "date_label": "Today (Thursday, April 16)",
+                    "relative_day_label": "Today",
+                    "summary": "Today (Thursday, April 16) from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
+                },
+                {
+                    "id": str(shift_tomorrow),
+                    "role_name": "Barista",
+                    "location_name": "Downtown",
+                    "starts_at": "2026-04-17T18:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "11:00 AM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_create_vacancy(_session, args):
+        captured.update(args)
+        return {
+            "status": "vacancy_created",
+            "shift_id": args["shift_id"],
+            "coverage_case_id": str(uuid4()),
+            "offers": [],
+            "used_published_amendment": True,
+        }
+
+    monkeypatch.setattr(retell_workflow, "create_vacancy", fake_create_vacancy)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert captured["shift_id"] == str(shift_today)
+    assert captured["employee_id"] == str(employee_id)
+    assert captured["source"] == "retell_post_call"
+    assert result["callout"]["status"] == "vacancy_created"
+    assert result["consent"]["status"] == "no_consent_change"
+    assert conversation.analysis["backfill_processing"]["callout"]["status"] == "vacancy_created"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_records_sms_opt_out(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_456",
+        conversation_type=RetellConversationType.call,
+        event_type="call_ended",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        transcript_items=[
+            {"role": "user", "content": "Please stop texting me about shifts."},
+        ],
+        analysis={},
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_log_consent(_session, args):
+        assert args["employee_id"] == str(employee_id)
+        assert args["phone"] == "+15555550100"
+        assert args["granted"] is False
+        return {"status": "consent_revoked", "phone": args["phone"], "changed": True}
+
+    monkeypatch.setattr(retell_workflow, "log_consent", fake_log_consent)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert result["consent"]["status"] == "consent_revoked"
+    assert result["callout"]["status"] == "no_callout_detected"

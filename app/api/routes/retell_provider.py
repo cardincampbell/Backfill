@@ -87,7 +87,7 @@ async def retell_webhook(request: Request, session: SessionDep):
         provider_event_id=_provider_event_id(body),
     )
     await session.commit()
-    if event == "function_call":
+    if event in {"function_call", "call_ended", "call_analyzed", "chat_ended", "chat_analyzed"}:
         try:
             result = await provider_callbacks.process_callback_entry_synchronously(session, callback_entry)
         except provider_callbacks.CallbackProcessingError as exc:

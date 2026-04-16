@@ -148,10 +148,21 @@ def dedupe_key_for_callback(
     provider: str,
     provider_event_id: str | None,
     payload: dict[str, Any] | None,
+    event_type: str | None = None,
 ) -> str:
     normalized_provider = provider.strip().lower()
     normalized_event_id = str(provider_event_id or "").strip()
+    normalized_event_type = str(event_type or "").strip().lower()
     if normalized_event_id:
+        if normalized_provider == "retell" and normalized_event_type in {
+            "call_started",
+            "call_ended",
+            "call_analyzed",
+            "chat_started",
+            "chat_ended",
+            "chat_analyzed",
+        }:
+            return f"{normalized_provider}:{normalized_event_type}:{normalized_event_id}"
         return f"{normalized_provider}:{normalized_event_id}"
     return f"{normalized_provider}:{_stable_payload_hash(_normalized_mapping(payload))}"
 
@@ -170,6 +181,7 @@ async def record_raw_callback(
         provider=provider,
         provider_event_id=provider_event_id,
         payload=payload,
+        event_type=event_type,
     )
     existing = await session.scalar(
         select(ProviderCallbackLog).where(
@@ -727,16 +739,34 @@ async def _process_retell_webhook(
     try:
         if event in {
             "call_started",
-            "call_ended",
-            "call_analyzed",
             "chat_started",
-            "chat_ended",
-            "chat_analyzed",
         }:
             conversation = await retell_workflow.persist_payload(session, payload)
             response_payload = {
                 "status": "ok",
                 "conversation_id": str(conversation.id) if conversation is not None else None,
+            }
+            return CallbackProcessingResult(
+                callback_log_id=entry.id,
+                response_kind="json",
+                response_payload=response_payload,
+            )
+
+        if event in {
+            "call_ended",
+            "call_analyzed",
+            "chat_ended",
+            "chat_analyzed",
+        }:
+            conversation = await retell_workflow.persist_payload(session, payload)
+            outcome = await retell_workflow.process_inbound_conversation_completion(
+                session,
+                conversation,
+            )
+            response_payload = {
+                "status": "ok",
+                "conversation_id": str(conversation.id) if conversation is not None else None,
+                "outcome": outcome,
             }
             return CallbackProcessingResult(
                 callback_log_id=entry.id,

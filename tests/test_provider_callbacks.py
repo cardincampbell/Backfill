@@ -75,6 +75,7 @@ def test_dedupe_key_prefers_provider_event_id() -> None:
         provider="twilio",
         provider_event_id="SM123",
         payload={"MessageSid": "SM999"},
+        event_type="delivered",
     )
 
     assert key == "twilio:SM123"
@@ -85,15 +86,36 @@ def test_dedupe_key_falls_back_to_stable_payload_hash() -> None:
         provider="retell",
         provider_event_id=None,
         payload={"event": "call_started", "call": {"id": "call_123", "status": "started"}},
+        event_type="call_started",
     )
     right = provider_callbacks.dedupe_key_for_callback(
         provider="retell",
         provider_event_id=None,
         payload={"call": {"status": "started", "id": "call_123"}, "event": "call_started"},
+        event_type="call_started",
     )
 
     assert left == right
     assert left.startswith("retell:")
+
+
+def test_dedupe_key_separates_retell_lifecycle_events_for_same_call() -> None:
+    started = provider_callbacks.dedupe_key_for_callback(
+        provider="retell",
+        provider_event_id="call_123",
+        payload={"event": "call_started"},
+        event_type="call_started",
+    )
+    ended = provider_callbacks.dedupe_key_for_callback(
+        provider="retell",
+        provider_event_id="call_123",
+        payload={"event": "call_ended"},
+        event_type="call_ended",
+    )
+
+    assert started == "retell:call_started:call_123"
+    assert ended == "retell:call_ended:call_123"
+    assert started != ended
 
 
 @pytest.mark.asyncio

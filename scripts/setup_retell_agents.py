@@ -266,16 +266,20 @@ FUNCTION_SCHEMAS = [
     },
 ]
 
+INBOUND_FUNCTION_SCHEMAS: list[dict] = []
+OUTBOUND_FUNCTION_SCHEMAS = FUNCTION_SCHEMAS
+SMS_CHAT_FUNCTION_SCHEMAS = FUNCTION_SCHEMAS
+
 WEBHOOK_URL = os.environ.get("BACKFILL_WEBHOOK_URL", "http://127.0.0.1:8000") + "/webhooks/retell"
 
 
-def _create_agent(client: Retell, name: str, prompt: str) -> dict:
+def _create_agent(client: Retell, name: str, prompt: str, *, function_schemas: list[dict] | None = None) -> dict:
     """Create a Retell agent and return the full response object."""
     agent = client.agent.create(
         agent_name=name,
         response_engine={
             "type": "retell-llm",
-            "llm_id": _get_or_create_llm(client, name, prompt),
+            "llm_id": _get_or_create_llm(client, name, prompt, function_schemas=function_schemas),
         },
         voice_id="11labs-Adrian",  # clear, professional US English voice
         enable_backchannel=True,
@@ -285,11 +289,11 @@ def _create_agent(client: Retell, name: str, prompt: str) -> dict:
     return agent
 
 
-def _create_chat_agent(client: Retell, name: str, prompt: str) -> dict:
+def _create_chat_agent(client: Retell, name: str, prompt: str, *, function_schemas: list[dict] | None = None) -> dict:
     payload = {
         "response_engine": {
             "type": "retell-llm",
-            "llm_id": _get_or_create_llm(client, name, prompt),
+            "llm_id": _get_or_create_llm(client, name, prompt, function_schemas=function_schemas),
         },
         "agent_name": name,
         "webhook_url": WEBHOOK_URL,
@@ -304,8 +308,15 @@ def _create_chat_agent(client: Retell, name: str, prompt: str) -> dict:
     return response.json()
 
 
-def _get_or_create_llm(client: Retell, name: str, prompt: str) -> str:
+def _get_or_create_llm(
+    client: Retell,
+    name: str,
+    prompt: str,
+    *,
+    function_schemas: list[dict] | None = None,
+) -> str:
     """Create a Retell LLM config with the given prompt and function schemas."""
+    tool_schemas = function_schemas or []
     llm = client.llm.create(
         model="gpt-4o",
         general_prompt=prompt,
@@ -318,7 +329,7 @@ def _get_or_create_llm(client: Retell, name: str, prompt: str) -> str:
                 "speak_during_execution": False,
                 "speak_after_execution": True,
             }
-            for fn in FUNCTION_SCHEMAS
+            for fn in tool_schemas
         ],
     )
     return llm.llm_id
@@ -332,6 +343,7 @@ def main():
         client,
         name="Backfill Inbound Callout",
         prompt=_load_prompt("inbound_callout.txt"),
+        function_schemas=INBOUND_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ inbound agent_id: {inbound.agent_id}")
 
@@ -340,6 +352,7 @@ def main():
         client,
         name="Backfill Outbound Shift Offer",
         prompt=_load_prompt("outbound_voice_t1t2.txt"),
+        function_schemas=OUTBOUND_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ outbound agent_id: {outbound.agent_id}")
 
@@ -348,6 +361,7 @@ def main():
         client,
         name="Backfill SMS Operations",
         prompt=_load_prompt("sms_chat.txt"),
+        function_schemas=SMS_CHAT_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ sms chat agent_id: {sms_chat['agent_id']}")
 

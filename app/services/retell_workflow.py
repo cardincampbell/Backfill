@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
@@ -29,6 +30,45 @@ from app.schemas.scheduling import PublishedShiftAmendmentWrite, ShiftCreate
 from app.services import businesses, communication_suppressions, coverage as coverage_service
 from app.services import delivery, messaging, scheduler_sync, scheduling, shift_assignments, workforce
 from app.config import settings
+
+_CALL_OUT_PATTERNS = (
+    re.compile(r"\bcall(?:ing)?\s*out\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+make\s+it\b"),
+    re.compile(r"\bwon'?t\s+make\s+it\b"),
+    re.compile(r"\bwill\s+not\s+make\s+it\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+come\s+in\b"),
+    re.compile(r"\bwon'?t\s+be\s+able\s+to\s+make\s+it\b"),
+    re.compile(r"\bnot\s+coming\s+in\b"),
+    re.compile(r"\bneed\s+to\s+call\s+out\b"),
+    re.compile(r"\bcalling\s+out\b"),
+    re.compile(r"\bsick\b"),
+)
+_SMS_OPT_OUT_PATTERNS = (
+    re.compile(r"\b(?:do\s+not|don't)\s+text\b"),
+    re.compile(r"\b(?:do\s+not|don't)\s+call\b"),
+    re.compile(r"\bopt\s+out\b"),
+    re.compile(r"\bunsubscribe\b"),
+    re.compile(r"\bstop\s+text(?:ing)?\b"),
+    re.compile(r"\bstop\s+calling\b"),
+)
+_TODAY_PATTERNS = (
+    re.compile(r"\btoday\b"),
+    re.compile(r"\blater\s+today\b"),
+    re.compile(r"\bthis\s+morning\b"),
+    re.compile(r"\bthis\s+afternoon\b"),
+    re.compile(r"\bthis\s+evening\b"),
+    re.compile(r"\btonight\b"),
+)
+_TOMORROW_PATTERNS = (re.compile(r"\btomorrow\b"),)
+_WEEKDAY_NAMES = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
 
 
 def _first_name(full_name: str | None) -> str | None:
@@ -238,6 +278,7 @@ def _extract_transcript_items(body: dict, payload: dict) -> list[dict[str, Any]]
         payload,
         body,
         keys=(
+            "transcript_with_tool_calls",
             "transcript_items",
             "transcript_object",
             "messages",
@@ -332,16 +373,265 @@ async def persist_payload(session: AsyncSession, body: dict) -> RetellConversati
     conversation.phone_from = _pick_value(payload, body, keys=("from_number", "from"))
     conversation.phone_to = _pick_value(payload, body, keys=("to_number", "to"))
     conversation.disconnection_reason = _pick_value(payload, body, keys=("disconnection_reason", "disconnect_reason"))
-    conversation.conversation_summary = summary
-    conversation.transcript_text = transcript_text
-    conversation.transcript_items = transcript_items
-    conversation.analysis = analysis
-    conversation.metadata_json = metadata
+    if summary:
+        conversation.conversation_summary = summary
+    if transcript_text:
+        conversation.transcript_text = transcript_text
+    conversation.transcript_items = transcript_items or list(conversation.transcript_items or [])
+    existing_analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    conversation.analysis = {
+        **existing_analysis,
+        **analysis,
+    }
+    existing_metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    conversation.metadata_json = {
+        **existing_metadata,
+        **metadata,
+    }
     conversation.raw_payload = body
     conversation.started_at = _normalize_timestamp(_pick_value(payload, body, keys=("started_at", "start_timestamp", "start_time"))) or conversation.started_at
     conversation.ended_at = _normalize_timestamp(_pick_value(payload, body, keys=("ended_at", "end_timestamp", "end_time"))) or conversation.ended_at
     await session.flush()
     return conversation
+
+
+def _processing_state(conversation: RetellConversation) -> dict[str, Any]:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    state = analysis.get("backfill_processing")
+    return state if isinstance(state, dict) else {}
+
+
+def _set_processing_state(conversation: RetellConversation, state: dict[str, Any]) -> None:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    conversation.analysis = {
+        **analysis,
+        "backfill_processing": state,
+    }
+
+
+def _conversation_assigned_shifts(conversation: RetellConversation) -> list[dict[str, Any]]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    assigned_shifts = metadata.get("assigned_shifts")
+    if not isinstance(assigned_shifts, list):
+        return []
+    return [shift for shift in assigned_shifts if isinstance(shift, dict)]
+
+
+def _conversation_user_utterances(conversation: RetellConversation) -> list[str]:
+    utterances: list[str] = []
+    for item in conversation.transcript_items or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or item.get("speaker") or item.get("sender") or "").strip().lower()
+        if role not in {"user", "caller", "human"}:
+            continue
+        content = str(item.get("content") or item.get("text") or item.get("message") or "").strip()
+        if content:
+            utterances.append(content)
+    return utterances
+
+
+def _combined_user_text(conversation: RetellConversation) -> str:
+    chunks = _conversation_user_utterances(conversation)
+    summary = str(conversation.conversation_summary or "").strip()
+    if summary:
+        chunks.append(summary)
+    return "\n".join(chunks).strip()
+
+
+def _matches_any_pattern(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    lowered = text.lower()
+    return any(pattern.search(lowered) for pattern in patterns)
+
+
+def _metadata_shift_id(conversation: RetellConversation) -> str | None:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    for key in ("selected_shift_id", "shift_id", "next_assigned_shift_id"):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return None
+
+
+def _shift_local_start_hour(shift: dict[str, Any]) -> int | None:
+    starts_at_raw = str(shift.get("starts_at") or "").strip()
+    timezone_name = str(shift.get("timezone") or "UTC").strip() or "UTC"
+    if not starts_at_raw:
+        return None
+    try:
+        starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
+        return _to_local_shift_time(starts_at, timezone_name).hour
+    except ValueError:
+        return None
+
+
+def _shift_reference_score(shift: dict[str, Any], text: str) -> int:
+    lowered = text.lower()
+    score = 0
+    relative_day = str(shift.get("relative_day_label") or "").strip().lower()
+    if relative_day == "today" and _matches_any_pattern(lowered, _TODAY_PATTERNS):
+        score += 20
+    if relative_day == "tomorrow" and _matches_any_pattern(lowered, _TOMORROW_PATTERNS):
+        score += 20
+
+    date_label = str(shift.get("date_label") or "").lower()
+    for weekday_name in _WEEKDAY_NAMES:
+        if weekday_name in date_label and weekday_name in lowered:
+            score += 12
+
+    role_name = str(shift.get("role_name") or "").strip().lower()
+    if role_name and role_name in lowered:
+        score += 6
+
+    location_name = str(shift.get("location_name") or "").strip().lower()
+    if location_name and location_name in lowered:
+        score += 6
+
+    start_time_label = str(shift.get("start_time_label") or "").strip().lower()
+    if start_time_label:
+        variants = {
+            start_time_label,
+            start_time_label.replace(":00", ""),
+            start_time_label.replace(" ", ""),
+            start_time_label.replace(":00", "").replace(" ", ""),
+        }
+        if any(variant and variant in lowered for variant in variants):
+            score += 5
+
+    local_hour = _shift_local_start_hour(shift)
+    if local_hour is not None:
+        if 5 <= local_hour < 12 and "morning" in lowered:
+            score += 5
+        if 12 <= local_hour < 17 and "afternoon" in lowered:
+            score += 5
+        if local_hour >= 17 and ("evening" in lowered or "tonight" in lowered):
+            score += 5
+    return score
+
+
+def _resolve_callout_shift(
+    conversation: RetellConversation,
+    user_text: str,
+) -> tuple[dict[str, Any] | None, str]:
+    assigned_shifts = _conversation_assigned_shifts(conversation)
+    if not assigned_shifts:
+        return None, "no_assigned_shifts"
+
+    selected_shift_id = _metadata_shift_id(conversation)
+    if selected_shift_id:
+        for shift in assigned_shifts:
+            if str(shift.get("id") or "").strip() == selected_shift_id:
+                return shift, "metadata_shift_id"
+
+    if len(assigned_shifts) == 1:
+        return assigned_shifts[0], "single_assigned_shift"
+
+    scored_shifts = [
+        (shift, _shift_reference_score(shift, user_text))
+        for shift in assigned_shifts
+    ]
+    scored_shifts.sort(key=lambda item: item[1], reverse=True)
+    if scored_shifts and scored_shifts[0][1] > 0:
+        top_shift, top_score = scored_shifts[0]
+        second_score = scored_shifts[1][1] if len(scored_shifts) > 1 else -1
+        if top_score > second_score:
+            return top_shift, "transcript_shift_match"
+
+    return None, "ambiguous_shift_reference"
+
+
+def _trimmed_conversation_summary(conversation: RetellConversation) -> str | None:
+    summary = str(conversation.conversation_summary or "").strip()
+    if summary:
+        return summary[:500]
+    user_text = _combined_user_text(conversation)
+    return user_text[:500] or None
+
+
+async def process_inbound_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return {"status": "no_conversation"}
+    if conversation.conversation_type != RetellConversationType.call:
+        return {"status": "ignored", "reason": "not_call"}
+    if str(conversation.direction or "").strip().lower() != "inbound":
+        return {"status": "ignored", "reason": "not_inbound"}
+
+    processing_state = _processing_state(conversation)
+    user_text = _combined_user_text(conversation)
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip() or None
+    caller_phone = (
+        str(metadata.get("caller_phone") or conversation.phone_from or "").strip() or None
+    )
+
+    consent_state = processing_state.get("consent") if isinstance(processing_state.get("consent"), dict) else {}
+    if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
+        consent_result = dict(consent_state)
+    elif caller_phone and _matches_any_pattern(user_text, _SMS_OPT_OUT_PATTERNS):
+        consent_result = await log_consent(
+            session,
+            {
+                "employee_id": employee_id,
+                "phone": caller_phone,
+                "granted": False,
+                "channel": "inbound_call",
+            },
+        )
+    else:
+        consent_result = {"status": "no_consent_change"}
+
+    callout_state = processing_state.get("callout") if isinstance(processing_state.get("callout"), dict) else {}
+    if callout_state.get("status") == "vacancy_created":
+        callout_result = dict(callout_state)
+    elif not _matches_any_pattern(user_text, _CALL_OUT_PATTERNS):
+        callout_result = {"status": "no_callout_detected"}
+    elif employee_id is None:
+        callout_result = {"status": "employee_context_missing"}
+    else:
+        selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
+        if selected_shift is None:
+            callout_result = {
+                "status": "shift_reference_unresolved",
+                "resolution": resolution,
+            }
+        else:
+            try:
+                vacancy = await create_vacancy(
+                    session,
+                    {
+                        "shift_id": str(selected_shift.get("id") or "").strip(),
+                        "employee_id": employee_id,
+                        "conversation_summary": _trimmed_conversation_summary(conversation),
+                        "source": "retell_post_call",
+                    },
+                )
+                callout_result = {
+                    **vacancy,
+                    "resolution": resolution,
+                }
+            except (LookupError, ValueError) as exc:
+                callout_result = {
+                    "status": str(exc),
+                    "shift_id": str(selected_shift.get("id") or "").strip() or None,
+                    "resolution": resolution,
+                }
+
+    updated_state = {
+        **processing_state,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "consent": consent_result,
+        "callout": callout_result,
+    }
+    _set_processing_state(conversation, updated_state)
+    await session.flush()
+    return {
+        "status": "processed",
+        "consent": consent_result,
+        "callout": callout_result,
+    }
 
 
 async def _resolve_offer_context(
@@ -806,6 +1096,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         raise ValueError("shift_not_open_for_callout")
 
     employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
+    source = str(args.get("source") or "retell_voice").strip() or "retell_voice"
     current_assignment = shift_assignments.current_assignment(shift.assignments or [])
     effective_employee_id = employee_id or (
         current_assignment.employee_id if current_assignment is not None else None
@@ -830,7 +1121,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
             PublishedShiftAmendmentWrite(
                 action="unassign_shift",
                 reason_code="callout",
-                source="retell_voice",
+                source=source,
                 note=str(args.get("conversation_summary") or args.get("note") or "").strip() or None,
             ),
         )
@@ -840,7 +1131,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         session,
         shift_id=shift.id,
         employee_id=effective_employee_id,
-        triggered_by="retell_voice",
+        triggered_by=source,
         reason_code="callout",
     )
     return {
