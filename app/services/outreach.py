@@ -5,7 +5,9 @@ from typing import Iterable
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy.orm import selectinload
 
 from app.models.common import AuditActorType, CoverageAttemptStatus, OfferStatus
@@ -25,7 +27,12 @@ def _enum_text(value: object | None) -> str | None:
 
 
 def _latest_attempt(offer: CoverageOffer) -> CoverageContactAttempt | None:
-    attempts = list(getattr(offer, "attempts", []) or [])
+    state = inspect(offer)
+    attempts_attr = state.attrs.attempts
+    loaded_value = attempts_attr.loaded_value
+    if loaded_value is NO_VALUE:
+        return None
+    attempts = list(loaded_value or [])
     if not attempts:
         return None
     return max(
