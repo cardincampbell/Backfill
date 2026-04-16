@@ -34,8 +34,11 @@ from app.config import settings
 _CALL_OUT_PATTERNS = (
     re.compile(r"\bcall(?:ing)?\s*out\b"),
     re.compile(r"\bcan(?:not|'?t)\s+make\s+it\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+make\s+(?:my|the|that)\s+shift\b"),
     re.compile(r"\bwon'?t\s+make\s+it\b"),
     re.compile(r"\bwill\s+not\s+make\s+it\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+work\b"),
+    re.compile(r"\bunable\s+to\s+work\b"),
     re.compile(r"\bcan(?:not|'?t)\s+come\s+in\b"),
     re.compile(r"\bwon'?t\s+be\s+able\s+to\s+make\s+it\b"),
     re.compile(r"\bnot\s+coming\s+in\b"),

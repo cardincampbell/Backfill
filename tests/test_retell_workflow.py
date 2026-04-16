@@ -819,6 +819,111 @@ async def test_process_inbound_conversation_completion_creates_callout_from_tran
 
 
 @pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_detects_cant_make_my_shift_tomorrow(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    shift_today = uuid4()
+    shift_tomorrow = uuid4()
+    shift_saturday = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_live_shape",
+        conversation_type=RetellConversationType.call,
+        event_type="transcript_updated",
+        direction="inbound",
+        status="ongoing",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        conversation_summary=(
+            "The user contacted the AI assistant to report they cannot work their only "
+            "shift scheduled for tomorrow. The agent confirmed the shift details and "
+            "asked for the type of reason, which the user provided as personal."
+        ),
+        transcript_text=(
+            "agent: Are you calling to report that you can't make an upcoming shift?\n"
+            "user: Yes. I can't make my shift tomorrow.\n"
+            "agent: Which shift tomorrow do you mean?\n"
+            "user: That's the only shift that I have tomorrow.\n"
+            "agent: Just to confirm, you're unable to work your only shift tomorrow, correct?\n"
+            "user: Correct.\n"
+            "agent: Do you want to share a broad reason?\n"
+            "user: Personal."
+        ),
+        transcript_items=[
+            {"role": "user", "content": "Yes. I can't make my shift tomorrow."},
+            {"role": "user", "content": "That's the only shift that I have tomorrow."},
+            {"role": "user", "content": "Correct."},
+            {"role": "user", "content": "Personal."},
+        ],
+        analysis={},
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [
+                {
+                    "id": str(shift_today),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-16T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Today (Thursday, April 16)",
+                    "relative_day_label": "Today",
+                    "summary": "Today (Thursday, April 16) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+                {
+                    "id": str(shift_tomorrow),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-17T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+                {
+                    "id": str(shift_saturday),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-18T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Saturday, April 18",
+                    "relative_day_label": "",
+                    "summary": "Saturday, April 18 from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_create_vacancy(_session, args):
+        captured.update(args)
+        return {
+            "status": "vacancy_created",
+            "shift_id": args["shift_id"],
+            "coverage_case_id": str(uuid4()),
+            "offers": [],
+            "used_published_amendment": True,
+        }
+
+    monkeypatch.setattr(retell_workflow, "create_vacancy", fake_create_vacancy)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert captured["shift_id"] == str(shift_tomorrow)
+    assert captured["employee_id"] == str(employee_id)
+    assert captured["source"] == "retell_post_call"
+    assert result["callout"]["status"] == "vacancy_created"
+    assert result["callout"]["resolution"] == "transcript_shift_match"
+
+
+@pytest.mark.asyncio
 async def test_process_inbound_conversation_completion_records_sms_opt_out(monkeypatch):
     session = FakeSession()
     employee_id = uuid4()
