@@ -162,6 +162,7 @@ async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
         "find_latest_actionable_offer_for_phone",
         fake_find_latest_actionable_offer_for_phone,
     )
+    monkeypatch.setattr(retell_workflow, "_current_utc_now", lambda: now)
 
     session.scalar_queue = [user, employee]
     session.execute_queue = [[shift]]
@@ -186,17 +187,18 @@ async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
             "lifecycle_status": ShiftLifecycleStatus.scheduled,
             "staffing_status": ShiftStaffingStatus.covered,
             "notes": None,
-            "date_label": "Thursday, April 16",
+            "date_label": "Today (Thursday, April 16)",
             "start_time_label": "11:00 AM",
             "end_time_label": "7:00 PM",
             "local_time_range": "11:00 AM to 7:00 PM PDT",
             "timezone": "America/Los_Angeles",
             "timezone_abbr": "PDT",
-            "summary": "Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
+            "relative_day_label": "Today",
+            "summary": "Today (Thursday, April 16) from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
         }
     ]
     assert result["assigned_shift_schedule_summary"] == (
-        "1. Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown"
+        "1. Today (Thursday, April 16) from 11:00 AM to 7:00 PM PDT as Barista at Downtown"
     )
 
 
@@ -298,6 +300,7 @@ async def test_lookup_caller_returns_full_future_published_schedule(monkeypatch)
         "find_latest_actionable_offer_for_phone",
         fake_find_latest_actionable_offer_for_phone,
     )
+    monkeypatch.setattr(retell_workflow, "_current_utc_now", lambda: now)
 
     session.scalar_queue = [None, employee]
     session.execute_queue = [[first_shift, second_shift]]
@@ -307,7 +310,7 @@ async def test_lookup_caller_returns_full_future_published_schedule(monkeypatch)
     assert result["assigned_shift_count"] == 2
     assert result["next_assigned_shift_id"] == str(first_shift.id)
     assert len(result["assigned_shifts"]) == 2
-    assert "Thursday, April 16" in result["assigned_shift_schedule_summary"]
+    assert "Today (Thursday, April 16)" in result["assigned_shift_schedule_summary"]
     assert "Wednesday, April 22" in result["assigned_shift_schedule_summary"]
     assert "Barista at Downtown" in result["assigned_shift_schedule_summary"]
 

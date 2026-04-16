@@ -46,6 +46,10 @@ def _coerce_retell_dynamic_value(value: object) -> str:
     return str(value)
 
 
+def _current_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _shift_display_timezone(shift: Shift) -> str:
     timezone_name = str(getattr(shift, "timezone", "") or "").strip()
     if timezone_name:
@@ -70,6 +74,17 @@ def _format_clock_label(value: datetime) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
+def _relative_day_label(value: datetime, reference_value: datetime) -> str | None:
+    delta_days = (value.date() - reference_value.date()).days
+    if delta_days == 0:
+        return "Today"
+    if delta_days == 1:
+        return "Tomorrow"
+    if delta_days == -1:
+        return "Yesterday"
+    return None
+
+
 def _format_shift_summary(
     *,
     role_name: str | None,
@@ -77,11 +92,19 @@ def _format_shift_summary(
     starts_at: datetime,
     ends_at: datetime,
     timezone_name: str,
+    reference_time: datetime,
 ) -> dict[str, str]:
     local_start = _to_local_shift_time(starts_at, timezone_name)
     local_end = _to_local_shift_time(ends_at, timezone_name)
+    local_reference = _to_local_shift_time(reference_time, timezone_name)
     timezone_abbr = local_start.tzname() or timezone_name
-    date_label = _format_calendar_label(local_start)
+    base_date_label = _format_calendar_label(local_start)
+    relative_label = _relative_day_label(local_start, local_reference)
+    date_label = (
+        f"{relative_label} ({base_date_label})"
+        if relative_label is not None
+        else base_date_label
+    )
     start_time_label = _format_clock_label(local_start)
     end_time_label = _format_clock_label(local_end)
     local_time_range = f"{start_time_label} to {end_time_label} {timezone_abbr}".strip()
@@ -97,6 +120,7 @@ def _format_shift_summary(
         "local_time_range": local_time_range,
         "timezone": timezone_name,
         "timezone_abbr": timezone_abbr,
+        "relative_day_label": relative_label or "",
         "summary": summary,
     }
 
@@ -408,6 +432,7 @@ async def _respond_to_offer(
 
 async def lookup_caller(session: AsyncSession, phone: str) -> dict:
     normalized = phone.strip()
+    reference_now = _current_utc_now()
     user = await session.scalar(select(User).where(User.primary_phone_e164 == normalized))
     employee = await session.scalar(
         select(Employee)
@@ -431,7 +456,7 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
                 Shift.lifecycle_status.in_(
                     [ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress]
                 ),
-                Shift.ends_at >= datetime.now(timezone.utc) - timedelta(hours=4),
+                Shift.ends_at >= reference_now - timedelta(hours=4),
             )
             .order_by(Shift.starts_at.asc())
         )
@@ -452,6 +477,7 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
                 starts_at=shift.starts_at,
                 ends_at=shift.ends_at,
                 timezone_name=timezone_name,
+                reference_time=reference_now,
             )
             assigned_shifts.append(
                 {
