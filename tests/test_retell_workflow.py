@@ -480,6 +480,7 @@ async def test_create_vacancy_uses_published_callout_amendment_before_coverage(m
         {
             "shift_id": str(shift_id),
             "employee_id": str(employee_id),
+            "source": "retell_post_call",
             "conversation_summary": "Taylor called out sick for the morning shift.",
         },
     )
@@ -493,7 +494,7 @@ async def test_create_vacancy_uses_published_callout_amendment_before_coverage(m
     assert captured["shift_id"] == shift_id
     assert captured["coverage_shift_id"] == shift_id
     assert captured["coverage_employee_id"] == employee_id
-    assert captured["triggered_by"] == "retell_voice"
+    assert captured["triggered_by"] == "retell_post_call"
     assert captured["reason_code"] == "callout"
     assert result == {
         "status": "vacancy_created",

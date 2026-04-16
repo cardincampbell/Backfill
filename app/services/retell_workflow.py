@@ -1097,6 +1097,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
 
     employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
     source = str(args.get("source") or "retell_voice").strip() or "retell_voice"
+    amendment_source = source if source in {"scheduler_ui", "copilot", "retell_voice", "sms_automation"} else "retell_voice"
     current_assignment = shift_assignments.current_assignment(shift.assignments or [])
     effective_employee_id = employee_id or (
         current_assignment.employee_id if current_assignment is not None else None
@@ -1121,7 +1122,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
             PublishedShiftAmendmentWrite(
                 action="unassign_shift",
                 reason_code="callout",
-                source=source,
+                source=amendment_source,
                 note=str(args.get("conversation_summary") or args.get("note") or "").strip() or None,
             ),
         )
