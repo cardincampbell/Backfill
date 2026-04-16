@@ -25,8 +25,6 @@ type EmployeeScheduleClientProps = {
   token: string;
 };
 
-type ShiftStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
-
 function parseDateOnly(value: string): Date {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   return new Date(Date.UTC(year, month - 1, day));
@@ -102,6 +100,22 @@ function employeeInitials(name: string): string {
 function getStatusConfig(status: string) {
   const normalized = (status ?? "scheduled") as string;
   switch (normalized) {
+    case "callout":
+      return {
+        label: "Callout",
+        icon: XCircle,
+        color: "#DC2626",
+        bgColor: "#DC2626",
+        textColor: "#DC2626",
+      };
+    case "no_show":
+      return {
+        label: "No Show",
+        icon: XCircle,
+        color: "#DC2626",
+        bgColor: "#DC2626",
+        textColor: "#DC2626",
+      };
     case "scheduled":
       return {
         label: "Scheduled",
@@ -190,7 +204,8 @@ export function EmployeeScheduleClient({
   const totalHours = useMemo(
     () =>
       weekShifts.reduce(
-        (sum, shift) => sum + durationHours(shift.starts_at, shift.ends_at),
+        (sum, shift) =>
+          shift.historical_display ? sum : sum + durationHours(shift.starts_at, shift.ends_at),
         0,
       ),
     [weekShifts],
@@ -277,7 +292,7 @@ export function EmployeeScheduleClient({
             </div>
           ) : (
             weekShifts.map((shift) => {
-              const statusConfig = getStatusConfig(shift.lifecycle_status);
+              const statusConfig = getStatusConfig(shift.display_status || shift.lifecycle_status);
               const StatusIcon = statusConfig.icon;
               const dateKey = dateKeyInTimezone(shift.starts_at, shift.timezone);
               const isToday = dateKey === todayKey;
@@ -285,25 +300,33 @@ export function EmployeeScheduleClient({
                 name: shift.location_name,
               });
               const hours = durationHours(shift.starts_at, shift.ends_at);
+              const isHistorical = shift.historical_display;
+              const isHistoricalIncident =
+                shift.display_status === "callout" || shift.display_status === "no_show";
+              const cardClassName = isHistorical
+                ? isHistoricalIncident
+                  ? "border-[#FECACA] bg-[#FEF2F2]"
+                  : "border-[#D0D7DE] bg-[#F8FAFC]"
+                : isToday
+                  ? "border-[#635BFF] shadow-lg shadow-[#635BFF]/10"
+                  : "border-[#E5E7EB] hover:border-[#635BFF]/30";
+              const primaryTextClass = isHistorical ? "line-through text-[#5E6D7A]" : "text-[#0A2540]";
+              const secondaryTextClass = isHistorical ? "line-through text-[#8898AA]" : "text-[#8898AA]";
 
               return (
                 <motion.div
                   key={shift.shift_id}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`rounded-xl border-2 bg-white transition-all ${
-                    isToday
-                      ? "border-[#635BFF] shadow-lg shadow-[#635BFF]/10"
-                      : "border-[#E5E7EB] hover:border-[#635BFF]/30"
-                  }`}
+                  className={`rounded-xl border-2 transition-all ${cardClassName}`}
                 >
                   <div className="p-5">
                     <div className="mb-4 flex items-start justify-between">
                       <div>
-                        <p className="mb-1 text-[15px] text-[#0A2540]" style={{ fontWeight: 560 }}>
+                        <p className={`mb-1 text-[15px] ${primaryTextClass}`} style={{ fontWeight: 560 }}>
                           {formatDateFull(shift.starts_at, shift.timezone)}
                         </p>
-                        {isToday ? (
+                        {isToday && !isHistorical ? (
                           <span
                             className="inline-block rounded-full bg-[#635BFF] px-2 py-0.5 text-[10px] uppercase tracking-wide text-white"
                             style={{ fontWeight: 600 }}
@@ -342,10 +365,10 @@ export function EmployeeScheduleClient({
                           >
                             Time
                           </p>
-                          <p className="text-[13px] text-[#0A2540]" style={{ fontWeight: 520 }}>
+                          <p className={`text-[13px] ${primaryTextClass}`} style={{ fontWeight: 520 }}>
                             {formatTime(shift.starts_at, shift.timezone)} - {formatTime(shift.ends_at, shift.timezone)}
                           </p>
-                          <p className="text-[11px] text-[#8898AA]" style={{ fontWeight: 420 }}>
+                          <p className={`text-[11px] ${secondaryTextClass}`} style={{ fontWeight: 420 }}>
                             {hours % 1 === 0 ? hours.toFixed(0) : hours.toFixed(1)} hours
                           </p>
                         </div>
@@ -362,7 +385,7 @@ export function EmployeeScheduleClient({
                           >
                             Location
                           </p>
-                          <p className="flex items-center gap-1 text-[13px] text-[#0A2540]" style={{ fontWeight: 520 }}>
+                          <p className={`flex items-center gap-1 text-[13px] ${primaryTextClass}`} style={{ fontWeight: 520 }}>
                             <span>{locationReference.logo}</span>
                             <span>{shift.location_name}</span>
                           </p>
@@ -380,7 +403,7 @@ export function EmployeeScheduleClient({
                           >
                             Role
                           </p>
-                          <p className="text-[13px] text-[#0A2540]" style={{ fontWeight: 520 }}>
+                          <p className={`text-[13px] ${primaryTextClass}`} style={{ fontWeight: 520 }}>
                             {shift.role_name}
                           </p>
                         </div>
