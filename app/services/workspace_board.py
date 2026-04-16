@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus, ShiftLifecycleStatus
+from app.models.common import AssignmentStatus, CoverageCaseStatus, MembershipRole, OfferStatus, ShiftLifecycleStatus
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.events import PlatformEvent
 from app.models.scheduling import Shift, ShiftAssignment
@@ -118,6 +118,11 @@ def _shift_display_employee_id(shift: Shift) -> UUID | None:
     return latest.employee_id if latest is not None else None
 
 
+def _shift_metadata_value(shift: Shift, key: str) -> object | None:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    return shift_metadata.get(key)
+
+
 def _shift_amendment_metadata(shift: Shift) -> dict:
     shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
     raw = shift_metadata.get(_PUBLISHED_AMENDMENT_METADATA_KEY)
@@ -159,9 +164,99 @@ def _shift_historical_artifacts(shift: Shift) -> list[dict]:
     return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
 
 
+def _assignment_metadata(assignment: ShiftAssignment | None) -> dict:
+    if assignment is None:
+        return {}
+    raw_metadata = assignment.assignment_metadata
+    return dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+
+
+def _assignment_amendment_reason_code(assignment: ShiftAssignment | None) -> str | None:
+    raw_reason = _assignment_metadata(assignment).get("published_amendment_reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _assignment_amendment_action(assignment: ShiftAssignment | None) -> str | None:
+    raw_action = _assignment_metadata(assignment).get("published_amendment_action")
+    if isinstance(raw_action, str) and raw_action:
+        return raw_action
+    return None
+
+
+def _assignment_status_value(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    status = assignment.status
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _derived_cancelled_history_reason_code(shift: Shift) -> str | None:
+    if _shift_lifecycle_status_value(shift) != ShiftLifecycleStatus.cancelled.value:
+        return None
+    if _shift_amendment_reason_code(shift) == "cancelled":
+        return "cancelled"
+    if any(
+        _assignment_amendment_reason_code(assignment) in {"cancelled", "callout", "no_show"}
+        or _assignment_amendment_action(assignment) in {"cancel_shift", "unassign_shift"}
+        for assignment in shift.assignments or []
+    ):
+        return "cancelled"
+    if _shift_metadata_value(shift, "consistency_repair_reason") == "cancelled_shift_owned_assignment_cleanup":
+        return "cancelled"
+    return None
+
+
+def _effective_shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_reason_code(shift)
+    if raw_reason is not None:
+        return raw_reason
+    return _derived_cancelled_history_reason_code(shift)
+
+
+def _recovered_shift_historical_artifacts(shift: Shift) -> list[dict]:
+    artifacts = _shift_historical_artifacts(shift)
+    if artifacts:
+        return artifacts
+    if _shift_lifecycle_status_value(shift) not in {
+        ShiftLifecycleStatus.scheduled.value,
+        ShiftLifecycleStatus.in_progress.value,
+    }:
+        return []
+    current_assignment = _best_assignment(shift)
+    assignments = sorted(
+        list(shift.assignments or []),
+        key=lambda item: (item.sequence_no or 0, item.created_at or datetime.min),
+    )
+    for assignment in reversed(assignments):
+        if current_assignment is not None and assignment.id == current_assignment.id:
+            continue
+        reason_code = _assignment_amendment_reason_code(assignment)
+        if reason_code not in {"callout", "no_show"}:
+            continue
+        status = _assignment_status_value(assignment)
+        if status not in {AssignmentStatus.cancelled.value, AssignmentStatus.no_show.value}:
+            continue
+        return [
+            {
+                "artifact_id": f"recovered-{assignment.id}",
+                "employee_id": str(assignment.employee_id) if assignment.employee_id is not None else None,
+                "employee_name": _assignment_employee_name(assignment),
+                "reason_code": reason_code,
+                "starts_at": shift.starts_at.isoformat(),
+                "ends_at": shift.ends_at.isoformat(),
+                "role_id": str(shift.role_id),
+                "role_code": shift.role.code if shift.role is not None else None,
+                "role_name": shift.role.name if shift.role is not None else None,
+            }
+        ]
+    return []
+
+
 def _shift_historical_artifact_employee_ids(shift: Shift) -> list[UUID]:
     employee_ids: list[UUID] = []
-    for artifact in _shift_historical_artifacts(shift):
+    for artifact in _recovered_shift_historical_artifacts(shift):
         raw_employee_id = artifact.get("employee_id")
         if raw_employee_id is None:
             continue
@@ -183,13 +278,13 @@ def _latest_timestamp(current: datetime | None, candidate: datetime | None) -> d
 def _shift_historical_display(shift: Shift) -> bool:
     return (
         _shift_lifecycle_status_value(shift) == ShiftLifecycleStatus.cancelled.value
-        and _shift_amendment_reason_code(shift) == "cancelled"
+        and _effective_shift_amendment_reason_code(shift) == "cancelled"
     )
 
 
 def _historical_artifact_shift_reads(shift: Shift) -> list[WorkspaceBoardShiftRead]:
     shift_reads: list[WorkspaceBoardShiftRead] = []
-    for index, artifact in enumerate(_shift_historical_artifacts(shift)):
+    for index, artifact in enumerate(_recovered_shift_historical_artifacts(shift)):
         raw_starts_at = artifact.get("starts_at")
         raw_ends_at = artifact.get("ends_at")
         raw_reason_code = artifact.get("reason_code")
@@ -584,7 +679,7 @@ async def get_location_board(
                 standby_depth=standby_depth,
                 manager_action_required=manager_action_required,
                 amended_from_published=_shift_amended_from_published(shift),
-                amendment_reason_code=_shift_amendment_reason_code(shift),
+                amendment_reason_code=_effective_shift_amendment_reason_code(shift),
                 schedule_break=_shift_schedule_break(shift),
                 historical_display=_shift_historical_display(shift),
             )
