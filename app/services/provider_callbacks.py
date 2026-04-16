@@ -55,6 +55,54 @@ def _normalized_uuid(value: Any) -> UUID | None:
         return None
 
 
+def _retell_payload_context_mappings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    mappings: list[dict[str, Any]] = []
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        mappings.append(metadata)
+    for key in ("call", "call_detail", "chat", "chat_detail", "data"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            mappings.append(candidate)
+    mappings.append(payload)
+    return mappings
+
+
+def _retell_function_args(payload: dict[str, Any]) -> dict[str, Any]:
+    args = _normalized_mapping(payload.get("args") if isinstance(payload.get("args"), dict) else {})
+    context_mappings = _retell_payload_context_mappings(payload)
+
+    def first_value(*keys: str) -> Any:
+        for mapping in context_mappings:
+            for key in keys:
+                value = mapping.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    if args.get("phone") in (None, ""):
+        phone = first_value("phone", "phone_number", "from_number", "from")
+        if phone not in (None, ""):
+            args["phone"] = str(phone).strip()
+
+    for field_name in (
+        "employee_id",
+        "worker_id",
+        "shift_id",
+        "offer_id",
+        "coverage_offer_id",
+        "coverage_case_id",
+        "location_id",
+        "business_id",
+    ):
+        if args.get(field_name) in (None, ""):
+            value = first_value(field_name)
+            if value not in (None, ""):
+                args[field_name] = str(value).strip()
+
+    return args
+
+
 @dataclass
 class CallbackProcessingResult:
     callback_log_id: UUID
@@ -700,7 +748,7 @@ async def _process_retell_webhook(
             result = await retell_workflow.dispatch_function_call(
                 session,
                 _normalized_text(payload.get("name")) or "",
-                payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                _retell_function_args(payload),
             )
             return CallbackProcessingResult(
                 callback_log_id=entry.id,

@@ -95,7 +95,7 @@ RETELL_AGENT_ID_OUTBOUND=...
 RETELL_CHAT_AGENT_ID=...
 ```
 
-The generated tool contracts are location-first and match the handlers in [`app/webhooks/retell_hooks.py`](./app/webhooks/retell_hooks.py).
+The generated tool contracts match the live Retell webhook handler in [`app/api/routes/retell_provider.py`](./app/api/routes/retell_provider.py) and the function implementations in [`app/services/retell_workflow.py`](./app/services/retell_workflow.py).
 
 ## 6. Import or update the Twilio number in Retell
 
@@ -142,17 +142,38 @@ That endpoint handles:
 - onboarding-link handoff
 - voice and chat agent tool calls
 
-## 8. Smoke-test the live path
+## 8a. Current inbound callout flow
+
+The intended inbound worker callout path is:
+
+1. Worker calls the Backfill number.
+2. Retell answers with the inbound callout agent.
+3. The agent calls `lookup_caller`.
+   - The backend resolves the worker by phone number.
+   - It returns the worker plus their currently assigned upcoming shifts.
+4. The agent calls `log_consent`.
+   - This updates Backfill's communication suppression ledger and the employee notification preferences.
+5. The agent calls `create_vacancy`.
+   - For a live assigned shift, Backfill first records a published shift amendment with `reason_code=callout`.
+   - Then Backfill opens or resumes the coverage case and starts the fill cascade.
+
+Two practical notes:
+
+- `scripts/setup_retell_agents.py` should be rerun any time the tool schema or prompts change, then the returned agent IDs should be copied back into `.env`.
+- The Retell callback processor now enriches tool arguments from webhook context, so inbound calls do not depend on the LLM perfectly restating the caller phone number or shift metadata.
+
+## 9. Smoke-test the live path
 
 Run through these in order:
 
 1. Call the public number and verify Retell answers with the inbound voice agent.
-2. Create a vacancy and confirm the app starts the cascade.
+2. Use a real worker number that exists on an employee record with an upcoming assigned shift.
+3. Confirm the inbound call produces a `create_vacancy` function call and the app starts the cascade.
 3. Send an outbound offer and confirm Retell places a call from `RETELL_FROM_NUMBER`.
 4. Send an outbound SMS and confirm Retell starts the text thread from `RETELL_FROM_NUMBER`.
 5. Reply `YES`, `NO`, `CANCEL`, and `STOP` from a real handset.
 6. Confirm Retell function calls hit `/webhooks/retell`.
 
-## 9. Current repo boundaries
+## 10. Current repo boundaries
 
 In unified mode, Retell is the conversation control plane for both voice and text. Twilio remains the underlying carrier and SIP trunk, but Backfill talks to Retell for agent-driven voice and SMS flows.

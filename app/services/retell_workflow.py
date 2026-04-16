@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -10,16 +10,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Location
-from app.models.common import OfferStatus, RetellConversationType, ShiftLifecycleStatus, ShiftStaffingStatus, ShiftStatus
+from app.models.common import (
+    AssignmentStatus,
+    CoverageCaseStatus,
+    OfferStatus,
+    RetellConversationType,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+    ShiftStatus,
+)
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.identity import User
 from app.models.integrations import RetellConversation
-from app.models.scheduling import Shift
+from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
-from app.schemas.scheduling import ShiftCreate
+from app.schemas.scheduling import PublishedShiftAmendmentWrite, ShiftCreate
 from app.services import businesses, communication_suppressions, coverage as coverage_service
-from app.services import delivery, messaging, scheduler_sync, scheduling
+from app.services import delivery, messaging, scheduler_sync, scheduling, shift_assignments, workforce
 from app.config import settings
 
 
@@ -280,6 +288,46 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
         .where(Employee.phone_e164 == normalized)
     )
     context = await delivery.find_latest_actionable_offer_for_phone(session, normalized)
+    assigned_shifts: list[dict[str, Any]] = []
+    if employee is not None:
+        result = await session.execute(
+            select(Shift)
+            .options(
+                selectinload(Shift.location),
+                selectinload(Shift.role),
+                selectinload(Shift.assignments),
+            )
+            .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.id)
+            .where(
+                ShiftAssignment.employee_id == employee.id,
+                ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
+                Shift.lifecycle_status.in_(
+                    [ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress]
+                ),
+                Shift.ends_at >= datetime.now(timezone.utc) - timedelta(hours=4),
+            )
+            .order_by(Shift.starts_at.asc())
+            .limit(10)
+        )
+        for shift in result.scalars().all():
+            assigned_shifts.append(
+                {
+                    "id": str(shift.id),
+                    "location_id": str(shift.location_id),
+                    "location_name": (
+                        getattr(shift.location, "location_display_name", None)
+                        or getattr(shift.location, "display_name", None)
+                        or getattr(shift.location, "name", None)
+                    ),
+                    "role_id": str(shift.role_id),
+                    "role_name": getattr(shift.role, "name", None),
+                    "starts_at": shift.starts_at.isoformat(),
+                    "ends_at": shift.ends_at.isoformat(),
+                    "status": shift.status,
+                    "lifecycle_status": shift.lifecycle_status,
+                    "staffing_status": shift.staffing_status,
+                }
+            )
     return {
         "phone": normalized,
         "user": {
@@ -293,6 +341,7 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
             "business_id": str(employee.business_id),
             "location_id": str(employee.primary_location_id) if employee.primary_location_id else None,
         } if employee is not None else None,
+        "assigned_shifts": assigned_shifts,
         "actionable_offer_id": str(context.offer.id) if context is not None else None,
     }
 
@@ -408,6 +457,132 @@ async def create_open_shift(session: AsyncSession, args: dict) -> dict:
     return {"status": "shift_created", "shift_id": str(shift.id)}
 
 
+async def log_consent(session: AsyncSession, args: dict) -> dict:
+    employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
+    granted = bool(args.get("granted"))
+    channel = str(args.get("channel") or "inbound_call").strip().lower() or "inbound_call"
+    employee = await session.get(Employee, employee_id) if employee_id is not None else None
+    phone = communication_suppressions.normalize_destination(
+        communication_suppressions.SMS_CHANNEL,
+        str(args.get("phone") or getattr(employee, "phone_e164", "") or "").strip() or None,
+    )
+    if phone is None:
+        raise ValueError("phone_or_employee_required")
+
+    metadata = {
+        "channel": channel,
+        "retell": {key: value for key, value in args.items() if key != "conversation_summary"},
+    }
+    changed = False
+    if granted:
+        _suppression, changed = await communication_suppressions.clear_destination_suppression(
+            session,
+            channel=communication_suppressions.SMS_CHANNEL,
+            destination=phone,
+            source="retell_voice_consent",
+            reason_code="voice_consent_granted",
+            metadata=metadata,
+        )
+    else:
+        _suppression, changed = await communication_suppressions.suppress_destination(
+            session,
+            channel=communication_suppressions.SMS_CHANNEL,
+            destination=phone,
+            source="retell_voice_consent",
+            reason_code="voice_consent_revoked",
+            metadata=metadata,
+        )
+
+    if employee is not None:
+        preferences = workforce.normalized_employee_notification_preferences(employee.employee_metadata)
+        preferences["schedule_publish_sms_enabled"] = granted
+        preferences["sms_opted_out_at"] = None if granted else datetime.now(timezone.utc)
+        preferences["sms_opt_out_reason"] = None if granted else "voice_consent_revoked"
+        employee.employee_metadata = {
+            **(employee.employee_metadata or {}),
+            "notification_preferences": workforce._serialized_employee_notification_preferences(preferences),
+            "voice_consent": {
+                "granted": granted,
+                "channel": channel,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "source": "retell_voice",
+            },
+        }
+        await session.flush()
+
+    return {
+        "status": "consent_granted" if granted else "consent_revoked",
+        "employee_id": str(employee.id) if employee is not None else None,
+        "phone": phone,
+        "changed": changed,
+    }
+
+
+async def create_vacancy(session: AsyncSession, args: dict) -> dict:
+    shift_id = _uuid_from_mapping(args, keys=("shift_id",))
+    if shift_id is None:
+        raise ValueError("shift_id_required")
+    shift = await session.get(
+        Shift,
+        shift_id,
+        options=[selectinload(Shift.assignments)],
+    )
+    if shift is None:
+        raise LookupError("shift_not_found")
+    if shift.lifecycle_status in {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}:
+        raise ValueError("shift_not_open_for_callout")
+
+    employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
+    current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+    effective_employee_id = employee_id or (
+        current_assignment.employee_id if current_assignment is not None else None
+    )
+    if (
+        current_assignment is not None
+        and effective_employee_id is not None
+        and current_assignment.employee_id != effective_employee_id
+    ):
+        raise ValueError("shift_not_assigned_to_employee")
+
+    used_published_amendment = False
+    if (
+        current_assignment is not None
+        and shift.lifecycle_status
+        in {ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress}
+    ):
+        await scheduling.apply_published_shift_amendment(
+            session,
+            shift.business_id,
+            shift.id,
+            PublishedShiftAmendmentWrite(
+                action="unassign_shift",
+                reason_code="callout",
+                source="retell_voice",
+                note=str(args.get("conversation_summary") or args.get("note") or "").strip() or None,
+            ),
+        )
+        used_published_amendment = True
+
+    vacancy = await scheduler_sync.create_vacancy_for_shift(
+        session,
+        shift_id=shift.id,
+        employee_id=effective_employee_id,
+        triggered_by="retell_voice",
+        reason_code="callout",
+    )
+    return {
+        "status": "vacancy_created",
+        "shift_id": str(vacancy["shift_id"]),
+        "coverage_case_id": (
+            str(vacancy["coverage_case_id"])
+            if vacancy.get("coverage_case_id") is not None
+            else None
+        ),
+        "offers": vacancy.get("offers", []),
+        "used_published_amendment": used_published_amendment,
+    }
+
+
 async def send_onboarding_link(
     session: AsyncSession,
     phone: str,
@@ -444,6 +619,8 @@ async def dispatch_function_call(session: AsyncSession, name: str, args: dict) -
         if not phone:
             raise ValueError("phone_required")
         return await lookup_caller(session, phone)
+    if name == "log_consent":
+        return await log_consent(session, args)
     if name == "get_open_shifts":
         return await get_open_shifts(session, location_id=_uuid_from_mapping(args, keys=("location_id",)))
     if name == "get_shift_status":
@@ -454,17 +631,7 @@ async def dispatch_function_call(session: AsyncSession, name: str, args: dict) -
     if name == "create_open_shift":
         return await create_open_shift(session, args)
     if name == "create_vacancy":
-        shift_id = _uuid_from_mapping(args, keys=("shift_id",))
-        if shift_id is None:
-            raise ValueError("shift_id_required")
-        employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
-        return await scheduler_sync.create_vacancy_for_shift(
-            session,
-            shift_id=shift_id,
-            employee_id=employee_id,
-            triggered_by="retell_voice",
-            reason_code="voice_callout",
-        )
+        return await create_vacancy(session, args)
     if name in {"claim_shift", "promote_standby"}:
         return await _respond_to_offer(session, args=args, accepted=True)
     if name in {"decline_shift", "cancel_standby"}:

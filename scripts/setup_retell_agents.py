@@ -63,9 +63,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "worker_id": {
-                    "type": "integer",
-                    "description": "The ID of the worker from the lookup_caller result.",
+                "employee_id": {
+                    "type": "string",
+                    "description": "Employee UUID from the lookup_caller result.",
                 },
                 "granted": {
                     "type": "boolean",
@@ -77,7 +77,7 @@ FUNCTION_SCHEMAS = [
                     "default": "inbound_call",
                 },
             },
-            "required": ["worker_id", "granted"],
+            "required": ["employee_id", "granted"],
         },
     },
     {
@@ -87,15 +87,15 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "shift_id": {
-                    "type": "integer",
-                    "description": "ID of the shift the worker is calling out of.",
+                    "type": "string",
+                    "description": "Shift UUID the worker is calling out of.",
                 },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who is calling out.",
+                "employee_id": {
+                    "type": "string",
+                    "description": "Employee UUID of the worker who is calling out.",
                 },
             },
-            "required": ["shift_id", "worker_id"],
+            "required": ["shift_id", "employee_id"],
         },
     },
     {
@@ -104,13 +104,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active cascade for this shift.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who was offered the shift.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID from the outbound Retell metadata.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -118,7 +114,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -127,13 +123,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active cascade for this shift.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who was offered the shift.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID from the outbound Retell metadata.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -141,7 +133,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -150,13 +142,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active or recently completed cascade.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the standby worker.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID for the standby worker.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -164,7 +152,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -173,13 +161,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the related cascade.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the standby worker being promoted.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID for the standby worker being promoted.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -187,7 +171,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -197,8 +181,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "location_id": {
-                    "type": "integer",
-                    "description": "Filter by location ID (optional).",
+                    "type": "string",
+                    "description": "Location UUID to filter by (optional).",
                 }
             },
             "required": [],
@@ -211,8 +195,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "shift_id": {
-                    "type": "integer",
-                    "description": "ID of the shift to look up.",
+                    "type": "string",
+                    "description": "Shift UUID to look up.",
                 }
             },
             "required": ["shift_id"],
@@ -225,8 +209,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "location_id": {
-                    "type": "integer",
-                    "description": "ID of the location that needs coverage.",
+                    "type": "string",
+                    "description": "Location UUID that needs coverage.",
                 },
                 "role": {
                     "type": "string",

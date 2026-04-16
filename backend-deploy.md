@@ -125,11 +125,13 @@ That is what the frontend already expects in [`web/lib/api.ts`](./web/lib/api.ts
 
 After `api.usebackfill.com` is live:
 
-1. Update the live Retell voice agent webhook to `https://api.usebackfill.com/webhooks/retell`
-2. Publish the voice agent
-3. Create or update the Retell SMS chat agent with the same webhook
-4. Bind that chat agent to the Retell phone number for inbound and outbound SMS
-5. Keep the Retell phone number termination URI pointed at `backfill.pstn.twilio.com`
+1. Run `python3 scripts/setup_retell_agents.py` so the live Retell agents pick up the current webhook, tool schema, and prompts.
+2. Copy the returned agent IDs into the backend env.
+3. Update the live Retell voice agent webhook to `https://api.usebackfill.com/webhooks/retell`
+4. Publish the voice agent
+5. Create or update the Retell SMS chat agent with the same webhook
+6. Bind that chat agent to the Retell phone number for inbound and outbound SMS
+7. Keep the Retell phone number termination URI pointed at `backfill.pstn.twilio.com`
 
 ## Persistence note
 

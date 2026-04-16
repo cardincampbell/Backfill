@@ -1,0 +1,369 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
+
+from app.models.business import Location, Role
+from app.models.common import (
+    AssignmentStatus,
+    EmployeeStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+    ShiftStatus,
+)
+from app.models.identity import User
+from app.models.scheduling import Shift, ShiftAssignment
+from app.models.workforce import Employee
+from app.services import retell_workflow
+
+
+class _ScalarResult:
+    def __init__(self, values):
+        self._values = values
+
+    def all(self):
+        return list(self._values)
+
+
+class _ExecuteResult:
+    def __init__(self, values):
+        self._values = values
+
+    def scalars(self):
+        return _ScalarResult(self._values)
+
+
+class FakeSession:
+    def __init__(self):
+        self.scalar_queue: list[object] = []
+        self.execute_queue: list[list[object]] = []
+        self.get_map: dict[tuple[type, object], object] = {}
+        self.flushed = 0
+
+    async def scalar(self, _query):
+        if self.scalar_queue:
+            return self.scalar_queue.pop(0)
+        return None
+
+    async def execute(self, _query):
+        values = self.execute_queue.pop(0) if self.execute_queue else []
+        return _ExecuteResult(values)
+
+    async def get(self, model, object_id, **_kwargs):
+        return self.get_map.get((model, object_id))
+
+    async def flush(self):
+        self.flushed += 1
+        return None
+
+
+@pytest.mark.asyncio
+async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
+    session = FakeSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    user = User(
+        id=uuid4(),
+        full_name="Taylor Caller",
+        email="taylor@example.com",
+        primary_phone_e164="+15555550100",
+        is_phone_verified=True,
+        onboarding_completed_at=now,
+        profile_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Caller",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.scheduled,
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift.id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = [assignment]
+
+    async def fake_find_latest_actionable_offer_for_phone(_session, _phone_e164):
+        return None
+
+    monkeypatch.setattr(
+        retell_workflow.delivery,
+        "find_latest_actionable_offer_for_phone",
+        fake_find_latest_actionable_offer_for_phone,
+    )
+
+    session.scalar_queue = [user, employee]
+    session.execute_queue = [[shift]]
+
+    result = await retell_workflow.lookup_caller(session, "+15555550100")
+
+    assert result["user"]["id"] == str(user.id)
+    assert result["employee"]["id"] == str(employee.id)
+    assert result["actionable_offer_id"] is None
+    assert result["assigned_shifts"] == [
+        {
+            "id": str(shift.id),
+            "location_id": str(location.id),
+            "location_name": "Downtown",
+            "role_id": str(role.id),
+            "role_name": "Barista",
+            "starts_at": shift.starts_at.isoformat(),
+            "ends_at": shift.ends_at.isoformat(),
+            "status": shift.status,
+            "lifecycle_status": ShiftLifecycleStatus.scheduled,
+            "staffing_status": ShiftStaffingStatus.covered,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "expected_status", "expected_reason"),
+    [
+        (True, "consent_granted", "voice_consent_granted"),
+        (False, "consent_revoked", "voice_consent_revoked"),
+    ],
+)
+async def test_log_consent_updates_sms_suppression_and_employee_preferences(
+    monkeypatch,
+    granted,
+    expected_status,
+    expected_reason,
+):
+    session = FakeSession()
+    now = datetime.now(timezone.utc)
+    employee = Employee(
+        id=uuid4(),
+        business_id=uuid4(),
+        full_name="Taylor Caller",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    session.get_map[(Employee, employee.id)] = employee
+    captured: dict[str, object] = {}
+
+    async def fake_clear(*_args, **kwargs):
+        captured.update(kwargs)
+        return object(), True
+
+    async def fake_suppress(*_args, **kwargs):
+        captured.update(kwargs)
+        return object(), True
+
+    monkeypatch.setattr(
+        retell_workflow.communication_suppressions,
+        "clear_destination_suppression",
+        fake_clear,
+    )
+    monkeypatch.setattr(
+        retell_workflow.communication_suppressions,
+        "suppress_destination",
+        fake_suppress,
+    )
+
+    result = await retell_workflow.log_consent(
+        session,
+        {
+            "employee_id": str(employee.id),
+            "granted": granted,
+            "channel": "inbound_call",
+        },
+    )
+
+    assert result["status"] == expected_status
+    assert result["employee_id"] == str(employee.id)
+    assert result["phone"] == "+15555550100"
+    assert result["changed"] is True
+    assert captured["channel"] == "sms"
+    assert captured["destination"] == "+15555550100"
+    assert captured["source"] == "retell_voice_consent"
+    assert captured["reason_code"] == expected_reason
+    preferences = employee.employee_metadata["notification_preferences"]
+    assert preferences["schedule_publish_sms_enabled"] is granted
+    if granted:
+        assert preferences["sms_opted_out_at"] is None
+        assert preferences["sms_opt_out_reason"] is None
+    else:
+        assert preferences["sms_opted_out_at"] is not None
+        assert preferences["sms_opt_out_reason"] == "voice_consent_revoked"
+    assert employee.employee_metadata["voice_consent"]["granted"] is granted
+
+
+@pytest.mark.asyncio
+async def test_create_vacancy_uses_published_callout_amendment_before_coverage(monkeypatch):
+    session = FakeSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.scheduled,
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = [assignment]
+    session.get_map[(Shift, shift_id)] = shift
+    captured: dict[str, object] = {}
+    coverage_case_id = uuid4()
+
+    async def fake_apply(_session, _business_id, _shift_id, payload):
+        captured["business_id"] = _business_id
+        captured["shift_id"] = _shift_id
+        captured["payload"] = payload
+        return object()
+
+    async def fake_create_vacancy_for_shift(
+        _session,
+        *,
+        shift_id,
+        employee_id=None,
+        triggered_by,
+        reason_code="scheduler_vacancy",
+        auto_execute=True,
+    ):
+        captured["coverage_shift_id"] = shift_id
+        captured["coverage_employee_id"] = employee_id
+        captured["triggered_by"] = triggered_by
+        captured["reason_code"] = reason_code
+        captured["auto_execute"] = auto_execute
+        return {
+            "shift_id": shift_id,
+            "coverage_case_id": coverage_case_id,
+            "offers": ["offer_123"],
+        }
+
+    monkeypatch.setattr(retell_workflow.scheduling, "apply_published_shift_amendment", fake_apply)
+    monkeypatch.setattr(retell_workflow.scheduler_sync, "create_vacancy_for_shift", fake_create_vacancy_for_shift)
+
+    result = await retell_workflow.create_vacancy(
+        session,
+        {
+            "shift_id": str(shift_id),
+            "employee_id": str(employee_id),
+            "conversation_summary": "Taylor called out sick for the morning shift.",
+        },
+    )
+
+    payload = captured["payload"]
+    assert payload.action == "unassign_shift"
+    assert payload.reason_code == "callout"
+    assert payload.source == "retell_voice"
+    assert payload.note == "Taylor called out sick for the morning shift."
+    assert captured["business_id"] == business_id
+    assert captured["shift_id"] == shift_id
+    assert captured["coverage_shift_id"] == shift_id
+    assert captured["coverage_employee_id"] == employee_id
+    assert captured["triggered_by"] == "retell_voice"
+    assert captured["reason_code"] == "callout"
+    assert result == {
+        "status": "vacancy_created",
+        "shift_id": str(shift_id),
+        "coverage_case_id": str(coverage_case_id),
+        "offers": ["offer_123"],
+        "used_published_amendment": True,
+    }

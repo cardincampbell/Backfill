@@ -9,6 +9,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from starlette.responses import JSONResponse
 
 from app.api import router as api_router
+from app.api.routes.retell_provider import public_router as retell_public_router
 from app.bootstrap import initialize_runtime
 from app.config import settings
 
@@ -120,6 +121,7 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(api_router)
+    app.include_router(retell_public_router)
     return app
 
 

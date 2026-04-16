@@ -9,6 +9,7 @@ from app.config import settings
 from app.services import provider_callbacks, rate_limit
 
 router = APIRouter(prefix="/providers/retell", tags=["retell"])
+public_router = APIRouter(tags=["retell"])
 
 
 def _validate_signature(raw_body: bytes, signature: str | None) -> bool:
@@ -52,6 +53,7 @@ def _provider_event_id(body: dict) -> str | None:
 
 
 @router.post("/webhook")
+@public_router.post("/webhooks/retell")
 async def retell_webhook(request: Request, session: SessionDep):
     client_ip = request.client.host if request.client is not None else "unknown"
     await rate_limit.assert_within_limit(
