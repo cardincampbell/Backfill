@@ -62,7 +62,7 @@ class FakeSession:
 @pytest.mark.asyncio
 async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
     session = FakeSession()
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 4, 16, 16, 0, tzinfo=timezone.utc)
     business_id = uuid4()
     location_id = uuid4()
     role_id = uuid4()
@@ -171,6 +171,8 @@ async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
     assert result["user"]["id"] == str(user.id)
     assert result["employee"]["id"] == str(employee.id)
     assert result["actionable_offer_id"] is None
+    assert result["assigned_shift_count"] == 1
+    assert result["next_assigned_shift_id"] == str(shift.id)
     assert result["assigned_shifts"] == [
         {
             "id": str(shift.id),
@@ -183,8 +185,131 @@ async def test_lookup_caller_returns_upcoming_assigned_shifts(monkeypatch):
             "status": shift.status,
             "lifecycle_status": ShiftLifecycleStatus.scheduled,
             "staffing_status": ShiftStaffingStatus.covered,
+            "notes": None,
+            "date_label": "Thursday, April 16",
+            "start_time_label": "11:00 AM",
+            "end_time_label": "7:00 PM",
+            "local_time_range": "11:00 AM to 7:00 PM PDT",
+            "timezone": "America/Los_Angeles",
+            "timezone_abbr": "PDT",
+            "summary": "Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
         }
     ]
+    assert result["assigned_shift_schedule_summary"] == (
+        "1. Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lookup_caller_returns_full_future_published_schedule(monkeypatch):
+    session = FakeSession()
+    now = datetime(2026, 4, 16, 16, 0, tzinfo=timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Caller",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    def build_shift(start_offset_days: int, start_hour_utc: int, end_hour_utc: int, *, end_offset_days: int = 0):
+        shift = Shift(
+            id=uuid4(),
+            business_id=business_id,
+            location_id=location_id,
+            role_id=role_id,
+            source_system="backfill_native",
+            timezone="America/Los_Angeles",
+            starts_at=datetime(2026, 4, 16 + start_offset_days, start_hour_utc, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 4, 16 + start_offset_days + end_offset_days, end_hour_utc, 0, tzinfo=timezone.utc),
+            status=ShiftStatus.scheduled,
+            lifecycle_status=ShiftLifecycleStatus.scheduled,
+            staffing_status=ShiftStaffingStatus.covered,
+            seats_requested=1,
+            seats_filled=1,
+            requires_manager_approval=False,
+            premium_cents=0,
+            notes=None,
+            shift_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+        assignment = ShiftAssignment(
+            id=uuid4(),
+            shift_id=shift.id,
+            employee_id=employee_id,
+            assigned_via="scheduler_ui",
+            status=AssignmentStatus.assigned,
+            sequence_no=1,
+            assignment_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+        shift.location = location
+        shift.role = role
+        shift.assignments = [assignment]
+        return shift
+
+    first_shift = build_shift(0, 18, 22)
+    second_shift = build_shift(6, 16, 0, end_offset_days=1)
+
+    async def fake_find_latest_actionable_offer_for_phone(_session, _phone_e164):
+        return None
+
+    monkeypatch.setattr(
+        retell_workflow.delivery,
+        "find_latest_actionable_offer_for_phone",
+        fake_find_latest_actionable_offer_for_phone,
+    )
+
+    session.scalar_queue = [None, employee]
+    session.execute_queue = [[first_shift, second_shift]]
+
+    result = await retell_workflow.lookup_caller(session, "+15555550100")
+
+    assert result["assigned_shift_count"] == 2
+    assert result["next_assigned_shift_id"] == str(first_shift.id)
+    assert len(result["assigned_shifts"]) == 2
+    assert "Thursday, April 16" in result["assigned_shift_schedule_summary"]
+    assert "Wednesday, April 22" in result["assigned_shift_schedule_summary"]
+    assert "Barista at Downtown" in result["assigned_shift_schedule_summary"]
 
 
 @pytest.mark.asyncio
@@ -397,8 +522,14 @@ async def test_build_inbound_webhook_response_personalizes_recognized_single_shi
                     "status": "covered",
                     "lifecycle_status": "scheduled",
                     "staffing_status": "covered",
+                    "date_label": "Thursday, April 16",
+                    "local_time_range": "11:00 AM to 7:00 PM PDT",
+                    "summary": "Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
                 }
             ],
+            "assigned_shift_schedule_summary": (
+                "1. Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown"
+            ),
             "actionable_offer_id": None,
         }
 
@@ -421,10 +552,90 @@ async def test_build_inbound_webhook_response_personalizes_recognized_single_shi
     assert payload["metadata"]["employee_found"] is True
     assert payload["metadata"]["upcoming_shift_count"] == 1
     assert payload["metadata"]["shift_id"] == str(shift_id)
+    assert payload["metadata"]["assigned_shift_schedule_summary"].startswith("1. Thursday, April 16")
     assert payload["dynamic_variables"]["caller_first_name"] == "Taylor"
     assert payload["dynamic_variables"]["employee_found"] == "true"
     assert payload["dynamic_variables"]["selected_shift_id"] == str(shift_id)
+    assert payload["dynamic_variables"]["selected_shift_summary"].startswith("Thursday, April 16")
+    assert payload["dynamic_variables"]["assigned_shift_schedule_summary"].startswith("1. Thursday, April 16")
     begin_message = payload["agent_override"]["retell_llm"]["begin_message"]
     assert "Hi Taylor" in begin_message
     assert "upcoming Barista shift" in begin_message
     assert "Backfill's AI assistant" in begin_message
+
+
+@pytest.mark.asyncio
+async def test_build_inbound_webhook_response_preloads_full_schedule_summary(monkeypatch):
+    session = FakeSession()
+
+    async def fake_lookup(_session, phone: str):
+        assert phone == "+15555550100"
+        return {
+            "phone": phone,
+            "user": None,
+            "employee": {
+                "id": str(uuid4()),
+                "full_name": "Taylor Caller",
+                "business_id": str(uuid4()),
+                "location_id": str(uuid4()),
+            },
+            "assigned_shifts": [
+                {
+                    "id": str(uuid4()),
+                    "location_id": str(uuid4()),
+                    "location_name": "Downtown",
+                    "role_id": str(uuid4()),
+                    "role_name": "Barista",
+                    "starts_at": "2026-04-16T18:00:00+00:00",
+                    "ends_at": "2026-04-17T02:00:00+00:00",
+                    "status": "covered",
+                    "lifecycle_status": "scheduled",
+                    "staffing_status": "covered",
+                    "date_label": "Thursday, April 16",
+                    "local_time_range": "11:00 AM to 7:00 PM PDT",
+                    "summary": "Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown",
+                },
+                {
+                    "id": str(uuid4()),
+                    "location_id": str(uuid4()),
+                    "location_name": "Downtown",
+                    "role_id": str(uuid4()),
+                    "role_name": "Barista",
+                    "starts_at": "2026-04-22T16:00:00+00:00",
+                    "ends_at": "2026-04-23T00:00:00+00:00",
+                    "status": "covered",
+                    "lifecycle_status": "scheduled",
+                    "staffing_status": "covered",
+                    "date_label": "Wednesday, April 22",
+                    "local_time_range": "9:00 AM to 5:00 PM PDT",
+                    "summary": "Wednesday, April 22 from 9:00 AM to 5:00 PM PDT as Barista at Downtown",
+                },
+            ],
+            "assigned_shift_schedule_summary": (
+                "1. Thursday, April 16 from 11:00 AM to 7:00 PM PDT as Barista at Downtown\n"
+                "2. Wednesday, April 22 from 9:00 AM to 5:00 PM PDT as Barista at Downtown"
+            ),
+            "actionable_offer_id": None,
+        }
+
+    monkeypatch.setattr(retell_workflow, "lookup_caller", fake_lookup)
+
+    result = await retell_workflow.build_inbound_webhook_response(
+        session,
+        {
+            "event": "call_inbound",
+            "call_inbound": {
+                "from_number": "+15555550100",
+                "agent_id": "agent_inbound_123",
+            },
+        },
+    )
+
+    payload = result["call_inbound"]
+    assert payload["metadata"]["upcoming_shift_count"] == 2
+    assert len(payload["metadata"]["assigned_shifts"]) == 2
+    assert "Thursday, April 16" in payload["dynamic_variables"]["assigned_shift_schedule_summary"]
+    assert "Wednesday, April 22" in payload["dynamic_variables"]["assigned_shift_schedule_summary"]
+    begin_message = payload["agent_override"]["retell_llm"]["begin_message"]
+    assert "2 upcoming published shifts" in begin_message
+    assert "starting with your upcoming Barista shift on Thursday, April 16" in begin_message

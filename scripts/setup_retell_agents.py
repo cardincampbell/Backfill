@@ -45,7 +45,7 @@ def _load_prompt(filename: str) -> str:
 FUNCTION_SCHEMAS = [
     {
         "name": "lookup_caller",
-        "description": "Look up the caller by phone number to identify if they are a known worker or manager.",
+        "description": "Look up the caller by phone number to identify them and return their full currently published upcoming assigned shift schedule.",
         "parameters": {
             "type": "object",
             "properties": {

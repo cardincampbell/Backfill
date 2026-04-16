@@ -46,23 +46,94 @@ def _coerce_retell_dynamic_value(value: object) -> str:
     return str(value)
 
 
+def _shift_display_timezone(shift: Shift) -> str:
+    timezone_name = str(getattr(shift, "timezone", "") or "").strip()
+    if timezone_name:
+        return timezone_name
+    location_timezone = str(getattr(getattr(shift, "location", None), "timezone", "") or "").strip()
+    return location_timezone or "UTC"
+
+
+def _to_local_shift_time(value: datetime, timezone_name: str) -> datetime:
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = timezone.utc
+    return value.astimezone(zone)
+
+
+def _format_calendar_label(value: datetime) -> str:
+    return value.strftime("%A, %B %d").replace(" 0", " ")
+
+
+def _format_clock_label(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _format_shift_summary(
+    *,
+    role_name: str | None,
+    location_name: str | None,
+    starts_at: datetime,
+    ends_at: datetime,
+    timezone_name: str,
+) -> dict[str, str]:
+    local_start = _to_local_shift_time(starts_at, timezone_name)
+    local_end = _to_local_shift_time(ends_at, timezone_name)
+    timezone_abbr = local_start.tzname() or timezone_name
+    date_label = _format_calendar_label(local_start)
+    start_time_label = _format_clock_label(local_start)
+    end_time_label = _format_clock_label(local_end)
+    local_time_range = f"{start_time_label} to {end_time_label} {timezone_abbr}".strip()
+    role_text = str(role_name or "shift").strip() or "shift"
+    location_text = str(location_name or "").strip()
+    summary = f"{date_label} from {local_time_range} as {role_text}"
+    if location_text:
+        summary += f" at {location_text}"
+    return {
+        "date_label": date_label,
+        "start_time_label": start_time_label,
+        "end_time_label": end_time_label,
+        "local_time_range": local_time_range,
+        "timezone": timezone_name,
+        "timezone_abbr": timezone_abbr,
+        "summary": summary,
+    }
+
+
+def _format_assigned_shift_schedule_summary(assigned_shifts: list[dict[str, Any]]) -> str:
+    if not assigned_shifts:
+        return ""
+    return "\n".join(
+        f"{index}. {str(shift.get('summary') or '').strip()}"
+        for index, shift in enumerate(assigned_shifts, start=1)
+        if str(shift.get("summary") or "").strip()
+    )
+
+
 def _format_inbound_shift_phrase(shift: dict[str, Any]) -> str:
     role_name = str(shift.get("role_name") or "shift").strip()
     location_name = str(shift.get("location_name") or "").strip()
-    starts_at_raw = str(shift.get("starts_at") or "").strip()
-    try:
-        starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
-    except ValueError:
-        starts_at = None
-    time_text = None
-    if starts_at is not None:
-        time_text = starts_at.astimezone(timezone.utc).strftime("%a %b %-d at %-I:%M %p UTC")
-    parts = [f"your upcoming {role_name} shift"]
+    date_label = str(shift.get("date_label") or "").strip()
+    local_time_range = str(shift.get("local_time_range") or "").strip()
+    if date_label and local_time_range:
+        phrase = f"your upcoming {role_name} shift on {date_label} from {local_time_range}"
+    else:
+        starts_at_raw = str(shift.get("starts_at") or "").strip()
+        try:
+            starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            starts_at = None
+        time_text = None
+        if starts_at is not None:
+            time_text = starts_at.astimezone(timezone.utc).strftime("%a %b %-d at %-I:%M %p UTC")
+        parts = [f"your upcoming {role_name} shift"]
+        if time_text:
+            parts.append(time_text)
+        phrase = " ".join(parts)
     if location_name:
-        parts.append(f"at {location_name}")
-    if time_text:
-        parts.append(time_text)
-    return " ".join(parts)
+        phrase += f" at {location_name}"
+    return phrase
 
 
 def _build_begin_message(
@@ -79,7 +150,11 @@ def _build_begin_message(
         shift_phrase = _format_inbound_shift_phrase(assigned_shifts[0])
         return f"Hi {caller_first_name}, {disclosure} Are you calling about {shift_phrase}?"
     if employee_found and caller_first_name and len(assigned_shifts) > 1:
-        return f"Hi {caller_first_name}, {disclosure} Are you calling about one of your upcoming shifts?"
+        next_shift_phrase = _format_inbound_shift_phrase(assigned_shifts[0])
+        return (
+            f"Hi {caller_first_name}, {disclosure} I have {len(assigned_shifts)} upcoming published shifts "
+            f"on your schedule, starting with {next_shift_phrase}. Are you calling about one of those shifts?"
+        )
     return f"Hi, {disclosure} Are you calling about an upcoming shift?"
 
 
@@ -359,18 +434,30 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
                 Shift.ends_at >= datetime.now(timezone.utc) - timedelta(hours=4),
             )
             .order_by(Shift.starts_at.asc())
-            .limit(10)
         )
+        seen_shift_ids: set[UUID] = set()
         for shift in result.scalars().all():
+            if shift.id in seen_shift_ids:
+                continue
+            seen_shift_ids.add(shift.id)
+            location_name = (
+                getattr(shift.location, "location_display_name", None)
+                or getattr(shift.location, "display_name", None)
+                or getattr(shift.location, "name", None)
+            )
+            timezone_name = _shift_display_timezone(shift)
+            shift_summary = _format_shift_summary(
+                role_name=getattr(shift.role, "name", None),
+                location_name=location_name,
+                starts_at=shift.starts_at,
+                ends_at=shift.ends_at,
+                timezone_name=timezone_name,
+            )
             assigned_shifts.append(
                 {
                     "id": str(shift.id),
                     "location_id": str(shift.location_id),
-                    "location_name": (
-                        getattr(shift.location, "location_display_name", None)
-                        or getattr(shift.location, "display_name", None)
-                        or getattr(shift.location, "name", None)
-                    ),
+                    "location_name": location_name,
                     "role_id": str(shift.role_id),
                     "role_name": getattr(shift.role, "name", None),
                     "starts_at": shift.starts_at.isoformat(),
@@ -378,8 +465,11 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
                     "status": shift.status,
                     "lifecycle_status": shift.lifecycle_status,
                     "staffing_status": shift.staffing_status,
+                    "notes": shift.notes,
+                    **shift_summary,
                 }
             )
+    assigned_shift_schedule_summary = _format_assigned_shift_schedule_summary(assigned_shifts)
     return {
         "phone": normalized,
         "user": {
@@ -394,6 +484,9 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
             "location_id": str(employee.primary_location_id) if employee.primary_location_id else None,
         } if employee is not None else None,
         "assigned_shifts": assigned_shifts,
+        "assigned_shift_count": len(assigned_shifts),
+        "assigned_shift_schedule_summary": assigned_shift_schedule_summary,
+        "next_assigned_shift_id": assigned_shifts[0]["id"] if assigned_shifts else None,
         "actionable_offer_id": str(context.offer.id) if context is not None else None,
     }
 
@@ -417,6 +510,7 @@ async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> d
     employee = lookup.get("employee") if isinstance(lookup.get("employee"), dict) else None
     user = lookup.get("user") if isinstance(lookup.get("user"), dict) else None
     assigned_shifts = list(lookup.get("assigned_shifts") or [])
+    assigned_shift_schedule_summary = str(lookup.get("assigned_shift_schedule_summary") or "").strip()
     employee_found = employee is not None
     caller_name = (
         str((employee or {}).get("full_name") or "").strip()
@@ -425,17 +519,22 @@ async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> d
     )
     caller_first_name = _first_name(caller_name)
     selected_shift = assigned_shifts[0] if len(assigned_shifts) == 1 else None
+    next_shift = assigned_shifts[0] if assigned_shifts else None
 
     metadata: dict[str, Any] = {
         "caller_phone": phone,
         "employee_found": employee_found,
         "upcoming_shift_count": len(assigned_shifts),
+        "assigned_shifts": assigned_shifts,
+        "assigned_shift_schedule_summary": assigned_shift_schedule_summary,
     }
     if employee is not None:
         metadata["employee_id"] = employee.get("id")
         metadata["business_id"] = employee.get("business_id")
         if employee.get("location_id"):
             metadata["location_id"] = employee.get("location_id")
+    if next_shift is not None:
+        metadata["next_shift_summary"] = next_shift.get("summary")
     if selected_shift is not None:
         metadata["shift_id"] = selected_shift.get("id")
         if selected_shift.get("location_id"):
@@ -447,17 +546,24 @@ async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> d
         "caller_name": _coerce_retell_dynamic_value(caller_name),
         "caller_first_name": _coerce_retell_dynamic_value(caller_first_name),
         "upcoming_shift_count": _coerce_retell_dynamic_value(len(assigned_shifts)),
+        "assigned_shift_schedule_summary": _coerce_retell_dynamic_value(assigned_shift_schedule_summary),
         "next_shift_role": _coerce_retell_dynamic_value(
-            selected_shift.get("role_name") if selected_shift is not None else None
+            next_shift.get("role_name") if next_shift is not None else None
         ),
         "next_shift_location": _coerce_retell_dynamic_value(
-            selected_shift.get("location_name") if selected_shift is not None else None
+            next_shift.get("location_name") if next_shift is not None else None
         ),
         "next_shift_starts_at": _coerce_retell_dynamic_value(
-            selected_shift.get("starts_at") if selected_shift is not None else None
+            next_shift.get("starts_at") if next_shift is not None else None
+        ),
+        "next_shift_summary": _coerce_retell_dynamic_value(
+            next_shift.get("summary") if next_shift is not None else None
         ),
         "selected_shift_id": _coerce_retell_dynamic_value(
             selected_shift.get("id") if selected_shift is not None else None
+        ),
+        "selected_shift_summary": _coerce_retell_dynamic_value(
+            selected_shift.get("summary") if selected_shift is not None else None
         ),
     }
     response_payload: dict[str, Any] = {
