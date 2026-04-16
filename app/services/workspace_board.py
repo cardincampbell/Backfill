@@ -224,7 +224,11 @@ def _recovered_shift_historical_artifacts(shift: Shift) -> list[dict]:
         ShiftLifecycleStatus.in_progress.value,
     }:
         return []
+    if _shift_schedule_break(shift):
+        return []
     current_assignment = _best_assignment(shift)
+    if current_assignment is None:
+        return []
     assignments = sorted(
         list(shift.assignments or []),
         key=lambda item: (item.sequence_no or 0, item.created_at or datetime.min),
