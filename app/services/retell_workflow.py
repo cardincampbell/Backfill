@@ -447,6 +447,141 @@ def _matches_any_pattern(text: str, patterns: tuple[re.Pattern[str], ...]) -> bo
     return any(pattern.search(lowered) for pattern in patterns)
 
 
+def _normalized_label(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+    return text or None
+
+
+def _retell_custom_analysis_data(conversation: RetellConversation) -> dict[str, Any]:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    custom = analysis.get("custom_analysis_data")
+    return custom if isinstance(custom, dict) else {}
+
+
+def _normalize_retell_confidence(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+    else:
+        try:
+            numeric = float(str(value).strip())
+        except (TypeError, ValueError):
+            numeric = None
+    if numeric is not None:
+        if numeric >= 0.8:
+            return "high"
+        if numeric >= 0.5:
+            return "medium"
+        return "low"
+
+    token = _normalized_label(value)
+    if token in {"high", "high_confidence", "very_confident", "certain", "strong"}:
+        return "high"
+    if token in {"medium", "medium_confidence", "moderate", "uncertain_but_likely"}:
+        return "medium"
+    if token in {"low", "low_confidence", "uncertain", "weak"}:
+        return "low"
+    return None
+
+
+def _normalize_retell_intent(value: Any) -> str | None:
+    token = _normalized_label(value)
+    if token is None:
+        return None
+    if "callout" in token or token in {
+        "call_out",
+        "call_out_request",
+        "callout_request",
+        "unable_to_work",
+        "cannot_work",
+        "unable_to_make_shift",
+        "shift_callout",
+        "report_callout",
+    }:
+        return "callout"
+    if "no_show" in token or "noshow" in token:
+        return "no_show"
+    if "opt_out" in token or token in {
+        "optout",
+        "unsubscribe",
+        "do_not_call",
+        "do_not_text",
+        "stop",
+    }:
+        return "opt_out"
+    if "schedule" in token and ("question" in token or "inquiry" in token or token == "schedule"):
+        return "schedule_question"
+    if "coverage" in token and ("status" in token or "question" in token or "inquiry" in token):
+        return "coverage_status_question"
+    if "manager" in token and ("request" in token or "support" in token):
+        return "manager_request"
+    if token in {"unknown", "other", "unclear", "none"}:
+        return "unknown"
+    return token
+
+
+def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | None:
+    custom = _retell_custom_analysis_data(conversation)
+    if not custom:
+        return None
+
+    raw_intent: Any = None
+    raw_confidence: Any = None
+    source = None
+    for key in (
+        "call_intent",
+        "intent",
+        "primary_intent",
+        "user_intent",
+        "inbound_intent",
+    ):
+        value = custom.get(key)
+        if value in (None, ""):
+            continue
+        source = f"custom_analysis_data.{key}"
+        if isinstance(value, dict):
+            raw_intent = _pick_value(
+                value,
+                keys=("value", "intent", "label", "name", "selection"),
+            )
+            raw_confidence = _pick_value(
+                value,
+                keys=("confidence", "confidence_level", "certainty"),
+            )
+        else:
+            raw_intent = value
+        break
+
+    if raw_confidence in (None, ""):
+        raw_confidence = _pick_value(
+            custom,
+            keys=(
+                "call_intent_confidence",
+                "intent_confidence",
+                "confidence",
+                "call_intent_confidence_level",
+                "intent_confidence_level",
+            ),
+        )
+
+    normalized_intent = _normalize_retell_intent(raw_intent)
+    normalized_confidence = _normalize_retell_confidence(raw_confidence)
+    if normalized_intent is None and normalized_confidence is None:
+        return None
+
+    return {
+        "provider": "retell_custom_analysis",
+        "source": source or "custom_analysis_data",
+        "raw_intent": None if raw_intent in (None, "") else str(raw_intent).strip(),
+        "intent": normalized_intent,
+        "raw_confidence": None if raw_confidence in (None, "") else str(raw_confidence).strip(),
+        "confidence": normalized_confidence,
+    }
+
+
 def _metadata_shift_id(conversation: RetellConversation) -> str | None:
     metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
     for key in ("selected_shift_id", "shift_id", "next_assigned_shift_id"):
@@ -569,11 +704,19 @@ async def process_inbound_conversation_completion(
     caller_phone = (
         str(metadata.get("caller_phone") or conversation.phone_from or "").strip() or None
     )
+    intent_signal = _retell_intent_signal(conversation)
 
     consent_state = processing_state.get("consent") if isinstance(processing_state.get("consent"), dict) else {}
     if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
         consent_result = dict(consent_state)
-    elif caller_phone and _matches_any_pattern(user_text, _SMS_OPT_OUT_PATTERNS):
+    elif caller_phone and (
+        _matches_any_pattern(user_text, _SMS_OPT_OUT_PATTERNS)
+        or (
+            isinstance(intent_signal, dict)
+            and intent_signal.get("intent") == "opt_out"
+            and intent_signal.get("confidence") == "high"
+        )
+    ):
         consent_result = await log_consent(
             session,
             {
@@ -589,6 +732,63 @@ async def process_inbound_conversation_completion(
     callout_state = processing_state.get("callout") if isinstance(processing_state.get("callout"), dict) else {}
     if callout_state.get("status") == "vacancy_created":
         callout_result = dict(callout_state)
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") in {"callout", "no_show"}:
+        if intent_signal.get("confidence") != "high":
+            callout_result = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+        elif employee_id is None:
+            callout_result = {
+                "status": "employee_context_missing",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+            }
+        else:
+            selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
+            if selected_shift is None:
+                callout_result = {
+                    "status": "shift_reference_unresolved",
+                    "resolution": resolution,
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                }
+            else:
+                reason_code = "no_show" if intent_signal.get("intent") == "no_show" else "callout"
+                try:
+                    vacancy = await create_vacancy(
+                        session,
+                        {
+                            "shift_id": str(selected_shift.get("id") or "").strip(),
+                            "employee_id": employee_id,
+                            "conversation_summary": _trimmed_conversation_summary(conversation),
+                            "source": "retell_post_call",
+                            "reason_code": reason_code,
+                        },
+                    )
+                    callout_result = {
+                        **vacancy,
+                        "resolution": resolution,
+                        "intent": intent_signal.get("intent"),
+                        "confidence": intent_signal.get("confidence"),
+                    }
+                except (LookupError, ValueError) as exc:
+                    callout_result = {
+                        "status": str(exc),
+                        "shift_id": str(selected_shift.get("id") or "").strip() or None,
+                        "resolution": resolution,
+                        "intent": intent_signal.get("intent"),
+                        "confidence": intent_signal.get("confidence"),
+                    }
+    elif isinstance(intent_signal, dict):
+        callout_result = {
+            "status": "retell_intent_non_callout",
+            "intent": intent_signal.get("intent"),
+            "confidence": intent_signal.get("confidence"),
+            "source": intent_signal.get("source"),
+        }
     elif not _matches_any_pattern(user_text, _CALL_OUT_PATTERNS):
         callout_result = {"status": "no_callout_detected"}
     elif employee_id is None:
@@ -625,6 +825,7 @@ async def process_inbound_conversation_completion(
     updated_state = {
         **processing_state,
         "processed_at": datetime.now(timezone.utc).isoformat(),
+        "intent": intent_signal or {"provider": "heuristic_fallback"},
         "consent": consent_result,
         "callout": callout_result,
     }
@@ -1100,6 +1301,8 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
 
     employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
     source = str(args.get("source") or "retell_voice").strip() or "retell_voice"
+    requested_reason_code = str(args.get("reason_code") or "callout").strip().lower()
+    reason_code = requested_reason_code if requested_reason_code in {"callout", "no_show"} else "callout"
     amendment_source = source if source in {"scheduler_ui", "copilot", "retell_voice", "sms_automation"} else "retell_voice"
     current_assignment = shift_assignments.current_assignment(shift.assignments or [])
     effective_employee_id = employee_id or (
@@ -1124,7 +1327,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
             shift.id,
             PublishedShiftAmendmentWrite(
                 action="unassign_shift",
-                reason_code="callout",
+                reason_code=reason_code,
                 source=amendment_source,
                 note=str(args.get("conversation_summary") or args.get("note") or "").strip() or None,
             ),
@@ -1136,7 +1339,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         shift_id=shift.id,
         employee_id=effective_employee_id,
         triggered_by=source,
-        reason_code="callout",
+        reason_code=reason_code,
     )
     return {
         "status": "vacancy_created",
@@ -1148,6 +1351,7 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         ),
         "offers": vacancy.get("offers", []),
         "used_published_amendment": used_published_amendment,
+        "reason_code": reason_code,
     }
 
 

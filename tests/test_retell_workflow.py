@@ -502,6 +502,7 @@ async def test_create_vacancy_uses_published_callout_amendment_before_coverage(m
         "coverage_case_id": str(coverage_case_id),
         "offers": ["offer_123"],
         "used_published_amendment": True,
+        "reason_code": "callout",
     }
 
 
@@ -921,6 +922,174 @@ async def test_process_inbound_conversation_completion_detects_cant_make_my_shif
     assert captured["source"] == "retell_post_call"
     assert result["callout"]["status"] == "vacancy_created"
     assert result["callout"]["resolution"] == "transcript_shift_match"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_uses_high_confidence_retell_callout_intent(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    shift_tomorrow = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_high_confidence",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        conversation_summary="Caller confirmed they cannot work their only shift tomorrow.",
+        transcript_text="user: Correct. Personal.",
+        transcript_items=[
+            {"role": "user", "content": "That's the only shift that I have tomorrow."},
+            {"role": "user", "content": "Correct."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "call_intent": "callout",
+                "call_intent_confidence": "high",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [
+                {
+                    "id": str(shift_tomorrow),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-17T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_create_vacancy(_session, args):
+        captured.update(args)
+        return {
+            "status": "vacancy_created",
+            "shift_id": args["shift_id"],
+            "coverage_case_id": str(uuid4()),
+            "offers": [],
+            "used_published_amendment": True,
+            "reason_code": args["reason_code"],
+        }
+
+    monkeypatch.setattr(retell_workflow, "create_vacancy", fake_create_vacancy)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert captured["shift_id"] == str(shift_tomorrow)
+    assert captured["reason_code"] == "callout"
+    assert result["callout"]["status"] == "vacancy_created"
+    assert result["callout"]["intent"] == "callout"
+    assert result["callout"]["confidence"] == "high"
+    assert conversation.analysis["backfill_processing"]["intent"]["intent"] == "callout"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_holds_medium_confidence_retell_callout_for_review():
+    session = FakeSession()
+    employee_id = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_medium_confidence",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        transcript_text="user: I can't make my shift tomorrow.",
+        transcript_items=[
+            {"role": "user", "content": "I can't make my shift tomorrow."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "call_intent": "callout",
+                "call_intent_confidence": "medium",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [
+                {
+                    "id": str(uuid4()),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-17T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert result["callout"]["status"] == "retell_intent_requires_secondary_review"
+    assert result["callout"]["intent"] == "callout"
+    assert result["callout"]["confidence"] == "medium"
+    assert conversation.analysis["backfill_processing"]["intent"]["confidence"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_records_non_callout_retell_intent():
+    session = FakeSession()
+    employee_id = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_schedule_question",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        transcript_text="user: What shifts do I have this week?",
+        transcript_items=[
+            {"role": "user", "content": "What shifts do I have this week?"},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "call_intent": "schedule_question",
+                "call_intent_confidence": "high",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert result["callout"]["status"] == "retell_intent_non_callout"
+    assert result["callout"]["intent"] == "schedule_question"
+    assert result["callout"]["confidence"] == "high"
 
 
 @pytest.mark.asyncio
