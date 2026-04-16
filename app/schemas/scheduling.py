@@ -105,7 +105,7 @@ class PublishedShiftAmendmentRead(BaseSchema):
 
 
 class ScheduleWeekPublishWrite(BaseSchema):
-    source: Literal["scheduler_ui", "copilot"]
+    source: Literal["scheduler_ui", "copilot", "coverage_automation"]
     notify_channels: list[Literal["sms", "email"]] = Field(default_factory=list)
     expected_shift_ids: Optional[list[UUID]] = None
     note: Optional[str] = None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -23,6 +23,7 @@ from app.models.common import (
     OfferResponseChannel,
     OutboxChannel,
     OutboxStatus,
+    ShiftLifecycleStatus,
     ShiftStatus,
 )
 from app.models.coverage import (
@@ -53,6 +54,46 @@ from app.schemas.coverage import (
     Phase2ExecutionResult,
 )
 from app.services import delivery as delivery_service, outreach as outreach_service, platform_events, runtime_projections
+
+
+def _shift_amendment_metadata(shift: Shift) -> dict:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    raw = shift_metadata.get("published_amendment")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _shift_amended_from_published(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("amended_from_published"))
+
+
+def _shift_schedule_break(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("schedule_break"))
+
+
+def _should_accept_via_published_reassignment(shift: Shift) -> bool:
+    return (
+        shift.lifecycle_status in {ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress}
+        and _shift_amended_from_published(shift)
+        and _shift_schedule_break(shift)
+        and shift.seats_filled < shift.seats_requested
+    )
+
+
+def _coverage_assignment_source(response_channel: str) -> str:
+    normalized = str(response_channel or "").strip().lower()
+    if normalized == "voice":
+        return "retell_voice"
+    if normalized == "sms":
+        return "sms_automation"
+    return "copilot"
+
+
+def _shift_calendar_day_window(shift: Shift) -> tuple[datetime, datetime]:
+    shift_zone = ZoneInfo(shift.timezone)
+    local_date = shift.starts_at.astimezone(shift_zone).date()
+    local_start = datetime.combine(local_date, time.min, tzinfo=shift_zone)
+    local_end = local_start + timedelta(days=1)
+    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
 def _normalize_candidate_score(
@@ -1070,14 +1111,15 @@ async def _collect_phase_1_candidates(
     employee_ids = [employee.id for employee in employees]
     busy_employee_ids: set[UUID] = set()
     if employee_ids:
+        day_starts_at, day_ends_at = _shift_calendar_day_window(shift)
         busy_result = await session.execute(
             select(ShiftAssignment.employee_id)
             .join(Shift, ShiftAssignment.shift_id == Shift.id)
             .where(
                 ShiftAssignment.employee_id.in_(employee_ids),
                 ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
-                Shift.starts_at < shift.ends_at,
-                Shift.ends_at > shift.starts_at,
+                Shift.starts_at < day_ends_at,
+                Shift.ends_at > day_starts_at,
             )
         )
         busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
@@ -1198,14 +1240,15 @@ async def _collect_phase_2_candidates(
     busy_employee_ids: set[UUID] = set()
     worked_location_counts: dict[UUID, int] = {}
     if employee_ids:
+        day_starts_at, day_ends_at = _shift_calendar_day_window(shift)
         busy_result = await session.execute(
             select(ShiftAssignment.employee_id)
             .join(Shift, ShiftAssignment.shift_id == Shift.id)
             .where(
                 ShiftAssignment.employee_id.in_(employee_ids),
                 ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
-                Shift.starts_at < shift.ends_at,
-                Shift.ends_at > shift.starts_at,
+                Shift.starts_at < day_ends_at,
+                Shift.ends_at > day_starts_at,
             )
         )
         busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
@@ -1703,6 +1746,7 @@ async def respond_to_offer(
 
     assignment: ShiftAssignment | None = None
     assignment_status: str | None = None
+    publish_note: str | None = None
     if action == "accepted":
         offer.status = OfferStatus.accepted
         offer.accepted_at = responded_at
@@ -1738,48 +1782,131 @@ async def respond_to_offer(
             }
             assignment_status = "standby"
         else:
-            current_sequence = await session.scalar(
-                select(func.coalesce(func.max(ShiftAssignment.sequence_no), 0)).where(
-                    ShiftAssignment.shift_id == shift.id
-                )
-            )
-            assignment = ShiftAssignment(
-                shift_id=shift.id,
-                employee_id=offer.employee_id,
-                assigned_via="coverage_offer",
-                status=AssignmentStatus.accepted,
-                sequence_no=int(current_sequence or 0) + 1,
-                accepted_at=responded_at,
-                assignment_metadata={
-                    "coverage_case_id": str(coverage_case.id),
-                    "coverage_offer_id": str(offer.id),
-                },
-            )
-            session.add(assignment)
-            assignment_status = AssignmentStatus.accepted.value
+            if _should_accept_via_published_reassignment(shift):
+                from app.services import scheduling as scheduling_service
 
-            if _is_standby_activation_offer(offer):
-                _record_standby_queue_result(
-                    coverage_case,
-                    offer,
-                    status="promoted",
-                    occurred_at=responded_at,
-                    assignment=assignment,
+                amendment_result = await scheduling_service.apply_published_shift_amendment(
+                    session,
+                    business_id,
+                    shift.id,
+                    scheduling_service.PublishedShiftAmendmentWrite(
+                        action="reassign_shift",
+                        reason_code="reassignment",
+                        target_employee_id=offer.employee_id,
+                        source=_coverage_assignment_source(payload.response_channel),
+                        note=payload.response_text or None,
+                    ),
+                    cancel_active_automation=False,
                 )
-
-            shift.seats_filled += 1
-            if shift.seats_filled >= shift.seats_requested:
-                shift.status = ShiftStatus.covered
+                assignment = amendment_result.current_assignment
+                assignment_status = (
+                    assignment.status.value if assignment is not None and hasattr(assignment.status, "value") else None
+                )
+                if _is_standby_activation_offer(offer):
+                    _record_standby_queue_result(
+                        coverage_case,
+                        offer,
+                        status="promoted",
+                        occurred_at=responded_at,
+                        assignment=assignment,
+                    )
                 coverage_case.status = CoverageCaseStatus.filled
                 coverage_case.closed_at = responded_at
                 _update_case_metadata(
                     coverage_case,
                     confirmed_offer_id=str(offer.id),
                     confirmed_employee_id=str(offer.employee_id),
+                    resolution="reassigned",
                 )
+                publish_note = "Automatically republished after coverage reassignment."
+                try:
+                    republish_result = await scheduling_service.publish_schedule_week(
+                        session,
+                        business_id,
+                        shift.location_id,
+                        amendment_result.week_start_date,
+                        scheduling_service.ScheduleWeekPublishWrite(
+                            source="coverage_automation",
+                            notify_channels=["email"],
+                            expected_shift_ids=[],
+                            note=publish_note,
+                        ),
+                    )
+                except scheduling_service.ScheduleWeekPublishConflictError as exc:
+                    _update_case_metadata(
+                        coverage_case,
+                        auto_republish_status="skipped_due_to_draft_conflict",
+                        auto_republish_week_start_date=exc.week_start_date.isoformat(),
+                        auto_republish_draft_shift_count=exc.draft_shift_count,
+                    )
+                else:
+                    _update_case_metadata(
+                        coverage_case,
+                        auto_republish_status="published",
+                        auto_republish_week_start_date=republish_result.week_start_date.isoformat(),
+                        auto_republish_notification_employee_count=(
+                            republish_result.notification_enqueued_employee_count
+                        ),
+                    )
+                    await platform_events.append(
+                        session,
+                        event_type=platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
+                        target_type="location",
+                        target_id=shift.location_id,
+                        business_id=business_id,
+                        location_id=coverage_case.location_id,
+                        actor_type=AuditActorType.system,
+                        payload=scheduling_service.build_schedule_week_publish_response(
+                            republish_result
+                        ).model_dump(mode="json"),
+                        metadata={
+                            "source": "coverage_automation",
+                            "note": publish_note,
+                        },
+                    )
             else:
-                shift.status = ShiftStatus.filling
-                coverage_case.status = CoverageCaseStatus.running
+                current_sequence = await session.scalar(
+                    select(func.coalesce(func.max(ShiftAssignment.sequence_no), 0)).where(
+                        ShiftAssignment.shift_id == shift.id
+                    )
+                )
+                assignment = ShiftAssignment(
+                    shift_id=shift.id,
+                    employee_id=offer.employee_id,
+                    assigned_via="coverage_offer",
+                    status=AssignmentStatus.accepted,
+                    sequence_no=int(current_sequence or 0) + 1,
+                    accepted_at=responded_at,
+                    assignment_metadata={
+                        "coverage_case_id": str(coverage_case.id),
+                        "coverage_offer_id": str(offer.id),
+                    },
+                )
+                session.add(assignment)
+                assignment_status = AssignmentStatus.accepted.value
+
+                if _is_standby_activation_offer(offer):
+                    _record_standby_queue_result(
+                        coverage_case,
+                        offer,
+                        status="promoted",
+                        occurred_at=responded_at,
+                        assignment=assignment,
+                    )
+
+                shift.seats_filled += 1
+                if shift.seats_filled >= shift.seats_requested:
+                    shift.status = ShiftStatus.covered
+                    coverage_case.status = CoverageCaseStatus.filled
+                    coverage_case.closed_at = responded_at
+                    _update_case_metadata(
+                        coverage_case,
+                        confirmed_offer_id=str(offer.id),
+                        confirmed_employee_id=str(offer.employee_id),
+                    )
+                else:
+                    shift.status = ShiftStatus.filling
+                    coverage_case.status = CoverageCaseStatus.running
 
             sibling_result = await session.execute(
                 select(CoverageOffer).where(

@@ -1022,6 +1022,7 @@ async def apply_published_shift_amendment(
     payload: PublishedShiftAmendmentWrite,
     *,
     assigned_by_user_id: UUID | None = None,
+    cancel_active_automation: bool = True,
 ) -> PublishedShiftAmendmentResult:
     shift = await _load_shift_for_assignment(session, business_id, shift_id)
     if not _is_live_shift(shift):
@@ -1044,11 +1045,14 @@ async def apply_published_shift_amendment(
     if payload.action == "cancel_shift":
         if payload.reason_code != "cancelled":
             raise ValueError("published_shift_cancel_requires_cancelled_reason")
-        cancelled_cases, cancelled_offers = await _cancel_active_automation(
-            session,
-            shift,
-            reason="published_shift_cancelled",
-        )
+        cancelled_cases: list[CoverageCase] = []
+        cancelled_offers: list[CoverageOffer] = []
+        if cancel_active_automation:
+            cancelled_cases, cancelled_offers = await _cancel_active_automation(
+                session,
+                shift,
+                reason="published_shift_cancelled",
+            )
         if current is not None:
             current.status = AssignmentStatus.cancelled
             current.cancelled_at = now
@@ -1098,11 +1102,14 @@ async def apply_published_shift_amendment(
     if payload.action == "unassign_shift":
         if payload.reason_code not in {"callout", "no_show"}:
             raise ValueError("published_shift_unassign_requires_operational_reason")
-        cancelled_cases, cancelled_offers = await _cancel_active_automation(
-            session,
-            shift,
-            reason="published_shift_unassigned",
-        )
+        cancelled_cases: list[CoverageCase] = []
+        cancelled_offers: list[CoverageOffer] = []
+        if cancel_active_automation:
+            cancelled_cases, cancelled_offers = await _cancel_active_automation(
+                session,
+                shift,
+                reason="published_shift_unassigned",
+            )
         current.status = (
             AssignmentStatus.no_show
             if payload.reason_code == "no_show"
@@ -1152,11 +1159,14 @@ async def apply_published_shift_amendment(
     if current is None and latest_assignment is None:
         raise ValueError("published_shift_requires_current_assignment")
 
-    cancelled_cases, cancelled_offers = await _cancel_active_automation(
-        session,
-        shift,
-        reason="published_shift_reassigned",
-    )
+    cancelled_cases: list[CoverageCase] = []
+    cancelled_offers: list[CoverageOffer] = []
+    if cancel_active_automation:
+        cancelled_cases, cancelled_offers = await _cancel_active_automation(
+            session,
+            shift,
+            reason="published_shift_reassigned",
+        )
     prior_reason_code = _shift_amendment_reason_code(shift)
     previous_assignment = current if current is not None else latest_assignment
     if (

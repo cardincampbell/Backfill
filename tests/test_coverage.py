@@ -12,6 +12,8 @@ from app.models.common import (
     CoverageOperatingMode,
     OfferStatus,
     OutboxStatus,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
     ShiftStatus,
 )
 from app.models.business import Business, LocationRole
@@ -30,7 +32,7 @@ from app.schemas.coverage import (
     CoverageOfferResponseCreate,
     Phase1ExecutionRequest,
 )
-from app.services import coverage
+from app.services import coverage, scheduling
 
 
 class _ScalarResult:
@@ -133,6 +135,26 @@ class FakeCoverageSession:
     async def execute(self, _query):
         values = self.execute_queue.pop(0) if self.execute_queue else []
         return _ExecuteResult(values)
+
+
+def test_shift_calendar_day_window_uses_local_shift_day():
+    shift = Shift(
+        id=uuid4(),
+        business_id=uuid4(),
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 17, 23, 30, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 18, 7, 30, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+
+    day_starts_at, day_ends_at = coverage._shift_calendar_day_window(shift)
+
+    assert day_starts_at == datetime(2026, 4, 17, 7, 0, tzinfo=timezone.utc)
+    assert day_ends_at == datetime(2026, 4, 18, 7, 0, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -315,6 +337,229 @@ async def test_respond_to_offer_accepts_and_assigns_shift():
     assert result.assignment_status == AssignmentStatus.accepted
     assert result.outreach_attempt.coverage_offer_id == offer.id
     assert result.outreach_attempt.status == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_respond_to_offer_accepts_active_callout_via_published_reassignment_and_republish(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    offer_id = uuid4()
+    sibling_id = uuid4()
+    employee_id = uuid4()
+    previous_employee_id = uuid4()
+    week_start = datetime.now(timezone.utc).date()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        ends_at=datetime.now(timezone.utc) + timedelta(hours=14),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.filling,
+        seats_requested=1,
+        seats_filled=0,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": True,
+                "reason_code": "callout",
+                "schedule_break": True,
+                "amended_employee_ids": [str(previous_employee_id)],
+            }
+        },
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        employee_id=employee_id,
+        channel="voice",
+        status=OfferStatus.pending,
+        idempotency_key="offer-main",
+        offer_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    sibling = CoverageOffer(
+        id=sibling_id,
+        coverage_case_id=case_id,
+        employee_id=uuid4(),
+        channel="voice",
+        status=OfferStatus.pending,
+        idempotency_key="offer-sibling",
+        offer_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    reassigned_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        assigned_via="retell_voice",
+        status=AssignmentStatus.assigned,
+        sequence_no=2,
+        assignment_metadata={"employee_name": "Coverage Accept"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case, offer=offer)
+    session.execute_queue = [[sibling]]
+
+    amendment_calls: list[dict] = []
+    republish_calls: list[dict] = []
+    writeback_shift_ids: list[object] = []
+    published_events: list[dict] = []
+
+    async def fake_apply_published_shift_amendment(
+        _session,
+        passed_business_id,
+        passed_shift_id,
+        payload,
+        *,
+        assigned_by_user_id=None,
+        cancel_active_automation=True,
+    ):
+        amendment_calls.append(
+            {
+                "business_id": passed_business_id,
+                "shift_id": passed_shift_id,
+                "payload": payload,
+                "assigned_by_user_id": assigned_by_user_id,
+                "cancel_active_automation": cancel_active_automation,
+            }
+        )
+        shift.staffing_status = ShiftStaffingStatus.covered
+        shift.seats_filled = 1
+        shift.shift_metadata = {
+            "published_amendment": {
+                "amended_from_published": True,
+                "reason_code": "reassignment",
+                "schedule_break": False,
+                "amended_employee_ids": [str(previous_employee_id), str(employee_id)],
+                "historical_artifacts": [
+                    {
+                        "employee_id": str(previous_employee_id),
+                        "employee_name": "Original Caller",
+                        "reason_code": "callout",
+                    }
+                ],
+            }
+        }
+        return scheduling.PublishedShiftAmendmentResult(
+            shift=shift,
+            action="reassign_shift",
+            reason_code="reassignment",
+            source=payload.source,
+            previous_assignment=None,
+            current_assignment=reassigned_assignment,
+            cancelled_cases=[],
+            cancelled_offers=[],
+            week_start_date=week_start,
+            week_end_date=week_start + timedelta(days=6),
+        )
+
+    async def fake_publish_schedule_week(
+        _session,
+        passed_business_id,
+        passed_location_id,
+        passed_week_start,
+        payload,
+    ):
+        republish_calls.append(
+            {
+                "business_id": passed_business_id,
+                "location_id": passed_location_id,
+                "week_start": passed_week_start,
+                "payload": payload,
+            }
+        )
+        shift.shift_metadata = {
+            "published_amendment": {
+                "amended_from_published": False,
+                "reason_code": "reassignment",
+                "schedule_break": False,
+                "amended_employee_ids": [str(previous_employee_id), str(employee_id)],
+                "historical_artifacts": [
+                    {
+                        "employee_id": str(previous_employee_id),
+                        "employee_name": "Original Caller",
+                        "reason_code": "callout",
+                    }
+                ],
+            }
+        }
+        return scheduling.ScheduleWeekPublishResult(
+            business_id=passed_business_id,
+            location_id=passed_location_id,
+            week_start_date=passed_week_start,
+            week_end_date=passed_week_start + timedelta(days=6),
+            published_shifts=[],
+            already_scheduled_shifts=[shift],
+            notification_enqueued_assignment_count=0,
+            notification_enqueued_employee_count=2,
+        )
+
+    async def fake_enqueue_writeback(_session, *, shift_id):
+        writeback_shift_ids.append(shift_id)
+        return None
+
+    async def fake_platform_event_append(_session, **kwargs):
+        published_events.append(kwargs)
+        return None
+
+    monkeypatch.setattr("app.services.scheduling.apply_published_shift_amendment", fake_apply_published_shift_amendment)
+    monkeypatch.setattr("app.services.scheduling.publish_schedule_week", fake_publish_schedule_week)
+    monkeypatch.setattr("app.services.scheduler_sync.enqueue_writeback", fake_enqueue_writeback)
+    monkeypatch.setattr("app.services.platform_events.append", fake_platform_event_append)
+
+    result = await coverage.respond_to_offer(
+        session,
+        business_id,
+        offer_id,
+        CoverageOfferResponseCreate(response="accepted", response_channel="voice"),
+    )
+
+    assignments = [obj for obj in session.added if isinstance(obj, ShiftAssignment)]
+
+    assert assignments == []
+    assert offer.status == OfferStatus.accepted
+    assert sibling.status == OfferStatus.cancelled
+    assert case.status == CoverageCaseStatus.filled
+    assert amendment_calls
+    assert amendment_calls[0]["payload"].action == "reassign_shift"
+    assert amendment_calls[0]["payload"].reason_code == "reassignment"
+    assert amendment_calls[0]["payload"].target_employee_id == employee_id
+    assert amendment_calls[0]["payload"].source == "retell_voice"
+    assert amendment_calls[0]["cancel_active_automation"] is False
+    assert republish_calls
+    assert republish_calls[0]["payload"].source == "coverage_automation"
+    assert republish_calls[0]["payload"].expected_shift_ids == []
+    assert republish_calls[0]["payload"].notify_channels == ["email"]
+    assert writeback_shift_ids == [shift_id]
+    assert any(
+        event["event_type"] == "schedule.week.published"
+        for event in published_events
+    )
+    assert result.assignment_id == reassigned_assignment.id
+    assert result.assignment_status == AssignmentStatus.assigned
 
 
 @pytest.mark.asyncio
