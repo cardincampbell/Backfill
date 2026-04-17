@@ -347,10 +347,14 @@ async def build_outreach_guardrail_snapshots(
         ).where(
             CoverageContactAttempt.employee_id.in_(employee_ids),
             CoverageContactAttempt.requested_at >= reference_time - RECENT_BURDEN_WINDOW,
+            CoverageContactAttempt.status != CoverageAttemptStatus.failed,
         )
     )
     for employee_id, requested_at, status in recent_attempts_result.all():
         if employee_id is None:
+            continue
+        status_text = str(status.value if hasattr(status, "value") else status)
+        if status_text == CoverageAttemptStatus.failed.value:
             continue
         attempts_by_employee.setdefault(employee_id, []).append((requested_at, status))
 

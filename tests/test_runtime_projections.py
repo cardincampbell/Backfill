@@ -291,3 +291,56 @@ async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
     assert guardrails["overtime_risk"]["status"] == "high"
     assert guardrails["overtime_risk"]["multiplier"] == 0.4
     assert guardrails["overall_multiplier"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_ignores_failed_attempts_for_cooldown():
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="System Failure Target",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=6),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [
+            (
+                employee.id,
+                now - timedelta(minutes=5),
+                CoverageAttemptStatus.failed,
+            ),
+            (
+                employee.id,
+                now - timedelta(hours=12),
+                CoverageAttemptStatus.accepted,
+            ),
+        ],
+        [],
+    ]
+
+    snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    guardrails = snapshots[employee.id]
+    assert guardrails["contact_cooldown"]["status"] == "clear"
+    assert guardrails["contact_cooldown"]["multiplier"] == 1.0
+    assert guardrails["recent_burden"]["recent_attempt_count"] == 1
+    assert guardrails["recent_burden"]["recent_accept_count"] == 1
+    assert guardrails["hard_excluded"] is False
