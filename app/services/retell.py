@@ -33,6 +33,15 @@ def _serialize(payload):
     return dict(payload)
 
 
+def _stringify_dynamic_variables(dynamic_variables: Optional[dict]) -> dict[str, str]:
+    if not isinstance(dynamic_variables, dict):
+        return {}
+    return {
+        str(key): "" if value is None else str(value)
+        for key, value in dynamic_variables.items()
+    }
+
+
 def _default_call_agent_id(agent_kind: str = "outbound") -> str:
     default_agent_id = settings.retell_agent_id
     if agent_kind == "inbound":
@@ -70,7 +79,7 @@ async def create_phone_call(
         to_number=to_number,
         override_agent_id=effective_agent_id,
         metadata=metadata,
-        retell_llm_dynamic_variables=dynamic_variables or {},
+        retell_llm_dynamic_variables=_stringify_dynamic_variables(dynamic_variables),
     )
     return response.call_id
 
@@ -96,7 +105,7 @@ def create_sms_chat(
         "metadata": {**(metadata or {})},
         "retell_llm_dynamic_variables": {
             "initial_message": body,
-            **(dynamic_variables or {}),
+            **_stringify_dynamic_variables(dynamic_variables),
         },
     }
     if effective_agent_id:
