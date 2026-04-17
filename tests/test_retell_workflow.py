@@ -29,6 +29,9 @@ class _ScalarResult:
     def all(self):
         return list(self._values)
 
+    def unique(self):
+        return self
+
 
 class _ExecuteResult:
     def __init__(self, values):
@@ -36,6 +39,11 @@ class _ExecuteResult:
 
     def scalars(self):
         return _ScalarResult(self._values)
+
+    def scalar_one_or_none(self):
+        if not self._values:
+            return None
+        return self._values[0]
 
 
 class FakeSession:
@@ -52,6 +60,10 @@ class FakeSession:
         return None
 
     async def execute(self, _query):
+        descriptions = getattr(_query, "column_descriptions", [])
+        entity = descriptions[0].get("entity") if descriptions else None
+        if entity is RetellConversation:
+            return _ExecuteResult([])
         values = self.execute_queue.pop(0) if self.execute_queue else []
         return _ExecuteResult(values)
 

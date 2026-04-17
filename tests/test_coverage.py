@@ -27,6 +27,7 @@ from app.models.coverage import (
     OutboxEvent,
 )
 from app.models.scheduling import Shift, ShiftAssignment
+from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import (
     CoverageCandidatePreview,
     CoverageOfferResponseCreate,
@@ -41,6 +42,9 @@ class _ScalarResult:
 
     def all(self):
         return list(self._values)
+
+    def unique(self):
+        return self
 
 
 class _ExecuteResult:
@@ -250,7 +254,160 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
     assert result.outreach_attempts[0].id == offers[0].id
     assert result.outreach_attempts[0].status == "queued"
     assert result.coverage_case.status == CoverageCaseStatus.running
-    assert runs
+
+
+@pytest.mark.asyncio
+async def test_collect_phase_1_candidates_excludes_callout_employee_and_defaults_missing_rules_to_available(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    excluded_employee_id = uuid4()
+    eligible_employee_id = uuid4()
+    shift_id = uuid4()
+    now = datetime(2026, 4, 16, 23, 24, tzinfo=timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        shift_metadata={
+            "published_amendment": {
+                "employee_id": str(excluded_employee_id),
+            }
+        },
+    )
+    case = CoverageCase(
+        id=uuid4(),
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    excluded_employee = Employee(
+        id=excluded_employee_id,
+        business_id=business_id,
+        full_name="Caller Employee",
+        phone_e164="+15555550100",
+        status="active",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    excluded_employee.employee_roles = [
+        EmployeeRole(
+            employee_id=excluded_employee_id,
+            role_id=role_id,
+            proficiency_level=1,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    excluded_employee.employee_locations = [
+        EmployeeLocation(
+            employee_id=excluded_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    eligible_employee = Employee(
+        id=eligible_employee_id,
+        business_id=business_id,
+        full_name="Eligible Employee",
+        phone_e164="+15555550101",
+        status="active",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    eligible_employee.employee_roles = [
+        EmployeeRole(
+            employee_id=eligible_employee_id,
+            role_id=role_id,
+            proficiency_level=1,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    eligible_employee.employee_locations = [
+        EmployeeLocation(
+            employee_id=eligible_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+
+    session = FakeCoverageSession(shift=shift, case=case)
+    session.execute_queue = [
+        [excluded_employee, eligible_employee],
+        [],
+    ]
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz is None else now.astimezone(tz)
+
+    monkeypatch.setattr(coverage, "datetime", FrozenDateTime)
+    async def fake_refresh_employee_score_snapshots(*_args, **_kwargs):
+        return {
+            excluded_employee_id: {"status": "fresh"},
+            eligible_employee_id: {"status": "fresh"},
+        }
+
+    async def fake_build_outreach_guardrail_snapshots(*_args, **_kwargs):
+        return {
+            excluded_employee_id: {"overall_multiplier": 1.0, "hard_excluded": False},
+            eligible_employee_id: {"overall_multiplier": 1.0, "hard_excluded": False},
+        }
+
+    monkeypatch.setattr(
+        coverage.runtime_projections,
+        "refresh_employee_score_snapshots",
+        fake_refresh_employee_score_snapshots,
+    )
+    monkeypatch.setattr(
+        coverage.runtime_projections,
+        "build_outreach_guardrail_snapshots",
+        fake_build_outreach_guardrail_snapshots,
+    )
+
+    _shift, ranked = await coverage._collect_phase_1_candidates(session, business_id, shift_id)
+
+    assert [candidate.employee_id for candidate in ranked] == [eligible_employee_id]
+    assert ranked[0].phone_e164 == "+15555550101"
 
 
 @pytest.mark.asyncio

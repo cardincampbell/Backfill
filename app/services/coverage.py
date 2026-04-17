@@ -765,6 +765,11 @@ def _is_available_for_shift(employee: Employee, shift: Shift) -> tuple[bool, dic
             snapshot["rule_match"] = True
             return True, snapshot
 
+    if not employee.availability_rules:
+        snapshot["rule_match"] = True
+        snapshot["reason"] = "no_availability_rules_default_available"
+        return True, snapshot
+
     day_of_week = starts_local.weekday()
     for rule in employee.availability_rules:
         if rule.day_of_week != day_of_week:
@@ -782,6 +787,44 @@ def _is_available_for_shift(employee: Employee, shift: Shift) -> tuple[bool, dic
 
     snapshot["reason"] = "no_matching_availability_rule"
     return False, snapshot
+
+
+def _excluded_employee_ids_for_shift(shift: Shift) -> set[UUID]:
+    metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    excluded: set[UUID] = set()
+
+    published_amendment = metadata.get("published_amendment")
+    if isinstance(published_amendment, dict):
+        employee_id = published_amendment.get("employee_id")
+        if employee_id not in (None, ""):
+            try:
+                excluded.add(UUID(str(employee_id).strip()))
+            except (TypeError, ValueError):
+                pass
+
+        amended_employee_ids = published_amendment.get("amended_employee_ids")
+        if isinstance(amended_employee_ids, list):
+            for employee_id in amended_employee_ids:
+                if employee_id in (None, ""):
+                    continue
+                try:
+                    excluded.add(UUID(str(employee_id).strip()))
+                except (TypeError, ValueError):
+                    continue
+
+    coverage_metadata = metadata.get("coverage")
+    if isinstance(coverage_metadata, dict):
+        excluded_employee_ids = coverage_metadata.get("excluded_employee_ids")
+        if isinstance(excluded_employee_ids, list):
+            for employee_id in excluded_employee_ids:
+                if employee_id in (None, ""):
+                    continue
+                try:
+                    excluded.add(UUID(str(employee_id).strip()))
+                except (TypeError, ValueError):
+                    continue
+
+    return excluded
 
 
 async def list_campaigns(session: AsyncSession, business_id: UUID) -> list[CoverageCase]:
@@ -1091,6 +1134,8 @@ async def _collect_phase_1_candidates(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
+    excluded_employee_ids = _excluded_employee_ids_for_shift(shift)
+
     result = await session.execute(
         select(Employee)
         .join(EmployeeRole, EmployeeRole.employee_id == Employee.id)
@@ -1140,6 +1185,8 @@ async def _collect_phase_1_candidates(
 
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
+        if employee.id in excluded_employee_ids:
+            continue
         employee_location = next(
             (
                 record
@@ -1219,6 +1266,8 @@ async def _collect_phase_2_candidates(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
+    excluded_employee_ids = _excluded_employee_ids_for_shift(shift)
+
     result = await session.execute(
         select(Employee)
         .join(EmployeeRole, EmployeeRole.employee_id == Employee.id)
@@ -1291,6 +1340,8 @@ async def _collect_phase_2_candidates(
 
     candidates: list[CoverageCandidatePreview] = []
     for employee in employees:
+        if employee.id in excluded_employee_ids:
+            continue
         if employee.primary_location_id == shift.location_id:
             continue
         if employee.id in busy_employee_ids:

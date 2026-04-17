@@ -883,6 +883,25 @@ async def create_vacancy_for_shift(
         assignment.status = AssignmentStatus.cancelled
         assignment.cancelled_at = now
 
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    coverage_metadata = shift_metadata.get("coverage") if isinstance(shift_metadata.get("coverage"), dict) else {}
+    excluded_employee_ids = {
+        str(value).strip()
+        for value in coverage_metadata.get("excluded_employee_ids", [])
+        if str(value).strip()
+    }
+    if employee_id is not None:
+        excluded_employee_ids.add(str(employee_id))
+    shift.shift_metadata = {
+        **shift_metadata,
+        "coverage": {
+            **coverage_metadata,
+            "excluded_employee_ids": sorted(excluded_employee_ids),
+            "last_vacancy_opened_at": now.isoformat(),
+            "last_vacancy_reason_code": reason_code,
+        },
+    }
+
     remaining_active = await session.scalar(
         select(func.count(ShiftAssignment.id)).where(
             ShiftAssignment.shift_id == shift.id,

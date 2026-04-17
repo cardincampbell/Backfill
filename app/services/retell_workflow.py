@@ -428,6 +428,21 @@ def _set_processing_state(conversation: RetellConversation, state: dict[str, Any
     }
 
 
+async def _lock_conversation_for_processing(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> RetellConversation | None:
+    if conversation is None:
+        return None
+    result = await session.execute(
+        select(RetellConversation)
+        .where(RetellConversation.id == conversation.id)
+        .with_for_update()
+    )
+    locked = result.scalar_one_or_none()
+    return locked or conversation
+
+
 def _conversation_assigned_shifts(conversation: RetellConversation) -> list[dict[str, Any]]:
     metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
     assigned_shifts = metadata.get("assigned_shifts")
@@ -1170,6 +1185,7 @@ async def process_inbound_conversation_completion(
     session: AsyncSession,
     conversation: RetellConversation | None,
 ) -> dict[str, Any]:
+    conversation = await _lock_conversation_for_processing(session, conversation)
     if conversation is None:
         return {"status": "no_conversation"}
     if conversation.conversation_type != RetellConversationType.call:
@@ -1456,6 +1472,7 @@ async def process_outbound_conversation_completion(
     session: AsyncSession,
     conversation: RetellConversation | None,
 ) -> dict[str, Any]:
+    conversation = await _lock_conversation_for_processing(session, conversation)
     if conversation is None:
         return {"status": "no_conversation"}
     if conversation.conversation_type != RetellConversationType.call:
