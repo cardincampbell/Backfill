@@ -5,6 +5,7 @@ from typing import Iterable
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import NO_VALUE
@@ -44,14 +45,30 @@ def _latest_attempt(offer: CoverageOffer) -> CoverageContactAttempt | None:
     )
 
 
+def _safe_attr(instance: object, name: str) -> object | None:
+    try:
+        state = inspect(instance)
+    except NoInspectionAvailable:
+        return getattr(instance, name, None)
+    if name in state.dict:
+        return state.dict.get(name)
+    if name not in state.attrs:
+        return None
+    attr_state = state.attrs[name]
+    loaded_value = attr_state.loaded_value
+    if loaded_value is NO_VALUE:
+        return None
+    return loaded_value
+
+
 def logical_outreach_status(
     offer: CoverageOffer,
     *,
     attempt: CoverageContactAttempt | None = None,
 ) -> str:
-    raw_offer_status = _enum_text(offer.status) or "pending"
-    raw_attempt_status = _enum_text(attempt.status) if attempt is not None else None
-    channel = _enum_text(offer.channel) or "sms"
+    raw_offer_status = _enum_text(_safe_attr(offer, "status")) or "pending"
+    raw_attempt_status = _enum_text(_safe_attr(attempt, "status")) if attempt is not None else None
+    channel = _enum_text(_safe_attr(offer, "channel")) or "sms"
 
     if raw_offer_status == OfferStatus.pending.value:
         if attempt is not None and attempt.sent_at is not None:
@@ -84,53 +101,80 @@ def outreach_attempt_read_from_offer(
     attempt: CoverageContactAttempt | None = None,
 ) -> CoverageOutreachAttemptRead:
     latest_attempt = attempt or _latest_attempt(offer)
+    offer_created_at = _safe_attr(offer, "created_at")
+    offer_updated_at = _safe_attr(offer, "updated_at")
+    offer_sent_at = _safe_attr(offer, "sent_at")
+    offer_expires_at = _safe_attr(offer, "expires_at")
+    offer_accepted_at = _safe_attr(offer, "accepted_at")
+    offer_declined_at = _safe_attr(offer, "declined_at")
+    offer_channel = _enum_text(_safe_attr(offer, "channel")) or "sms"
+    offer_status = _enum_text(_safe_attr(offer, "status")) or "pending"
+    offer_delivery_provider = _safe_attr(offer, "delivery_provider")
+    offer_provider_message_id = _safe_attr(offer, "provider_message_id")
+    offer_idempotency_key = _safe_attr(offer, "idempotency_key")
+    offer_metadata = dict((_safe_attr(offer, "offer_metadata") or {}))
+
+    attempt_requested_at = _safe_attr(latest_attempt, "requested_at")
+    attempt_created_at = _safe_attr(latest_attempt, "created_at")
+    attempt_status = _enum_text(_safe_attr(latest_attempt, "status")) if latest_attempt is not None else None
+    attempt_no = int((_safe_attr(latest_attempt, "attempt_no") or 0)) if latest_attempt is not None else 0
+    attempt_outbox_event_id = _safe_attr(latest_attempt, "outbox_event_id")
+    attempt_delivery_provider = _safe_attr(latest_attempt, "delivery_provider")
+    attempt_provider_message_id = _safe_attr(latest_attempt, "provider_message_id")
+    attempt_sent_at = _safe_attr(latest_attempt, "sent_at")
+    attempt_delivered_at = _safe_attr(latest_attempt, "delivered_at")
+    attempt_responded_at = _safe_attr(latest_attempt, "responded_at")
+    attempt_expires_at = _safe_attr(latest_attempt, "expires_at")
+    attempt_metadata = dict((_safe_attr(latest_attempt, "attempt_metadata") or {}))
+    attempt_updated_at = _safe_attr(latest_attempt, "updated_at")
+
     reference_time = (
-        offer.created_at
-        or offer.updated_at
-        or getattr(latest_attempt, "requested_at", None)
-        or getattr(latest_attempt, "created_at", None)
+        offer_created_at
+        or offer_updated_at
+        or attempt_requested_at
+        or attempt_created_at
         or datetime.now(timezone.utc)
     )
     requested_at = (
-        latest_attempt.requested_at
+        attempt_requested_at
         if latest_attempt is not None
-        else offer.sent_at or reference_time
+        else offer_sent_at or reference_time
     )
     return CoverageOutreachAttemptRead(
         id=offer.id,
-        campaign_id=offer.coverage_case_id,
-        campaign_run_id=offer.coverage_case_run_id,
-        coverage_candidate_id=offer.coverage_candidate_id,
-        employee_id=offer.employee_id,
-        channel=_enum_text(offer.channel) or "sms",
+        campaign_id=_safe_attr(offer, "coverage_case_id"),
+        campaign_run_id=_safe_attr(offer, "coverage_case_run_id"),
+        coverage_candidate_id=_safe_attr(offer, "coverage_candidate_id"),
+        employee_id=_safe_attr(offer, "employee_id"),
+        channel=offer_channel,
         status=logical_outreach_status(offer, attempt=latest_attempt),
-        offer_status=_enum_text(offer.status) or "pending",
-        attempt_status=_enum_text(latest_attempt.status) if latest_attempt is not None else None,
-        attempt_no=int(getattr(latest_attempt, "attempt_no", 0) or 0),
-        outbox_event_id=getattr(latest_attempt, "outbox_event_id", None),
+        offer_status=offer_status,
+        attempt_status=attempt_status,
+        attempt_no=attempt_no,
+        outbox_event_id=attempt_outbox_event_id,
         delivery_provider=(
-            getattr(latest_attempt, "delivery_provider", None)
-            or offer.delivery_provider
+            attempt_delivery_provider
+            or offer_delivery_provider
         ),
         provider_message_id=(
-            getattr(latest_attempt, "provider_message_id", None)
-            or offer.provider_message_id
+            attempt_provider_message_id
+            or offer_provider_message_id
         ),
-        idempotency_key=offer.idempotency_key,
+        idempotency_key=offer_idempotency_key,
         requested_at=requested_at,
-        sent_at=getattr(latest_attempt, "sent_at", None) or offer.sent_at,
-        delivered_at=getattr(latest_attempt, "delivered_at", None),
-        responded_at=getattr(latest_attempt, "responded_at", None),
-        expires_at=getattr(latest_attempt, "expires_at", None) or offer.expires_at,
-        accepted_at=offer.accepted_at,
-        declined_at=offer.declined_at,
-        offer_metadata=dict(offer.offer_metadata or {}),
-        attempt_metadata=dict(getattr(latest_attempt, "attempt_metadata", None) or {}),
-        created_at=offer.created_at or reference_time,
+        sent_at=attempt_sent_at or offer_sent_at,
+        delivered_at=attempt_delivered_at,
+        responded_at=attempt_responded_at,
+        expires_at=attempt_expires_at or offer_expires_at,
+        accepted_at=offer_accepted_at,
+        declined_at=offer_declined_at,
+        offer_metadata=offer_metadata,
+        attempt_metadata=attempt_metadata,
+        created_at=offer_created_at or reference_time,
         updated_at=max(
             [
                 value
-                for value in [offer.updated_at, getattr(latest_attempt, "updated_at", None), reference_time]
+                for value in [offer_updated_at, attempt_updated_at, reference_time]
                 if value is not None
             ],
             default=reference_time,

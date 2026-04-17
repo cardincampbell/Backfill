@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import MissingGreenlet
+from sqlalchemy.orm.attributes import NO_VALUE
 
 from app.models.common import CoverageAttemptStatus, OfferStatus
 from app.models.coverage import CoverageContactAttempt, CoverageOffer
@@ -200,3 +202,51 @@ async def test_append_outreach_attempt_event_uses_scalar_fallback_when_attempts_
 
     assert captured["payload"]["attempt_status"] == "delivered"
     assert captured["payload"]["status"] == "awaiting_response"
+
+
+@pytest.mark.asyncio
+async def test_outreach_attempt_read_does_not_touch_expired_offer_updated_at(monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    class _ExplodingOffer:
+        def __init__(self):
+            self.id = uuid4()
+
+        def __getattribute__(self, name):
+            if name == "updated_at":
+                raise MissingGreenlet("expired attribute access")
+            return object.__getattribute__(self, name)
+
+    class _FakeAttrState:
+        def __init__(self, loaded_value):
+            self.loaded_value = loaded_value
+
+    class _FakeState:
+        def __init__(self):
+            self.dict = {
+                "coverage_case_id": uuid4(),
+                "coverage_case_run_id": uuid4(),
+                "coverage_candidate_id": uuid4(),
+                "employee_id": uuid4(),
+                "channel": "voice",
+                "status": OfferStatus.delivered,
+                "idempotency_key": "case:1:employee:voice",
+                "offer_metadata": {"phase_no": 1},
+                "created_at": now,
+            }
+            self.attrs = {
+                **{name: _FakeAttrState(value) for name, value in self.dict.items()},
+                "updated_at": _FakeAttrState(NO_VALUE),
+            }
+
+    offer = _ExplodingOffer()
+
+    monkeypatch.setattr(outreach, "_latest_attempt", lambda _offer: None)
+    monkeypatch.setattr(outreach, "inspect", lambda _instance: _FakeState())
+
+    result = outreach.outreach_attempt_read_from_offer(offer)
+
+    assert result.coverage_offer_id == offer.id
+    assert result.offer_status == "delivered"
+    assert result.status == "voice_initiated"
+    assert result.updated_at == now
