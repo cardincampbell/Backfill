@@ -732,7 +732,7 @@ function DraggableShiftChip({
   const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
   const canInteract = !isHistoricalShift;
   const canDragChip = draggable && canInteract;
-  const showInlineActions = canInteract && !hasOperationalBreak;
+  const showInlineActions = canInteract;
   const isFlagAction = publishState === 'published' || publishState === 'amended';
   const shiftTintColor = isHistoricalShift ? '#9CA3AF' : hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color;
   const shiftLabelColor = isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : shift.color;
