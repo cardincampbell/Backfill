@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional, Sequence
 from uuid import UUID
 
@@ -19,8 +20,23 @@ from app.schemas.business import (
     LocationRoleReplace,
     RoleCreate,
 )
-from app.services import business_identity_derivation, role_derivation, shift_defaults
+from app.services import (
+    business_classification,
+    business_identity_derivation,
+    role_derivation,
+    role_normalization,
+    shift_defaults,
+)
 from app.services.utils import role_code_from_name, slugify
+
+
+@dataclass(frozen=True)
+class RoleCreateResult:
+    role: Role
+    decision: str
+    normalized_name: str
+    confidence: float | None = None
+    reason: str | None = None
 
 async def _next_unique_business_slug(session: AsyncSession, requested: str) -> str:
     base = slugify(requested)
@@ -271,7 +287,7 @@ async def create_business_record(
     if derive_identity:
         await business_identity_derivation.sync_business_identity(session, business, locations=[])
     if derive_roles:
-        await role_derivation.sync_business_role_catalog(session, business, locations=[])
+        await business_classification.sync_business_classification(session, business, locations=[])
     return business
 
 
@@ -430,7 +446,7 @@ async def create_location_record(
                 locations=existing_locations,
             )
     if derive_roles:
-        await role_derivation.sync_business_role_catalog(session, business, locations=existing_locations)
+        await business_classification.sync_business_classification(session, business, locations=existing_locations)
     return location
 
 
@@ -579,25 +595,57 @@ async def ensure_business_role(
     return existing
 
 
-async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCreate) -> Role:
+async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCreate) -> RoleCreateResult:
     business = await get_business(session, business_id)
     if business is None:
         raise LookupError("business_not_found")
 
+    existing_roles = await list_roles(session, business_id)
+    normalization = await role_normalization.normalize_role_name(
+        session,
+        business_id=business_id,
+        raw_name=payload.name,
+        existing_roles=existing_roles,
+    )
+    if normalization.decision == "reject":
+        raise role_normalization.RoleNameRejectedError(
+            normalization.reason or "Enter a clearer role name."
+        )
+    if payload.code is None and normalization.matched_role is not None:
+        return RoleCreateResult(
+            role=normalization.matched_role,
+            decision="reused_existing",
+            normalized_name=normalization.normalized_name,
+            confidence=normalization.confidence,
+            reason=normalization.reason,
+        )
+
     existing_role = await _find_existing_business_role(
         session,
         business_id,
-        name=payload.name,
+        name=normalization.normalized_name,
         code=payload.code,
     )
     if existing_role is not None:
-        raise ValueError("role_already_exists")
+        if payload.code is not None:
+            raise ValueError("role_already_exists")
+        return RoleCreateResult(
+            role=existing_role,
+            decision="reused_existing",
+            normalized_name=normalization.normalized_name,
+            confidence=normalization.confidence,
+            reason=normalization.reason,
+        )
 
-    code = await _next_unique_role_code(session, business_id, payload.code or payload.name)
+    code = await _next_unique_role_code(
+        session,
+        business_id,
+        payload.code or normalization.normalized_name,
+    )
     role = Role(
         business_id=business_id,
         code=code,
-        name=payload.name.strip(),
+        name=normalization.normalized_name,
         category=payload.category,
         description=payload.description,
         min_notice_minutes=payload.min_notice_minutes,
@@ -608,7 +656,13 @@ async def create_role(session: AsyncSession, business_id: UUID, payload: RoleCre
     session.add(role)
     await session.flush()
     await session.refresh(role)
-    return role
+    return RoleCreateResult(
+        role=role,
+        decision="created_new",
+        normalized_name=normalization.normalized_name,
+        confidence=normalization.confidence,
+        reason=normalization.reason,
+    )
 
 
 async def rerun_role_derivation(session: AsyncSession, business_id: UUID) -> tuple[Business, list[Role]]:
@@ -617,7 +671,7 @@ async def rerun_role_derivation(session: AsyncSession, business_id: UUID) -> tup
         raise LookupError("business_not_found")
 
     locations = await list_locations(session, business_id)
-    await role_derivation.sync_business_role_catalog(session, business, locations=locations)
+    await business_classification.sync_business_classification(session, business, locations=locations)
     await session.flush()
     await session.refresh(business)
     roles = await list_roles(session, business_id)
@@ -789,10 +843,22 @@ async def create_and_assign_location_role(
     if location is None or location.business_id != business_id:
         raise LookupError("location_not_found")
 
+    existing_roles = await list_roles(session, business_id)
+    normalization = await role_normalization.normalize_role_name(
+        session,
+        business_id=business_id,
+        raw_name=payload.name,
+        existing_roles=existing_roles,
+    )
+    if normalization.decision == "reject":
+        raise role_normalization.RoleNameRejectedError(
+            normalization.reason or "Enter a clearer role name."
+        )
+
     role = await ensure_business_role(
         session,
         business_id=business_id,
-        role_name=payload.name,
+        role_name=normalization.matched_role.name if normalization.matched_role else normalization.normalized_name,
         role_code=payload.code,
         category=payload.category,
         description=payload.description,

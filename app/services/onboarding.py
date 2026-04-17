@@ -11,7 +11,7 @@ from app.models.identity import Membership, User
 from app.schemas.onboarding import OnboardingProfileUpdate, OwnerWorkspaceBootstrapRequest
 from app.services import audit as audit_service
 from app.services import auth as auth_service
-from app.services import business_identity_derivation, businesses, role_derivation
+from app.services import business_classification, business_identity_derivation, businesses
 
 
 async def _assert_email_available(session: AsyncSession, user_id: UUID, email: str) -> None:
@@ -114,7 +114,7 @@ async def bootstrap_owner_workspace(
         derive_roles=False,
     )
     await business_identity_derivation.sync_business_identity(session, business, locations=[location])
-    await role_derivation.sync_business_role_catalog(session, business, locations=[location])
+    await business_classification.sync_business_classification(session, business, locations=[location])
     user.onboarding_completed_at = datetime.now(timezone.utc)
 
     await audit_service.append(

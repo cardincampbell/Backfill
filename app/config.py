@@ -132,10 +132,27 @@ class Settings:
     retell_chat_agent_id_inbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_INBOUND", "")
     retell_chat_agent_id_outbound: str = os.environ.get("RETELL_CHAT_AGENT_ID_OUTBOUND", "")
     retell_from_number: str = os.environ.get("RETELL_FROM_NUMBER", "")
+    secondary_intent_model: str = os.environ.get(
+        "BACKFILL_SECONDARY_INTENT_MODEL",
+        "",
+    ).strip()
     openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
     anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "")
     llm_default_provider: str = os.environ.get("BACKFILL_LLM_DEFAULT_PROVIDER", "").strip().lower()
     llm_default_model: str = os.environ.get("BACKFILL_LLM_DEFAULT_MODEL", "").strip()
+    role_normalization_model: str = os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "").strip()
+    business_classification_mode: str = os.environ.get(
+        "BACKFILL_BUSINESS_CLASSIFICATION_MODE",
+        "shadow",
+    ).strip().lower()
+    business_classification_model: str = os.environ.get(
+        "BACKFILL_BUSINESS_CLASSIFICATION_MODEL",
+        os.environ.get("BACKFILL_ROLE_DERIVATION_MODEL", os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "")),
+    ).strip()
+    role_derivation_model: str = os.environ.get(
+        "BACKFILL_ROLE_DERIVATION_MODEL",
+        os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", ""),
+    ).strip()
     billing_fill_price_cents: int = int(os.environ.get("BACKFILL_BILLING_FILL_PRICE_CENTS", "2000"))
     billing_location_monthly_cap_cents: int = int(
         os.environ.get("BACKFILL_BILLING_LOCATION_MONTHLY_CAP_CENTS", "20000")
@@ -163,6 +180,16 @@ class Settings:
         os.environ.get("BACKFILL_RETELL_WEBHOOK_LIMIT_PER_MINUTE", "240")
     )
     worker_api_key: str = os.environ.get("BACKFILL_WORKER_API_KEY", "")
+    service_mode: str = os.environ.get("BACKFILL_SERVICE_MODE", "api").strip().lower()
+    worker_poll_seconds: float = float(os.environ.get("BACKFILL_WORKER_POLL_SECONDS", "10"))
+    worker_batch_limit: int = int(os.environ.get("BACKFILL_WORKER_BATCH_LIMIT", "20"))
+    worker_error_backoff_seconds: float = float(
+        os.environ.get("BACKFILL_WORKER_ERROR_BACKOFF_SECONDS", "15")
+    )
+    worker_run_once: bool = os.environ.get(
+        "BACKFILL_WORKER_RUN_ONCE",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     public_link_signing_secret: str = os.environ.get(
         "BACKFILL_PUBLIC_LINK_SIGNING_SECRET",
         os.environ.get("BACKFILL_WORKER_API_KEY", "backfill-dev-public-link-secret"),

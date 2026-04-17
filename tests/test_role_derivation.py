@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -10,13 +11,22 @@ from app.models.common import ShiftStatus
 from app.models.role_taxonomy import (
     BusinessVertical,
     BusinessVerticalTypeMapping,
+    BusinessSubvertical,
     BusinessRoleArchetype,
     BusinessVerticalRoleArchetype,
 )
 from app.models.scheduling import Shift
 from app.schemas.scheduling import ShiftCreate
 from app.schemas.workforce import EmployeeEnrollAtLocationCreate
-from app.services import businesses, retell_workflow, role_derivation, scheduler_sync, scheduling, workforce
+from app.services import (
+    business_classification,
+    businesses,
+    retell_workflow,
+    role_derivation,
+    scheduler_sync,
+    scheduling,
+    workforce,
+)
 
 
 class _ScalarResult:
@@ -72,6 +82,23 @@ class FakeSession:
 
     async def get(self, model, object_id):
         return self.get_map.get((model, object_id))
+
+
+@pytest.fixture(autouse=True)
+def disable_llm_refinement_by_default(monkeypatch):
+    monkeypatch.setattr(
+        role_derivation,
+        "settings",
+        SimpleNamespace(role_derivation_model="", openai_api_key=""),
+    )
+    monkeypatch.setattr(
+        business_classification,
+        "settings",
+        SimpleNamespace(
+            business_classification_model="",
+            business_classification_mode="shadow",
+        ),
+    )
 
 
 def _make_location(*, business_id, primary_type: str, types: list[str], hours: dict | None = None) -> Location:
@@ -191,6 +218,15 @@ def _make_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
             "expeditor": role_derivation.BusinessRoleArchetypeDefinition("Expeditor", "operations"),
             "inventory_lead": role_derivation.BusinessRoleArchetypeDefinition("Inventory Lead", "inventory"),
         },
+        active_vertical_codes=("bakery", "bar", "cafe", "mixed_unknown", "restaurant", "retail"),
+        subverticals_by_vertical={
+            "restaurant": ("full_service_restaurant",),
+            "bar": ("bar",),
+            "cafe": ("cafe", "coffee_shop"),
+            "bakery": ("bakery",),
+            "retail": (),
+            "mixed_unknown": (),
+        },
     )
 
 
@@ -210,6 +246,13 @@ def _make_taxonomy_execute_queue() -> list[list[object]]:
         BusinessVerticalTypeMapping(place_type="coffee_shop", business_vertical_code="cafe", subvertical_code="coffee_shop", is_active=True, metadata_json={}),
         BusinessVerticalTypeMapping(place_type="bakery", business_vertical_code="bakery", subvertical_code="bakery", is_active=True, metadata_json={}),
         BusinessVerticalTypeMapping(place_type="store", business_vertical_code="retail", subvertical_code=None, is_active=True, metadata_json={}),
+    ]
+    subverticals = [
+        BusinessSubvertical(code="full_service_restaurant", business_vertical_code="restaurant", display_name="Full Service Restaurant", is_active=True, metadata_json={}),
+        BusinessSubvertical(code="bar", business_vertical_code="bar", display_name="Bar", is_active=True, metadata_json={}),
+        BusinessSubvertical(code="cafe", business_vertical_code="cafe", display_name="Cafe", is_active=True, metadata_json={}),
+        BusinessSubvertical(code="coffee_shop", business_vertical_code="cafe", display_name="Coffee Shop", is_active=True, metadata_json={}),
+        BusinessSubvertical(code="bakery", business_vertical_code="bakery", display_name="Bakery", is_active=True, metadata_json={}),
     ]
     role_templates = [
         BusinessRoleArchetype(code="general_manager", display_name="General Manager", role_family="management", is_active=True, metadata_json={}),
@@ -264,7 +307,7 @@ def _make_taxonomy_execute_queue() -> list[list[object]]:
         BusinessVerticalRoleArchetype(business_vertical_code="bar", business_role_code="host", sort_order=60, is_active=True, metadata_json={}),
         BusinessVerticalRoleArchetype(business_vertical_code="mixed_unknown", business_role_code="general_manager", sort_order=10, is_active=True, metadata_json={}),
     ]
-    return [verticals, mappings, role_templates, vertical_roles]
+    return [verticals, mappings, subverticals, role_templates, vertical_roles, verticals, subverticals]
 
 
 def test_derive_business_catalog_builds_business_level_role_pack():
@@ -314,6 +357,126 @@ async def test_sync_business_role_catalog_persists_classification_and_roles():
     bartender = next(role for role in created_roles if role.code == "bartender")
     assert bartender.metadata_json["derivation"]["support_location_count"] == 1
     assert derivation.classification.vertical == "restaurant"
+
+
+@pytest.mark.asyncio
+async def test_sync_business_role_catalog_applies_high_confidence_llm_refinement(monkeypatch):
+    business = _make_business(place_metadata={"primary_type": "coffee_shop", "types": ["cafe", "coffee_shop"]})
+    location = _make_location(
+        business_id=business.id,
+        primary_type="coffee_shop",
+        types=["cafe", "coffee_shop", "bakery"],
+        hours={"periods": [{"open": {"time": "0600"}}]},
+    )
+    session = FakeSession()
+    session.execute_queue = [*_make_taxonomy_execute_queue(), []]
+
+    async def fake_generate(_session, request):
+        assert request.provider == business_classification.llm_gateway.LlmProvider.OPENAI
+        assert request.model == "gpt-derive"
+        return business_classification.llm_gateway.LlmGenerationResult(
+            provider=request.provider or "",
+            model=request.model or "",
+            tool_calls=[
+                business_classification.llm_gateway.LlmToolCall(
+                    tool_call_id="call_1",
+                    name="submit_business_classification",
+                    arguments={
+                        "decision": "classify",
+                        "vertical_code": "bakery",
+                        "subvertical_code": "bakery",
+                        "selected_role_codes": ["delivery_coordinator"],
+                        "confidence": 0.88,
+                        "reason": "Bakery signal is strong and delivery support looks relevant.",
+                        "reason_codes": ["llm.vertical.bakery"],
+                        "gap_suggestions": [],
+                    },
+                )
+            ],
+        )
+
+    async def fake_lookup(*args, **kwargs):
+        return uuid4()
+
+    monkeypatch.setattr("app.services.business_classification.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr("app.services.business_classification._lookup_llm_generation_id", fake_lookup)
+    monkeypatch.setattr(
+        business_classification,
+        "settings",
+        SimpleNamespace(
+            business_classification_model="gpt-derive",
+            business_classification_mode="primary",
+        ),
+    )
+    monkeypatch.setattr("app.services.business_classification.llm_gateway.provider_is_configured", lambda _provider: True)
+
+    derivation = await role_derivation.sync_business_role_catalog(session, business, locations=[location])
+
+    assert business.vertical == "bakery"
+    assert business.settings["derived_classification"]["vertical"] == "bakery"
+    assert business.settings["derived_classification"]["llm_candidate"]["applied"] is True
+    assert derivation.classification.vertical == "bakery"
+    created_roles = [obj for obj in session.added if isinstance(obj, Role)]
+    delivery = next(role for role in created_roles if role.code == "delivery_coordinator")
+    assert delivery.metadata_json["derivation"]["derivation_type"] == "llm_selected"
+
+
+@pytest.mark.asyncio
+async def test_sync_business_role_catalog_ignores_low_confidence_llm_refinement(monkeypatch):
+    business = _make_business(place_metadata={"primary_type": "store", "types": ["store"]})
+    location = _make_location(
+        business_id=business.id,
+        primary_type="store",
+        types=["store"],
+        hours={},
+    )
+    session = FakeSession()
+    session.execute_queue = [*_make_taxonomy_execute_queue(), []]
+
+    async def fake_generate(_session, request):
+        return business_classification.llm_gateway.LlmGenerationResult(
+            provider=request.provider or "",
+            model=request.model or "",
+            tool_calls=[
+                business_classification.llm_gateway.LlmToolCall(
+                    tool_call_id="call_1",
+                    name="submit_business_classification",
+                    arguments={
+                        "decision": "classify",
+                        "vertical_code": "restaurant",
+                        "subvertical_code": "full_service_restaurant",
+                        "selected_role_codes": ["bartender"],
+                        "confidence": 0.42,
+                        "reason": "Weak cross-domain guess.",
+                        "reason_codes": ["llm.low_confidence"],
+                        "gap_suggestions": [],
+                    },
+                )
+            ],
+        )
+
+    async def fake_lookup(*args, **kwargs):
+        return uuid4()
+
+    monkeypatch.setattr("app.services.business_classification.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr("app.services.business_classification._lookup_llm_generation_id", fake_lookup)
+    monkeypatch.setattr(
+        business_classification,
+        "settings",
+        SimpleNamespace(
+            business_classification_model="gpt-derive",
+            business_classification_mode="primary",
+        ),
+    )
+    monkeypatch.setattr("app.services.business_classification.llm_gateway.provider_is_configured", lambda _provider: True)
+
+    derivation = await role_derivation.sync_business_role_catalog(session, business, locations=[location])
+
+    assert business.vertical == "retail"
+    assert derivation.classification.vertical == "retail"
+    assert business.settings["derived_classification"]["llm_candidate"]["applied"] is False
+    created_role_codes = {role.code for role in session.added if isinstance(role, Role)}
+    assert "bartender" not in created_role_codes
 
 
 @pytest.mark.asyncio

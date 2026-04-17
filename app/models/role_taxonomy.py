@@ -28,9 +28,44 @@ class BusinessVertical(TimestampMixin, Base):
         back_populates="business_vertical",
         cascade="all, delete-orphan",
     )
+    subverticals: Mapped[list["BusinessSubvertical"]] = relationship(
+        back_populates="business_vertical",
+        cascade="all, delete-orphan",
+    )
     role_archetypes: Mapped[list["BusinessVerticalRoleArchetype"]] = relationship(
         back_populates="business_vertical",
         cascade="all, delete-orphan",
+    )
+
+
+class BusinessSubvertical(TimestampMixin, Base):
+    __tablename__ = "business_subverticals"
+    __table_args__ = (
+        Index(
+            "ix_business_subverticals_vertical_active",
+            "business_vertical_code",
+            "is_active",
+        ),
+    )
+
+    code: Mapped[str] = mapped_column(String(120), primary_key=True)
+    business_vertical_code: Mapped[str] = mapped_column(
+        ForeignKey("business_verticals.code", ondelete="CASCADE"),
+        nullable=False,
+    )
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    metadata_json: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+
+    business_vertical: Mapped["BusinessVertical"] = relationship(back_populates="subverticals")
+    type_mappings: Mapped[list["BusinessVerticalTypeMapping"]] = relationship(
+        back_populates="business_subvertical"
     )
 
 
@@ -49,7 +84,10 @@ class BusinessVerticalTypeMapping(TimestampMixin, Base):
         ForeignKey("business_verticals.code", ondelete="CASCADE"),
         nullable=False,
     )
-    subvertical_code: Mapped[Optional[str]] = mapped_column(String(120))
+    subvertical_code: Mapped[Optional[str]] = mapped_column(
+        String(120),
+        ForeignKey("business_subverticals.code", ondelete="SET NULL"),
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     metadata_json: Mapped[dict] = mapped_column(
         JSONB,
@@ -59,6 +97,7 @@ class BusinessVerticalTypeMapping(TimestampMixin, Base):
     )
 
     business_vertical: Mapped["BusinessVertical"] = relationship(back_populates="type_mappings")
+    business_subvertical: Mapped[Optional["BusinessSubvertical"]] = relationship(back_populates="type_mappings")
 
 
 class BusinessPlaceType(UUIDPrimaryKeyMixin, TimestampMixin, Base):

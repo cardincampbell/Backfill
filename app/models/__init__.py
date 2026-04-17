@@ -1,5 +1,9 @@
 from app.models.ai import LlmGeneration
 from app.models.business import Business, Location, LocationRole, Role
+from app.models.business_classification import (
+    BusinessDerivationGapSuggestion,
+    BusinessDerivationRun,
+)
 from app.models.communications import CommunicationSuppression
 from app.models.coverage import (
     AuditLog,
@@ -26,6 +30,7 @@ from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.role_taxonomy import (
     BusinessPlaceType,
     BusinessRoleArchetype,
+    BusinessSubvertical,
     BusinessVertical,
     BusinessVerticalRoleArchetype,
     BusinessVerticalTypeMapping,
@@ -45,6 +50,9 @@ __all__ = [
     "AuditLog",
     "BusinessPlaceType",
     "BusinessRoleArchetype",
+    "BusinessSubvertical",
+    "BusinessDerivationGapSuggestion",
+    "BusinessDerivationRun",
     "Business",
     "BusinessVertical",
     "BusinessVerticalRoleArchetype",
