@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from uuid import uuid4
 
 import pytest
@@ -13,7 +13,7 @@ from app.models.business import Business, Location, Role
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
-from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
+from app.models.workforce import Employee, EmployeeAvailabilityRule, EmployeeLocation, EmployeeRole
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleReplace,
     EmployeeAvailabilityRuleRead,
@@ -42,6 +42,26 @@ class DummyWorkforceSession:
 
     async def commit(self):
         self.commits += 1
+
+
+class DummyEmployeeCreateSession:
+    def __init__(self, *, location: Location | None = None):
+        self.location = location
+        self.added: list[object] = []
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def get(self, model, object_id):
+        if model is Location and self.location is not None and object_id == self.location.id:
+            return self.location
+        return None
+
+    async def flush(self):
+        return None
+
+    async def refresh(self, _obj):
+        return None
 
 
 def _make_auth_context(*, business_id, location_id=None) -> AuthContext:
@@ -82,6 +102,66 @@ def _make_auth_context(*, business_id, location_id=None) -> AuthContext:
         updated_at=now,
     )
     return AuthContext(user=user, session=session, memberships=[membership])
+
+
+@pytest.mark.asyncio
+async def test_create_employee_seeds_all_days_availability(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        timezone="America/Chicago",
+        settings={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session = DummyEmployeeCreateSession(location=location)
+
+    async def fake_require_business(_session, incoming_business_id):
+        assert incoming_business_id == business_id
+        return business
+
+    async def fake_find_duplicate_employee(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.workforce._require_business", fake_require_business)
+    monkeypatch.setattr("app.services.workforce._find_duplicate_employee", fake_find_duplicate_employee)
+
+    employee = await workforce.create_employee(
+        session,
+        business_id,
+        workforce.EmployeeCreate(
+            full_name="Jamie Rivera",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            primary_location_id=location_id,
+            employee_metadata={"source": "team_ui"},
+        ),
+    )
+
+    rules = [entry for entry in session.added if isinstance(entry, EmployeeAvailabilityRule)]
+
+    assert employee.primary_location_id == location_id
+    assert len(rules) == 7
+    assert [rule.day_of_week for rule in rules] == list(range(7))
+    assert all(rule.start_local_time == time(0, 0) for rule in rules)
+    assert all(rule.end_local_time == time(23, 59) for rule in rules)
+    assert all(rule.timezone == "America/Chicago" for rule in rules)
+    assert all(rule.availability_type == "available" for rule in rules)
+    assert all(rule.availability_metadata["preset"] == "all_days" for rule in rules)
 
 
 def test_enroll_employee_route_records_audit(monkeypatch):

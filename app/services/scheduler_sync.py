@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -31,7 +31,7 @@ from app.models.integrations import (
     SchedulerSyncRun,
 )
 from app.models.scheduling import Shift, ShiftAssignment
-from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
+from app.models.workforce import Employee, EmployeeAvailabilityRule, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import CoverageCaseCreate
 from app.schemas.integrations import (
     SchedulerConnectionRead,
@@ -122,6 +122,27 @@ def _retry_delay(job_type: str, attempt_number: int) -> timedelta | None:
 
 def _provider_display_value(provider: SchedulerProvider | str) -> str:
     return provider.value if isinstance(provider, SchedulerProvider) else str(provider)
+
+
+def _default_employee_availability_rules(
+    *,
+    employee_id: UUID,
+    timezone_name: str,
+    source: str,
+) -> list[EmployeeAvailabilityRule]:
+    return [
+        EmployeeAvailabilityRule(
+            employee_id=employee_id,
+            day_of_week=day_of_week,
+            start_local_time=time(0, 0),
+            end_local_time=time(23, 59),
+            timezone=timezone_name,
+            availability_type="available",
+            priority=0,
+            availability_metadata={"source": source, "preset": "all_days"},
+        )
+        for day_of_week in range(7)
+    ]
 
 
 def _connection_has_credentials(connection: SchedulerConnection) -> bool:
@@ -457,6 +478,18 @@ async def _get_or_create_employee(
             employee_metadata={"source": "scheduler_sync", **record.metadata},
         )
         session.add(employee)
+        await session.flush()
+        location = await session.get(Location, connection.location_id)
+        timezone_name = (
+            str(getattr(location, "timezone", "") or "").strip()
+            or "UTC"
+        )
+        for rule in _default_employee_availability_rules(
+            employee_id=employee.id,
+            timezone_name=timezone_name,
+            source="scheduler_sync",
+        ):
+            session.add(rule)
         await session.flush()
         created = True
     else:

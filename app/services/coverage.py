@@ -765,11 +765,6 @@ def _is_available_for_shift(employee: Employee, shift: Shift) -> tuple[bool, dic
             snapshot["rule_match"] = True
             return True, snapshot
 
-    if not employee.availability_rules:
-        snapshot["rule_match"] = True
-        snapshot["reason"] = "no_availability_rules_default_available"
-        return True, snapshot
-
     day_of_week = starts_local.weekday()
     for rule in employee.availability_rules:
         if rule.day_of_week != day_of_week:

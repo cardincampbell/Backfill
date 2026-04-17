@@ -257,7 +257,7 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_collect_phase_1_candidates_excludes_callout_employee_and_defaults_missing_rules_to_available(monkeypatch):
+async def test_collect_phase_1_candidates_excludes_callout_employee_and_requires_matching_availability(monkeypatch):
     business_id = uuid4()
     location_id = uuid4()
     role_id = uuid4()
@@ -406,8 +406,7 @@ async def test_collect_phase_1_candidates_excludes_callout_employee_and_defaults
 
     _shift, ranked = await coverage._collect_phase_1_candidates(session, business_id, shift_id)
 
-    assert [candidate.employee_id for candidate in ranked] == [eligible_employee_id]
-    assert ranked[0].phone_e164 == "+15555550101"
+    assert ranked == []
 
 
 @pytest.mark.asyncio

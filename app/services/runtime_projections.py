@@ -120,11 +120,7 @@ async def monitor_runtime_projection_freshness(
         .distinct()
         .limit(max(1, business_limit))
     )
-    business_ids: list[object] = []
-    for row in active_business_result.all():
-        business_id = row[0] if isinstance(row, tuple) else row
-        if business_id is not None:
-            business_ids.append(business_id)
+    business_ids = [business_id for business_id in active_business_result.scalars().all() if business_id is not None]
     if not business_ids:
         return {
             "status": "ready",

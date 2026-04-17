@@ -19,6 +19,24 @@ class _ExecuteResult:
     def all(self):
         return list(self._values)
 
+    def scalars(self):
+        values = self._values
+
+        class _ScalarResult:
+            def __init__(self, scalar_values):
+                self._scalar_values = scalar_values
+
+            def all(self):
+                normalized = []
+                for value in self._scalar_values:
+                    if isinstance(value, tuple):
+                        normalized.append(value[0])
+                    else:
+                        normalized.append(value)
+                return normalized
+
+        return _ScalarResult(values)
+
 
 class FakeProjectionSession:
     def __init__(self):
@@ -147,6 +165,29 @@ async def test_monitor_runtime_projection_freshness_blocks_when_stale_ratio_is_t
     assert result["fresh_employee_count"] == 1
     assert result["stale_employee_count"] == 2
     assert result["missing_employee_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_monitor_runtime_projection_freshness_uses_scalar_business_ids():
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [(business_id,)],
+        [
+            (business_id, {"updated_at": (now - timedelta(minutes=2)).isoformat()}),
+        ],
+    ]
+
+    result = await runtime_projections.monitor_runtime_projection_freshness(
+        session,
+        now=now,
+        business_limit=10,
+    )
+
+    assert result["status"] == "ready"
+    assert result["monitored_business_count"] == 1
+    assert result["fresh_employee_count"] == 1
 
 
 @pytest.mark.asyncio
