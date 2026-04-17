@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.business import Location, Role
+from app.models.business import Business, Location, Role
 from app.models.common import (
     AssignmentStatus,
     CoverageCaseStatus,
@@ -480,8 +480,10 @@ async def _get_or_create_employee(
         session.add(employee)
         await session.flush()
         location = await session.get(Location, connection.location_id)
+        business = await session.get(Business, connection.business_id)
         timezone_name = (
             str(getattr(location, "timezone", "") or "").strip()
+            or str(getattr(business, "timezone", "") or "").strip()
             or "UTC"
         )
         for rule in _default_employee_availability_rules(
