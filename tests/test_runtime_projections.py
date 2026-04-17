@@ -216,7 +216,7 @@ async def test_build_outreach_guardrail_snapshots_marks_hard_cooldown_and_burden
         [
             (
                 employee.id,
-                now - timedelta(minutes=5),
+                now - timedelta(seconds=30),
                 CoverageAttemptStatus.delivered,
             ),
             (
@@ -247,6 +247,30 @@ async def test_build_outreach_guardrail_snapshots_marks_hard_cooldown_and_burden
     assert guardrails["recent_burden"]["recent_attempt_count"] == 2
     assert guardrails["recent_burden"]["recent_accept_count"] == 1
     assert guardrails["hard_excluded"] is True
+
+
+def test_contact_cooldown_snapshot_uses_configured_hard_window(monkeypatch):
+    now = datetime.now(timezone.utc)
+    last_contact_at = now - timedelta(minutes=2)
+
+    monkeypatch.setattr(
+        runtime_projections,
+        "_contact_cooldown_hard_window",
+        lambda: timedelta(minutes=3),
+    )
+    monkeypatch.setattr(
+        runtime_projections,
+        "_contact_cooldown_soft_window",
+        lambda: timedelta(hours=2),
+    )
+
+    snapshot = runtime_projections._contact_cooldown_snapshot(
+        last_contact_at=last_contact_at,
+        now=now,
+    )
+
+    assert snapshot["status"] == "hard_cooldown"
+    assert snapshot["multiplier"] == 0.0
 
 
 @pytest.mark.asyncio

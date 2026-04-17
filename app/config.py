@@ -153,6 +153,12 @@ class Settings:
         "BACKFILL_ROLE_DERIVATION_MODEL",
         os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", ""),
     ).strip()
+    coverage_contact_cooldown_hard_seconds: int = int(
+        os.environ.get("BACKFILL_COVERAGE_CONTACT_COOLDOWN_HARD_SECONDS", "60")
+    )
+    coverage_contact_cooldown_soft_seconds: int = int(
+        os.environ.get("BACKFILL_COVERAGE_CONTACT_COOLDOWN_SOFT_SECONDS", str(2 * 60 * 60))
+    )
     billing_fill_price_cents: int = int(os.environ.get("BACKFILL_BILLING_FILL_PRICE_CENTS", "2000"))
     billing_location_monthly_cap_cents: int = int(
         os.environ.get("BACKFILL_BILLING_LOCATION_MONTHLY_CAP_CENTS", "20000")

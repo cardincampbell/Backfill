@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.common import AssignmentStatus, CoverageAttemptStatus, CoverageCaseStatus, EmployeeStatus
 from app.models.coverage import CoverageCase, CoverageContactAttempt
 from app.models.scheduling import Shift, ShiftAssignment
@@ -15,14 +16,30 @@ from app.schemas.coverage import CoverageCandidatePreview
 from app.services import delivery
 
 SCORE_SNAPSHOT_STALE_AFTER = timedelta(minutes=15)
-CONTACT_COOLDOWN_HARD = timedelta(minutes=15)
-CONTACT_COOLDOWN_SOFT = timedelta(hours=2)
 RECENT_BURDEN_WINDOW = timedelta(days=7)
 OVERTIME_LOOKBACK_WINDOW = timedelta(days=7)
 _ENGINE_RUNTIME_SOURCE = "authoring_tables"
 _SCORE_SNAPSHOT_SOURCE = "employee.response_profile"
 _PROJECTION_BLOCK_MIN_EMPLOYEE_COUNT = 5
 _PROJECTION_BLOCK_STALE_RATIO = 0.5
+
+
+def _contact_cooldown_hard_window() -> timedelta:
+    return timedelta(seconds=max(0, int(settings.coverage_contact_cooldown_hard_seconds)))
+
+
+def _contact_cooldown_soft_window() -> timedelta:
+    return timedelta(
+        seconds=max(
+            0,
+            int(
+                max(
+                    settings.coverage_contact_cooldown_soft_seconds,
+                    settings.coverage_contact_cooldown_hard_seconds,
+                )
+            ),
+        )
+    )
 
 
 def _normalize_datetime(value: object | None) -> datetime | None:
@@ -259,14 +276,16 @@ def _contact_cooldown_snapshot(
         }
 
     age_seconds = max(0, int((now - last_contact_at).total_seconds()))
-    if age_seconds < int(CONTACT_COOLDOWN_HARD.total_seconds()):
+    hard_window_seconds = int(_contact_cooldown_hard_window().total_seconds())
+    soft_window_seconds = int(_contact_cooldown_soft_window().total_seconds())
+    if age_seconds < hard_window_seconds:
         return {
             "status": "hard_cooldown",
             "multiplier": 0.0,
             "last_contact_at": last_contact_at.isoformat(),
             "age_seconds": age_seconds,
         }
-    if age_seconds < int(CONTACT_COOLDOWN_SOFT.total_seconds()):
+    if age_seconds < soft_window_seconds:
         return {
             "status": "soft_cooldown",
             "multiplier": 0.65,
