@@ -271,6 +271,36 @@ def _pick_value(*mappings: dict[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
+def _lookup_normalized_mapping_entry(
+    mapping: dict[str, Any],
+    *,
+    keys: tuple[str, ...],
+) -> tuple[str | None, Any]:
+    normalized_keys = {
+        normalized
+        for key in keys
+        if (normalized := _normalized_label(key)) is not None
+    }
+    if not normalized_keys:
+        return None, None
+    for raw_key, value in mapping.items():
+        if value in (None, ""):
+            continue
+        if _normalized_label(raw_key) in normalized_keys:
+            return str(raw_key), value
+    return None, None
+
+
+def _pick_normalized_value(*mappings: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        _, value = _lookup_normalized_mapping_entry(mapping, keys=keys)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _normalize_timestamp(value: Any) -> Optional[datetime]:
     if value in (None, ""):
         return None
@@ -607,32 +637,32 @@ def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | 
     raw_intent: Any = None
     raw_confidence: Any = None
     source = None
-    for key in (
+    key, value = _lookup_normalized_mapping_entry(
+        custom,
+        keys=(
         "call_intent",
         "intent",
         "primary_intent",
         "user_intent",
         "inbound_intent",
-    ):
-        value = custom.get(key)
-        if value in (None, ""):
-            continue
+        ),
+    )
+    if value not in (None, ""):
         source = f"custom_analysis_data.{key}"
         if isinstance(value, dict):
-            raw_intent = _pick_value(
+            raw_intent = _pick_normalized_value(
                 value,
                 keys=("value", "intent", "label", "name", "selection"),
             )
-            raw_confidence = _pick_value(
+            raw_confidence = _pick_normalized_value(
                 value,
                 keys=("confidence", "confidence_level", "certainty"),
             )
         else:
             raw_intent = value
-        break
 
     if raw_confidence in (None, ""):
-        raw_confidence = _pick_value(
+        raw_confidence = _pick_normalized_value(
             custom,
             keys=(
                 "call_intent_confidence",
@@ -666,32 +696,32 @@ def _retell_outbound_intent_signal(conversation: RetellConversation) -> dict[str
     raw_intent: Any = None
     raw_confidence: Any = None
     source = None
-    for key in (
-        "outbound_intent",
-        "call_intent",
-        "intent",
-        "primary_intent",
-        "user_intent",
-    ):
-        value = custom.get(key)
-        if value in (None, ""):
-            continue
+    key, value = _lookup_normalized_mapping_entry(
+        custom,
+        keys=(
+            "outbound_intent",
+            "call_intent",
+            "intent",
+            "primary_intent",
+            "user_intent",
+        ),
+    )
+    if value not in (None, ""):
         source = f"custom_analysis_data.{key}"
         if isinstance(value, dict):
-            raw_intent = _pick_value(
+            raw_intent = _pick_normalized_value(
                 value,
                 keys=("value", "intent", "label", "name", "selection"),
             )
-            raw_confidence = _pick_value(
+            raw_confidence = _pick_normalized_value(
                 value,
                 keys=("confidence", "confidence_level", "certainty"),
             )
         else:
             raw_intent = value
-        break
 
     if raw_confidence in (None, ""):
-        raw_confidence = _pick_value(
+        raw_confidence = _pick_normalized_value(
             custom,
             keys=(
                 "outbound_intent_confidence",

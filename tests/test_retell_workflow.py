@@ -1010,6 +1010,78 @@ async def test_process_inbound_conversation_completion_uses_high_confidence_rete
 
 
 @pytest.mark.asyncio
+async def test_process_inbound_conversation_completion_accepts_human_labeled_retell_callout(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    shift_tomorrow = uuid4()
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_retell_human_labels",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="inbound",
+        status="ended",
+        agent_id="agent_inbound_123",
+        phone_from="+15555550100",
+        phone_to="+18002225345",
+        conversation_summary="Caller confirmed they cannot work their only shift tomorrow.",
+        transcript_text="user: Correct. Personal.",
+        transcript_items=[
+            {"role": "user", "content": "That's the only shift that I have tomorrow."},
+            {"role": "user", "content": "Correct."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "Call Intent": "Callout",
+                "Intent Confidence": "High",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "caller_phone": "+15555550100",
+            "assigned_shifts": [
+                {
+                    "id": str(shift_tomorrow),
+                    "role_name": "General Manager",
+                    "location_name": "Pasadena",
+                    "starts_at": "2026-04-17T21:00:00+00:00",
+                    "timezone": "America/Los_Angeles",
+                    "start_time_label": "2:00 PM",
+                    "date_label": "Tomorrow (Friday, April 17)",
+                    "relative_day_label": "Tomorrow",
+                    "summary": "Tomorrow (Friday, April 17) from 2:00 PM to 6:00 PM PDT as General Manager at Pasadena",
+                },
+            ],
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_create_vacancy(_session, args):
+        captured.update(args)
+        return {
+            "status": "vacancy_created",
+            "shift_id": args["shift_id"],
+            "coverage_case_id": str(uuid4()),
+            "offers": [],
+            "used_published_amendment": True,
+            "reason_code": args["reason_code"],
+        }
+
+    monkeypatch.setattr(retell_workflow, "create_vacancy", fake_create_vacancy)
+
+    result = await retell_workflow.process_inbound_conversation_completion(session, conversation)
+
+    assert captured["shift_id"] == str(shift_tomorrow)
+    assert result["callout"]["status"] == "vacancy_created"
+    assert result["callout"]["intent"] == "callout"
+    assert result["callout"]["confidence"] == "high"
+    assert result["callout"]["source"] == "custom_analysis_data.Call Intent"
+
+
+@pytest.mark.asyncio
 async def test_process_inbound_conversation_completion_holds_medium_confidence_retell_callout_for_review():
     session = FakeSession()
     employee_id = uuid4()
@@ -1477,6 +1549,70 @@ async def test_process_outbound_conversation_completion_accepts_high_confidence_
     assert result["offer_response"]["intent"] == "accept_shift"
     assert result["offer_response"]["confidence"] == "high"
     assert conversation.analysis["backfill_processing"]["intent"]["intent"] == "accept_shift"
+
+
+@pytest.mark.asyncio
+async def test_process_outbound_conversation_completion_accepts_human_labeled_retell_intent(monkeypatch):
+    session = FakeSession()
+    employee_id = uuid4()
+    offer_id = uuid4()
+    shift_id = uuid4()
+    captured: dict[str, object] = {}
+    conversation = RetellConversation(
+        id=uuid4(),
+        external_id="call_outbound_accept_human_labels",
+        conversation_type=RetellConversationType.call,
+        event_type="call_analyzed",
+        direction="outbound",
+        status="ended",
+        agent_id="agent_outbound_123",
+        phone_from="+18002225345",
+        phone_to="+15555550199",
+        conversation_summary="Worker confirmed they can take the offered shift.",
+        transcript_text="user: Yes, I can take it.",
+        transcript_items=[
+            {"role": "user", "content": "Yes, I can take it."},
+        ],
+        analysis={
+            "custom_analysis_data": {
+                "Call Intent": "Accept shift",
+                "Intent Confidence": "High",
+            }
+        },
+        metadata_json={
+            "employee_id": str(employee_id),
+            "offer_id": str(offer_id),
+            "shift_id": str(shift_id),
+            "location_name": "Pasadena",
+            "role_name": "General Manager",
+            "shift_starts_at": "2026-04-17T21:00:00+00:00",
+            "shift_ends_at": "2026-04-18T01:00:00+00:00",
+        },
+        raw_payload={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    async def fake_respond_to_offer(_session, *, args, accepted):
+        captured.update(args)
+        captured["accepted"] = accepted
+        return {
+            "status": "accepted",
+            "offer_id": args["offer_id"],
+            "shift_id": args["shift_id"],
+            "assignment_id": str(uuid4()),
+        }
+
+    monkeypatch.setattr(retell_workflow, "_respond_to_offer", fake_respond_to_offer)
+
+    result = await retell_workflow.process_outbound_conversation_completion(session, conversation)
+
+    assert captured["accepted"] is True
+    assert captured["offer_id"] == str(offer_id)
+    assert result["offer_response"]["status"] == "accepted"
+    assert result["offer_response"]["intent"] == "accept_shift"
+    assert result["offer_response"]["confidence"] == "high"
+    assert result["offer_response"]["source"] == "custom_analysis_data.Call Intent"
 
 
 @pytest.mark.asyncio
