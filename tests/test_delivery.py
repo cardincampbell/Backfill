@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 
-from app.models.common import CoverageAttemptStatus, CoverageCaseStatus, CoverageRunStatus, OfferStatus, OutboxStatus
-from app.models.business import Location, Role
+from app.models.common import AssignmentStatus, CoverageAttemptStatus, CoverageCaseStatus, CoverageRunStatus, OfferStatus, OutboxStatus
+from app.models.business import Business, Location, Role
 from app.models.coverage import CoverageCandidate, CoverageCase, CoverageCaseRun, CoverageContactAttempt, CoverageOffer, OutboxEvent
-from app.models.scheduling import Shift
+from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.services import delivery
 
@@ -172,7 +173,8 @@ async def test_process_outbox_batch_sends_schedule_publish_sms(monkeypatch):
         payload={
             "business_id": str(uuid4()),
             "phone_e164": "+15555550100",
-            "text_body": "Your schedule is live.",
+            "text_body": "EMAIL BODY SHOULD NOT BE USED",
+            "sms_body": "Your schedule is live.",
         },
     )
     captured: dict[str, str | None] = {}
@@ -244,6 +246,64 @@ async def test_process_outbox_batch_cancels_schedule_publish_sms_on_invalid_twil
     assert event.status == OutboxStatus.cancelled
     assert event.error_message == "The 'To' number is not a valid phone number."
     assert event.result_payload["twilio_error_code"] == 21211
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_sends_schedule_publish_email(monkeypatch):
+    now = datetime.now(timezone.utc)
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="schedule_publish",
+        aggregate_id=uuid4(),
+        topic=delivery.SCHEDULE_PUBLISH_NOTIFICATION_TOPIC,
+        channel="email",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={
+            "business_id": str(uuid4()),
+            "email": "worker@example.com",
+            "subject": "Your Backfill schedule is live",
+            "text_body": "Plain text schedule body",
+            "html_body": "<div>Styled schedule email</div>",
+            "email_headers": {"List-Unsubscribe": "<mailto:unsubscribe@example.com>"},
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_send_email(
+        *,
+        to: str,
+        subject: str,
+        text_body: str,
+        html_body: str | None = None,
+        headers: dict[str, str] | None = None,
+    ):
+        captured["to"] = to
+        captured["subject"] = subject
+        captured["text_body"] = text_body
+        captured["html_body"] = html_body or ""
+        captured["headers"] = headers or {}
+        return "SG-PUBLISH"
+
+    monkeypatch.setattr("app.services.messaging.send_email", fake_send_email)
+
+    session = FakeDeliverySession()
+    session.execute_queue = [[event]]
+
+    result = await delivery.process_outbox_batch(
+        session,
+        now=now,
+        limit=10,
+    )
+
+    assert result["claimed_count"] == 1
+    assert result["sent_count"] == 1
+    assert event.status == OutboxStatus.sent
+    assert captured["to"] == "worker@example.com"
+    assert captured["subject"] == "Your Backfill schedule is live"
+    assert captured["text_body"] == "Plain text schedule body"
+    assert captured["html_body"] == "<div>Styled schedule email</div>"
+    assert captured["headers"] == {"List-Unsubscribe": "<mailto:unsubscribe@example.com>"}
 
 
 @pytest.mark.asyncio
@@ -853,6 +913,147 @@ async def test_twilio_sms_provider_builds_callback_and_message(monkeypatch):
     assert "Server" in captured["body"]
     assert "Reply YES" in captured["body"]
     assert captured["status_callback"].endswith("/api/providers/twilio/sms/status")
+
+
+@pytest.mark.asyncio
+async def test_process_outbox_batch_enriches_retell_voice_call_with_employee_shift_context(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    offer_id = uuid4()
+    employee_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Casa Vega West",
+        slug="casa-vega-west",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 17, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc),
+    )
+    shift.location = location
+    shift.role = role
+    weekly_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 16, 18, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 17, 2, 0, tzinfo=timezone.utc),
+    )
+    weekly_shift.location = location
+    weekly_shift.role = role
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Smith",
+        phone_e164="+15555550100",
+        response_profile={},
+        employee_metadata={},
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=weekly_shift.id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={},
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=uuid4(),
+        employee_id=employee_id,
+        channel="voice",
+        status=OfferStatus.pending,
+        idempotency_key="offer-retell-voice",
+        expires_at=now + timedelta(minutes=5),
+        offer_metadata={"shift_id": str(shift_id), "premium_cents": 500},
+    )
+    event = OutboxEvent(
+        id=uuid4(),
+        aggregate_type="coverage_offer",
+        aggregate_id=offer_id,
+        topic="coverage.offer.created",
+        channel="voice",
+        status=OutboxStatus.pending,
+        available_at=now,
+        payload={"phone_e164": "+15555550100"},
+    )
+
+    session = FakeDeliverySession()
+    session.get_map[(CoverageOffer, offer_id)] = offer
+    session.get_map[(Employee, employee_id)] = employee
+    session.get_map[(Business, business_id)] = business
+    session.scalar_queue = [shift, None, 0]
+    session.execute_queue = [[weekly_shift]]
+
+    async def fake_claim_outbox_events(_session, *, now, limit, topic, business_resolver):
+        assert limit == 10
+        return [event]
+
+    captured: dict[str, object] = {}
+
+    async def fake_create_phone_call(*, to_number, metadata, dynamic_variables=None, agent_id=None, agent_kind="outbound"):
+        captured["to_number"] = to_number
+        captured["metadata"] = metadata
+        captured["dynamic_variables"] = dynamic_variables
+        captured["agent_kind"] = agent_kind
+        return "call_123"
+
+    monkeypatch.setattr(delivery.worker_runtime, "claim_outbox_events", fake_claim_outbox_events)
+    monkeypatch.setattr(delivery.retell_service, "create_phone_call", fake_create_phone_call)
+
+    result = await delivery.process_outbox_batch(session, now=now, limit=10)
+
+    assert result["claimed_count"] == 1
+    assert result["sent_count"] == 1
+    assert captured["to_number"] == "+15555550100"
+    assert captured["agent_kind"] == "outbound"
+    metadata = captured["metadata"]
+    dynamic_variables = captured["dynamic_variables"]
+    assert dynamic_variables["employee_first_name"] == "Taylor"
+    assert dynamic_variables["employee_last_name"] == "Smith"
+    assert dynamic_variables["location_name"] == "Casa Vega West"
+    assert dynamic_variables["shift_date"] == "Friday, April 17"
+    assert dynamic_variables["shift_start_time"] == "2:00 PM PDT"
+    assert dynamic_variables["shift_end_time"] == "6:00 PM PDT"
+    shift_context = json.loads(dynamic_variables["shift_context"])
+    assert shift_context["week_start_date"] == "2026-04-13"
+    assert shift_context["week_end_date"] == "2026-04-19"
+    assert shift_context["offered_shift"]["shift_id"] == str(shift_id)
+    assert shift_context["weekly_assigned_shifts"][0]["shift_id"] == str(weekly_shift.id)
+    assert metadata["employee_first_name"] == "Taylor"
+    assert metadata["shift_context"]["offered_shift"]["shift_id"] == str(shift_id)
+    assert offer.status == OfferStatus.pending
+    assert event.status == OutboxStatus.sent
 
 
 @pytest.mark.asyncio

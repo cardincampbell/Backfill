@@ -75,6 +75,7 @@ def test_dedupe_key_prefers_provider_event_id() -> None:
         provider="twilio",
         provider_event_id="SM123",
         payload={"MessageSid": "SM999"},
+        event_type="delivered",
     )
 
     assert key == "twilio:SM123"
@@ -85,15 +86,36 @@ def test_dedupe_key_falls_back_to_stable_payload_hash() -> None:
         provider="retell",
         provider_event_id=None,
         payload={"event": "call_started", "call": {"id": "call_123", "status": "started"}},
+        event_type="call_started",
     )
     right = provider_callbacks.dedupe_key_for_callback(
         provider="retell",
         provider_event_id=None,
         payload={"call": {"status": "started", "id": "call_123"}, "event": "call_started"},
+        event_type="call_started",
     )
 
     assert left == right
     assert left.startswith("retell:")
+
+
+def test_dedupe_key_separates_retell_lifecycle_events_for_same_call() -> None:
+    started = provider_callbacks.dedupe_key_for_callback(
+        provider="retell",
+        provider_event_id="call_123",
+        payload={"event": "call_started"},
+        event_type="call_started",
+    )
+    ended = provider_callbacks.dedupe_key_for_callback(
+        provider="retell",
+        provider_event_id="call_123",
+        payload={"event": "call_ended"},
+        event_type="call_ended",
+    )
+
+    assert started == "retell:call_started:call_123"
+    assert ended == "retell:call_ended:call_123"
+    assert started != ended
 
 
 @pytest.mark.asyncio
@@ -177,6 +199,46 @@ async def test_process_callback_entry_marks_failed_and_raises_typed_error(monkey
     assert entry.status == "dead_lettered"
     assert entry.error_message == "offer_not_found"
     assert session.rollbacks == 1
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_process_retell_function_call_enriches_args_from_payload_context(monkeypatch) -> None:
+    session = DummyCallbackSession()
+    employee_id = uuid4()
+    shift_id = uuid4()
+    entry = _callback_entry(
+        provider="retell",
+        route_key="retell_webhook",
+        event_type="function_call",
+        provider_event_id="call_123",
+        dedupe_key="retell:call_123",
+        payload={
+            "event": "function_call",
+            "name": "create_vacancy",
+            "args": {},
+            "from_number": "+15555550100",
+            "metadata": {
+                "employee_id": str(employee_id),
+                "shift_id": str(shift_id),
+            },
+        },
+    )
+    session.get_map[(ProviderCallbackLog, entry.id)] = entry
+
+    async def fake_dispatch(_session, name, args):
+        assert name == "create_vacancy"
+        assert args["phone"] == "+15555550100"
+        assert args["employee_id"] == str(employee_id)
+        assert args["shift_id"] == str(shift_id)
+        return {"status": "vacancy_created", "shift_id": args["shift_id"]}
+
+    monkeypatch.setattr(provider_callbacks.retell_workflow, "dispatch_function_call", fake_dispatch)
+
+    result = await provider_callbacks.process_callback_entry(session, entry)
+
+    assert result.response_payload == {"status": "vacancy_created", "shift_id": str(shift_id)}
+    assert entry.status == "processed"
     assert session.commits == 1
 
 

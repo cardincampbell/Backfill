@@ -66,6 +66,49 @@ def test_retell_function_call_route_returns_dispatch_result(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_retell_public_webhook_alias_returns_dispatch_result(monkeypatch):
+    class CallbackEntry:
+        id = "cb_retell_alias"
+        status = "received"
+        result_payload = {}
+
+    async def fake_process(session, entry):
+        assert entry.status == "received"
+        return type(
+            "CallbackResult",
+            (),
+            {
+                "response_kind": "json",
+                "response_payload": {"status": "vacancy_created", "shift_id": "shift_123"},
+                "response_text": None,
+            },
+        )()
+
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), True
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/retell",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "function_call",
+                "name": "create_vacancy",
+                "args": {"shift_id": "shift_123", "employee_id": "emp_123"},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": "vacancy_created", "shift_id": "shift_123"}
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_retell_lifecycle_route_persists_conversation(monkeypatch):
     class CallbackEntry:
         id = "cb_retell_2"
@@ -95,6 +138,92 @@ def test_retell_lifecycle_route_persists_conversation(monkeypatch):
             "event": "call_started",
             "callback_log_id": "cb_retell_2",
         }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_retell_call_ended_route_processes_completed_inbound_outcome(monkeypatch):
+    class CallbackEntry:
+        id = "cb_retell_ended"
+        status = "received"
+        result_payload = {}
+
+    async def fake_record(*args, **kwargs):
+        return CallbackEntry(), True
+
+    async def fake_process(session, entry):
+        assert entry.status == "received"
+        return type(
+            "CallbackResult",
+            (),
+            {
+                "response_kind": "json",
+                "response_payload": {
+                    "status": "ok",
+                    "conversation_id": "conv_123",
+                    "outcome": {"status": "processed", "callout": {"status": "vacancy_created"}},
+                },
+                "response_text": None,
+            },
+        )()
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.record_raw_callback", fake_record)
+    monkeypatch.setattr("app.api.routes.retell_provider.provider_callbacks.process_callback_entry_synchronously", fake_process)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/retell",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "call_ended",
+                "call": {"call_id": "call_123"},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["outcome"]["callout"]["status"] == "vacancy_created"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_retell_inbound_webhook_returns_personalized_call_context(monkeypatch):
+    async def fake_build_inbound(_session, body):
+        assert body["event"] == "call_inbound"
+        return {
+            "call_inbound": {
+                "override_agent_id": "agent_inbound_123",
+                "metadata": {"employee_id": "emp_123", "shift_id": "shift_123"},
+                "dynamic_variables": {"caller_first_name": "Taylor", "employee_found": "true"},
+                "agent_override": {
+                    "retell_llm": {
+                        "begin_message": "Hi Taylor, this is Backfill's AI assistant. Are you calling about your upcoming shift?"
+                    }
+                },
+            }
+        }
+
+    monkeypatch.setattr("app.api.routes.retell_provider._validate_signature", lambda raw_body, signature: True)
+    monkeypatch.setattr(
+        "app.api.routes.retell_provider.provider_callbacks.retell_workflow.build_inbound_webhook_response",
+        fake_build_inbound,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/retell",
+            headers={"X-Retell-Signature": "sig_valid"},
+            json={
+                "event": "call_inbound",
+                "call_inbound": {"from_number": "+15555550100"},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["call_inbound"]["override_agent_id"] == "agent_inbound_123"
+        assert response.json()["call_inbound"]["metadata"]["employee_id"] == "emp_123"
     finally:
         app.dependency_overrides.clear()
 

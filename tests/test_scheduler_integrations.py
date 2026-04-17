@@ -9,8 +9,15 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
-from app.models.business import Location
-from app.models.common import AssignmentStatus, CoverageCaseStatus, MembershipRole, MembershipStatus, SessionRiskLevel, ShiftStatus
+from app.models.business import Business, Location
+from app.models.common import (
+    AssignmentStatus,
+    CoverageCaseStatus,
+    MembershipRole,
+    MembershipStatus,
+    SessionRiskLevel,
+    ShiftStatus,
+)
 from app.models.coverage import CoverageCase
 from app.models.identity import Membership, Session, User
 from app.models.integrations import SchedulerConnection
@@ -423,3 +430,67 @@ async def test_create_vacancy_reuses_active_offers_and_skips_duplicate_dispatch(
     assert result["coverage_case_id"] == case_id
     assert result["offers"] == [str(existing_offer_id)]
     assert coverage_case.case_metadata["excluded_employee_ids"] == [str(employee_id)]
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_employee_uses_business_timezone_when_location_missing_timezone():
+    business_id = uuid4()
+    location_id = uuid4()
+    connection = SchedulerConnection(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        provider="7shifts",
+        provider_location_ref="company-123",
+        status="active",
+        writeback_enabled=True,
+        credentials={},
+        webhook_secret="whsec_test_secret",
+        secret_hint="whse...cret",
+        connection_metadata={},
+    )
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Denver",
+        settings={},
+        place_metadata={},
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        timezone="",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+    )
+    session = FakeSchedulerSession()
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.scalar_queue = [None, None, None]
+
+    employee, created = await scheduler_sync._get_or_create_employee(
+        session,
+        connection=connection,
+        record=SimpleNamespace(
+            external_ref="emp_123",
+            full_name="Jamie Rivera",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            metadata={},
+        ),
+    )
+
+    availability_rules = [
+        entry for entry in session.added if entry.__class__.__name__ == "EmployeeAvailabilityRule"
+    ]
+
+    assert created is True
+    assert employee.business_id == business_id
+    assert len(availability_rules) == 7
+    assert all(rule.timezone == "America/Denver" for rule in availability_rules)

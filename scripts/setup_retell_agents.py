@@ -8,7 +8,7 @@ Run once (or re-run to update) after setting RETELL_API_KEY in .env:
 
 Creates two agents:
   1. inbound_callout  — workers calling 1-800-BACKFILL to report absences
-  2. outbound_t1t2    — AI calling workers to offer open shifts
+  2. outbound_t1t2    — AI calling workers to offer open shifts with personalized shift and weekly schedule context
   3. sms_chat         — AI texting workers and managers on the same number
 
 Agent IDs are printed to stdout. Copy them into your .env:
@@ -40,12 +40,12 @@ def _load_prompt(filename: str) -> str:
     return (PROMPTS_DIR / filename).read_text()
 
 
-# ── Function call schemas shared by both agents ───────────────────────────────
+# ── Function call schemas for chat and optional live-call tools ───────────────
 
 FUNCTION_SCHEMAS = [
     {
         "name": "lookup_caller",
-        "description": "Look up the caller by phone number to identify if they are a known worker or manager.",
+        "description": "Look up the caller by phone number to identify them and return their full currently published upcoming assigned shift schedule.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -63,9 +63,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "worker_id": {
-                    "type": "integer",
-                    "description": "The ID of the worker from the lookup_caller result.",
+                "employee_id": {
+                    "type": "string",
+                    "description": "Employee UUID from the lookup_caller result.",
                 },
                 "granted": {
                     "type": "boolean",
@@ -77,7 +77,7 @@ FUNCTION_SCHEMAS = [
                     "default": "inbound_call",
                 },
             },
-            "required": ["worker_id", "granted"],
+            "required": ["employee_id", "granted"],
         },
     },
     {
@@ -87,15 +87,15 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "shift_id": {
-                    "type": "integer",
-                    "description": "ID of the shift the worker is calling out of.",
+                    "type": "string",
+                    "description": "Shift UUID the worker is calling out of.",
                 },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who is calling out.",
+                "employee_id": {
+                    "type": "string",
+                    "description": "Employee UUID of the worker who is calling out.",
                 },
             },
-            "required": ["shift_id", "worker_id"],
+            "required": ["shift_id", "employee_id"],
         },
     },
     {
@@ -104,13 +104,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active cascade for this shift.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who was offered the shift.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID from the outbound Retell metadata.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -118,7 +114,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -127,13 +123,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active cascade for this shift.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the worker who was offered the shift.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID from the outbound Retell metadata.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -141,7 +133,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -150,13 +142,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the active or recently completed cascade.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the standby worker.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID for the standby worker.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -164,7 +152,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -173,13 +161,9 @@ FUNCTION_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
-                "cascade_id": {
-                    "type": "integer",
-                    "description": "ID of the related cascade.",
-                },
-                "worker_id": {
-                    "type": "integer",
-                    "description": "ID of the standby worker being promoted.",
+                "offer_id": {
+                    "type": "string",
+                    "description": "Coverage offer UUID for the standby worker being promoted.",
                 },
                 "conversation_summary": {
                     "type": "string",
@@ -187,7 +171,7 @@ FUNCTION_SCHEMAS = [
                     "default": "",
                 },
             },
-            "required": ["cascade_id", "worker_id"],
+            "required": ["offer_id"],
         },
     },
     {
@@ -197,8 +181,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "location_id": {
-                    "type": "integer",
-                    "description": "Filter by location ID (optional).",
+                    "type": "string",
+                    "description": "Location UUID to filter by (optional).",
                 }
             },
             "required": [],
@@ -211,8 +195,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "shift_id": {
-                    "type": "integer",
-                    "description": "ID of the shift to look up.",
+                    "type": "string",
+                    "description": "Shift UUID to look up.",
                 }
             },
             "required": ["shift_id"],
@@ -225,8 +209,8 @@ FUNCTION_SCHEMAS = [
             "type": "object",
             "properties": {
                 "location_id": {
-                    "type": "integer",
-                    "description": "ID of the location that needs coverage.",
+                    "type": "string",
+                    "description": "Location UUID that needs coverage.",
                 },
                 "role": {
                     "type": "string",
@@ -282,16 +266,20 @@ FUNCTION_SCHEMAS = [
     },
 ]
 
+INBOUND_FUNCTION_SCHEMAS: list[dict] = []
+OUTBOUND_FUNCTION_SCHEMAS: list[dict] = []
+SMS_CHAT_FUNCTION_SCHEMAS = FUNCTION_SCHEMAS
+
 WEBHOOK_URL = os.environ.get("BACKFILL_WEBHOOK_URL", "http://127.0.0.1:8000") + "/webhooks/retell"
 
 
-def _create_agent(client: Retell, name: str, prompt: str) -> dict:
+def _create_agent(client: Retell, name: str, prompt: str, *, function_schemas: list[dict] | None = None) -> dict:
     """Create a Retell agent and return the full response object."""
     agent = client.agent.create(
         agent_name=name,
         response_engine={
             "type": "retell-llm",
-            "llm_id": _get_or_create_llm(client, name, prompt),
+            "llm_id": _get_or_create_llm(client, name, prompt, function_schemas=function_schemas),
         },
         voice_id="11labs-Adrian",  # clear, professional US English voice
         enable_backchannel=True,
@@ -301,11 +289,11 @@ def _create_agent(client: Retell, name: str, prompt: str) -> dict:
     return agent
 
 
-def _create_chat_agent(client: Retell, name: str, prompt: str) -> dict:
+def _create_chat_agent(client: Retell, name: str, prompt: str, *, function_schemas: list[dict] | None = None) -> dict:
     payload = {
         "response_engine": {
             "type": "retell-llm",
-            "llm_id": _get_or_create_llm(client, name, prompt),
+            "llm_id": _get_or_create_llm(client, name, prompt, function_schemas=function_schemas),
         },
         "agent_name": name,
         "webhook_url": WEBHOOK_URL,
@@ -320,8 +308,15 @@ def _create_chat_agent(client: Retell, name: str, prompt: str) -> dict:
     return response.json()
 
 
-def _get_or_create_llm(client: Retell, name: str, prompt: str) -> str:
+def _get_or_create_llm(
+    client: Retell,
+    name: str,
+    prompt: str,
+    *,
+    function_schemas: list[dict] | None = None,
+) -> str:
     """Create a Retell LLM config with the given prompt and function schemas."""
+    tool_schemas = function_schemas or []
     llm = client.llm.create(
         model="gpt-4o",
         general_prompt=prompt,
@@ -334,7 +329,7 @@ def _get_or_create_llm(client: Retell, name: str, prompt: str) -> str:
                 "speak_during_execution": False,
                 "speak_after_execution": True,
             }
-            for fn in FUNCTION_SCHEMAS
+            for fn in tool_schemas
         ],
     )
     return llm.llm_id
@@ -348,14 +343,18 @@ def main():
         client,
         name="Backfill Inbound Callout",
         prompt=_load_prompt("inbound_callout.txt"),
+        function_schemas=INBOUND_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ inbound agent_id: {inbound.agent_id}")
 
     print("Creating outbound shift offer agent...")
+    # The outbound prompt expects dynamic variables such as employee name,
+    # offered shift timing, location, and same-week schedule context.
     outbound = _create_agent(
         client,
         name="Backfill Outbound Shift Offer",
         prompt=_load_prompt("outbound_voice_t1t2.txt"),
+        function_schemas=OUTBOUND_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ outbound agent_id: {outbound.agent_id}")
 
@@ -364,6 +363,7 @@ def main():
         client,
         name="Backfill SMS Operations",
         prompt=_load_prompt("sms_chat.txt"),
+        function_schemas=SMS_CHAT_FUNCTION_SCHEMAS,
     )
     print(f"  ✓ sms chat agent_id: {sms_chat['agent_id']}")
 

@@ -146,6 +146,7 @@ def test_location_board_route_returns_snapshot(monkeypatch):
             f"/api/workspace/businesses/{business_id}/locations/{location_id}/board"
         )
         assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "private, no-store"
         payload = response.json()
         assert payload["business_name"] == "Casa Vega"
         assert payload["location_name"] == "West Hollywood"
@@ -907,6 +908,1622 @@ async def test_location_board_reports_setup_required_when_no_schedulable_locatio
     assert len(board.roles) == 1
     assert len(board.workers) == 1
     assert all(worker.can_cover_here is False for worker in board.workers)
+
+
+@pytest.mark.asyncio
+async def test_location_board_marks_week_published_from_latest_publish_event():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jamie Rivera"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={},
+        created_at=now,
+        updated_at=published_at,
+    )
+    shift.lifecycle_status = "scheduled"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-1",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], [shift], [publish_event], []]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_at == published_at
+    assert board.publish_summary.amended_shift_ids == []
+    assert board.publish_summary.published_shift_ids == [shift_id]
+    assert board.publish_summary.published_employee_ids == [employee_id]
+    assert board.shifts[0].amended_from_published is False
+    assert board.shifts[0].amendment_reason_code is None
+    assert board.shifts[0].schedule_break is False
+
+
+@pytest.mark.asyncio
+async def test_location_board_marks_week_amended_for_matching_shift_amendment():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    amended_at = published_at + timedelta(hours=3)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=amended_at,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=amended_at,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jamie Rivera"},
+        created_at=now,
+        updated_at=amended_at,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={},
+        created_at=now,
+        updated_at=amended_at,
+    )
+    shift.lifecycle_status = "draft"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-2",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+    amended_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.amended",
+        compatibility_event_name="schedule.week.amended",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-3",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+            "shift_id": str(shift_id),
+            "action": "unassign_shift",
+            "reason_code": "callout",
+        },
+        event_metadata={},
+        occurred_at=amended_at,
+        created_at=amended_at,
+        updated_at=amended_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    shift.shift_metadata = {
+        "published_amendment": {
+            "amended_from_published": True,
+            "reason_code": "callout",
+            "schedule_break": True,
+            "amended_employee_ids": [str(employee_id)],
+        }
+    }
+    session.execute_queue = [[location_role], [role], [employee], [shift], [publish_event], [amended_event]]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "amended"
+    assert board.publish_summary.published_at == published_at
+    assert board.publish_summary.amended_at == amended_at
+    assert board.publish_summary.amended_shift_ids == [shift_id]
+    assert board.publish_summary.amended_employee_ids == [employee_id]
+    assert board.shifts[0].amended_from_published is True
+    assert board.shifts[0].amendment_reason_code == "callout"
+    assert board.shifts[0].schedule_break is True
+
+
+@pytest.mark.asyncio
+async def test_location_board_does_not_render_historical_cancelled_shift_for_active_callout_schedule_break():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    amended_at = published_at + timedelta(hours=3)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=amended_at,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=amended_at,
+        )
+    ]
+    cancelled_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="retell_voice",
+        status=AssignmentStatus.cancelled,
+        sequence_no=1,
+        assignment_metadata={
+            "employee_name": "Jamie Rivera",
+            "published_amendment_reason_code": "callout",
+            "published_amendment_action": "unassign_shift",
+        },
+        created_at=now,
+        updated_at=amended_at,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": True,
+                "reason_code": "callout",
+                "schedule_break": True,
+                "amended_employee_ids": [str(employee_id)],
+            }
+        },
+        created_at=now,
+        updated_at=amended_at,
+    )
+    shift.lifecycle_status = "scheduled"
+    shift.assignments = [cancelled_assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-callout-published",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+    amended_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.amended",
+        compatibility_event_name="schedule.week.amended",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-callout-amended",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+            "shift_id": str(shift_id),
+            "action": "unassign_shift",
+            "reason_code": "callout",
+        },
+        event_metadata={},
+        occurred_at=amended_at,
+        created_at=amended_at,
+        updated_at=amended_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], [shift], [publish_event], [amended_event]]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "amended"
+    assert board.publish_summary.amended_shift_ids == [shift_id]
+    assert board.publish_summary.amended_employee_ids == [employee_id]
+    assert len(board.shifts) == 1
+    assert board.shifts[0].historical_display is False
+    assert board.shifts[0].schedule_break is True
+    assert board.shifts[0].amendment_reason_code == "callout"
+    assert board.shifts[0].current_assignment is None
+    assert board.shifts[0].last_assignment is not None
+    assert board.shifts[0].last_assignment.employee_id == employee_id
+
+
+@pytest.mark.asyncio
+async def test_location_board_ignores_amendment_events_for_other_weeks():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    unrelated_amended_at = published_at + timedelta(hours=3)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jamie Rivera"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={},
+        created_at=now,
+        updated_at=published_at,
+    )
+    shift.lifecycle_status = "scheduled"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-4",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+    unrelated_amended_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.amended",
+        compatibility_event_name="schedule.week.amended",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-5",
+        payload={
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+            "shift_id": str(uuid4()),
+            "action": "unassign_shift",
+            "reason_code": "callout",
+        },
+        event_metadata={},
+        occurred_at=unrelated_amended_at,
+        created_at=unrelated_amended_at,
+        updated_at=unrelated_amended_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [
+        [location_role],
+        [role],
+        [employee],
+        [shift],
+        [publish_event],
+        [unrelated_amended_event],
+    ]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_at == published_at
+    assert board.publish_summary.amended_at is None
+    assert board.publish_summary.amended_shift_ids == []
+    assert board.publish_summary.amended_employee_ids == []
+
+
+@pytest.mark.asyncio
+async def test_location_board_preserves_historical_cancelled_shift_after_republish():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.cancelled,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jamie Rivera"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": False,
+                "reason_code": "cancelled",
+                "schedule_break": False,
+                "old_employee_id": str(employee_id),
+                "amended_employee_ids": [],
+            }
+        },
+        created_at=now,
+        updated_at=published_at,
+    )
+    shift.lifecycle_status = "cancelled"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-6",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], [shift], [publish_event], []]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_employee_ids == [employee_id]
+    assert board.shifts[0].historical_display is True
+    assert board.shifts[0].amendment_reason_code == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_location_board_exposes_historical_reassignment_artifact_after_republish():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 6, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    previous_employee_id = uuid4()
+    current_employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    previous_employee = Employee(
+        id=previous_employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    previous_employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=previous_employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    previous_employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=previous_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    current_employee = Employee(
+        id=current_employee_id,
+        business_id=business_id,
+        full_name="Chris Patel",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    current_employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=current_employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    current_employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=current_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    current_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=current_employee_id,
+        employee=current_employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=2,
+        assignment_metadata={"employee_name": "Chris Patel"},
+        created_at=now,
+        updated_at=now,
+    )
+    previous_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=previous_employee_id,
+        employee=previous_employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.no_show,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jamie Rivera"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={
+            "published_amendment": {
+                "amended_from_published": False,
+                "reason_code": "reassignment",
+                "schedule_break": False,
+                "old_employee_id": str(previous_employee_id),
+                "new_employee_id": str(current_employee_id),
+                "amended_employee_ids": [],
+                "historical_artifacts": [
+                    {
+                        "artifact_id": "artifact-1",
+                        "employee_id": str(previous_employee_id),
+                        "employee_name": "Jamie Rivera",
+                        "reason_code": "no_show",
+                        "starts_at": (now + timedelta(hours=2)).isoformat(),
+                        "ends_at": (now + timedelta(hours=10)).isoformat(),
+                        "role_id": str(role_id),
+                        "role_code": "cashier",
+                        "role_name": "Cashier",
+                    }
+                ],
+            }
+        },
+        created_at=now,
+        updated_at=published_at,
+    )
+    shift.lifecycle_status = "scheduled"
+    shift.assignments = [previous_assignment, current_assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-7",
+        payload={
+            "week_start_date": "2026-04-06",
+            "week_end_date": "2026-04-12",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [previous_employee, current_employee], [shift], [publish_event], []]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 6),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_employee_ids == sorted(
+        [previous_employee_id, current_employee_id],
+        key=str,
+    )
+    assert len(board.shifts) == 2
+    historical_shift = next(item for item in board.shifts if item.historical_display)
+    live_shift = next(item for item in board.shifts if not item.historical_display)
+    assert historical_shift.amendment_reason_code == "no_show"
+    assert historical_shift.last_assignment is not None
+    assert historical_shift.last_assignment.employee_id == previous_employee_id
+    assert live_shift.current_assignment is not None
+    assert live_shift.current_assignment.employee_id == current_employee_id
+
+
+@pytest.mark.asyncio
+async def test_location_board_recovers_cancelled_history_from_assignment_metadata_when_shift_metadata_was_cleared():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Harper Lewis",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.cancelled,
+        sequence_no=1,
+        assignment_metadata={
+            "employee_name": "Harper Lewis",
+            "published_amendment_action": "unassign_shift",
+            "published_amendment_reason_code": "callout",
+        },
+        created_at=now,
+        updated_at=published_at,
+        cancelled_at=published_at,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 14, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={
+            "published_amendment": {
+                "action": None,
+                "reason_code": None,
+                "amended_from_published": False,
+                "schedule_break": False,
+            }
+        },
+        created_at=now,
+        updated_at=published_at,
+    )
+    shift.lifecycle_status = "cancelled"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-legacy-cancelled",
+        payload={
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], [shift], [publish_event], []]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 13),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_employee_ids == [employee_id]
+    assert len(board.shifts) == 1
+    assert board.shifts[0].historical_display is True
+    assert board.shifts[0].amendment_reason_code == "cancelled"
+    assert board.shifts[0].schedule_break is False
+
+
+@pytest.mark.asyncio
+async def test_location_board_recovers_historical_reassignment_artifact_from_assignment_metadata_when_shift_metadata_was_cleared():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc)
+    published_at = now + timedelta(hours=2)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    previous_employee_id = uuid4()
+    current_employee_id = uuid4()
+    shift_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=3,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    previous_employee = Employee(
+        id=previous_employee_id,
+        business_id=business_id,
+        full_name="Harper Lewis",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    previous_employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=previous_employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    previous_employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=previous_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    current_employee = Employee(
+        id=current_employee_id,
+        business_id=business_id,
+        full_name="Isabella Thomas",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    current_employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=current_employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    current_employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=current_employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    previous_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=previous_employee_id,
+        employee=previous_employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.no_show,
+        sequence_no=1,
+        assignment_metadata={
+            "employee_name": "Harper Lewis",
+            "published_amendment_action": "unassign_shift",
+            "published_amendment_reason_code": "no_show",
+        },
+        created_at=now,
+        updated_at=published_at,
+        cancelled_at=published_at,
+    )
+    current_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=current_employee_id,
+        employee=current_employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=2,
+        assignment_metadata={"employee_name": "Isabella Thomas"},
+        created_at=published_at + timedelta(minutes=5),
+        updated_at=published_at + timedelta(minutes=5),
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 14, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={
+            "published_amendment": {
+                "action": None,
+                "reason_code": None,
+                "amended_from_published": False,
+                "schedule_break": False,
+                "historical_artifacts": [],
+            }
+        },
+        created_at=now,
+        updated_at=published_at + timedelta(minutes=5),
+    )
+    shift.lifecycle_status = "scheduled"
+    shift.assignments = [previous_assignment, current_assignment]
+    shift.coverage_cases = []
+    publish_event = PlatformEvent(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        event_type="schedule.week.published",
+        compatibility_event_name="schedule.week.published",
+        entity_type="location",
+        entity_id=location_id,
+        actor_type=AuditActorType.user,
+        trace_id="trace-legacy-reassignment",
+        payload={
+            "week_start_date": "2026-04-13",
+            "week_end_date": "2026-04-19",
+        },
+        event_metadata={},
+        occurred_at=published_at,
+        created_at=published_at,
+        updated_at=published_at,
+    )
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [
+        [location_role],
+        [role],
+        [previous_employee, current_employee],
+        [shift],
+        [publish_event],
+        [],
+    ]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 13),
+    )
+
+    assert board.publish_summary.state == "published"
+    assert board.publish_summary.published_employee_ids == sorted(
+        [previous_employee_id, current_employee_id],
+        key=str,
+    )
+    assert len(board.shifts) == 2
+    historical_shift = next(item for item in board.shifts if item.historical_display)
+    live_shift = next(item for item in board.shifts if not item.historical_display)
+    assert historical_shift.amendment_reason_code == "no_show"
+    assert historical_shift.last_assignment is not None
+    assert historical_shift.last_assignment.employee_id == previous_employee_id
+    assert live_shift.current_assignment is not None
+    assert live_shift.current_assignment.employee_id == current_employee_id
 
 
 def test_board_window_uses_location_timezone_boundaries():

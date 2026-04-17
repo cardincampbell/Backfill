@@ -55,6 +55,54 @@ def _normalized_uuid(value: Any) -> UUID | None:
         return None
 
 
+def _retell_payload_context_mappings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    mappings: list[dict[str, Any]] = []
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        mappings.append(metadata)
+    for key in ("call", "call_detail", "chat", "chat_detail", "data"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            mappings.append(candidate)
+    mappings.append(payload)
+    return mappings
+
+
+def _retell_function_args(payload: dict[str, Any]) -> dict[str, Any]:
+    args = _normalized_mapping(payload.get("args") if isinstance(payload.get("args"), dict) else {})
+    context_mappings = _retell_payload_context_mappings(payload)
+
+    def first_value(*keys: str) -> Any:
+        for mapping in context_mappings:
+            for key in keys:
+                value = mapping.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    if args.get("phone") in (None, ""):
+        phone = first_value("phone", "phone_number", "from_number", "from")
+        if phone not in (None, ""):
+            args["phone"] = str(phone).strip()
+
+    for field_name in (
+        "employee_id",
+        "worker_id",
+        "shift_id",
+        "offer_id",
+        "coverage_offer_id",
+        "coverage_case_id",
+        "location_id",
+        "business_id",
+    ):
+        if args.get(field_name) in (None, ""):
+            value = first_value(field_name)
+            if value not in (None, ""):
+                args[field_name] = str(value).strip()
+
+    return args
+
+
 @dataclass
 class CallbackProcessingResult:
     callback_log_id: UUID
@@ -100,10 +148,21 @@ def dedupe_key_for_callback(
     provider: str,
     provider_event_id: str | None,
     payload: dict[str, Any] | None,
+    event_type: str | None = None,
 ) -> str:
     normalized_provider = provider.strip().lower()
     normalized_event_id = str(provider_event_id or "").strip()
+    normalized_event_type = str(event_type or "").strip().lower()
     if normalized_event_id:
+        if normalized_provider == "retell" and normalized_event_type in {
+            "call_started",
+            "call_ended",
+            "call_analyzed",
+            "chat_started",
+            "chat_ended",
+            "chat_analyzed",
+        }:
+            return f"{normalized_provider}:{normalized_event_type}:{normalized_event_id}"
         return f"{normalized_provider}:{normalized_event_id}"
     return f"{normalized_provider}:{_stable_payload_hash(_normalized_mapping(payload))}"
 
@@ -122,6 +181,7 @@ async def record_raw_callback(
         provider=provider,
         provider_event_id=provider_event_id,
         payload=payload,
+        event_type=event_type,
     )
     existing = await session.scalar(
         select(ProviderCallbackLog).where(
@@ -679,11 +739,7 @@ async def _process_retell_webhook(
     try:
         if event in {
             "call_started",
-            "call_ended",
-            "call_analyzed",
             "chat_started",
-            "chat_ended",
-            "chat_analyzed",
         }:
             conversation = await retell_workflow.persist_payload(session, payload)
             response_payload = {
@@ -696,11 +752,33 @@ async def _process_retell_webhook(
                 response_payload=response_payload,
             )
 
+        if event in {
+            "call_ended",
+            "call_analyzed",
+            "chat_ended",
+            "chat_analyzed",
+        }:
+            conversation = await retell_workflow.persist_payload(session, payload)
+            outcome = await retell_workflow.process_conversation_completion(
+                session,
+                conversation,
+            )
+            response_payload = {
+                "status": "ok",
+                "conversation_id": str(conversation.id) if conversation is not None else None,
+                "outcome": outcome,
+            }
+            return CallbackProcessingResult(
+                callback_log_id=entry.id,
+                response_kind="json",
+                response_payload=response_payload,
+            )
+
         if event == "function_call":
             result = await retell_workflow.dispatch_function_call(
                 session,
                 _normalized_text(payload.get("name")) or "",
-                payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                _retell_function_args(payload),
             )
             return CallbackProcessingResult(
                 callback_log_id=entry.id,

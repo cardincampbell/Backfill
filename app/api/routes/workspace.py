@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import MembershipRole
@@ -95,6 +95,7 @@ async def get_workspace(session: SessionDep, auth_ctx: AuthDep):
 async def get_location_board(
     business_id: UUID,
     location_id: UUID,
+    response: Response,
     session: SessionDep,
     auth_ctx: AuthDep,
     week_start: date | None = None,
@@ -106,6 +107,7 @@ async def get_location_board(
         allowed_roles=READ_ROLES,
     ):
         raise HTTPException(status_code=403, detail="location_access_denied")
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         return await workspace_board_service.get_location_board(
             session,

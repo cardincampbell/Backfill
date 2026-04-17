@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole, MembershipStatus
@@ -24,6 +24,7 @@ from app.schemas.business import (
     LocationRoleReplace,
     LocationRoleRead,
     RoleCreate,
+    RoleCreateResultRead,
     RoleRead,
 )
 from app.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
@@ -34,7 +35,7 @@ from app.schemas.settings import (
     LocationShiftDefaultsUpdate,
 )
 from app.services import audit as audit_service
-from app.services import auth as auth_service, businesses, settings as settings_service
+from app.services import auth as auth_service, businesses, role_normalization, settings as settings_service
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
@@ -483,41 +484,47 @@ async def list_roles(business_id: UUID, session: SessionDep, auth_ctx: AuthDep):
     return await businesses.list_roles(session, business_id)
 
 
-@router.post("/{business_id}/roles", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{business_id}/roles", response_model=RoleCreateResultRead, status_code=status.HTTP_201_CREATED)
 async def create_role(
     business_id: UUID,
     payload: RoleCreate,
     session: SessionDep,
     auth_ctx: AuthDep,
     request: Request,
+    response: Response,
 ):
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
     try:
-        role = await businesses.create_role(session, business_id, payload)
+        result = await businesses.create_role(session, business_id, payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except role_normalization.RoleNameRejectedError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         if detail == "role_already_exists":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
-    membership = auth_service.membership_for_scope(auth_ctx, business_id)
-    await audit_service.append(
-        session,
-        event_name="role.created",
-        target_type="role",
-        target_id=role.id,
-        business_id=business_id,
-        actor_type=AuditActorType.user,
-        actor_user_id=auth_ctx.user.id,
-        actor_membership_id=membership.id if membership is not None else None,
-        ip_address=audit_service.request_client_ip(request),
-        user_agent=audit_service.request_user_agent(request),
-        payload={"name": role.name, "code": role.code},
-    )
+    if result.decision == "created_new":
+        membership = auth_service.membership_for_scope(auth_ctx, business_id)
+        await audit_service.append(
+            session,
+            event_name="role.created",
+            target_type="role",
+            target_id=result.role.id,
+            business_id=business_id,
+            actor_type=AuditActorType.user,
+            actor_user_id=auth_ctx.user.id,
+            actor_membership_id=membership.id if membership is not None else None,
+            ip_address=audit_service.request_client_ip(request),
+            user_agent=audit_service.request_user_agent(request),
+            payload={"name": result.role.name, "code": result.role.code},
+        )
+    else:
+        response.status_code = status.HTTP_200_OK
     await session.commit()
-    return role
+    return result
 
 
 @router.post(
@@ -679,6 +686,8 @@ async def create_and_assign_location_role(
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except role_normalization.RoleNameRejectedError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

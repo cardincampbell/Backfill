@@ -27,7 +27,6 @@ import {
   updateEmployee,
   type EmployeeProfile,
 } from "@/lib/api/workforce";
-import { validateCustomRoleName } from "@/lib/role-name-validation";
 
 import {
   AvailabilityEditorPanel,
@@ -692,47 +691,31 @@ export function EmployeeEditorDrawer({
   const handleAddCustomRole = async () => {
     const trimmed = customRole.trim();
     if (!trimmed) {
-      return;
-    }
-
-    const existing = roleCatalog.find(
-      (role) => role.name.toLowerCase() === trimmed.toLowerCase(),
-    );
-    if (existing) {
-      setFormData((current) => ({
-        ...current,
-        selectedRoleIds: current.selectedRoleIds.includes(existing.id)
-          ? current.selectedRoleIds
-          : [...current.selectedRoleIds, existing.id],
-        primaryRoleId: current.primaryRoleId || existing.id,
-      }));
-      setCustomRole("");
-      return;
-    }
-
-    const validation = validateCustomRoleName(
-      trimmed,
-      roleCatalog.map((role) => role.name),
-    );
-    if (!validation.ok) {
       setFeedback({
         tone: "error",
-        message: validation.message,
+        message: "Enter a role name.",
       });
       return;
     }
 
     try {
       setFeedback(null);
-      const createdRole = await createBusinessRole(businessId, {
-        name: validation.roleName,
+      const result = await createBusinessRole(businessId, {
+        name: trimmed,
       });
-      setRoleCatalog((current) => [...current, createdRole]);
-      onRoleCreated?.(createdRole);
+      const role = result.role;
+      setRoleCatalog((current) =>
+        current.some((existing) => existing.id === role.id) ? current : [...current, role],
+      );
+      if (result.decision === "created_new") {
+        onRoleCreated?.(role);
+      }
       setFormData((current) => ({
         ...current,
-        selectedRoleIds: [...current.selectedRoleIds, createdRole.id],
-        primaryRoleId: current.primaryRoleId || createdRole.id,
+        selectedRoleIds: current.selectedRoleIds.includes(role.id)
+          ? current.selectedRoleIds
+          : [...current.selectedRoleIds, role.id],
+        primaryRoleId: current.primaryRoleId || role.id,
       }));
       setCustomRole("");
     } catch (error) {
@@ -776,7 +759,6 @@ export function EmployeeEditorDrawer({
         setFormData(buildAssignmentStateFromProfile(nextProfile));
         setEmail(nextProfile.email ?? "");
         setPhone(nextProfile.phone_e164 ?? "");
-        await onSaved(nextProfile);
       }
 
       if (hasAvailabilityChanges) {
@@ -820,6 +802,10 @@ export function EmployeeEditorDrawer({
           });
           return;
         }
+      }
+
+      if ((hasProfileChanges || hasAvailabilityChanges) && nextProfile) {
+        await onSaved(nextProfile);
       }
 
       setFeedback({

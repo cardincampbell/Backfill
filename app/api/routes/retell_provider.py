@@ -9,6 +9,7 @@ from app.config import settings
 from app.services import provider_callbacks, rate_limit
 
 router = APIRouter(prefix="/providers/retell", tags=["retell"])
+public_router = APIRouter(tags=["retell"])
 
 
 def _validate_signature(raw_body: bytes, signature: str | None) -> bool:
@@ -52,6 +53,7 @@ def _provider_event_id(body: dict) -> str | None:
 
 
 @router.post("/webhook")
+@public_router.post("/webhooks/retell")
 async def retell_webhook(request: Request, session: SessionDep):
     client_ip = request.client.host if request.client is not None else "unknown"
     await rate_limit.assert_within_limit(
@@ -69,6 +71,12 @@ async def retell_webhook(request: Request, session: SessionDep):
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_json_payload") from exc
     event = str(body.get("event") or "").strip()
+    if event in {"call_inbound", "chat_inbound"}:
+        response_payload = await provider_callbacks.retell_workflow.build_inbound_webhook_response(
+            session,
+            body,
+        )
+        return response_payload
     callback_entry, _created = await provider_callbacks.record_raw_callback(
         session,
         provider="retell",
@@ -79,7 +87,7 @@ async def retell_webhook(request: Request, session: SessionDep):
         provider_event_id=_provider_event_id(body),
     )
     await session.commit()
-    if event == "function_call":
+    if event in {"function_call", "call_ended", "call_analyzed", "chat_ended", "chat_analyzed"}:
         try:
             result = await provider_callbacks.process_callback_entry_synchronously(session, callback_entry)
         except provider_callbacks.CallbackProcessingError as exc:

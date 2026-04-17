@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from uuid import UUID
+from html import escape
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -26,6 +27,8 @@ from app.models.coverage import CoverageCase, CoverageContactAttempt, CoverageOf
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.scheduling import (
+    PublishedShiftAmendmentRead,
+    PublishedShiftAmendmentWrite,
     ScheduleWeekPublishRead,
     ScheduleWeekPublishWrite,
     ShiftAssignmentMutationResponse,
@@ -48,6 +51,14 @@ _ACTIVE_CASE_STATUSES = {CoverageCaseStatus.queued, CoverageCaseStatus.running}
 _ACTIVE_OFFER_STATUSES = {OfferStatus.pending, OfferStatus.delivered}
 _ACTIVE_RUN_STATUSES = {CoverageRunStatus.queued, CoverageRunStatus.running}
 _USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
+_LIVE_SHIFT_LIFECYCLE_STATUSES = {
+    ShiftLifecycleStatus.scheduled,
+    ShiftLifecycleStatus.in_progress,
+}
+_PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+_SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
+
+
 class ShiftAssignmentConflictError(Exception):
     def __init__(self, current_assignment: ShiftAssignment | None):
         super().__init__("stale_assignment_conflict")
@@ -92,6 +103,20 @@ class ScheduleWeekPublishResult:
     already_scheduled_shifts: list[Shift]
     notification_enqueued_assignment_count: int
     notification_enqueued_employee_count: int
+
+
+@dataclass
+class PublishedShiftAmendmentResult:
+    shift: Shift
+    action: str
+    reason_code: str
+    source: str
+    previous_assignment: ShiftAssignment | None
+    current_assignment: ShiftAssignment | None
+    cancelled_cases: list[CoverageCase]
+    cancelled_offers: list[CoverageOffer]
+    week_start_date: date
+    week_end_date: date
 
 
 def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
@@ -170,6 +195,167 @@ def build_schedule_week_publish_response(
     )
 
 
+def build_published_shift_amendment_response(
+    result: PublishedShiftAmendmentResult,
+) -> PublishedShiftAmendmentRead:
+    return PublishedShiftAmendmentRead(
+        shift_id=result.shift.id,
+        action=result.action,
+        reason_code=result.reason_code,
+        amended_from_published=_shift_amended_from_published(result.shift),
+        schedule_break=_shift_schedule_break(result.shift),
+        lifecycle_status=(
+            result.shift.lifecycle_status.value
+            if hasattr(result.shift.lifecycle_status, "value")
+            else str(result.shift.lifecycle_status)
+        ),
+        staffing_status=(
+            result.shift.staffing_status.value
+            if hasattr(result.shift.staffing_status, "value")
+            else str(result.shift.staffing_status)
+        ),
+        status=result.shift.status.value if hasattr(result.shift.status, "value") else str(result.shift.status),
+        week_publish_state="amended",
+        current_assignment=_assignment_read(result.current_assignment),
+    )
+
+
+def _shift_amendment_metadata(shift: Shift) -> dict:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    raw = shift_metadata.get(_PUBLISHED_AMENDMENT_METADATA_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _set_shift_amendment_metadata(shift: Shift, metadata: dict) -> None:
+    shift_metadata = dict(shift.shift_metadata or {})
+    shift_metadata[_PUBLISHED_AMENDMENT_METADATA_KEY] = metadata
+    shift.shift_metadata = shift_metadata
+
+
+def _shift_amended_from_published(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("amended_from_published"))
+
+
+def _shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_metadata(shift).get("reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _shift_schedule_break(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("schedule_break"))
+
+
+def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
+    raw_value = _shift_amendment_metadata(shift).get("amended_employee_ids")
+    if not isinstance(raw_value, list):
+        return []
+    employee_ids: list[UUID] = []
+    for raw_id in raw_value:
+        try:
+            employee_ids.append(raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id)))
+        except (TypeError, ValueError):
+            continue
+    return employee_ids
+
+
+def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    try:
+        employee = assignment.employee
+    except Exception:
+        employee = None
+    if employee is not None and employee.full_name:
+        return employee.full_name
+    metadata = assignment.assignment_metadata or {}
+    if isinstance(metadata, dict):
+        raw_name = metadata.get("employee_name")
+        if isinstance(raw_name, str):
+            name = raw_name.strip()
+            if name:
+                return name
+    return None
+
+
+def _shift_historical_artifacts(shift: Shift) -> list[dict]:
+    raw_value = _shift_amendment_metadata(shift).get(_SHIFT_HISTORICAL_ARTIFACTS_KEY)
+    if not isinstance(raw_value, list):
+        return []
+    return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
+
+
+def _append_shift_historical_artifact(
+    shift: Shift,
+    *,
+    employee_id: UUID | None,
+    employee_name: str | None,
+    reason_code: str,
+) -> None:
+    artifacts = _shift_historical_artifacts(shift)
+    artifacts.append(
+        {
+            "artifact_id": str(uuid4()),
+            "employee_id": str(employee_id) if employee_id is not None else None,
+            "employee_name": employee_name,
+            "reason_code": reason_code,
+            "starts_at": shift.starts_at.isoformat(),
+            "ends_at": shift.ends_at.isoformat(),
+            "role_id": str(shift.role_id),
+            "role_code": shift.role.code if shift.role is not None else None,
+            "role_name": shift.role.name if shift.role is not None else None,
+        }
+    )
+    metadata = {
+        **_shift_amendment_metadata(shift),
+        _SHIFT_HISTORICAL_ARTIFACTS_KEY: artifacts,
+    }
+    _set_shift_amendment_metadata(shift, metadata)
+
+
+def _mark_shift_amended_from_published(
+    shift: Shift,
+    *,
+    action: str,
+    reason_code: str | None,
+    schedule_break: bool,
+    source: str,
+    note: str | None,
+    amended_at: datetime,
+    old_employee_id: UUID | None,
+    new_employee_id: UUID | None,
+) -> None:
+    amended_employee_ids = [
+        str(employee_id)
+        for employee_id in [old_employee_id, new_employee_id]
+        if employee_id is not None
+    ]
+    metadata = {
+        **_shift_amendment_metadata(shift),
+        "action": action,
+        "reason_code": reason_code,
+        "schedule_break": schedule_break,
+        "source": source,
+        "note": note,
+        "amended_at": amended_at.isoformat(),
+        "old_employee_id": str(old_employee_id) if old_employee_id is not None else None,
+        "new_employee_id": str(new_employee_id) if new_employee_id is not None else None,
+        "amended_employee_ids": amended_employee_ids,
+        "amended_from_published": True,
+    }
+    _set_shift_amendment_metadata(shift, metadata)
+
+
+def _clear_shift_amended_from_published(shift: Shift) -> None:
+    metadata = _shift_amendment_metadata(shift)
+    if not metadata:
+        return
+    metadata["amended_from_published"] = False
+    metadata["amended_employee_ids"] = []
+    _set_shift_amendment_metadata(shift, metadata)
+
+
 def _normalized_notify_channels(channels: list[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
@@ -220,6 +406,110 @@ def _format_shift_notification_line(shift: Shift) -> str:
     return f"{date_label} {start_label}-{end_label} · {role_name}"
 
 
+def _schedule_publish_week_label(week_start_date: date, week_end_date: date) -> str:
+    return (
+        f"{week_start_date.strftime('%b %d').replace(' 0', ' ')}"
+        f" – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
+    )
+
+
+def _build_schedule_publish_email_html(
+    *,
+    business_name: str,
+    location_name: str,
+    employee_name: str,
+    week_label: str,
+    shift_lines: list[str],
+    schedule_url: str,
+    note: str | None,
+    unsubscribe_url: str | None = None,
+) -> str:
+    headline = escape(f"Your schedule for {week_label} is live")
+    intro = escape(
+        f"{business_name} published your schedule for {location_name} for the week of {week_label}."
+    )
+    summary = escape(
+        f"You have {len(shift_lines)} scheduled shift{'s' if len(shift_lines) != 1 else ''}."
+    )
+    greeting = escape(f"Hi {employee_name},")
+    schedule_url_html = escape(schedule_url)
+    note_html = (
+        f"""
+          <tr>
+            <td style="padding:18px 0 0 0;">
+              <div style="padding:16px 18px;border-radius:14px;background:#EEF2FF;border:1px solid #D9E0FF;">
+                <div style="font-size:12px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;color:#635BFF;padding:0 0 8px 0;">Manager note</div>
+                <div style="font-size:15px;line-height:1.6;color:#334155;">{escape(note)}</div>
+              </div>
+            </td>
+          </tr>
+        """.strip()
+        if note
+        else ""
+    )
+    shift_items = "".join(
+        f"""
+          <tr>
+            <td style="padding:0 0 10px 0;">
+              <div style="padding:14px 16px;border-radius:14px;background:#F8FAFC;border:1px solid #E2E8F0;font-size:15px;line-height:1.5;color:#0A2540;">
+                {escape(line)}
+              </div>
+            </td>
+          </tr>
+        """.strip()
+        for line in shift_lines
+    )
+    unsubscribe_html = (
+        f' To stop Backfill schedule emails, <a href="{escape(unsubscribe_url)}" '
+        'style="color:#635BFF;text-decoration:underline;">unsubscribe</a>.'
+        if unsubscribe_url
+        else ""
+    )
+    return f"""
+<div style="margin:0;padding:24px 0;background:#ffffff;font-family:Helvetica Neue,Arial,sans-serif;color:#111111;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;margin:0 auto;padding:0 16px;">
+    <tr>
+      <td align="left" style="padding:0 0 28px 0;font-size:32px;font-weight:800;letter-spacing:-0.04em;">Backfill</td>
+      <td align="right" style="padding:0 0 28px 0;font-size:14px;font-weight:600;color:#666666;white-space:nowrap;">Callouts covered.</td>
+    </tr>
+    <tr>
+      <td colspan="2">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#F3F5F8;border:1px solid #DFE4EA;border-radius:18px;padding:32px;">
+          <tr>
+            <td style="font-size:44px;line-height:1.02;font-weight:800;letter-spacing:-0.06em;padding:0 0 18px 0;">{headline}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 8px 0;">{greeting}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 10px 0;">{intro}</td>
+          </tr>
+          <tr>
+            <td style="font-size:18px;line-height:1.6;color:#3F4C5C;padding:0 0 24px 0;">{summary}</td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 18px 0;">
+              <a href="{schedule_url_html}" style="display:inline-block;padding:16px 30px;background:#111111;color:#ffffff;text-decoration:none;border-radius:14px;font-size:18px;font-weight:700;">View schedule</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 0 10px 0;font-size:12px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;color:#635BFF;">This week's shifts</td>
+          </tr>
+          {shift_items}
+          {note_html}
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" style="padding:22px 0 0 0;font-size:13px;line-height:1.55;color:#8A8A8A;">
+        This secure link always shows the latest published schedule. If you believe this message was sent in error, you can ignore it.{unsubscribe_html}
+      </td>
+    </tr>
+  </table>
+</div>
+""".strip()
+
+
 def _schedule_publish_notification_payload(
     *,
     business_id: UUID,
@@ -233,10 +523,14 @@ def _schedule_publish_notification_payload(
     note: str | None,
     schedule_url: str,
 ) -> dict:
-    week_label = f"{week_start_date.strftime('%b %d').replace(' 0', ' ')} – {week_end_date.strftime('%b %d, %Y').replace(' 0', ' ')}"
+    week_label = _schedule_publish_week_label(week_start_date, week_end_date)
     shift_lines = [_format_shift_notification_line(shift) for shift in shifts]
     subject = f"Your Backfill schedule for {week_label} is live"
     intro = f"Your schedule for {location_name} for the week of {week_label} is now live."
+    sms_body = (
+        f"Backfill: Your {location_name} schedule for {week_label} is live. "
+        f"View it here: {schedule_url}"
+    )
     unsubscribe_url = (
         communication_suppressions.build_email_unsubscribe_url(email=employee.email)
         if employee.email
@@ -255,19 +549,15 @@ def _schedule_publish_notification_payload(
             *(["", note] if note else []),
         ]
     )
-    html_lines = "".join(f"<li>{line}</li>" for line in shift_lines)
-    html_body = (
-        f"<p>Hi {employee.full_name},</p>"
-        f"<p>{intro}</p>"
-        f"<ul>{html_lines}</ul>"
-        f'<p><a href="{schedule_url}">View your schedule</a></p>'
-        + (
-            f'<p style="font-size:13px;color:#5b708b">'
-            f'Prefer not to receive these emails? <a href="{unsubscribe_url}">Unsubscribe</a>.</p>'
-            if unsubscribe_url
-            else ""
-        )
-        + (f"<p>{note}</p>" if note else "")
+    html_body = _build_schedule_publish_email_html(
+        business_name=business_name,
+        location_name=location_name,
+        employee_name=employee.full_name,
+        week_label=week_label,
+        shift_lines=shift_lines,
+        schedule_url=schedule_url,
+        note=note,
+        unsubscribe_url=unsubscribe_url,
     )
     return {
         "business_id": str(business_id),
@@ -284,6 +574,7 @@ def _schedule_publish_notification_payload(
         "unsubscribe_url": unsubscribe_url,
         "shift_ids": [str(shift.id) for shift in shifts],
         "shift_count": len(shifts),
+        "sms_body": sms_body,
         "text_body": text_body,
         "html_body": html_body,
         "subject": subject,
@@ -307,6 +598,7 @@ async def _enqueue_schedule_publish_notifications(
     shifts: list[Shift],
     notify_channels: list[str],
     note: str | None,
+    candidate_employee_ids: set[UUID] | None = None,
 ) -> tuple[int, int]:
     normalized_channels = _normalized_notify_channels(notify_channels)
     if not normalized_channels:
@@ -338,8 +630,34 @@ async def _enqueue_schedule_publish_notifications(
         employees_by_id[employee.id] = employee
         enqueued_assignment_count += 1
 
-    for employee_id, employee_shifts in shifts_by_employee.items():
-        employee = employees_by_id[employee_id]
+    if candidate_employee_ids is None:
+        notification_employee_ids = set(shifts_by_employee.keys())
+    else:
+        notification_employee_ids = set(candidate_employee_ids)
+
+    notified_employee_count = 0
+
+    for employee_id in sorted(notification_employee_ids, key=str):
+        employee = employees_by_id.get(employee_id)
+        if employee is None:
+            loaded_employee = await session.get(Employee, employee_id)
+            if loaded_employee is None or loaded_employee.business_id != business_id:
+                continue
+            employee = loaded_employee
+        available_channels: list[str] = []
+        for channel in normalized_channels:
+            if channel == "sms" and not employee.phone_e164:
+                continue
+            if channel == "email" and not employee.email:
+                continue
+            if not _employee_allows_publish_notification(employee, channel):
+                continue
+            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
+                continue
+            available_channels.append(channel)
+        if not available_channels:
+            continue
+        employee_shifts = shifts_by_employee.get(employee_id, [])
         access_link, _ = await employee_schedule_link_service.get_or_create_schedule_access_link(
             session,
             business_id=business_id,
@@ -362,17 +680,7 @@ async def _enqueue_schedule_publish_notifications(
             note=note,
             schedule_url=schedule_url,
         )
-        for channel in normalized_channels:
-            if channel == "sms" and (
-                not employee.phone_e164 or not _employee_allows_publish_notification(employee, "sms")
-            ):
-                continue
-            if channel == "email" and (
-                not employee.email or not _employee_allows_publish_notification(employee, "email")
-            ):
-                continue
-            if await _employee_is_globally_suppressed(session, employee=employee, channel=channel):
-                continue
+        for channel in available_channels:
             session.add(
                 OutboxEvent(
                     aggregate_type="schedule_publish",
@@ -383,8 +691,9 @@ async def _enqueue_schedule_publish_notifications(
                     result_payload={},
                 )
             )
+        notified_employee_count += 1
 
-    return enqueued_assignment_count, len(shifts_by_employee)
+    return enqueued_assignment_count, notified_employee_count
 
 
 async def list_shifts(
@@ -404,6 +713,44 @@ async def list_shifts(
         stmt = stmt.where(Shift.starts_at <= ends_at)
     result = await session.execute(stmt.order_by(Shift.starts_at.asc()))
     return list(result.scalars().all())
+
+
+async def get_shift(session: AsyncSession, business_id: UUID, shift_id: UUID) -> Shift:
+    shift = await session.get(Shift, shift_id)
+    if shift is None or shift.business_id != business_id:
+        raise LookupError("shift_not_found")
+    return shift
+
+
+async def _shift_week_window(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    shift: Shift,
+) -> tuple[date, date]:
+    business = await session.get(Business, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
+    location = shift.location
+    if location is None:
+        location = await session.get(Location, shift.location_id)
+    if location is None or location.business_id != business_id:
+        raise LookupError("business_or_location_not_found")
+    business_settings = business.settings if isinstance(business.settings, dict) else {}
+    location_settings = location.settings if isinstance(location.settings, dict) else {}
+    week_window = schedule_week_window(
+        location.timezone,
+        effective_week_start_day(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
+        shift.starts_at.astimezone(ZoneInfo(location.timezone)).date(),
+    )
+    return week_window.week_start, week_window.week_end
+
+
+def _is_live_shift(shift: Shift) -> bool:
+    return shift.lifecycle_status in _LIVE_SHIFT_LIFECYCLE_STATUSES
 
 
 async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftCreate) -> Shift:
@@ -461,6 +808,10 @@ async def update_shift(
     )
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
+    if shift.lifecycle_status == ShiftLifecycleStatus.cancelled:
+        raise ValueError("cancelled_shift_update_not_allowed")
+
+    changed = False
 
     if payload.role_id is not None and payload.role_id != shift.role_id:
         role = await session.get(Role, payload.role_id)
@@ -476,30 +827,56 @@ async def update_shift(
         if enabled_role is None:
             raise ValueError("location_role_not_enabled")
         shift.role_id = payload.role_id
+        changed = True
 
-    if payload.timezone is not None:
+    if payload.timezone is not None and payload.timezone != shift.timezone:
         shift.timezone = payload.timezone
-    if payload.starts_at is not None:
+        changed = True
+    if payload.starts_at is not None and payload.starts_at != shift.starts_at:
         shift.starts_at = payload.starts_at
-    if payload.ends_at is not None:
+        changed = True
+    if payload.ends_at is not None and payload.ends_at != shift.ends_at:
         shift.ends_at = payload.ends_at
+        changed = True
     if payload.starts_at is not None or payload.ends_at is not None:
         if shift.ends_at <= shift.starts_at:
             raise ValueError("shift_end_must_be_after_start")
-    if payload.seats_requested is not None:
+    if payload.seats_requested is not None and payload.seats_requested != shift.seats_requested:
         if payload.seats_requested < max(1, shift.seats_filled):
             raise ValueError("seats_requested_below_current_fill")
         shift.seats_requested = payload.seats_requested
-    if payload.requires_manager_approval is not None:
+        changed = True
+    if (
+        payload.requires_manager_approval is not None
+        and payload.requires_manager_approval != shift.requires_manager_approval
+    ):
         shift.requires_manager_approval = payload.requires_manager_approval
-    if payload.premium_cents is not None:
+        changed = True
+    if payload.premium_cents is not None and payload.premium_cents != shift.premium_cents:
         shift.premium_cents = payload.premium_cents
-    if payload.notes is not None:
+        changed = True
+    if payload.notes is not None and payload.notes != shift.notes:
         shift.notes = payload.notes
-    if payload.shift_metadata is not None:
+        changed = True
+    if payload.shift_metadata is not None and payload.shift_metadata != shift.shift_metadata:
         shift.shift_metadata = payload.shift_metadata
+        changed = True
 
     _recompute_shift_ownership_state(shift)
+    if changed and _is_live_shift(shift):
+        current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+        current_employee_id = current_assignment.employee_id if current_assignment is not None else None
+        _mark_shift_amended_from_published(
+            shift,
+            action="update_shift",
+            reason_code="amendment",
+            schedule_break=False,
+            source="scheduler_ui",
+            note=None,
+            amended_at=datetime.now(timezone.utc),
+            old_employee_id=current_employee_id,
+            new_employee_id=current_employee_id,
+        )
 
     await session.flush()
     await session.refresh(shift)
@@ -594,6 +971,18 @@ async def publish_schedule_week(
                 already_scheduled_shift_count=len(already_scheduled_shifts),
             )
 
+    notification_candidate_employee_ids: set[UUID] = set()
+    for shift in shifts:
+        if _shift_amended_from_published(shift):
+            notification_candidate_employee_ids.update(_shift_amended_employee_ids(shift))
+    for shift in draft_shifts:
+        current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+        if current_assignment is not None and current_assignment.employee_id is not None:
+            notification_candidate_employee_ids.add(current_assignment.employee_id)
+
+    for shift in shifts:
+        _clear_shift_amended_from_published(shift)
+
     for shift in draft_shifts:
         shift.lifecycle_status = ShiftLifecycleStatus.scheduled
 
@@ -606,9 +995,10 @@ async def publish_schedule_week(
             location_name=getattr(location, "display_name", None) or location.name,
             week_start_date=window.week_start,
             week_end_date=window.week_end,
-            shifts=draft_shifts,
+            shifts=shifts,
             notify_channels=payload.notify_channels,
             note=payload.note,
+            candidate_employee_ids=notification_candidate_employee_ids,
         )
     )
 
@@ -625,6 +1015,238 @@ async def publish_schedule_week(
     )
 
 
+async def apply_published_shift_amendment(
+    session: AsyncSession,
+    business_id: UUID,
+    shift_id: UUID,
+    payload: PublishedShiftAmendmentWrite,
+    *,
+    assigned_by_user_id: UUID | None = None,
+    cancel_active_automation: bool = True,
+) -> PublishedShiftAmendmentResult:
+    shift = await _load_shift_for_assignment(session, business_id, shift_id)
+    if not _is_live_shift(shift):
+        raise ValueError("published_shift_amendment_requires_live_shift")
+    if payload.action == "reassign_shift":
+        if payload.target_employee_id is None:
+            raise ValueError("published_shift_reassignment_requires_target_employee")
+    elif payload.target_employee_id is not None:
+        raise ValueError("published_shift_amendment_target_employee_must_be_null")
+
+    current = shift_assignments.current_assignment(shift.assignments or [])
+    latest_assignment = shift_assignments.latest_assignment(shift.assignments or [])
+    now = datetime.now(timezone.utc)
+    week_start_date, week_end_date = await _shift_week_window(
+        session,
+        business_id=business_id,
+        shift=shift,
+    )
+
+    if payload.action == "cancel_shift":
+        if payload.reason_code != "cancelled":
+            raise ValueError("published_shift_cancel_requires_cancelled_reason")
+        cancelled_cases: list[CoverageCase] = []
+        cancelled_offers: list[CoverageOffer] = []
+        if cancel_active_automation:
+            cancelled_cases, cancelled_offers = await _cancel_active_automation(
+                session,
+                shift,
+                reason="published_shift_cancelled",
+            )
+        if current is not None:
+            current.status = AssignmentStatus.cancelled
+            current.cancelled_at = now
+            current.assignment_metadata = {
+                **(current.assignment_metadata or {}),
+                "published_amendment_action": payload.action,
+                "published_amendment_reason_code": payload.reason_code,
+                "published_amendment_source": payload.source,
+                "published_amendment_note": payload.note,
+                "published_amendment_at": now.isoformat(),
+            }
+        shift.seats_filled = 0
+        shift.lifecycle_status = ShiftLifecycleStatus.cancelled
+        shift.staffing_status = ShiftStaffingStatus.open
+        _mark_shift_amended_from_published(
+            shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            schedule_break=False,
+            source=payload.source,
+            note=payload.note,
+            amended_at=now,
+            old_employee_id=(
+                current.employee_id
+                if current is not None
+                else latest_assignment.employee_id if latest_assignment is not None else None
+            ),
+            new_employee_id=None,
+        )
+        await session.flush()
+        return PublishedShiftAmendmentResult(
+            shift=shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            source=payload.source,
+            previous_assignment=current if current is not None else latest_assignment,
+            current_assignment=None,
+            cancelled_cases=cancelled_cases,
+            cancelled_offers=cancelled_offers,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date,
+        )
+
+    if current is None and not _shift_schedule_break(shift):
+        raise ValueError("published_shift_requires_current_assignment")
+
+    if payload.action == "unassign_shift":
+        if payload.reason_code not in {"callout", "no_show"}:
+            raise ValueError("published_shift_unassign_requires_operational_reason")
+        cancelled_cases: list[CoverageCase] = []
+        cancelled_offers: list[CoverageOffer] = []
+        if cancel_active_automation:
+            cancelled_cases, cancelled_offers = await _cancel_active_automation(
+                session,
+                shift,
+                reason="published_shift_unassigned",
+            )
+        current.status = (
+            AssignmentStatus.no_show
+            if payload.reason_code == "no_show"
+            else AssignmentStatus.cancelled
+        )
+        current.cancelled_at = now
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_source": payload.source,
+            "published_amendment_note": payload.note,
+            "published_amendment_at": now.isoformat(),
+        }
+        _recompute_shift_ownership_state(shift)
+        _mark_shift_amended_from_published(
+            shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            schedule_break=True,
+            source=payload.source,
+            note=payload.note,
+            amended_at=now,
+            old_employee_id=current.employee_id,
+            new_employee_id=None,
+        )
+        await session.flush()
+        return PublishedShiftAmendmentResult(
+            shift=shift,
+            action=payload.action,
+            reason_code=payload.reason_code,
+            source=payload.source,
+            previous_assignment=current,
+            current_assignment=None,
+            cancelled_cases=cancelled_cases,
+            cancelled_offers=cancelled_offers,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date,
+        )
+
+    if payload.reason_code != "reassignment":
+        raise ValueError("published_shift_reassign_requires_reassignment_reason")
+    employee = await _load_employee_for_assignment(session, business_id, payload.target_employee_id)
+    _validate_employee_eligibility(employee, shift)
+    if current is not None and current.employee_id == employee.id:
+        raise ValueError("published_shift_reassignment_requires_different_employee")
+    if current is None and latest_assignment is None:
+        raise ValueError("published_shift_requires_current_assignment")
+
+    cancelled_cases: list[CoverageCase] = []
+    cancelled_offers: list[CoverageOffer] = []
+    if cancel_active_automation:
+        cancelled_cases, cancelled_offers = await _cancel_active_automation(
+            session,
+            shift,
+            reason="published_shift_reassigned",
+        )
+    prior_reason_code = _shift_amendment_reason_code(shift)
+    previous_assignment = current if current is not None else latest_assignment
+    if (
+        _shift_schedule_break(shift)
+        and previous_assignment is not None
+        and prior_reason_code in {"callout", "no_show"}
+    ):
+        _append_shift_historical_artifact(
+            shift,
+            employee_id=previous_assignment.employee_id,
+            employee_name=_assignment_employee_name(previous_assignment),
+            reason_code=prior_reason_code,
+        )
+    if current is not None:
+        current.status = AssignmentStatus.cancelled
+        current.cancelled_at = now
+        current.assignment_metadata = {
+            **(current.assignment_metadata or {}),
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_source": payload.source,
+            "published_amendment_note": payload.note,
+            "published_amendment_at": now.isoformat(),
+        }
+    next_sequence_no = _next_assignment_sequence_no(shift)
+    assignment = ShiftAssignment(
+        shift_id=shift.id,
+        employee_id=employee.id,
+        assigned_by_user_id=assigned_by_user_id,
+        replaced_assignment_id=(
+            current.id
+            if current is not None
+            else latest_assignment.id if latest_assignment is not None else None
+        ),
+        assigned_via=payload.source,
+        status=AssignmentStatus.assigned,
+        sequence_no=next_sequence_no,
+        assignment_metadata={
+            "note": payload.note,
+            "source": payload.source,
+            "employee_name": employee.full_name,
+            "published_amendment_action": payload.action,
+            "published_amendment_reason_code": payload.reason_code,
+            "published_amendment_at": now.isoformat(),
+        },
+    )
+    assignment.employee = employee
+    session.add(assignment)
+    shift.assignments.append(assignment)
+    _recompute_shift_ownership_state(shift)
+    _mark_shift_amended_from_published(
+        shift,
+        action=payload.action,
+        reason_code=payload.reason_code,
+        schedule_break=False,
+        source=payload.source,
+        note=payload.note,
+        amended_at=now,
+        old_employee_id=(
+            current.employee_id
+            if current is not None
+            else latest_assignment.employee_id if latest_assignment is not None else None
+        ),
+        new_employee_id=employee.id,
+    )
+    await session.flush()
+    return PublishedShiftAmendmentResult(
+        shift=shift,
+        action=payload.action,
+        reason_code=payload.reason_code,
+        source=payload.source,
+        previous_assignment=current if current is not None else latest_assignment,
+        current_assignment=assignment,
+        cancelled_cases=cancelled_cases,
+        cancelled_offers=cancelled_offers,
+        week_start_date=week_start_date,
+        week_end_date=week_end_date,
+    )
+
+
 async def set_shift_assignment(
     session: AsyncSession,
     business_id: UUID,
@@ -634,6 +1256,10 @@ async def set_shift_assignment(
     assigned_by_user_id: UUID | None = None,
 ) -> ShiftAssignmentMutationResult:
     shift = await _load_shift_for_assignment(session, business_id, shift_id)
+    if _is_live_shift(shift):
+        raise ValueError("published_shift_assignment_requires_amendment")
+    if shift.lifecycle_status != ShiftLifecycleStatus.draft:
+        raise ValueError("non_draft_shift_assignment_not_allowed")
     current = shift_assignments.current_assignment(shift.assignments or [])
 
     if int(shift.seats_requested or 1) != 1:
@@ -672,6 +1298,8 @@ async def set_shift_assignment(
             "manual_unassigned_source": payload.source,
         }
         _recompute_shift_ownership_state(shift)
+        if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
+            shift.lifecycle_status = ShiftLifecycleStatus.draft
         await session.flush()
         return ShiftAssignmentMutationResult(
             shift=shift,
@@ -733,6 +1361,8 @@ async def set_shift_assignment(
     session.add(assignment)
     shift.assignments.append(assignment)
     _recompute_shift_ownership_state(shift)
+    if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
+        shift.lifecycle_status = ShiftLifecycleStatus.draft
     await session.flush()
     return ShiftAssignmentMutationResult(
         shift=shift,
@@ -753,6 +1383,7 @@ async def _load_shift_for_assignment(
     shift = await session.get(
         Shift,
         shift_id,
+        populate_existing=True,
         options=(
             selectinload(Shift.location),
             selectinload(Shift.role),
@@ -777,6 +1408,7 @@ async def _load_employee_for_assignment(
     employee = await session.get(
         Employee,
         employee_id,
+        populate_existing=True,
         options=(
             selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
             selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),

@@ -194,6 +194,11 @@ def _make_role_taxonomy() -> role_derivation.RoleDerivationTaxonomy:
             "assistant_manager": role_derivation.BusinessRoleArchetypeDefinition("Assistant Manager", "management"),
             "baker": role_derivation.BusinessRoleArchetypeDefinition("Baker", "back_of_house"),
         },
+        active_vertical_codes=("cafe", "mixed_unknown"),
+        subverticals_by_vertical={
+            "cafe": ("cafe", "coffee_shop"),
+            "mixed_unknown": (),
+        },
     )
 
 

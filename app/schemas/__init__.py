@@ -12,6 +12,7 @@ from app.schemas.business import (
     LocationRoleRead,
     LocationRoleUpsert,
     RoleCreate,
+    RoleCreateResultRead,
     RoleRead,
 )
 from app.schemas.coverage import (
@@ -151,6 +152,7 @@ __all__ = [
     "Phase2ExecutionResult",
     "Phase2CoveragePreview",
     "RoleCreate",
+    "RoleCreateResultRead",
     "RoleRead",
     "Phase1CoveragePreview",
     "SessionCreateRequest",

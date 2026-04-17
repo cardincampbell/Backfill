@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time
 from io import BytesIO, StringIO
 from typing import Optional
 from uuid import UUID
@@ -343,6 +343,39 @@ def _self_service_employee_name(
         return normalized_phone
 
     return "Backfill User"
+
+
+def _default_availability_timezone(
+    *,
+    business: Business,
+    primary_location: Location | None,
+) -> str:
+    location_timezone = str(getattr(primary_location, "timezone", "") or "").strip()
+    if location_timezone:
+        return location_timezone
+    business_timezone = str(getattr(business, "timezone", "") or "").strip()
+    return business_timezone or "UTC"
+
+
+def _default_weekly_availability_rules(
+    *,
+    employee_id: UUID,
+    timezone_name: str,
+    source: str,
+) -> list[EmployeeAvailabilityRule]:
+    return [
+        EmployeeAvailabilityRule(
+            employee_id=employee_id,
+            day_of_week=day_of_week,
+            start_local_time=time(0, 0),
+            end_local_time=time(23, 59),
+            timezone=timezone_name,
+            availability_type="available",
+            priority=0,
+            availability_metadata={"source": source, "preset": "all_days"},
+        )
+        for day_of_week in range(7)
+    ]
 
 
 def _pick_linkable_employee_match(
@@ -890,7 +923,7 @@ async def create_employee(
     *,
     linked_user_id: UUID | None = None,
 ) -> Employee:
-    await _require_business(session, business_id)
+    business = await _require_business(session, business_id)
     normalized_external_ref = _normalize_employee_external_ref(payload.external_ref)
     normalized_phone = _normalize_employee_phone(payload.phone_e164)
     normalized_email = _normalize_employee_email(payload.email)
@@ -940,6 +973,18 @@ async def create_employee(
         )
         session.add(primary_location)
 
+    availability_timezone = _default_availability_timezone(
+        business=business,
+        primary_location=primary_business_location,
+    )
+    default_availability_rules = _default_weekly_availability_rules(
+        employee_id=employee.id,
+        timezone_name=availability_timezone,
+        source="employee_create",
+    )
+    for rule in default_availability_rules:
+        session.add(rule)
+
     await session.flush()
     await session.refresh(employee)
     if primary_location is not None:
@@ -949,6 +994,7 @@ async def create_employee(
     else:
         set_committed_value(employee, "employee_locations", [])
     set_committed_value(employee, "employee_roles", [])
+    set_committed_value(employee, "availability_rules", default_availability_rules)
     return _attach_employee_notification_preferences(employee)
 
 

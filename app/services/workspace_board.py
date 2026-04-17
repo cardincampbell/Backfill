@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus, ShiftLifecycleStatus
+from app.models.common import AssignmentStatus, CoverageCaseStatus, MembershipRole, OfferStatus, ShiftLifecycleStatus
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.events import PlatformEvent
 from app.models.scheduling import Shift, ShiftAssignment
@@ -23,8 +23,9 @@ from app.schemas.workspace_board import (
     WorkspaceBoardWorkerRead,
     WorkspaceLocationBoardRead,
 )
+from app.services import platform_events
 from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
-from app.services import platform_events, shift_assignments as shift_assignment_service
+from app.services import shift_assignments as shift_assignment_service
 
 
 READ_ROLES = {
@@ -33,11 +34,12 @@ READ_ROLES = {
     MembershipRole.manager,
     MembershipRole.viewer,
 }
+_PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+_SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
 
 
 def board_window(timezone_name: str, week_start_day: str | date | None, week_start: date | None = None):
     return schedule_week_window(timezone_name, week_start_day, week_start)
-
 
 def _to_float(value: Decimal | float | int | None) -> float:
     if value is None:
@@ -108,13 +110,6 @@ def _shift_lifecycle_status_value(shift: Shift) -> str:
     return lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status)
 
 
-def _assignment_status_value(assignment: ShiftAssignment | None) -> str | None:
-    if assignment is None:
-        return None
-    status = assignment.status
-    return status.value if hasattr(status, "value") else str(status)
-
-
 def _shift_display_employee_id(shift: Shift) -> UUID | None:
     current = _best_assignment(shift)
     if current is not None and current.employee_id is not None:
@@ -123,45 +118,251 @@ def _shift_display_employee_id(shift: Shift) -> UUID | None:
     return latest.employee_id if latest is not None else None
 
 
-def _shift_is_live_operational_break(shift: Shift) -> bool:
-    if _best_assignment(shift) is not None:
-        return False
+def _shift_metadata_value(shift: Shift, key: str) -> object | None:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    return shift_metadata.get(key)
+
+
+def _shift_amendment_metadata(shift: Shift) -> dict:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    raw = shift_metadata.get(_PUBLISHED_AMENDMENT_METADATA_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _shift_amended_from_published(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("amended_from_published"))
+
+
+def _shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_metadata(shift).get("reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _shift_schedule_break(shift: Shift) -> bool:
+    return bool(_shift_amendment_metadata(shift).get("schedule_break"))
+
+
+def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
+    raw_value = _shift_amendment_metadata(shift).get("amended_employee_ids")
+    if not isinstance(raw_value, list):
+        return []
+    employee_ids: list[UUID] = []
+    for raw_id in raw_value:
+        try:
+            employee_ids.append(raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id)))
+        except (TypeError, ValueError):
+            continue
+    return employee_ids
+
+
+def _shift_historical_artifacts(shift: Shift) -> list[dict]:
+    raw_value = _shift_amendment_metadata(shift).get(_SHIFT_HISTORICAL_ARTIFACTS_KEY)
+    if not isinstance(raw_value, list):
+        return []
+    return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
+
+
+def _assignment_metadata(assignment: ShiftAssignment | None) -> dict:
+    if assignment is None:
+        return {}
+    raw_metadata = assignment.assignment_metadata
+    return dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+
+
+def _assignment_amendment_reason_code(assignment: ShiftAssignment | None) -> str | None:
+    raw_reason = _assignment_metadata(assignment).get("published_amendment_reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _assignment_amendment_action(assignment: ShiftAssignment | None) -> str | None:
+    raw_action = _assignment_metadata(assignment).get("published_amendment_action")
+    if isinstance(raw_action, str) and raw_action:
+        return raw_action
+    return None
+
+
+def _assignment_status_value(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    status = assignment.status
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _derived_cancelled_history_reason_code(shift: Shift) -> str | None:
+    if _shift_lifecycle_status_value(shift) != ShiftLifecycleStatus.cancelled.value:
+        return None
+    if _shift_amendment_reason_code(shift) == "cancelled":
+        return "cancelled"
+    if any(
+        _assignment_amendment_reason_code(assignment) in {"cancelled", "callout", "no_show"}
+        or _assignment_amendment_action(assignment) in {"cancel_shift", "unassign_shift"}
+        for assignment in shift.assignments or []
+    ):
+        return "cancelled"
+    if _shift_metadata_value(shift, "consistency_repair_reason") == "cancelled_shift_owned_assignment_cleanup":
+        return "cancelled"
+    return None
+
+
+def _effective_shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_reason_code(shift)
+    if raw_reason is not None:
+        return raw_reason
+    return _derived_cancelled_history_reason_code(shift)
+
+
+def _recovered_shift_historical_artifacts(shift: Shift) -> list[dict]:
+    artifacts = _shift_historical_artifacts(shift)
+    if artifacts:
+        return artifacts
     if _shift_lifecycle_status_value(shift) not in {
         ShiftLifecycleStatus.scheduled.value,
         ShiftLifecycleStatus.in_progress.value,
     }:
-        return False
-    if (
-        shift.staffing_status.value
-        if hasattr(shift.staffing_status, "value")
-        else str(shift.staffing_status)
-    ) not in {"open", "filling"}:
-        return False
-    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
-    return _assignment_status_value(last_assignment) in {"cancelled", "no_show"}
+        return []
+    if _shift_schedule_break(shift):
+        return []
+    current_assignment = _best_assignment(shift)
+    if current_assignment is None:
+        return []
+    assignments = sorted(
+        list(shift.assignments or []),
+        key=lambda item: (item.sequence_no or 0, item.created_at or datetime.min),
+    )
+    for assignment in reversed(assignments):
+        if current_assignment is not None and assignment.id == current_assignment.id:
+            continue
+        reason_code = _assignment_amendment_reason_code(assignment)
+        if reason_code not in {"callout", "no_show"}:
+            continue
+        status = _assignment_status_value(assignment)
+        if status not in {AssignmentStatus.cancelled.value, AssignmentStatus.no_show.value}:
+            continue
+        return [
+            {
+                "artifact_id": f"recovered-{assignment.id}",
+                "employee_id": str(assignment.employee_id) if assignment.employee_id is not None else None,
+                "employee_name": _assignment_employee_name(assignment),
+                "reason_code": reason_code,
+                "starts_at": shift.starts_at.isoformat(),
+                "ends_at": shift.ends_at.isoformat(),
+                "role_id": str(shift.role_id),
+                "role_code": shift.role.code if shift.role is not None else None,
+                "role_name": shift.role.name if shift.role is not None else None,
+            }
+        ]
+    return []
 
 
-def _shift_is_historical_display(shift: Shift) -> bool:
-    if _shift_lifecycle_status_value(shift) != ShiftLifecycleStatus.cancelled.value:
-        return False
-    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
-    return _assignment_status_value(last_assignment) in {"cancelled", "no_show"}
+def _shift_historical_artifact_employee_ids(shift: Shift) -> list[UUID]:
+    employee_ids: list[UUID] = []
+    for artifact in _recovered_shift_historical_artifacts(shift):
+        raw_employee_id = artifact.get("employee_id")
+        if raw_employee_id is None:
+            continue
+        try:
+            employee_ids.append(raw_employee_id if isinstance(raw_employee_id, UUID) else UUID(str(raw_employee_id)))
+        except (TypeError, ValueError):
+            continue
+    return employee_ids
 
 
-def _shift_amendment_reason_code(shift: Shift) -> str | None:
-    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
-    last_status = _assignment_status_value(last_assignment)
-    if _shift_is_live_operational_break(shift):
-        if last_status == "no_show":
-            return "no_show"
-        if last_status == "cancelled":
-            return "callout"
-    if _shift_is_historical_display(shift):
-        if last_status == "no_show":
-            return "no_show"
-        if last_status == "cancelled":
-            return "cancelled"
-    return None
+def _latest_timestamp(current: datetime | None, candidate: datetime | None) -> datetime | None:
+    if current is None:
+        return candidate
+    if candidate is None:
+        return current
+    return max(current, candidate)
+
+
+def _shift_historical_display(shift: Shift) -> bool:
+    return (
+        _shift_lifecycle_status_value(shift) == ShiftLifecycleStatus.cancelled.value
+        and _effective_shift_amendment_reason_code(shift) == "cancelled"
+    )
+
+
+def _historical_artifact_shift_reads(shift: Shift) -> list[WorkspaceBoardShiftRead]:
+    shift_reads: list[WorkspaceBoardShiftRead] = []
+    for index, artifact in enumerate(_recovered_shift_historical_artifacts(shift)):
+        raw_starts_at = artifact.get("starts_at")
+        raw_ends_at = artifact.get("ends_at")
+        raw_reason_code = artifact.get("reason_code")
+        if not isinstance(raw_starts_at, str) or not isinstance(raw_ends_at, str):
+            continue
+        if not isinstance(raw_reason_code, str) or not raw_reason_code:
+            continue
+        try:
+            starts_at = datetime.fromisoformat(raw_starts_at)
+            ends_at = datetime.fromisoformat(raw_ends_at)
+        except ValueError:
+            continue
+        raw_employee_id = artifact.get("employee_id")
+        employee_id: UUID | None = None
+        if raw_employee_id is not None:
+            try:
+                employee_id = raw_employee_id if isinstance(raw_employee_id, UUID) else UUID(str(raw_employee_id))
+            except (TypeError, ValueError):
+                employee_id = None
+        employee_name = artifact.get("employee_name") if isinstance(artifact.get("employee_name"), str) else None
+        role_id = shift.role_id
+        raw_role_id = artifact.get("role_id")
+        if raw_role_id is not None:
+            try:
+                role_id = raw_role_id if isinstance(raw_role_id, UUID) else UUID(str(raw_role_id))
+            except (TypeError, ValueError):
+                role_id = shift.role_id
+        role_code = artifact.get("role_code") if isinstance(artifact.get("role_code"), str) else shift.role.code
+        role_name = artifact.get("role_name") if isinstance(artifact.get("role_name"), str) else shift.role.name
+        artifact_token = artifact.get("artifact_id") if isinstance(artifact.get("artifact_id"), str) else str(index)
+        artifact_shift_id = uuid5(shift.id, f"historical:{artifact_token}")
+        artifact_assignment_id = uuid5(artifact_shift_id, "last-assignment")
+        shift_reads.append(
+            WorkspaceBoardShiftRead(
+                shift_id=artifact_shift_id,
+                role_id=role_id,
+                role_code=role_code,
+                role_name=role_name,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                lifecycle_status=ShiftLifecycleStatus.cancelled.value,
+                staffing_status=(
+                    shift.staffing_status.value
+                    if hasattr(shift.staffing_status, "value")
+                    else str(shift.staffing_status)
+                ),
+                status=shift.status.value,
+                seats_requested=shift.seats_requested,
+                seats_filled=0,
+                requires_manager_approval=shift.requires_manager_approval,
+                premium_cents=shift.premium_cents,
+                notes=shift.notes,
+                current_assignment=None,
+                last_assignment=WorkspaceBoardShiftAssignmentRead(
+                    assignment_id=artifact_assignment_id,
+                    employee_id=employee_id,
+                    employee_name=employee_name,
+                    status="no_show" if raw_reason_code == "no_show" else "cancelled",
+                    assigned_via="published_amendment",
+                    accepted_at=None,
+                ),
+                coverage_case_id=None,
+                coverage_case_status=None,
+                pending_offer_count=0,
+                delivered_offer_count=0,
+                standby_depth=0,
+                manager_action_required=False,
+                amended_from_published=False,
+                amendment_reason_code=raw_reason_code,
+                schedule_break=False,
+                historical_display=True,
+            )
+        )
+    return shift_reads
 
 
 async def _build_publish_summary(
@@ -171,6 +372,7 @@ async def _build_publish_summary(
     location_id: UUID,
     week_start: date,
     week_end: date,
+    workers: list[WorkspaceBoardWorkerRead],
     shifts: list[Shift],
 ) -> WorkspaceBoardPublishSummaryRead:
     publish_event_rows = await session.execute(
@@ -197,29 +399,74 @@ async def _build_publish_summary(
     if published_event is None:
         return WorkspaceBoardPublishSummaryRead()
 
+    published_at = published_event.occurred_at
     published_shift_ids: set[UUID] = set()
     amended_shift_ids: set[UUID] = set()
     published_employee_ids: set[UUID] = set()
     amended_employee_ids: set[UUID] = set()
+    amended_at: datetime | None = None
+
+    amended_event_rows = await session.execute(
+        select(PlatformEvent)
+        .where(
+            PlatformEvent.business_id == business_id,
+            PlatformEvent.location_id == location_id,
+            PlatformEvent.event_type == platform_events.PlatformEventType.SCHEDULE_WEEK_AMENDED,
+            PlatformEvent.occurred_at > published_at,
+        )
+        .order_by(PlatformEvent.occurred_at.desc())
+        .limit(100)
+    )
+    amended_events = list(amended_event_rows.scalars().all())
+    matching_amended_events = [
+        entry
+        for entry in amended_events
+        if isinstance(entry.payload, dict)
+        and entry.payload.get("week_start_date") == week_start.isoformat()
+        and entry.payload.get("week_end_date") == week_end.isoformat()
+    ]
+    if matching_amended_events:
+        amended_at = matching_amended_events[0].occurred_at
 
     for shift in shifts:
         employee_id = _shift_display_employee_id(shift)
+        if _shift_amended_from_published(shift):
+            amended_shift_ids.add(shift.id)
+            for amended_employee_id in _shift_amended_employee_ids(shift):
+                amended_employee_ids.add(amended_employee_id)
+            if employee_id is not None:
+                amended_employee_ids.add(employee_id)
+            amended_at = _latest_timestamp(amended_at, shift.updated_at or shift.created_at)
+            continue
+
         lifecycle_status = _shift_lifecycle_status_value(shift)
-        if lifecycle_status == ShiftLifecycleStatus.draft.value or _shift_is_live_operational_break(shift):
+        if lifecycle_status in {
+            ShiftLifecycleStatus.scheduled.value,
+            ShiftLifecycleStatus.in_progress.value,
+        }:
+            published_shift_ids.add(shift.id)
+            if employee_id is not None:
+                published_employee_ids.add(employee_id)
+            for historical_employee_id in _shift_historical_artifact_employee_ids(shift):
+                published_employee_ids.add(historical_employee_id)
+            continue
+
+        if _shift_historical_display(shift):
+            if employee_id is not None:
+                published_employee_ids.add(employee_id)
+            continue
+
+        if lifecycle_status == ShiftLifecycleStatus.draft.value:
             amended_shift_ids.add(shift.id)
             if employee_id is not None:
                 amended_employee_ids.add(employee_id)
-            continue
+            amended_at = _latest_timestamp(amended_at, shift.updated_at or shift.created_at)
 
-        published_shift_ids.add(shift.id)
-        if employee_id is not None:
-            published_employee_ids.add(employee_id)
-
-    state = "amended" if amended_shift_ids or amended_employee_ids else "published"
+    state = "amended" if amended_at is not None or amended_shift_ids or amended_employee_ids else "published"
     return WorkspaceBoardPublishSummaryRead(
         state=state,
-        published_at=published_event.occurred_at,
-        amended_at=published_event.occurred_at if state == "amended" else None,
+        published_at=published_at,
+        amended_at=amended_at,
         published_shift_ids=sorted(published_shift_ids, key=str),
         amended_shift_ids=sorted(amended_shift_ids, key=str),
         published_employee_ids=sorted(published_employee_ids, key=str),
@@ -435,24 +682,28 @@ async def get_location_board(
                 delivered_offer_count=delivered_offer_count,
                 standby_depth=standby_depth,
                 manager_action_required=manager_action_required,
-                amended_from_published=_shift_is_live_operational_break(shift),
-                amendment_reason_code=_shift_amendment_reason_code(shift),
-                schedule_break=_shift_is_live_operational_break(shift),
-                historical_display=_shift_is_historical_display(shift),
+                amended_from_published=_shift_amended_from_published(shift),
+                amendment_reason_code=_effective_shift_amendment_reason_code(shift),
+                schedule_break=_shift_schedule_break(shift),
+                historical_display=_shift_historical_display(shift),
             )
         )
+        shift_reads.extend(_historical_artifact_shift_reads(shift))
 
+    shift_reads.sort(key=lambda item: (item.starts_at, item.role_name, str(item.shift_id)))
+
+    publish_summary = await _build_publish_summary(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=window.week_start,
+        week_end=window.week_end,
+        workers=workers,
+        shifts=shifts,
+    )
     business_name = business.display_name
     location_role_setup_required = not bool(location_roles)
     location_employee_setup_required = not any(worker.can_cover_here for worker in workers)
-    publish_summary = await _build_publish_summary(
-        session,
-        business_id=business.id,
-        location_id=location.id,
-        week_start=window.week_start,
-        week_end=window.week_end,
-        shifts=shifts,
-    )
     return WorkspaceLocationBoardRead(
         business_id=business.id,
         business_name=business_name,

@@ -31,8 +31,12 @@ function shiftDuration(shift: Shift) {
 
 interface PublishWeekModalProps {
   weekLabel: string;
-  shifts: Shift[];
+  publishableShifts: Shift[];
+  weekShifts: Shift[];
   employees: Employee[];
+  notificationEmployees?: Employee[];
+  isRepublish?: boolean;
+  publishedDateLabel?: string | null;
   dark?: boolean;
   onClose: () => void;
   onPublish: () => Promise<ScheduleWeekPublishResponse>;
@@ -41,8 +45,12 @@ interface PublishWeekModalProps {
 
 export function PublishWeekModal({
   weekLabel,
-  shifts,
+  publishableShifts,
+  weekShifts,
   employees,
+  notificationEmployees,
+  isRepublish = false,
+  publishedDateLabel = null,
   dark = false,
   onClose,
   onPublish,
@@ -52,17 +60,18 @@ export function PublishWeekModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<ScheduleWeekPublishResponse | null>(null);
 
-  const affectedEmployees = Array.from(
-    new Set(
-      shifts
-        .map((shift) => shift.employeeId)
-        .filter((employeeId): employeeId is string => Boolean(employeeId)),
-    ),
-  )
-    .map((id) => employees.find((employee) => employee.id === id))
-    .filter(Boolean) as Employee[];
+  const affectedEmployees = notificationEmployees
+    ?? Array.from(
+      new Set(
+        publishableShifts
+          .map((shift) => shift.employeeId)
+          .filter((employeeId): employeeId is string => Boolean(employeeId)),
+      ),
+    )
+      .map((id) => employees.find((employee) => employee.id === id))
+      .filter(Boolean) as Employee[];
 
-  const totalShifts = shifts.length;
+  const totalShifts = publishableShifts.length;
   const modalClass = dark
     ? "bg-[#0F2E4C] border border-white/[0.08]"
     : "bg-white border border-[#E5E7EB]";
@@ -135,15 +144,18 @@ export function PublishWeekModal({
             </div>
             <div>
               <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
-                {stage === "confirm" && "Publish Schedule"}
-                {stage === "publishing" && "Publishing..."}
-                {stage === "success" && "Schedule Published"}
+                {stage === "confirm" && (isRepublish ? "Republish Schedule" : "Publish Schedule")}
+                {stage === "publishing" && (isRepublish ? "Republishing..." : "Publishing...")}
+                {stage === "success" && (isRepublish ? "Schedule Republished" : "Schedule Published")}
               </h3>
               <p className={`mt-0.5 text-[11px] ${textSecondary}`} style={{ fontWeight: 440 }}>
                 {stage === "confirm" &&
                   `${weekLabel} · ${totalShifts} Draft Shifts | ${affectedEmployees.length} Employees`}
                 {stage === "publishing" && "Publishing draft shifts and queuing notifications"}
-                {stage === "success" && "Draft shifts are live and notifications were queued"}
+                {stage === "success" &&
+                  (isRepublish
+                    ? "Draft amendments are live and notifications were queued"
+                    : "Draft shifts are live and notifications were queued")}
               </p>
             </div>
           </div>
@@ -157,6 +169,11 @@ export function PublishWeekModal({
         <div className="px-6 py-5">
           {stage === "confirm" ? (
             <>
+              {publishedDateLabel ? (
+                <div className={`mb-4 rounded-xl border px-3 py-2 text-[12px] ${dark ? "border-[#F59E0B]/25 bg-[#F59E0B]/10 text-[#FDE68A]" : "border-[#FDE68A] bg-[#FFF7D6] text-[#8A6100]"}`}>
+                  This schedule was published on {publishedDateLabel}
+                </div>
+              ) : null}
               {errorMessage ? (
                 <div
                   className={`mb-4 rounded-xl border px-3 py-2 text-[12px] ${
@@ -185,7 +202,7 @@ export function PublishWeekModal({
                     {
                       icon: "📨",
                       text: "Assigned staff notifications are queued",
-                      detail: "SMS and email are enqueued asynchronously",
+                      detail: "Email notifications are enqueued asynchronously",
                     },
                   ].map((item) => (
                     <div key={item.text} className={`flex items-start gap-3 rounded-lg p-3 ${subtleSurfaceClass}`}>
@@ -212,7 +229,7 @@ export function PublishWeekModal({
                 </p>
                 <div className="max-h-[180px] space-y-1.5 overflow-y-auto pr-1">
                   {affectedEmployees.map((employee) => {
-                    const employeeShifts = shifts.filter((shift) => shift.employeeId === employee.id);
+                    const employeeShifts = weekShifts.filter((shift) => shift.employeeId === employee.id);
                     const employeeHours = employeeShifts.reduce(
                       (sum, shift) => sum + shiftDuration(shift),
                       0,
@@ -250,7 +267,7 @@ export function PublishWeekModal({
                   })}
                   {affectedEmployees.length === 0 ? (
                     <div className={`rounded-lg p-3 text-[12px] ${subtleSurfaceClass} ${textSecondary}`}>
-                      No assigned employees on the remaining draft shifts. Publish will still move them live.
+                      No employees are queued to receive email updates from this publish action.
                     </div>
                   ) : null}
                 </div>

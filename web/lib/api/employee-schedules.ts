@@ -17,6 +17,8 @@ export type PublicEmployeeScheduleShift = {
   timezone: string;
   lifecycle_status: string;
   staffing_status: string;
+  display_status: string;
+  historical_display: boolean;
   notes: string | null;
 };
 

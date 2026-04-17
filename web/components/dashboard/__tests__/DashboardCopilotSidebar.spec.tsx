@@ -3,8 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api/copilot", () => ({
+  cancelCopilotSocketTurn: vi.fn(),
+  connectCopilotSessionSocket: vi.fn(() => ({
+    readyState: 3,
+    addEventListener: vi.fn(),
+    close: vi.fn(),
+  })),
   createCopilotMessage: vi.fn(),
   createCopilotSession: vi.fn(),
+  sendCopilotSocketMessage: vi.fn(),
 }));
 
 import {

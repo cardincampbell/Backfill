@@ -47,6 +47,7 @@ import {
 } from '@/lib/api/workforce';
 import { buildTeamEmployeeEditPath } from '@/lib/dashboard-paths';
 import { resolvePreferredWorkspaceBusiness } from '@/lib/workspace-business';
+import { DashboardToast } from './DashboardToast';
 import DashboardShell from './DashboardShell';
 import { EmployeeEditorDrawer, type EmployeeEditorSeed } from './EmployeeEditorDrawer';
 import {
@@ -1855,7 +1856,7 @@ export default function Team({
   const [businessRoles, setBusinessRoles] = useState<BusinessRole[]>([]);
   const [businessLocations, setBusinessLocations] = useState<BusinessLocation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const [toast, setToast] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [locationFilters, setLocationFilters] = useState<Set<string>>(new Set());
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
@@ -1876,13 +1877,57 @@ export default function Team({
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
+  const [updatedEmployeeId, setUpdatedEmployeeId] = useState<string | null>(null);
   const locationFilterRef = useRef<HTMLButtonElement>(null);
   const statusFilterRef = useRef<HTMLButtonElement>(null);
   const roleFilterRef = useRef<HTMLButtonElement>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+  const highlightTimeoutRef = useRef<number | null>(null);
   const activeEditingEmployeeId =
     editingEmployeeId ?? (routeSegments[0] === 'employee' ? routeSegments[1] ?? null : null);
   const defaultBusinessLocation =
     businessLocations.length === 1 ? businessLocations[0] : null;
+
+  const showToast = useCallback(
+    (next: { tone: 'success' | 'error'; message: string } | null, duration = 4000) => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = null;
+      }
+      setToast(next);
+      if (!next) {
+        return;
+      }
+      toastTimeoutRef.current = window.setTimeout(() => {
+        setToast(null);
+        toastTimeoutRef.current = null;
+      }, duration);
+    },
+    [],
+  );
+
+  const highlightEmployee = useCallback((employeeId: string) => {
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+    }
+    setUpdatedEmployeeId(employeeId);
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setUpdatedEmployeeId(null);
+      highlightTimeoutRef.current = null;
+    }, 5000);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (toastTimeoutRef.current !== null) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1904,7 +1949,7 @@ export default function Team({
       setLoading(true);
 
       try {
-        setFeedback(null);
+        showToast(null);
         const [nextLocations, nextRoles, nextEmployees] = await Promise.all([
           listBusinessLocations(businessId),
           listBusinessRoles(businessId),
@@ -1922,7 +1967,7 @@ export default function Team({
         if (cancelled) {
           return;
         }
-        setFeedback({
+        showToast({
           tone: 'error',
           message: 'Could not load the team roster.',
         });
@@ -1941,7 +1986,7 @@ export default function Team({
     return () => {
       cancelled = true;
     };
-  }, [businessId, workspaceReady]);
+  }, [businessId, showToast, workspaceReady]);
 
   const locationOptions = useMemo(
     () => ['All Locations', ...businessLocations.map((location) => locationDisplayName(location))],
@@ -2089,32 +2134,33 @@ export default function Team({
   const handleAddEmployee = useCallback(async (employee: EmployeeSummary) => {
     const nextEmployee = buildLiveEmployee(employee, businessLocations);
     setEmployeesData((current) => [nextEmployee, ...current.filter((item) => item.id !== nextEmployee.id)]);
-    setFeedback({
+    showToast({
       tone: 'success',
       message: `${nextEmployee.name} added to the roster.`,
     });
-  }, [businessLocations]);
+  }, [businessLocations, showToast]);
 
   const handleSaveEmployee = useCallback(async (employee: EmployeeProfile) => {
     const nextEmployee = buildLiveEmployee(employee, businessLocations);
     setEmployeesData((current) =>
       current.map((item) => (item.id === nextEmployee.id ? nextEmployee : item)),
     );
-    setSelectedEmployee(nextEmployee);
-    setFeedback({
+    closeEmployeeEditor();
+    highlightEmployee(nextEmployee.id);
+    showToast({
       tone: 'success',
-      message: `${nextEmployee.name} updated.`,
+      message: 'Employee updated',
     });
-  }, [businessLocations]);
+  }, [businessLocations, closeEmployeeEditor, highlightEmployee, showToast]);
 
   const handleDeleteEmployee = useCallback(async (employeeId: string) => {
     setEmployeesData((current) => current.filter((item) => item.id !== employeeId));
     closeEmployeeEditor();
-    setFeedback({
+    showToast({
       tone: 'success',
       message: 'Employee removed from the roster.',
     });
-  }, [closeEmployeeEditor]);
+  }, [closeEmployeeEditor, showToast]);
 
   const handleBulkImported = useCallback(async (result: EmployeeBulkImportResponse) => {
     if (!businessId) {
@@ -2122,11 +2168,11 @@ export default function Team({
     }
     const refreshed = await listEmployees(businessId);
     setEmployeesData(refreshed.map((employee) => buildLiveEmployee(employee, businessLocations)));
-    setFeedback({
+    showToast({
       tone: 'success',
       message: `Imported ${result.created_count} employee${result.created_count === 1 ? '' : 's'}${result.skipped_count ? `, skipped ${result.skipped_count}` : ''}.`,
     });
-  }, [businessId, businessLocations]);
+  }, [businessId, businessLocations, showToast]);
 
   const selectedEmployeeRecords = useMemo(
     () => employeesData.filter((employee) => selectedEmployees.has(employee.id)),
@@ -2210,11 +2256,11 @@ export default function Team({
       current.map((employee) => updatedById.get(employee.id) ?? employee),
     );
     clearSelection();
-    setFeedback({
+    showToast({
       tone: 'success',
       message: `Updated locations for ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
     });
-  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
+  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords, showToast]);
 
   const handleBulkAssignRoles = useCallback(async (roleIds: string[]) => {
     if (!businessId || !roleIds.length || !selectedEmployeeRecords.length) {
@@ -2256,11 +2302,11 @@ export default function Team({
       current.map((employee) => updatedById.get(employee.id) ?? employee),
     );
     clearSelection();
-    setFeedback({
+    showToast({
       tone: 'success',
       message: `Updated roles for ${updatedEmployees.length} employee${updatedEmployees.length === 1 ? '' : 's'}.`,
     });
-  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords]);
+  }, [businessId, businessLocations, businessRoles, clearSelection, selectedEmployeeRecords, showToast]);
 
   const handleBulkExport = useCallback(() => {
     if (!selectedEmployeeRecords.length) {
@@ -2297,11 +2343,11 @@ export default function Team({
 
     setShowBulkExport(false);
     clearSelection();
-    setFeedback({
+    showToast({
       tone: 'success',
       message: `Exported ${selectedEmployeeRecords.length} employee${selectedEmployeeRecords.length === 1 ? '' : 's'}.`,
     });
-  }, [clearSelection, selectedEmployeeRecords]);
+  }, [clearSelection, selectedEmployeeRecords, showToast]);
 
   const handleBulkRemove = useCallback(async () => {
     if (!businessId || !selectedEmployeeRecords.length) {
@@ -2328,13 +2374,13 @@ export default function Team({
 
     clearSelection();
     setShowBulkRemove(false);
-    setFeedback({
+    showToast({
       tone: blocked.length ? 'error' : 'success',
       message: blocked.length
         ? `Removed ${removable.length} employee${removable.length === 1 ? '' : 's'}, skipped ${blocked.length} due to active scheduling constraints.`
         : `Removed ${removable.length} employee${removable.length === 1 ? '' : 's'}.`,
     });
-  }, [businessId, clearSelection, selectedEmployeeRecords]);
+  }, [businessId, clearSelection, selectedEmployeeRecords, showToast]);
 
   const showBlockingLoader = loading && employeesData.length === 0;
   const allVisibleSelected =
@@ -2369,20 +2415,6 @@ export default function Team({
             </button>
           </div>
         </div>
-
-        {feedback ? (
-          <div
-            className="mb-4 rounded-xl px-4 py-3 text-[13px]"
-            role="status"
-            style={{
-              background: feedback.tone === 'success' ? 'rgba(0, 184, 147, 0.08)' : 'rgba(229, 72, 77, 0.08)',
-              color: feedback.tone === 'success' ? '#067A64' : '#C13535',
-              fontWeight: 500,
-            }}
-          >
-            {feedback.message}
-          </div>
-        ) : null}
 
         {/* Filters + Search */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-4">
@@ -2756,7 +2788,10 @@ export default function Team({
               <motion.div
                 key={emp.id}
                 initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+                animate={{
+                  opacity: 1,
+                  boxShadow: updatedEmployeeId === emp.id ? '0 0 0 2px #00B89340' : '0 0 0 0px transparent',
+                }}
                 transition={{ duration: 0.25, delay: i * 0.02 }}
                 style={{
                   gridTemplateColumns:
@@ -2840,7 +2875,14 @@ export default function Team({
             const primaryLoc = getPrimaryLocation(emp);
             const reliabilityColor = getReliabilityColor(emp.reliability);
             return (
-              <motion.div key={emp.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25, delay: i * 0.02 }}
+              <motion.div
+                key={emp.id}
+                initial={{ opacity: 0 }}
+                animate={{
+                  opacity: 1,
+                  boxShadow: updatedEmployeeId === emp.id ? '0 0 0 2px #00B89340' : '0 0 0 0px transparent',
+                }}
+                transition={{ duration: 0.25, delay: i * 0.02 }}
                 className={`px-4 py-3.5 transition-colors ${selectedEmployees.has(emp.id) ? 'bg-[#635BFF]/[0.02]' : ''} ${isDark ? 'active:bg-white/[0.03]' : 'active:bg-[#FAFBFC]'}`}>
                 <div className="flex items-center gap-3">
                   <button
@@ -2981,6 +3023,7 @@ export default function Team({
           />
         )}
       </AnimatePresence>
+      <DashboardToast message={toast?.message ?? null} tone={toast?.tone ?? 'success'} />
     </>
   );
 

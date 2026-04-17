@@ -4,6 +4,7 @@ This repo is already split correctly for production:
 
 - `usebackfill.com` serves the Next.js frontend from Vercel.
 - `api.usebackfill.com` should serve the FastAPI backend from a container host.
+- a second non-public worker service should run the runtime loop that drains outbox events and background work.
 
 Do not point Retell at `https://usebackfill.com/webhooks/retell` unless the backend is actually mounted there. Right now the clean deployment shape is a separate backend origin.
 
@@ -11,6 +12,7 @@ Do not point Retell at `https://usebackfill.com/webhooks/retell` unless the back
 
 - Frontend: `https://usebackfill.com`
 - Backend API: `https://api.usebackfill.com`
+- Backend worker: separate private service from the same image with `BACKFILL_SERVICE_MODE=worker`
 - Retell webhook: `https://api.usebackfill.com/webhooks/retell`
 - Optional split-mode Twilio SMS webhook: `https://api.usebackfill.com/webhooks/twilio/sms`
 
@@ -55,12 +57,41 @@ docker build -t backfill-api .
 docker run -p 8000:8000 --env-file .env backfill-api
 ```
 
-The container serves:
+API mode (`BACKFILL_SERVICE_MODE=api`, default) serves:
 
 - API routes under `/api/*`
 - Retell webhook under `/webhooks/retell`
 - Twilio webhook under `/webhooks/twilio/sms`
 - health check at `/healthz`
+
+Worker mode (`BACKFILL_SERVICE_MODE=worker`) runs the durable background loop directly against Postgres:
+
+- processes schedule publish notification outbox rows
+- processes coverage delivery outbox rows
+- runs provider callback processing
+- runs runtime projection freshness checks
+- runs the coverage runtime tick
+
+Recommended worker env:
+
+```env
+BACKFILL_SERVICE_MODE=worker
+BACKFILL_WORKER_POLL_SECONDS=10
+BACKFILL_WORKER_BATCH_LIMIT=20
+BACKFILL_WORKER_ERROR_BACKOFF_SECONDS=15
+```
+
+Recommended Railway shape:
+
+- `Backfill API` service
+  - public networking enabled
+  - `BACKFILL_SERVICE_MODE=api`
+- `Backfill Worker` service
+  - no public networking required
+  - same repo / same Docker image
+  - `BACKFILL_SERVICE_MODE=worker`
+
+Do not rely on schedule publish notifications, feed projections, or other outbox-driven workflows unless the worker service is running.
 
 ## DNS
 
@@ -94,11 +125,13 @@ That is what the frontend already expects in [`web/lib/api.ts`](./web/lib/api.ts
 
 After `api.usebackfill.com` is live:
 
-1. Update the live Retell voice agent webhook to `https://api.usebackfill.com/webhooks/retell`
-2. Publish the voice agent
-3. Create or update the Retell SMS chat agent with the same webhook
-4. Bind that chat agent to the Retell phone number for inbound and outbound SMS
-5. Keep the Retell phone number termination URI pointed at `backfill.pstn.twilio.com`
+1. Run `python3 scripts/setup_retell_agents.py` so the live Retell agents pick up the current webhook, tool schema, and prompts.
+2. Copy the returned agent IDs into the backend env.
+3. Run `python3 scripts/setup_retell_phone_number.py` so the Retell phone number is bound to the current inbound/outbound agents and the inbound webhook is set to `https://api.usebackfill.com/webhooks/retell`.
+4. Publish the voice agent
+5. Create or update the Retell SMS chat agent with the same webhook
+6. Bind that chat agent to the Retell phone number for inbound and outbound SMS
+7. Keep the Retell phone number termination URI pointed at `backfill.pstn.twilio.com`
 
 ## Persistence note
 

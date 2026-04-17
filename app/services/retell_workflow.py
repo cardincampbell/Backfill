@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -10,17 +11,234 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Location
-from app.models.common import OfferStatus, RetellConversationType, ShiftLifecycleStatus, ShiftStaffingStatus, ShiftStatus
+from app.models.common import (
+    AssignmentStatus,
+    CoverageCaseStatus,
+    OfferStatus,
+    RetellConversationType,
+    ShiftLifecycleStatus,
+    ShiftStaffingStatus,
+    ShiftStatus,
+)
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.identity import User
 from app.models.integrations import RetellConversation
-from app.models.scheduling import Shift
+from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
-from app.schemas.scheduling import ShiftCreate
+from app.schemas.scheduling import PublishedShiftAmendmentWrite, ShiftCreate
 from app.services import businesses, communication_suppressions, coverage as coverage_service
-from app.services import delivery, messaging, scheduler_sync, scheduling
+from app.services import delivery, llm_gateway, messaging, scheduler_sync, scheduling, shift_assignments, workforce
 from app.config import settings
+
+_CALL_OUT_PATTERNS = (
+    re.compile(r"\bcall(?:ing)?\s*out\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+make\s+it\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+make\s+(?:my|the|that)\s+shift\b"),
+    re.compile(r"\bwon'?t\s+make\s+it\b"),
+    re.compile(r"\bwill\s+not\s+make\s+it\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+work\b"),
+    re.compile(r"\bunable\s+to\s+work\b"),
+    re.compile(r"\bcan(?:not|'?t)\s+come\s+in\b"),
+    re.compile(r"\bwon'?t\s+be\s+able\s+to\s+make\s+it\b"),
+    re.compile(r"\bnot\s+coming\s+in\b"),
+    re.compile(r"\bneed\s+to\s+call\s+out\b"),
+    re.compile(r"\bcalling\s+out\b"),
+    re.compile(r"\bsick\b"),
+)
+_SMS_OPT_OUT_PATTERNS = (
+    re.compile(r"\b(?:do\s+not|don't)\s+text\b"),
+    re.compile(r"\b(?:do\s+not|don't)\s+call\b"),
+    re.compile(r"\bopt\s+out\b"),
+    re.compile(r"\bunsubscribe\b"),
+    re.compile(r"\bstop\s+text(?:ing)?\b"),
+    re.compile(r"\bstop\s+calling\b"),
+)
+_TODAY_PATTERNS = (
+    re.compile(r"\btoday\b"),
+    re.compile(r"\blater\s+today\b"),
+    re.compile(r"\bthis\s+morning\b"),
+    re.compile(r"\bthis\s+afternoon\b"),
+    re.compile(r"\bthis\s+evening\b"),
+    re.compile(r"\btonight\b"),
+)
+_TOMORROW_PATTERNS = (re.compile(r"\btomorrow\b"),)
+_WEEKDAY_NAMES = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+_OPENAI_INTENT_ENUM = (
+    "callout",
+    "no_show",
+    "opt_out",
+    "schedule_question",
+    "coverage_status_question",
+    "manager_request",
+    "unknown",
+)
+_OPENAI_OUTBOUND_INTENT_ENUM = (
+    "accept_shift",
+    "decline_shift",
+    "opt_out",
+    "follow_up_needed",
+    "unknown",
+)
+
+
+def _first_name(full_name: str | None) -> str | None:
+    text = str(full_name or "").strip()
+    if not text:
+        return None
+    return text.split()[0]
+
+
+def _coerce_retell_dynamic_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _current_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _shift_display_timezone(shift: Shift) -> str:
+    timezone_name = str(getattr(shift, "timezone", "") or "").strip()
+    if timezone_name:
+        return timezone_name
+    location_timezone = str(getattr(getattr(shift, "location", None), "timezone", "") or "").strip()
+    return location_timezone or "UTC"
+
+
+def _to_local_shift_time(value: datetime, timezone_name: str) -> datetime:
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = timezone.utc
+    return value.astimezone(zone)
+
+
+def _format_calendar_label(value: datetime) -> str:
+    return value.strftime("%A, %B %d").replace(" 0", " ")
+
+
+def _format_clock_label(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _relative_day_label(value: datetime, reference_value: datetime) -> str | None:
+    delta_days = (value.date() - reference_value.date()).days
+    if delta_days == 0:
+        return "Today"
+    if delta_days == 1:
+        return "Tomorrow"
+    if delta_days == -1:
+        return "Yesterday"
+    return None
+
+
+def _format_shift_summary(
+    *,
+    role_name: str | None,
+    location_name: str | None,
+    starts_at: datetime,
+    ends_at: datetime,
+    timezone_name: str,
+    reference_time: datetime,
+) -> dict[str, str]:
+    local_start = _to_local_shift_time(starts_at, timezone_name)
+    local_end = _to_local_shift_time(ends_at, timezone_name)
+    local_reference = _to_local_shift_time(reference_time, timezone_name)
+    timezone_abbr = local_start.tzname() or timezone_name
+    base_date_label = _format_calendar_label(local_start)
+    relative_label = _relative_day_label(local_start, local_reference)
+    date_label = (
+        f"{relative_label} ({base_date_label})"
+        if relative_label is not None
+        else base_date_label
+    )
+    start_time_label = _format_clock_label(local_start)
+    end_time_label = _format_clock_label(local_end)
+    local_time_range = f"{start_time_label} to {end_time_label} {timezone_abbr}".strip()
+    role_text = str(role_name or "shift").strip() or "shift"
+    location_text = str(location_name or "").strip()
+    summary = f"{date_label} from {local_time_range} as {role_text}"
+    if location_text:
+        summary += f" at {location_text}"
+    return {
+        "date_label": date_label,
+        "start_time_label": start_time_label,
+        "end_time_label": end_time_label,
+        "local_time_range": local_time_range,
+        "timezone": timezone_name,
+        "timezone_abbr": timezone_abbr,
+        "relative_day_label": relative_label or "",
+        "summary": summary,
+    }
+
+
+def _format_assigned_shift_schedule_summary(assigned_shifts: list[dict[str, Any]]) -> str:
+    if not assigned_shifts:
+        return ""
+    return "\n".join(
+        f"{index}. {str(shift.get('summary') or '').strip()}"
+        for index, shift in enumerate(assigned_shifts, start=1)
+        if str(shift.get("summary") or "").strip()
+    )
+
+
+def _format_inbound_shift_phrase(shift: dict[str, Any]) -> str:
+    role_name = str(shift.get("role_name") or "shift").strip()
+    location_name = str(shift.get("location_name") or "").strip()
+    date_label = str(shift.get("date_label") or "").strip()
+    local_time_range = str(shift.get("local_time_range") or "").strip()
+    if date_label and local_time_range:
+        phrase = f"your upcoming {role_name} shift on {date_label} from {local_time_range}"
+    else:
+        starts_at_raw = str(shift.get("starts_at") or "").strip()
+        try:
+            starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            starts_at = None
+        time_text = None
+        if starts_at is not None:
+            time_text = starts_at.astimezone(timezone.utc).strftime("%a %b %-d at %-I:%M %p UTC")
+        parts = [f"your upcoming {role_name} shift"]
+        if time_text:
+            parts.append(time_text)
+        phrase = " ".join(parts)
+    if location_name:
+        phrase += f" at {location_name}"
+    return phrase
+
+
+def _build_begin_message(
+    *,
+    employee_found: bool,
+    caller_first_name: str | None,
+    assigned_shifts: list[dict[str, Any]],
+) -> str:
+    disclosure = (
+        "This is Backfill's AI assistant. We may use this number to call or text you about shift coverage, "
+        "and you can opt out anytime by saying so or replying STOP."
+    )
+    if employee_found and caller_first_name and len(assigned_shifts) == 1:
+        shift_phrase = _format_inbound_shift_phrase(assigned_shifts[0])
+        return f"Hi {caller_first_name}, {disclosure} Are you calling about {shift_phrase}?"
+    if employee_found and caller_first_name and len(assigned_shifts) > 1:
+        next_shift_phrase = _format_inbound_shift_phrase(assigned_shifts[0])
+        return (
+            f"Hi {caller_first_name}, {disclosure} I have {len(assigned_shifts)} upcoming published shifts "
+            f"on your schedule, starting with {next_shift_phrase}. Are you calling about one of those shifts?"
+        )
+    return f"Hi, {disclosure} Are you calling about an upcoming shift?"
 
 
 def _conversation_type_from_event(event: str) -> RetellConversationType:
@@ -79,6 +297,7 @@ def _extract_transcript_items(body: dict, payload: dict) -> list[dict[str, Any]]
         payload,
         body,
         keys=(
+            "transcript_with_tool_calls",
             "transcript_items",
             "transcript_object",
             "messages",
@@ -173,16 +392,1298 @@ async def persist_payload(session: AsyncSession, body: dict) -> RetellConversati
     conversation.phone_from = _pick_value(payload, body, keys=("from_number", "from"))
     conversation.phone_to = _pick_value(payload, body, keys=("to_number", "to"))
     conversation.disconnection_reason = _pick_value(payload, body, keys=("disconnection_reason", "disconnect_reason"))
-    conversation.conversation_summary = summary
-    conversation.transcript_text = transcript_text
-    conversation.transcript_items = transcript_items
-    conversation.analysis = analysis
-    conversation.metadata_json = metadata
+    if summary:
+        conversation.conversation_summary = summary
+    if transcript_text:
+        conversation.transcript_text = transcript_text
+    conversation.transcript_items = transcript_items or list(conversation.transcript_items or [])
+    existing_analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    conversation.analysis = {
+        **existing_analysis,
+        **analysis,
+    }
+    existing_metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    conversation.metadata_json = {
+        **existing_metadata,
+        **metadata,
+    }
     conversation.raw_payload = body
     conversation.started_at = _normalize_timestamp(_pick_value(payload, body, keys=("started_at", "start_timestamp", "start_time"))) or conversation.started_at
     conversation.ended_at = _normalize_timestamp(_pick_value(payload, body, keys=("ended_at", "end_timestamp", "end_time"))) or conversation.ended_at
     await session.flush()
     return conversation
+
+
+def _processing_state(conversation: RetellConversation) -> dict[str, Any]:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    state = analysis.get("backfill_processing")
+    return state if isinstance(state, dict) else {}
+
+
+def _set_processing_state(conversation: RetellConversation, state: dict[str, Any]) -> None:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    conversation.analysis = {
+        **analysis,
+        "backfill_processing": state,
+    }
+
+
+async def _lock_conversation_for_processing(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> RetellConversation | None:
+    if conversation is None:
+        return None
+    result = await session.execute(
+        select(RetellConversation)
+        .where(RetellConversation.id == conversation.id)
+        .with_for_update()
+    )
+    locked = result.scalar_one_or_none()
+    return locked or conversation
+
+
+def _conversation_assigned_shifts(conversation: RetellConversation) -> list[dict[str, Any]]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    assigned_shifts = metadata.get("assigned_shifts")
+    if not isinstance(assigned_shifts, list):
+        return []
+    return [shift for shift in assigned_shifts if isinstance(shift, dict)]
+
+
+def _conversation_user_utterances(conversation: RetellConversation) -> list[str]:
+    utterances: list[str] = []
+    for item in conversation.transcript_items or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or item.get("speaker") or item.get("sender") or "").strip().lower()
+        if role not in {"user", "caller", "human"}:
+            continue
+        content = str(item.get("content") or item.get("text") or item.get("message") or "").strip()
+        if content:
+            utterances.append(content)
+    return utterances
+
+
+def _combined_user_text(conversation: RetellConversation) -> str:
+    chunks = _conversation_user_utterances(conversation)
+    summary = str(conversation.conversation_summary or "").strip()
+    if summary:
+        chunks.append(summary)
+    return "\n".join(chunks).strip()
+
+
+def _matches_any_pattern(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    lowered = text.lower()
+    return any(pattern.search(lowered) for pattern in patterns)
+
+
+def _normalized_label(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+    return text or None
+
+
+def _retell_custom_analysis_data(conversation: RetellConversation) -> dict[str, Any]:
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    custom = analysis.get("custom_analysis_data")
+    return custom if isinstance(custom, dict) else {}
+
+
+def _normalize_retell_confidence(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+    else:
+        try:
+            numeric = float(str(value).strip())
+        except (TypeError, ValueError):
+            numeric = None
+    if numeric is not None:
+        if numeric >= 0.8:
+            return "high"
+        if numeric >= 0.5:
+            return "medium"
+        return "low"
+
+    token = _normalized_label(value)
+    if token in {"high", "high_confidence", "very_confident", "certain", "strong"}:
+        return "high"
+    if token in {"medium", "medium_confidence", "moderate", "uncertain_but_likely"}:
+        return "medium"
+    if token in {"low", "low_confidence", "uncertain", "weak"}:
+        return "low"
+    return None
+
+
+def _normalize_retell_intent(value: Any) -> str | None:
+    token = _normalized_label(value)
+    if token is None:
+        return None
+    if "callout" in token or token in {
+        "call_out",
+        "call_out_request",
+        "callout_request",
+        "unable_to_work",
+        "cannot_work",
+        "unable_to_make_shift",
+        "shift_callout",
+        "report_callout",
+    }:
+        return "callout"
+    if "no_show" in token or "noshow" in token:
+        return "no_show"
+    if "opt_out" in token or token in {
+        "optout",
+        "unsubscribe",
+        "do_not_call",
+        "do_not_text",
+        "stop",
+    }:
+        return "opt_out"
+    if "schedule" in token and ("question" in token or "inquiry" in token or token == "schedule"):
+        return "schedule_question"
+    if "coverage" in token and ("status" in token or "question" in token or "inquiry" in token):
+        return "coverage_status_question"
+    if "manager" in token and ("request" in token or "support" in token):
+        return "manager_request"
+    if token in {"unknown", "other", "unclear", "none"}:
+        return "unknown"
+    return token
+
+
+def _normalize_outbound_retell_intent(value: Any) -> str | None:
+    token = _normalized_label(value)
+    if token is None:
+        return None
+    if token in {
+        "accept_shift",
+        "claim_shift",
+        "take_shift",
+        "accept_offer",
+        "take_offer",
+        "yes_take_it",
+        "yes_accept",
+        "standby_accept",
+        "promote_standby",
+        "interested",
+    }:
+        return "accept_shift"
+    if token in {
+        "decline_shift",
+        "decline_offer",
+        "reject_shift",
+        "decline",
+        "not_interested",
+        "pass",
+        "cannot_take",
+        "cant_take",
+        "cancel_standby",
+        "remove_from_queue",
+    }:
+        return "decline_shift"
+    if "opt_out" in token or token in {
+        "optout",
+        "unsubscribe",
+        "do_not_call",
+        "do_not_text",
+        "stop",
+    }:
+        return "opt_out"
+    if token in {"follow_up_needed", "question", "question_or_followup", "needs_followup"}:
+        return "follow_up_needed"
+    if token in {"unknown", "other", "unclear", "none"}:
+        return "unknown"
+    return token
+
+
+def _retell_intent_signal(conversation: RetellConversation) -> dict[str, Any] | None:
+    custom = _retell_custom_analysis_data(conversation)
+    if not custom:
+        return None
+
+    raw_intent: Any = None
+    raw_confidence: Any = None
+    source = None
+    for key in (
+        "call_intent",
+        "intent",
+        "primary_intent",
+        "user_intent",
+        "inbound_intent",
+    ):
+        value = custom.get(key)
+        if value in (None, ""):
+            continue
+        source = f"custom_analysis_data.{key}"
+        if isinstance(value, dict):
+            raw_intent = _pick_value(
+                value,
+                keys=("value", "intent", "label", "name", "selection"),
+            )
+            raw_confidence = _pick_value(
+                value,
+                keys=("confidence", "confidence_level", "certainty"),
+            )
+        else:
+            raw_intent = value
+        break
+
+    if raw_confidence in (None, ""):
+        raw_confidence = _pick_value(
+            custom,
+            keys=(
+                "call_intent_confidence",
+                "intent_confidence",
+                "confidence",
+                "call_intent_confidence_level",
+                "intent_confidence_level",
+            ),
+        )
+
+    normalized_intent = _normalize_retell_intent(raw_intent)
+    normalized_confidence = _normalize_retell_confidence(raw_confidence)
+    if normalized_intent is None and normalized_confidence is None:
+        return None
+
+    return {
+        "provider": "retell_custom_analysis",
+        "source": source or "custom_analysis_data",
+        "raw_intent": None if raw_intent in (None, "") else str(raw_intent).strip(),
+        "intent": normalized_intent,
+        "raw_confidence": None if raw_confidence in (None, "") else str(raw_confidence).strip(),
+        "confidence": normalized_confidence,
+    }
+
+
+def _retell_outbound_intent_signal(conversation: RetellConversation) -> dict[str, Any] | None:
+    custom = _retell_custom_analysis_data(conversation)
+    if not custom:
+        return None
+
+    raw_intent: Any = None
+    raw_confidence: Any = None
+    source = None
+    for key in (
+        "outbound_intent",
+        "call_intent",
+        "intent",
+        "primary_intent",
+        "user_intent",
+    ):
+        value = custom.get(key)
+        if value in (None, ""):
+            continue
+        source = f"custom_analysis_data.{key}"
+        if isinstance(value, dict):
+            raw_intent = _pick_value(
+                value,
+                keys=("value", "intent", "label", "name", "selection"),
+            )
+            raw_confidence = _pick_value(
+                value,
+                keys=("confidence", "confidence_level", "certainty"),
+            )
+        else:
+            raw_intent = value
+        break
+
+    if raw_confidence in (None, ""):
+        raw_confidence = _pick_value(
+            custom,
+            keys=(
+                "outbound_intent_confidence",
+                "call_intent_confidence",
+                "intent_confidence",
+                "confidence",
+                "outbound_intent_confidence_level",
+                "call_intent_confidence_level",
+                "intent_confidence_level",
+            ),
+        )
+
+    normalized_intent = _normalize_outbound_retell_intent(raw_intent)
+    normalized_confidence = _normalize_retell_confidence(raw_confidence)
+    if normalized_intent is None and normalized_confidence is None:
+        return None
+
+    return {
+        "provider": "retell_custom_analysis",
+        "source": source or "custom_analysis_data",
+        "raw_intent": None if raw_intent in (None, "") else str(raw_intent).strip(),
+        "intent": normalized_intent,
+        "raw_confidence": None if raw_confidence in (None, "") else str(raw_confidence).strip(),
+        "confidence": normalized_confidence,
+    }
+
+
+def _secondary_intent_model() -> str:
+    configured_model = settings.secondary_intent_model or settings.llm_default_model
+    configured_model = configured_model.strip()
+    if configured_model:
+        return configured_model
+    return "gpt-5-mini"
+
+
+def _secondary_intent_messages(conversation: RetellConversation) -> list[llm_gateway.LlmMessage]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    assigned_schedule_summary = str(metadata.get("assigned_shift_schedule_summary") or "").strip()
+    summary = str(conversation.conversation_summary or "").strip()
+    transcript = str(conversation.transcript_text or "").strip()
+    caller_phone = str(metadata.get("caller_phone") or conversation.phone_from or "").strip()
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip()
+
+    payload_lines = [
+        f"caller_phone: {caller_phone or 'unknown'}",
+        f"employee_id: {employee_id or 'unknown'}",
+        f"conversation_summary: {summary or 'none'}",
+        f"assigned_shift_schedule_summary: {assigned_schedule_summary or 'none'}",
+        "transcript:",
+        transcript or "none",
+    ]
+
+    return [
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "You classify inbound employee calls for Backfill. "
+                "Read the transcript and summary, then choose the single best intent. "
+                "Use callout when the caller says they cannot work a scheduled shift. "
+                "Use no_show when the caller reports they already missed or are currently missing the shift. "
+                "Use opt_out when the caller asks to stop calls or texts. "
+                "Use schedule_question for schedule or shift-info questions. "
+                "Use coverage_status_question for coverage follow-up questions. "
+                "Use manager_request for manager/support/operator requests. "
+                "Use unknown when the transcript is too ambiguous."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="user",
+            content="\n".join(payload_lines),
+        ),
+    ]
+
+
+def _secondary_intent_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
+    return [
+        llm_gateway.LlmToolDefinition(
+            name="resolve_inbound_intent",
+            description="Classify the worker's inbound call intent from the transcript and schedule context.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": list(_OPENAI_INTENT_ENUM),
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Short explanation for the chosen intent.",
+                    },
+                },
+                "required": ["intent", "confidence"],
+                "additionalProperties": False,
+            },
+        )
+    ]
+
+
+def _secondary_outbound_intent_messages(
+    conversation: RetellConversation,
+) -> list[llm_gateway.LlmMessage]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    summary = str(conversation.conversation_summary or "").strip()
+    transcript = str(conversation.transcript_text or "").strip()
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip()
+    offer_id = str(metadata.get("offer_id") or conversation.coverage_offer_id or "").strip()
+    location_name = str(metadata.get("location_name") or "").strip()
+    role_name = str(metadata.get("role_name") or "").strip()
+    shift_starts_at = str(metadata.get("shift_starts_at") or "").strip()
+    shift_ends_at = str(metadata.get("shift_ends_at") or "").strip()
+
+    payload_lines = [
+        f"employee_id: {employee_id or 'unknown'}",
+        f"offer_id: {offer_id or 'unknown'}",
+        f"location_name: {location_name or 'unknown'}",
+        f"role_name: {role_name or 'unknown'}",
+        f"shift_starts_at: {shift_starts_at or 'unknown'}",
+        f"shift_ends_at: {shift_ends_at or 'unknown'}",
+        f"conversation_summary: {summary or 'none'}",
+        "transcript:",
+        transcript or "none",
+    ]
+
+    return [
+        llm_gateway.LlmMessage(
+            role="system",
+            content=(
+                "You classify outbound Backfill shift-offer calls. "
+                "Read the transcript and summary, then choose the single best intent. "
+                "Use accept_shift when the worker clearly agrees to take the offered shift. "
+                "Use decline_shift when the worker clearly refuses, is unavailable, or passes. "
+                "Use opt_out when the worker asks Backfill to stop calling or texting them. "
+                "Use follow_up_needed when the worker asks a question, gives a conditional answer, "
+                "or the call needs manual follow-up before a yes or no can be acted on. "
+                "Use unknown when the transcript is too ambiguous."
+            ),
+        ),
+        llm_gateway.LlmMessage(
+            role="user",
+            content="\n".join(payload_lines),
+        ),
+    ]
+
+
+def _secondary_outbound_intent_tool_definitions() -> list[llm_gateway.LlmToolDefinition]:
+    return [
+        llm_gateway.LlmToolDefinition(
+            name="resolve_outbound_intent",
+            description="Classify the worker's outbound shift-offer call response from the transcript and shift context.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": list(_OPENAI_OUTBOUND_INTENT_ENUM),
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Short explanation for the chosen intent.",
+                    },
+                },
+                "required": ["intent", "confidence"],
+                "additionalProperties": False,
+            },
+        )
+    ]
+
+
+async def _secondary_intent_signal(
+    session: AsyncSession,
+    conversation: RetellConversation,
+) -> dict[str, Any] | None:
+    if not llm_gateway.provider_is_configured(llm_gateway.LlmProvider.OPENAI):
+        return None
+
+    try:
+        result = await llm_gateway.generate(
+            session,
+            request=llm_gateway.LlmGenerationRequest(
+                purpose="intent_resolution",
+                business_id=conversation.business_id,
+                location_id=conversation.location_id,
+                coverage_case_id=conversation.coverage_case_id,
+                shift_id=conversation.shift_id,
+                provider=llm_gateway.LlmProvider.OPENAI,
+                model=_secondary_intent_model(),
+                messages=_secondary_intent_messages(conversation),
+                tools=_secondary_intent_tool_definitions(),
+                tool_choice="required",
+                max_output_tokens=256,
+                metadata={
+                    "channel": "retell_post_call",
+                    "retell_conversation_id": str(conversation.id),
+                    "retell_external_id": conversation.external_id,
+                },
+            ),
+        )
+    except Exception as exc:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "failed",
+            "error": str(exc),
+        }
+
+    if not result.tool_calls:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "missing_tool_call",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+
+    selected_call = result.tool_calls[0]
+    intent = _normalize_retell_intent((selected_call.arguments or {}).get("intent"))
+    confidence = _normalize_retell_confidence((selected_call.arguments or {}).get("confidence"))
+    reasoning = str((selected_call.arguments or {}).get("reasoning") or "").strip() or None
+    if intent is None:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "invalid_tool_payload",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+    return {
+        "provider": "openai_intent_resolution",
+        "source": "openai_llm",
+        "intent": intent,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "model": result.model,
+        "provider_generation_id": result.provider_generation_id,
+    }
+
+
+async def _secondary_outbound_intent_signal(
+    session: AsyncSession,
+    conversation: RetellConversation,
+) -> dict[str, Any] | None:
+    if not llm_gateway.provider_is_configured(llm_gateway.LlmProvider.OPENAI):
+        return None
+
+    try:
+        result = await llm_gateway.generate(
+            session,
+            request=llm_gateway.LlmGenerationRequest(
+                purpose="intent_resolution",
+                business_id=conversation.business_id,
+                location_id=conversation.location_id,
+                coverage_case_id=conversation.coverage_case_id,
+                shift_id=conversation.shift_id,
+                provider=llm_gateway.LlmProvider.OPENAI,
+                model=_secondary_intent_model(),
+                messages=_secondary_outbound_intent_messages(conversation),
+                tools=_secondary_outbound_intent_tool_definitions(),
+                tool_choice="required",
+                max_output_tokens=256,
+                metadata={
+                    "channel": "retell_outbound_post_call",
+                    "retell_conversation_id": str(conversation.id),
+                    "retell_external_id": conversation.external_id,
+                },
+            ),
+        )
+    except Exception as exc:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "failed",
+            "error": str(exc),
+        }
+
+    if not result.tool_calls:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "missing_tool_call",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+
+    selected_call = result.tool_calls[0]
+    intent = _normalize_outbound_retell_intent((selected_call.arguments or {}).get("intent"))
+    confidence = _normalize_retell_confidence((selected_call.arguments or {}).get("confidence"))
+    reasoning = str((selected_call.arguments or {}).get("reasoning") or "").strip() or None
+    if intent is None:
+        return {
+            "provider": "openai_intent_resolution",
+            "source": "openai_llm",
+            "status": "invalid_tool_payload",
+            "model": result.model,
+            "provider_generation_id": result.provider_generation_id,
+        }
+    return {
+        "provider": "openai_intent_resolution",
+        "source": "openai_llm",
+        "intent": intent,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "model": result.model,
+        "provider_generation_id": result.provider_generation_id,
+    }
+
+
+def _metadata_shift_id(conversation: RetellConversation) -> str | None:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    for key in ("selected_shift_id", "shift_id", "next_assigned_shift_id"):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return None
+
+
+def _shift_local_start_hour(shift: dict[str, Any]) -> int | None:
+    starts_at_raw = str(shift.get("starts_at") or "").strip()
+    timezone_name = str(shift.get("timezone") or "UTC").strip() or "UTC"
+    if not starts_at_raw:
+        return None
+    try:
+        starts_at = datetime.fromisoformat(starts_at_raw.replace("Z", "+00:00"))
+        return _to_local_shift_time(starts_at, timezone_name).hour
+    except ValueError:
+        return None
+
+
+def _shift_reference_score(shift: dict[str, Any], text: str) -> int:
+    lowered = text.lower()
+    score = 0
+    relative_day = str(shift.get("relative_day_label") or "").strip().lower()
+    if relative_day == "today" and _matches_any_pattern(lowered, _TODAY_PATTERNS):
+        score += 20
+    if relative_day == "tomorrow" and _matches_any_pattern(lowered, _TOMORROW_PATTERNS):
+        score += 20
+
+    date_label = str(shift.get("date_label") or "").lower()
+    for weekday_name in _WEEKDAY_NAMES:
+        if weekday_name in date_label and weekday_name in lowered:
+            score += 12
+
+    role_name = str(shift.get("role_name") or "").strip().lower()
+    if role_name and role_name in lowered:
+        score += 6
+
+    location_name = str(shift.get("location_name") or "").strip().lower()
+    if location_name and location_name in lowered:
+        score += 6
+
+    start_time_label = str(shift.get("start_time_label") or "").strip().lower()
+    if start_time_label:
+        variants = {
+            start_time_label,
+            start_time_label.replace(":00", ""),
+            start_time_label.replace(" ", ""),
+            start_time_label.replace(":00", "").replace(" ", ""),
+        }
+        if any(variant and variant in lowered for variant in variants):
+            score += 5
+
+    local_hour = _shift_local_start_hour(shift)
+    if local_hour is not None:
+        if 5 <= local_hour < 12 and "morning" in lowered:
+            score += 5
+        if 12 <= local_hour < 17 and "afternoon" in lowered:
+            score += 5
+        if local_hour >= 17 and ("evening" in lowered or "tonight" in lowered):
+            score += 5
+    return score
+
+
+def _resolve_callout_shift(
+    conversation: RetellConversation,
+    user_text: str,
+) -> tuple[dict[str, Any] | None, str]:
+    assigned_shifts = _conversation_assigned_shifts(conversation)
+    if not assigned_shifts:
+        return None, "no_assigned_shifts"
+
+    selected_shift_id = _metadata_shift_id(conversation)
+    if selected_shift_id:
+        for shift in assigned_shifts:
+            if str(shift.get("id") or "").strip() == selected_shift_id:
+                return shift, "metadata_shift_id"
+
+    if len(assigned_shifts) == 1:
+        return assigned_shifts[0], "single_assigned_shift"
+
+    scored_shifts = [
+        (shift, _shift_reference_score(shift, user_text))
+        for shift in assigned_shifts
+    ]
+    scored_shifts.sort(key=lambda item: item[1], reverse=True)
+    if scored_shifts and scored_shifts[0][1] > 0:
+        top_shift, top_score = scored_shifts[0]
+        second_score = scored_shifts[1][1] if len(scored_shifts) > 1 else -1
+        if top_score > second_score:
+            return top_shift, "transcript_shift_match"
+
+    return None, "ambiguous_shift_reference"
+
+
+def _trimmed_conversation_summary(conversation: RetellConversation) -> str | None:
+    summary = str(conversation.conversation_summary or "").strip()
+    if summary:
+        return summary[:500]
+    user_text = _combined_user_text(conversation)
+    return user_text[:500] or None
+
+
+async def _execute_intent_driven_callout(
+    session: AsyncSession,
+    conversation: RetellConversation,
+    *,
+    employee_id: str | None,
+    user_text: str,
+    intent: str,
+    confidence: str | None,
+    source: str | None,
+    secondary_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if employee_id is None:
+        result = {
+            "status": "employee_context_missing",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
+    if selected_shift is None:
+        result = {
+            "status": "shift_reference_unresolved",
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    reason_code = "no_show" if intent == "no_show" else "callout"
+    try:
+        vacancy = await create_vacancy(
+            session,
+            {
+                "shift_id": str(selected_shift.get("id") or "").strip(),
+                "employee_id": employee_id,
+                "conversation_summary": _trimmed_conversation_summary(conversation),
+                "source": "retell_post_call",
+                "reason_code": reason_code,
+            },
+        )
+        result = {
+            **vacancy,
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+    except (LookupError, ValueError) as exc:
+        result = {
+            "status": str(exc),
+            "shift_id": str(selected_shift.get("id") or "").strip() or None,
+            "resolution": resolution,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+
+async def process_inbound_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    conversation = await _lock_conversation_for_processing(session, conversation)
+    if conversation is None:
+        return {"status": "no_conversation"}
+    if conversation.conversation_type != RetellConversationType.call:
+        return {"status": "ignored", "reason": "not_call"}
+    if str(conversation.direction or "").strip().lower() != "inbound":
+        return {"status": "ignored", "reason": "not_inbound"}
+
+    processing_state = _processing_state(conversation)
+    user_text = _combined_user_text(conversation)
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip() or None
+    caller_phone = (
+        str(metadata.get("caller_phone") or conversation.phone_from or "").strip() or None
+    )
+    intent_signal = _retell_intent_signal(conversation)
+    secondary_intent_signal: dict[str, Any] | None = None
+    intent_agreement_signal: dict[str, Any] | None = None
+
+    if (
+        isinstance(intent_signal, dict)
+        and intent_signal.get("confidence") in {"low", "medium"}
+        and intent_signal.get("intent") is not None
+    ):
+        secondary_intent_signal = await _secondary_intent_signal(session, conversation)
+        if (
+            isinstance(secondary_intent_signal, dict)
+            and secondary_intent_signal.get("intent") == intent_signal.get("intent")
+        ):
+            intent_agreement_signal = {
+                "provider": "retell_openai_agreement",
+                "source": "retell_non_high_confidence_openai_confirmation",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "secondary_intent": secondary_intent_signal,
+            }
+
+    consent_state = processing_state.get("consent") if isinstance(processing_state.get("consent"), dict) else {}
+    if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
+        consent_result = dict(consent_state)
+    elif caller_phone and (
+        _matches_any_pattern(user_text, _SMS_OPT_OUT_PATTERNS)
+        or (
+            (
+                isinstance(intent_signal, dict)
+                and intent_signal.get("intent") == "opt_out"
+                and intent_signal.get("confidence") == "high"
+            )
+            or (
+                isinstance(intent_agreement_signal, dict)
+                and intent_agreement_signal.get("intent") == "opt_out"
+            )
+        )
+    ):
+        consent_result = await log_consent(
+            session,
+            {
+                "employee_id": employee_id,
+                "phone": caller_phone,
+                "granted": False,
+                "channel": "inbound_call",
+            },
+        )
+    else:
+        consent_result = {"status": "no_consent_change"}
+
+    callout_state = processing_state.get("callout") if isinstance(processing_state.get("callout"), dict) else {}
+    if callout_state.get("status") == "vacancy_created":
+        callout_result = dict(callout_state)
+    elif isinstance(intent_agreement_signal, dict):
+        if intent_agreement_signal.get("intent") in {"callout", "no_show"}:
+            callout_result = await _execute_intent_driven_callout(
+                session,
+                conversation,
+                employee_id=employee_id,
+                user_text=user_text,
+                intent=str(intent_agreement_signal.get("intent")),
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+        else:
+            callout_result = {
+                "status": "retell_openai_intent_agreement_non_callout",
+                "intent": intent_agreement_signal.get("intent"),
+                "confidence": intent_agreement_signal.get("confidence"),
+                "source": intent_agreement_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") in {"callout", "no_show"}:
+        if intent_signal.get("confidence") == "high":
+            callout_result = await _execute_intent_driven_callout(
+                session,
+                conversation,
+                employee_id=employee_id,
+                user_text=user_text,
+                intent=str(intent_signal.get("intent")),
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+        elif intent_signal.get("confidence") in {"low", "medium"}:
+            callout_result = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
+            callout_result = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif isinstance(intent_signal, dict):
+        if intent_signal.get("confidence") in {"low", "medium"}:
+            if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent"):
+                callout_result = {
+                    "status": "retell_openai_intent_disagreement",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+            else:
+                callout_result = {
+                    "status": "retell_intent_requires_secondary_review",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+        else:
+            callout_result = {
+                "status": "retell_intent_non_callout",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif not _matches_any_pattern(user_text, _CALL_OUT_PATTERNS):
+        callout_result = {"status": "no_callout_detected"}
+    elif employee_id is None:
+        callout_result = {"status": "employee_context_missing"}
+    else:
+        selected_shift, resolution = _resolve_callout_shift(conversation, user_text)
+        if selected_shift is None:
+            callout_result = {
+                "status": "shift_reference_unresolved",
+                "resolution": resolution,
+            }
+        else:
+            try:
+                vacancy = await create_vacancy(
+                    session,
+                    {
+                        "shift_id": str(selected_shift.get("id") or "").strip(),
+                        "employee_id": employee_id,
+                        "conversation_summary": _trimmed_conversation_summary(conversation),
+                        "source": "retell_post_call",
+                    },
+                )
+                callout_result = {
+                    **vacancy,
+                    "resolution": resolution,
+                }
+            except (LookupError, ValueError) as exc:
+                callout_result = {
+                    "status": str(exc),
+                    "shift_id": str(selected_shift.get("id") or "").strip() or None,
+                    "resolution": resolution,
+                }
+
+    updated_state = {
+        **processing_state,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "intent": intent_signal or {"provider": "heuristic_fallback"},
+        "secondary_intent": secondary_intent_signal,
+        "consent": consent_result,
+        "callout": callout_result,
+    }
+    _set_processing_state(conversation, updated_state)
+    await session.flush()
+    return {
+        "status": "processed",
+        "consent": consent_result,
+        "callout": callout_result,
+    }
+
+
+def _conversation_offer_args(conversation: RetellConversation) -> dict[str, Any]:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    args: dict[str, Any] = {}
+
+    offer_id = metadata.get("offer_id") or metadata.get("coverage_offer_id") or conversation.coverage_offer_id
+    coverage_case_id = metadata.get("coverage_case_id") or conversation.coverage_case_id
+    employee_id = metadata.get("employee_id") or metadata.get("worker_id") or conversation.employee_id
+    shift_id = metadata.get("shift_id") or conversation.shift_id
+    phone = conversation.phone_to or metadata.get("phone") or metadata.get("worker_phone")
+
+    if offer_id not in (None, ""):
+        args["offer_id"] = str(offer_id).strip()
+    if coverage_case_id not in (None, ""):
+        args["coverage_case_id"] = str(coverage_case_id).strip()
+    if employee_id not in (None, ""):
+        args["employee_id"] = str(employee_id).strip()
+    if shift_id not in (None, ""):
+        args["shift_id"] = str(shift_id).strip()
+    if phone not in (None, ""):
+        args["phone"] = str(phone).strip()
+
+    summary = _trimmed_conversation_summary(conversation)
+    if summary:
+        args["conversation_summary"] = summary
+    return args
+
+
+async def _execute_intent_driven_offer_response(
+    session: AsyncSession,
+    conversation: RetellConversation,
+    *,
+    intent: str,
+    confidence: str | None,
+    source: str | None,
+    secondary_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if intent not in {"accept_shift", "decline_shift"}:
+        result = {
+            "status": "unsupported_outbound_intent",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    args = _conversation_offer_args(conversation)
+    if not any(args.get(key) for key in ("offer_id", "coverage_case_id", "shift_id", "phone")):
+        result = {
+            "status": "offer_context_missing",
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+    try:
+        response = await _respond_to_offer(
+            session,
+            args=args,
+            accepted=intent == "accept_shift",
+        )
+        result = {
+            **response,
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+    except (LookupError, ValueError) as exc:
+        result = {
+            "status": str(exc),
+            "intent": intent,
+            "confidence": confidence,
+            "source": source,
+            "offer_id": args.get("offer_id"),
+            "coverage_case_id": args.get("coverage_case_id"),
+            "shift_id": args.get("shift_id"),
+        }
+        if secondary_intent is not None:
+            result["secondary_intent"] = secondary_intent
+        return result
+
+
+async def process_outbound_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    conversation = await _lock_conversation_for_processing(session, conversation)
+    if conversation is None:
+        return {"status": "no_conversation"}
+    if conversation.conversation_type != RetellConversationType.call:
+        return {"status": "ignored", "reason": "not_call"}
+    if str(conversation.direction or "").strip().lower() != "outbound":
+        return {"status": "ignored", "reason": "not_outbound"}
+
+    processing_state = _processing_state(conversation)
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    employee_id = str(metadata.get("employee_id") or conversation.employee_id or "").strip() or None
+    phone = str(conversation.phone_to or metadata.get("phone") or "").strip() or None
+    intent_signal = _retell_outbound_intent_signal(conversation)
+    secondary_intent_signal: dict[str, Any] | None = None
+    intent_agreement_signal: dict[str, Any] | None = None
+
+    if (
+        isinstance(intent_signal, dict)
+        and intent_signal.get("confidence") in {"low", "medium"}
+        and intent_signal.get("intent") is not None
+    ):
+        secondary_intent_signal = await _secondary_outbound_intent_signal(session, conversation)
+        if (
+            isinstance(secondary_intent_signal, dict)
+            and secondary_intent_signal.get("intent") == intent_signal.get("intent")
+        ):
+            intent_agreement_signal = {
+                "provider": "retell_openai_agreement",
+                "source": "retell_non_high_confidence_openai_confirmation",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "secondary_intent": secondary_intent_signal,
+            }
+
+    consent_state = (
+        processing_state.get("consent")
+        if isinstance(processing_state.get("consent"), dict)
+        else {}
+    )
+    opt_out_confirmed = (
+        (isinstance(intent_signal, dict) and intent_signal.get("intent") == "opt_out" and intent_signal.get("confidence") == "high")
+        or (isinstance(intent_agreement_signal, dict) and intent_agreement_signal.get("intent") == "opt_out")
+    )
+    if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
+        consent_result = dict(consent_state)
+    elif opt_out_confirmed and (employee_id or phone):
+        consent_result = await log_consent(
+            session,
+            {
+                "employee_id": employee_id,
+                "phone": phone,
+                "granted": False,
+                "channel": "outbound_call",
+            },
+        )
+    elif opt_out_confirmed:
+        consent_result = {"status": "opt_out_detected_missing_contact_context"}
+    else:
+        consent_result = {"status": "no_consent_change"}
+
+    offer_response_state = (
+        processing_state.get("offer_response")
+        if isinstance(processing_state.get("offer_response"), dict)
+        else {}
+    )
+    finalized_offer_status = str(offer_response_state.get("status") or "").strip().lower()
+    if finalized_offer_status in {"accepted", "declined"}:
+        offer_response = dict(offer_response_state)
+    elif isinstance(intent_agreement_signal, dict):
+        if intent_agreement_signal.get("intent") in {"accept_shift", "decline_shift"}:
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent=str(intent_agreement_signal.get("intent")),
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+        elif intent_agreement_signal.get("intent") == "opt_out":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent="decline_shift",
+                confidence=str(intent_agreement_signal.get("confidence") or ""),
+                source=str(intent_agreement_signal.get("source") or ""),
+                secondary_intent=secondary_intent_signal,
+            )
+            offer_response["intent"] = "opt_out"
+            offer_response["opt_out_applied"] = True
+        else:
+            offer_response = {
+                "status": "retell_openai_intent_agreement_non_offer_action",
+                "intent": intent_agreement_signal.get("intent"),
+                "confidence": intent_agreement_signal.get("confidence"),
+                "source": intent_agreement_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") in {"accept_shift", "decline_shift"}:
+        if intent_signal.get("confidence") == "high":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent=str(intent_signal.get("intent")),
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+        elif intent_signal.get("confidence") in {"low", "medium"}:
+            offer_response = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
+            offer_response = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif isinstance(intent_signal, dict) and intent_signal.get("intent") == "opt_out":
+        if intent_signal.get("confidence") == "high":
+            offer_response = await _execute_intent_driven_offer_response(
+                session,
+                conversation,
+                intent="decline_shift",
+                confidence=intent_signal.get("confidence"),
+                source=intent_signal.get("source"),
+            )
+            offer_response["intent"] = "opt_out"
+            offer_response["opt_out_applied"] = True
+        elif intent_signal.get("confidence") in {"low", "medium"}:
+            offer_response = {
+                "status": (
+                    "retell_openai_intent_disagreement"
+                    if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent")
+                    else "retell_intent_requires_secondary_review"
+                ),
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+                "secondary_intent": secondary_intent_signal,
+            }
+        else:
+            offer_response = {
+                "status": "retell_intent_requires_secondary_review",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    elif isinstance(intent_signal, dict):
+        if intent_signal.get("confidence") in {"low", "medium"}:
+            if isinstance(secondary_intent_signal, dict) and secondary_intent_signal.get("intent"):
+                offer_response = {
+                    "status": "retell_openai_intent_disagreement",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+            else:
+                offer_response = {
+                    "status": "retell_intent_requires_secondary_review",
+                    "intent": intent_signal.get("intent"),
+                    "confidence": intent_signal.get("confidence"),
+                    "source": intent_signal.get("source"),
+                    "secondary_intent": secondary_intent_signal,
+                }
+        else:
+            offer_response = {
+                "status": "retell_intent_non_offer_action",
+                "intent": intent_signal.get("intent"),
+                "confidence": intent_signal.get("confidence"),
+                "source": intent_signal.get("source"),
+            }
+    else:
+        offer_response = {"status": "no_offer_intent_detected"}
+
+    updated_state = {
+        **processing_state,
+        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "intent": intent_signal or {"provider": "no_retell_outbound_intent"},
+        "secondary_intent": secondary_intent_signal,
+        "consent": consent_result,
+        "offer_response": offer_response,
+    }
+    _set_processing_state(conversation, updated_state)
+    await session.flush()
+    return {
+        "status": "processed",
+        "consent": consent_result,
+        "offer_response": offer_response,
+    }
+
+
+async def process_conversation_completion(
+    session: AsyncSession,
+    conversation: RetellConversation | None,
+) -> dict[str, Any]:
+    if conversation is None:
+        return {"status": "no_conversation"}
+    direction = str(conversation.direction or "").strip().lower()
+    if direction == "inbound":
+        return await process_inbound_conversation_completion(session, conversation)
+    if direction == "outbound":
+        return await process_outbound_conversation_completion(session, conversation)
+    return {"status": "ignored", "reason": "unsupported_direction"}
 
 
 async def _resolve_offer_context(
@@ -263,8 +1764,9 @@ async def _respond_to_offer(
         },
     )
     result = await coverage_service.respond_to_offer(session, business_id, offer.id, payload)
+    offer_status = result.offer.status.value if hasattr(result.offer.status, "value") else str(result.offer.status)
     return {
-        "status": result.offer.status,
+        "status": offer_status,
         "offer_id": str(result.offer.id),
         "shift_id": str(result.shift_id),
         "assignment_id": str(result.assignment_id) if result.assignment_id else None,
@@ -273,6 +1775,7 @@ async def _respond_to_offer(
 
 async def lookup_caller(session: AsyncSession, phone: str) -> dict:
     normalized = phone.strip()
+    reference_now = _current_utc_now()
     user = await session.scalar(select(User).where(User.primary_phone_e164 == normalized))
     employee = await session.scalar(
         select(Employee)
@@ -280,6 +1783,62 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
         .where(Employee.phone_e164 == normalized)
     )
     context = await delivery.find_latest_actionable_offer_for_phone(session, normalized)
+    assigned_shifts: list[dict[str, Any]] = []
+    if employee is not None:
+        result = await session.execute(
+            select(Shift)
+            .options(
+                selectinload(Shift.location),
+                selectinload(Shift.role),
+                selectinload(Shift.assignments),
+            )
+            .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.id)
+            .where(
+                ShiftAssignment.employee_id == employee.id,
+                ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
+                Shift.lifecycle_status.in_(
+                    [ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress]
+                ),
+                Shift.ends_at >= reference_now - timedelta(hours=4),
+            )
+            .order_by(Shift.starts_at.asc())
+        )
+        seen_shift_ids: set[UUID] = set()
+        for shift in result.scalars().all():
+            if shift.id in seen_shift_ids:
+                continue
+            seen_shift_ids.add(shift.id)
+            location_name = (
+                getattr(shift.location, "location_display_name", None)
+                or getattr(shift.location, "display_name", None)
+                or getattr(shift.location, "name", None)
+            )
+            timezone_name = _shift_display_timezone(shift)
+            shift_summary = _format_shift_summary(
+                role_name=getattr(shift.role, "name", None),
+                location_name=location_name,
+                starts_at=shift.starts_at,
+                ends_at=shift.ends_at,
+                timezone_name=timezone_name,
+                reference_time=reference_now,
+            )
+            assigned_shifts.append(
+                {
+                    "id": str(shift.id),
+                    "location_id": str(shift.location_id),
+                    "location_name": location_name,
+                    "role_id": str(shift.role_id),
+                    "role_name": getattr(shift.role, "name", None),
+                    "starts_at": shift.starts_at.isoformat(),
+                    "ends_at": shift.ends_at.isoformat(),
+                    "status": shift.status,
+                    "lifecycle_status": shift.lifecycle_status,
+                    "staffing_status": shift.staffing_status,
+                    "notes": shift.notes,
+                    **shift_summary,
+                }
+            )
+    assigned_shift_schedule_summary = _format_assigned_shift_schedule_summary(assigned_shifts)
     return {
         "phone": normalized,
         "user": {
@@ -293,8 +1852,114 @@ async def lookup_caller(session: AsyncSession, phone: str) -> dict:
             "business_id": str(employee.business_id),
             "location_id": str(employee.primary_location_id) if employee.primary_location_id else None,
         } if employee is not None else None,
+        "assigned_shifts": assigned_shifts,
+        "assigned_shift_count": len(assigned_shifts),
+        "assigned_shift_schedule_summary": assigned_shift_schedule_summary,
+        "next_assigned_shift_id": assigned_shifts[0]["id"] if assigned_shifts else None,
         "actionable_offer_id": str(context.offer.id) if context is not None else None,
     }
+
+
+async def build_inbound_webhook_response(session: AsyncSession, body: dict) -> dict[str, Any]:
+    event = str(body.get("event") or "").strip().lower()
+    inbound_key = "chat_inbound" if event == "chat_inbound" else "call_inbound"
+    inbound_payload = body.get(inbound_key) if isinstance(body.get(inbound_key), dict) else {}
+    phone = str(
+        inbound_payload.get("from_number")
+        or body.get("from_number")
+        or ""
+    ).strip()
+    lookup = await lookup_caller(session, phone) if phone else {
+        "phone": phone,
+        "user": None,
+        "employee": None,
+        "assigned_shifts": [],
+        "actionable_offer_id": None,
+    }
+    employee = lookup.get("employee") if isinstance(lookup.get("employee"), dict) else None
+    user = lookup.get("user") if isinstance(lookup.get("user"), dict) else None
+    assigned_shifts = list(lookup.get("assigned_shifts") or [])
+    assigned_shift_schedule_summary = str(lookup.get("assigned_shift_schedule_summary") or "").strip()
+    employee_found = employee is not None
+    caller_name = (
+        str((employee or {}).get("full_name") or "").strip()
+        or str((user or {}).get("full_name") or "").strip()
+        or None
+    )
+    caller_first_name = _first_name(caller_name)
+    selected_shift = assigned_shifts[0] if len(assigned_shifts) == 1 else None
+    next_shift = assigned_shifts[0] if assigned_shifts else None
+
+    metadata: dict[str, Any] = {
+        "caller_phone": phone,
+        "employee_found": employee_found,
+        "upcoming_shift_count": len(assigned_shifts),
+        "assigned_shifts": assigned_shifts,
+        "assigned_shift_schedule_summary": assigned_shift_schedule_summary,
+    }
+    if employee is not None:
+        metadata["employee_id"] = employee.get("id")
+        metadata["business_id"] = employee.get("business_id")
+        if employee.get("location_id"):
+            metadata["location_id"] = employee.get("location_id")
+    if next_shift is not None:
+        metadata["next_shift_summary"] = next_shift.get("summary")
+    if selected_shift is not None:
+        metadata["shift_id"] = selected_shift.get("id")
+        if selected_shift.get("location_id"):
+            metadata["location_id"] = selected_shift.get("location_id")
+
+    dynamic_variables = {
+        "caller_phone": _coerce_retell_dynamic_value(phone),
+        "employee_found": _coerce_retell_dynamic_value(employee_found),
+        "caller_name": _coerce_retell_dynamic_value(caller_name),
+        "caller_first_name": _coerce_retell_dynamic_value(caller_first_name),
+        "upcoming_shift_count": _coerce_retell_dynamic_value(len(assigned_shifts)),
+        "assigned_shift_schedule_summary": _coerce_retell_dynamic_value(assigned_shift_schedule_summary),
+        "next_shift_role": _coerce_retell_dynamic_value(
+            next_shift.get("role_name") if next_shift is not None else None
+        ),
+        "next_shift_location": _coerce_retell_dynamic_value(
+            next_shift.get("location_name") if next_shift is not None else None
+        ),
+        "next_shift_starts_at": _coerce_retell_dynamic_value(
+            next_shift.get("starts_at") if next_shift is not None else None
+        ),
+        "next_shift_summary": _coerce_retell_dynamic_value(
+            next_shift.get("summary") if next_shift is not None else None
+        ),
+        "selected_shift_id": _coerce_retell_dynamic_value(
+            selected_shift.get("id") if selected_shift is not None else None
+        ),
+        "selected_shift_summary": _coerce_retell_dynamic_value(
+            selected_shift.get("summary") if selected_shift is not None else None
+        ),
+    }
+    response_payload: dict[str, Any] = {
+        "dynamic_variables": dynamic_variables,
+        "metadata": metadata,
+    }
+    if event == "call_inbound":
+        response_payload["override_agent_id"] = (
+            settings.retell_agent_id_inbound
+            or str(inbound_payload.get("agent_id") or "").strip()
+            or settings.retell_agent_id
+        )
+        response_payload["agent_override"] = {
+            "retell_llm": {
+                "begin_message": _build_begin_message(
+                    employee_found=employee_found,
+                    caller_first_name=caller_first_name,
+                    assigned_shifts=assigned_shifts,
+                )
+            }
+        }
+    if event == "chat_inbound":
+        response_payload["override_agent_id"] = (
+            settings.retell_chat_agent_id_inbound
+            or settings.retell_chat_agent_id
+        )
+    return {inbound_key: response_payload}
 
 
 async def get_open_shifts(session: AsyncSession, location_id: UUID | None = None) -> dict:
@@ -408,6 +2073,137 @@ async def create_open_shift(session: AsyncSession, args: dict) -> dict:
     return {"status": "shift_created", "shift_id": str(shift.id)}
 
 
+async def log_consent(session: AsyncSession, args: dict) -> dict:
+    employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
+    granted = bool(args.get("granted"))
+    channel = str(args.get("channel") or "inbound_call").strip().lower() or "inbound_call"
+    employee = await session.get(Employee, employee_id) if employee_id is not None else None
+    phone = communication_suppressions.normalize_destination(
+        communication_suppressions.SMS_CHANNEL,
+        str(args.get("phone") or getattr(employee, "phone_e164", "") or "").strip() or None,
+    )
+    if phone is None:
+        raise ValueError("phone_or_employee_required")
+
+    metadata = {
+        "channel": channel,
+        "retell": {key: value for key, value in args.items() if key != "conversation_summary"},
+    }
+    changed = False
+    if granted:
+        _suppression, changed = await communication_suppressions.clear_destination_suppression(
+            session,
+            channel=communication_suppressions.SMS_CHANNEL,
+            destination=phone,
+            source="retell_voice_consent",
+            reason_code="voice_consent_granted",
+            metadata=metadata,
+        )
+    else:
+        _suppression, changed = await communication_suppressions.suppress_destination(
+            session,
+            channel=communication_suppressions.SMS_CHANNEL,
+            destination=phone,
+            source="retell_voice_consent",
+            reason_code="voice_consent_revoked",
+            metadata=metadata,
+        )
+
+    if employee is not None:
+        preferences = workforce.normalized_employee_notification_preferences(employee.employee_metadata)
+        preferences["schedule_publish_sms_enabled"] = granted
+        preferences["sms_opted_out_at"] = None if granted else datetime.now(timezone.utc)
+        preferences["sms_opt_out_reason"] = None if granted else "voice_consent_revoked"
+        employee.employee_metadata = {
+            **(employee.employee_metadata or {}),
+            "notification_preferences": workforce._serialized_employee_notification_preferences(preferences),
+            "voice_consent": {
+                "granted": granted,
+                "channel": channel,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "source": "retell_voice",
+            },
+        }
+        await session.flush()
+
+    return {
+        "status": "consent_granted" if granted else "consent_revoked",
+        "employee_id": str(employee.id) if employee is not None else None,
+        "phone": phone,
+        "changed": changed,
+    }
+
+
+async def create_vacancy(session: AsyncSession, args: dict) -> dict:
+    shift_id = _uuid_from_mapping(args, keys=("shift_id",))
+    if shift_id is None:
+        raise ValueError("shift_id_required")
+    shift = await session.get(
+        Shift,
+        shift_id,
+        options=[selectinload(Shift.assignments)],
+    )
+    if shift is None:
+        raise LookupError("shift_not_found")
+    if shift.lifecycle_status in {ShiftLifecycleStatus.cancelled, ShiftLifecycleStatus.completed}:
+        raise ValueError("shift_not_open_for_callout")
+
+    employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
+    source = str(args.get("source") or "retell_voice").strip() or "retell_voice"
+    requested_reason_code = str(args.get("reason_code") or "callout").strip().lower()
+    reason_code = requested_reason_code if requested_reason_code in {"callout", "no_show"} else "callout"
+    amendment_source = source if source in {"scheduler_ui", "copilot", "retell_voice", "sms_automation"} else "retell_voice"
+    current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+    effective_employee_id = employee_id or (
+        current_assignment.employee_id if current_assignment is not None else None
+    )
+    if (
+        current_assignment is not None
+        and effective_employee_id is not None
+        and current_assignment.employee_id != effective_employee_id
+    ):
+        raise ValueError("shift_not_assigned_to_employee")
+
+    used_published_amendment = False
+    if (
+        current_assignment is not None
+        and shift.lifecycle_status
+        in {ShiftLifecycleStatus.scheduled, ShiftLifecycleStatus.in_progress}
+    ):
+        await scheduling.apply_published_shift_amendment(
+            session,
+            shift.business_id,
+            shift.id,
+            PublishedShiftAmendmentWrite(
+                action="unassign_shift",
+                reason_code=reason_code,
+                source=amendment_source,
+                note=str(args.get("conversation_summary") or args.get("note") or "").strip() or None,
+            ),
+        )
+        used_published_amendment = True
+
+    vacancy = await scheduler_sync.create_vacancy_for_shift(
+        session,
+        shift_id=shift.id,
+        employee_id=effective_employee_id,
+        triggered_by=source,
+        reason_code=reason_code,
+    )
+    return {
+        "status": "vacancy_created",
+        "shift_id": str(vacancy["shift_id"]),
+        "coverage_case_id": (
+            str(vacancy["coverage_case_id"])
+            if vacancy.get("coverage_case_id") is not None
+            else None
+        ),
+        "offers": vacancy.get("offers", []),
+        "used_published_amendment": used_published_amendment,
+        "reason_code": reason_code,
+    }
+
+
 async def send_onboarding_link(
     session: AsyncSession,
     phone: str,
@@ -444,6 +2240,8 @@ async def dispatch_function_call(session: AsyncSession, name: str, args: dict) -
         if not phone:
             raise ValueError("phone_required")
         return await lookup_caller(session, phone)
+    if name == "log_consent":
+        return await log_consent(session, args)
     if name == "get_open_shifts":
         return await get_open_shifts(session, location_id=_uuid_from_mapping(args, keys=("location_id",)))
     if name == "get_shift_status":
@@ -454,17 +2252,7 @@ async def dispatch_function_call(session: AsyncSession, name: str, args: dict) -
     if name == "create_open_shift":
         return await create_open_shift(session, args)
     if name == "create_vacancy":
-        shift_id = _uuid_from_mapping(args, keys=("shift_id",))
-        if shift_id is None:
-            raise ValueError("shift_id_required")
-        employee_id = _uuid_from_mapping(args, keys=("employee_id", "worker_id"))
-        return await scheduler_sync.create_vacancy_for_shift(
-            session,
-            shift_id=shift_id,
-            employee_id=employee_id,
-            triggered_by="retell_voice",
-            reason_code="voice_callout",
-        )
+        return await create_vacancy(session, args)
     if name in {"claim_shift", "promote_standby"}:
         return await _respond_to_offer(session, args=args, accepted=True)
     if name in {"decline_shift", "cancel_standby"}:

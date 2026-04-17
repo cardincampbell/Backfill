@@ -33,6 +33,8 @@ _PUBLISHABLE_LIFECYCLE_STATUSES = {
 }
 _VISIBLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
 _LAST_ACCESSED_TOUCH_WINDOW = timedelta(minutes=15)
+_PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
+_SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
 
 
 def _sign_token_payload(payload: str) -> str:
@@ -102,6 +104,8 @@ async def get_or_create_schedule_access_link(
             revoked_at=None,
             last_accessed_at=None,
             link_metadata={},
+            created_at=now,
+            updated_at=now,
         )
         session.add(link)
         await session.flush()
@@ -158,6 +162,122 @@ def _selected_location_for(
         if employee_location.location_id == explicit_location_id:
             return employee_location.location
     raise LookupError("location_not_found")
+
+
+def _shift_amendment_metadata(shift: Shift) -> dict:
+    shift_metadata = shift.shift_metadata if isinstance(shift.shift_metadata, dict) else {}
+    raw = shift_metadata.get(_PUBLISHED_AMENDMENT_METADATA_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _shift_amendment_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_metadata(shift).get("reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _shift_historical_artifacts(shift: Shift) -> list[dict]:
+    raw_value = _shift_amendment_metadata(shift).get(_SHIFT_HISTORICAL_ARTIFACTS_KEY)
+    if not isinstance(raw_value, list):
+        return []
+    return [dict(entry) for entry in raw_value if isinstance(entry, dict)]
+
+
+def _assignment_metadata(assignment: ShiftAssignment | None) -> dict:
+    if assignment is None:
+        return {}
+    raw_metadata = assignment.assignment_metadata
+    return dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+
+
+def _assignment_amendment_reason_code(assignment: ShiftAssignment | None) -> str | None:
+    raw_reason = _assignment_metadata(assignment).get("published_amendment_reason_code")
+    if isinstance(raw_reason, str) and raw_reason:
+        return raw_reason
+    return None
+
+
+def _assignment_amendment_action(assignment: ShiftAssignment | None) -> str | None:
+    raw_action = _assignment_metadata(assignment).get("published_amendment_action")
+    if isinstance(raw_action, str) and raw_action:
+        return raw_action
+    return None
+
+
+def _assignment_status_value(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    status = assignment.status
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _effective_cancelled_reason_code(shift: Shift) -> str | None:
+    raw_reason = _shift_amendment_reason_code(shift)
+    if raw_reason in {"cancelled", "callout", "no_show"}:
+        return raw_reason
+    if shift.lifecycle_status != ShiftLifecycleStatus.cancelled:
+        return None
+    if any(
+        _assignment_amendment_reason_code(assignment) in {"cancelled", "callout", "no_show"}
+        or _assignment_amendment_action(assignment) in {"cancel_shift", "unassign_shift"}
+        for assignment in shift.assignments or []
+    ):
+        return "cancelled"
+    return None
+
+
+def _artifact_for_employee(shift: Shift, employee_id: UUID) -> dict | None:
+    for artifact in _shift_historical_artifacts(shift):
+        raw_employee_id = artifact.get("employee_id")
+        try:
+            artifact_employee_id = (
+                raw_employee_id if isinstance(raw_employee_id, UUID) else UUID(str(raw_employee_id))
+            )
+        except (TypeError, ValueError):
+            continue
+        if artifact_employee_id == employee_id:
+            return artifact
+    return None
+
+
+def _recovered_historical_entry_for_employee(shift: Shift, employee_id: UUID) -> dict | None:
+    explicit_artifact = _artifact_for_employee(shift, employee_id)
+    if explicit_artifact is not None:
+        return explicit_artifact
+
+    current_assignment = shift_assignments.current_assignment(shift.assignments or [])
+    assignments = sorted(
+        list(shift.assignments or []),
+        key=lambda item: (item.sequence_no or 0, item.created_at or datetime.min),
+    )
+    for assignment in reversed(assignments):
+        if assignment.employee_id != employee_id:
+            continue
+        if current_assignment is not None and assignment.id == current_assignment.id:
+            continue
+        reason_code = _assignment_amendment_reason_code(assignment)
+        status_value = _assignment_status_value(assignment)
+        if reason_code not in {"callout", "no_show"}:
+            continue
+        if status_value not in {ShiftLifecycleStatus.cancelled.value, "cancelled", "no_show", "replaced"}:
+            continue
+        return {
+            "reason_code": reason_code,
+            "starts_at": shift.starts_at.isoformat(),
+            "ends_at": shift.ends_at.isoformat(),
+        }
+
+    if shift.lifecycle_status == ShiftLifecycleStatus.cancelled:
+        if any(assignment.employee_id == employee_id for assignment in shift.assignments or []):
+            reason_code = _effective_cancelled_reason_code(shift) or "cancelled"
+            return {
+                "reason_code": reason_code,
+                "starts_at": shift.starts_at.isoformat(),
+                "ends_at": shift.ends_at.isoformat(),
+            }
+
+    return None
 
 
 async def resolve_schedule_access_link(
@@ -244,10 +364,34 @@ async def get_employee_schedule_read(
         if selected_location is not None and shift.location_id != selected_location.id:
             continue
         current_assignment = shift_assignments.current_assignment(shift.assignments or [])
-        if current_assignment is None or current_assignment.employee_id != employee.id:
-            continue
         location = shift.location
         role = shift.role
+        if current_assignment is not None and current_assignment.employee_id == employee.id:
+            filtered_shifts.append(
+                PublicEmployeeScheduleShiftRead(
+                    shift_id=shift.id,
+                    location_id=shift.location_id,
+                    location_name=location.location_display_name if location is not None else "Location",
+                    role_id=shift.role_id,
+                    role_name=role.name if role is not None else "Shift",
+                    starts_at=shift.starts_at,
+                    ends_at=shift.ends_at,
+                    timezone=shift.timezone,
+                    lifecycle_status=shift.lifecycle_status.value,
+                    staffing_status=shift.staffing_status.value,
+                    display_status=shift.lifecycle_status.value,
+                    historical_display=False,
+                    notes=shift.notes,
+                )
+            )
+            continue
+
+        historical_entry = _recovered_historical_entry_for_employee(shift, employee.id)
+        if historical_entry is None:
+            continue
+        display_status = historical_entry.get("reason_code")
+        if not isinstance(display_status, str) or not display_status:
+            display_status = "cancelled"
         filtered_shifts.append(
             PublicEmployeeScheduleShiftRead(
                 shift_id=shift.id,
@@ -260,6 +404,8 @@ async def get_employee_schedule_read(
                 timezone=shift.timezone,
                 lifecycle_status=shift.lifecycle_status.value,
                 staffing_status=shift.staffing_status.value,
+                display_status=display_status,
+                historical_display=True,
                 notes=shift.notes,
             )
         )

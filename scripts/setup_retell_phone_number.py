@@ -12,6 +12,7 @@ Required env vars:
   RETELL_TWILIO_TERMINATION_URI
 
 Optional env vars:
+  BACKFILL_WEBHOOK_URL
   RETELL_AGENT_ID_INBOUND
   RETELL_AGENT_ID_OUTBOUND
   RETELL_CHAT_AGENT_ID
@@ -62,6 +63,13 @@ def _chat_agent_binding(agent_kind: str) -> list[dict]:
     return _agent_binding(specific_agent or generic_agent)
 
 
+def _backfill_retell_webhook_url() -> str | None:
+    base_url = os.environ.get("BACKFILL_WEBHOOK_URL", "").strip().rstrip("/")
+    if not base_url:
+        return None
+    return f"{base_url}/webhooks/retell"
+
+
 def _build_payload() -> tuple[str, dict]:
     phone_number = _require("RETELL_FROM_NUMBER")
     payload = {
@@ -77,6 +85,10 @@ def _build_payload() -> tuple[str, dict]:
         "inbound_sms_agents": _chat_agent_binding("inbound"),
         "outbound_sms_agents": _chat_agent_binding("outbound"),
     }
+    webhook_url = _backfill_retell_webhook_url()
+    if webhook_url is not None:
+        payload["inbound_webhook_url"] = webhook_url
+        payload["inbound_sms_webhook_url"] = webhook_url
     return phone_number, payload
 
 

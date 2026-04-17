@@ -29,6 +29,8 @@ class PublicEmployeeScheduleShiftRead(BaseSchema):
     timezone: str
     lifecycle_status: str
     staffing_status: str
+    display_status: str
+    historical_display: bool = False
     notes: Optional[str] = None
 
 

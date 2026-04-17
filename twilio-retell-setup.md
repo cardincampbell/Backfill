@@ -95,7 +95,7 @@ RETELL_AGENT_ID_OUTBOUND=...
 RETELL_CHAT_AGENT_ID=...
 ```
 
-The generated tool contracts are location-first and match the handlers in [`app/webhooks/retell_hooks.py`](./app/webhooks/retell_hooks.py).
+The generated tool contracts match the live Retell webhook handler in [`app/api/routes/retell_provider.py`](./app/api/routes/retell_provider.py) and the function implementations in [`app/services/retell_workflow.py`](./app/services/retell_workflow.py).
 
 ## 6. Import or update the Twilio number in Retell
 
@@ -142,17 +142,65 @@ That endpoint handles:
 - onboarding-link handoff
 - voice and chat agent tool calls
 
-## 8. Smoke-test the live path
+For the phone number itself, also make sure the inbound webhook is set to:
+
+```text
+{BACKFILL_WEBHOOK_URL}/webhooks/retell
+```
+
+Retell uses that inbound webhook before the call connects, which lets Backfill do the caller phone lookup as early as possible and return:
+
+- dynamic variables for the inbound agent
+- metadata like employee_id and shift_id
+- a personalized begin message
+
+If you use `scripts/setup_retell_phone_number.py` with `BACKFILL_WEBHOOK_URL` set, it will configure the inbound phone webhook for you.
+
+If you configure it manually in Retell:
+
+1. Open the Retell dashboard.
+2. Go to Phone Numbers.
+3. Select the Backfill number.
+4. Confirm the inbound voice agent is bound to the number.
+5. Set Inbound Webhook URL to `{BACKFILL_WEBHOOK_URL}/webhooks/retell`.
+6. If you are using Retell-managed SMS, also set the inbound SMS webhook to the same URL.
+
+## 8a. Current inbound callout flow
+
+The intended inbound worker callout path is:
+
+1. Worker calls the Backfill number.
+2. Retell sends `call_inbound` to Backfill before the call connects.
+3. Backfill looks up the caller by phone number and returns:
+   - employee context
+   - assigned upcoming shifts
+   - a personalized opening greeting
+4. Retell answers with the inbound callout agent.
+5. The agent uses the preloaded caller context and calls `lookup_caller` only if it needs to re-check or clarify.
+6. The agent calls `log_consent`.
+   - This updates Backfill's communication suppression ledger and the employee notification preferences.
+7. The agent calls `create_vacancy`.
+   - For a live assigned shift, Backfill first records a published shift amendment with `reason_code=callout`.
+   - Then Backfill opens or resumes the coverage case and starts the fill cascade.
+
+Two practical notes:
+
+- `scripts/setup_retell_agents.py` should be rerun any time the tool schema or prompts change, then the returned agent IDs should be copied back into `.env`.
+- `scripts/setup_retell_phone_number.py` should be rerun any time the inbound webhook URL, inbound agent bindings, or SMS agent bindings change.
+- The Retell callback processor now enriches tool arguments from webhook context, so inbound calls do not depend on the LLM perfectly restating the caller phone number or shift metadata.
+
+## 9. Smoke-test the live path
 
 Run through these in order:
 
 1. Call the public number and verify Retell answers with the inbound voice agent.
-2. Create a vacancy and confirm the app starts the cascade.
+2. Use a real worker number that exists on an employee record with an upcoming assigned shift.
+3. Confirm the inbound call produces a `create_vacancy` function call and the app starts the cascade.
 3. Send an outbound offer and confirm Retell places a call from `RETELL_FROM_NUMBER`.
 4. Send an outbound SMS and confirm Retell starts the text thread from `RETELL_FROM_NUMBER`.
 5. Reply `YES`, `NO`, `CANCEL`, and `STOP` from a real handset.
 6. Confirm Retell function calls hit `/webhooks/retell`.
 
-## 9. Current repo boundaries
+## 10. Current repo boundaries
 
 In unified mode, Retell is the conversation control plane for both voice and text. Twilio remains the underlying carrier and SIP trunk, but Backfill talks to Retell for agent-driven voice and SMS flows.

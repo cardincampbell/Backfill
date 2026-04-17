@@ -136,3 +136,67 @@ async def test_append_outreach_attempt_event_uses_logical_outreach_entity(monkey
     assert captured["target_id"] == offer.id
     assert captured["payload"]["outreach_attempt_id"] == str(offer.id)
     assert captured["payload"]["coverage_offer_id"] == str(offer.id)
+
+
+class _FakeScalarSession:
+    def __init__(self, attempt):
+        self._attempt = attempt
+
+    async def scalar(self, _query):
+        return self._attempt
+
+
+@pytest.mark.asyncio
+async def test_append_outreach_attempt_event_uses_scalar_fallback_when_attempts_unloaded(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    offer = CoverageOffer(
+        id=uuid4(),
+        coverage_case_id=uuid4(),
+        employee_id=uuid4(),
+        channel="sms",
+        status=OfferStatus.delivered,
+        idempotency_key="case:1:employee:sms",
+        offer_metadata={"phase_no": 1},
+        created_at=now,
+        updated_at=now,
+    )
+    attempt = CoverageContactAttempt(
+        id=uuid4(),
+        coverage_offer_id=offer.id,
+        coverage_case_id=offer.coverage_case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        employee_id=offer.employee_id,
+        channel="sms",
+        status=CoverageAttemptStatus.delivered,
+        attempt_no=1,
+        requested_at=now,
+        delivered_at=now,
+        attempt_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    captured: dict = {}
+
+    async def fake_append(_session, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(outreach.platform_events, "append", fake_append)
+
+    await outreach.append_outreach_attempt_event(
+        _FakeScalarSession(attempt),
+        event_type="coverage.outreach_attempt.delivered",
+        compatibility_event_name="coverage.offer.delivered",
+        offer=offer,
+        business_id=business_id,
+        location_id=location_id,
+        shift_id=shift_id,
+        metadata={"channel": "test"},
+    )
+
+    assert captured["payload"]["attempt_status"] == "delivered"
+    assert captured["payload"]["status"] == "awaiting_response"

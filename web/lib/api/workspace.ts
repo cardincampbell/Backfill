@@ -343,6 +343,27 @@ export type ScheduleWeekPublishResponse = {
   already_scheduled_shift_ids: string[];
 };
 
+export type PublishedShiftAmendmentPayload = {
+  action: "cancel_shift" | "unassign_shift" | "reassign_shift";
+  reason_code: "cancelled" | "callout" | "no_show" | "reassignment" | "amendment";
+  target_employee_id?: string | null;
+  source: "scheduler_ui" | "copilot" | "retell_voice" | "sms_automation";
+  note?: string;
+};
+
+export type PublishedShiftAmendmentResponse = {
+  shift_id: string;
+  action: PublishedShiftAmendmentPayload["action"];
+  reason_code: PublishedShiftAmendmentPayload["reason_code"];
+  amended_from_published: boolean;
+  schedule_break: boolean;
+  lifecycle_status: string;
+  staffing_status: string;
+  status: string;
+  week_publish_state: "amended";
+  current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
+};
+
 export class ShiftAssignmentConflictError extends Error {
   currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"];
 
@@ -776,9 +797,17 @@ export async function getLocationBoard(
   weekStart?: string,
 ): Promise<WorkspaceBoard | null> {
   const qs = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
-  const board = await fetchAppJson<WorkspaceBoard>(
+  const response = await apiFetchApp(
     `${API_PREFIX}/workspace/businesses/${businessId}/locations/${locationId}/board${qs}`,
+    {
+      cache: "no-store",
+      next: { revalidate: 0 },
+    },
   );
+  if (!response.ok) {
+    return null;
+  }
+  const board = (await response.json()) as WorkspaceBoard;
   if (!board) {
     return null;
   }
@@ -872,6 +901,25 @@ export async function assignShift(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as ShiftAssignmentMutationResponse;
+}
+
+export async function amendPublishedShift(
+  businessId: string,
+  shiftId: string,
+  payload: PublishedShiftAmendmentPayload,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shifts/${shiftId}/published-amendment`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as PublishedShiftAmendmentResponse;
 }
 
 export async function publishScheduleWeek(

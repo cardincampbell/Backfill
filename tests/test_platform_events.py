@@ -15,6 +15,7 @@ class FakePlatformEventSession:
     def __init__(self):
         self.added: list[object] = []
         self.execute_values: list[object] = []
+        self.scalar_values: list[object] = []
 
     def add(self, obj):
         if getattr(obj, "id", None) is None:
@@ -41,6 +42,11 @@ class FakePlatformEventSession:
                 return _ScalarResult(self._result_values)
 
         return _ExecuteResult(values)
+
+    async def scalar(self, _stmt):
+        if self.scalar_values:
+            return self.scalar_values.pop(0)
+        return None
 
 
 @pytest.mark.asyncio
@@ -124,6 +130,71 @@ async def test_append_platform_event_defaults_compatibility_name_to_event_type(m
     platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
     assert len(platform_entries) == 1
     assert platform_entries[0].compatibility_event_name == platform_events.PlatformEventType.COVERAGE_PHASE_1_EXECUTED
+
+
+@pytest.mark.asyncio
+async def test_append_platform_event_clears_missing_actor_user_id(monkeypatch):
+    session = FakePlatformEventSession()
+    session.scalar_values = [None, None]
+    user_id = uuid4()
+
+    async def fake_enqueue(_session, _entry):
+        return []
+
+    monkeypatch.setattr("app.services.webhooks.enqueue_audit_event", fake_enqueue)
+
+    entry = await platform_events.append(
+        session,
+        event_type=platform_events.PlatformEventType.SCHEDULE_SHIFT_AMENDED,
+        target_type="shift",
+        target_id=uuid4(),
+        business_id=uuid4(),
+        location_id=uuid4(),
+        actor_type=AuditActorType.user,
+        actor_user_id=user_id,
+        actor_membership_id=uuid4(),
+        payload={"shift_id": "shift_123"},
+        metadata={"source": "scheduler_ui"},
+    )
+
+    platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
+    assert len(platform_entries) == 1
+    assert platform_entries[0].actor_user_id is None
+    assert entry.actor_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_append_platform_event_clears_missing_actor_membership_id(monkeypatch):
+    session = FakePlatformEventSession()
+    existing_user_id = uuid4()
+    missing_membership_id = uuid4()
+    session.scalar_values = [existing_user_id, None, existing_user_id, None]
+
+    async def fake_enqueue(_session, _entry):
+        return []
+
+    monkeypatch.setattr("app.services.webhooks.enqueue_audit_event", fake_enqueue)
+
+    entry = await platform_events.append(
+        session,
+        event_type=platform_events.PlatformEventType.SCHEDULE_SHIFT_AMENDED,
+        target_type="shift",
+        target_id=uuid4(),
+        business_id=uuid4(),
+        location_id=uuid4(),
+        actor_type=AuditActorType.user,
+        actor_user_id=existing_user_id,
+        actor_membership_id=missing_membership_id,
+        payload={"shift_id": "shift_123"},
+        metadata={"source": "scheduler_ui"},
+    )
+
+    platform_entries = [obj for obj in session.added if isinstance(obj, PlatformEvent)]
+    assert len(platform_entries) == 1
+    assert platform_entries[0].actor_user_id == existing_user_id
+    assert platform_entries[0].actor_membership_id is None
+    assert entry.actor_user_id == existing_user_id
+    assert entry.actor_membership_id is None
 
 
 def test_platform_event_type_includes_billing_events():

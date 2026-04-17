@@ -17,7 +17,9 @@ from app.schemas.copilot import (
     CopilotIntentRead,
     CopilotMessageRead,
     CopilotSessionDetailRead,
+    CopilotSessionEventRead,
     CopilotSessionRead,
+    CopilotTurnRead,
     CopilotValidationResultRead,
 )
 from app.services import llm_gateway
@@ -27,9 +29,13 @@ from app.services.auth import AuthContext
 class FakeCopilotSession:
     def __init__(self):
         self.commits = 0
+        self.rollbacks = 0
 
     async def commit(self):
         self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 class _ScalarResult:
@@ -54,6 +60,23 @@ class FakeReuseLookupSession:
 
     async def execute(self, _query):
         return _ExecuteResult(self._entries)
+
+
+class FakeSessionmaker:
+    def __init__(self, session):
+        self._session = session
+
+    def __call__(self):
+        session = self._session
+
+        class _ContextManager:
+            async def __aenter__(self_inner):
+                return session
+
+            async def __aexit__(self_inner, exc_type, exc, tb):
+                return False
+
+        return _ContextManager()
 
 
 def _make_auth_context(*, business_id, location_id=None, role=MembershipRole.manager) -> AuthContext:
@@ -328,6 +351,105 @@ def test_create_message_route_returns_turn_shape(client: TestClient, monkeypatch
     assert payload["action_run"]["status"] == "executed"
     assert payload["outbound_message"]["message_metadata"]["message_kind"] == "tool_result"
     assert fake_db.commits == 1
+
+
+def test_copilot_live_socket_sends_ready_and_completed_events(client: TestClient, monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+    session_id = detail.session.id
+    fake_db = FakeCopilotSession()
+    now = datetime.now(timezone.utc)
+
+    async def fake_resolve_auth_context(_session, token):
+        assert token == "socket-token"
+        return auth_ctx
+
+    async def fake_get_session_detail(_db, **kwargs):
+        assert kwargs["session_id"] == session_id
+        return detail
+
+    async def fake_create_turn(_db, **kwargs):
+        publisher = kwargs["live_event_publisher"]
+        trace_id = kwargs["live_trace_id"]
+        turn = CopilotTurnRead(
+            session=detail.session,
+            resolved_intent=CopilotIntentRead(
+                family="coverage",
+                tool_name="coverage.list_active_campaigns",
+                reasoning="Test",
+                confidence=0.9,
+            ),
+            inbound_message=CopilotMessageRead(
+                id=uuid4(),
+                copilot_session_id=session_id,
+                direction="inbound",
+                normalized_channel="dashboard",
+                raw_text="Show active coverage campaigns",
+                normalized_text="show active coverage campaigns",
+                message_metadata={},
+                created_at=now,
+            ),
+            outbound_message=CopilotMessageRead(
+                id=uuid4(),
+                copilot_session_id=session_id,
+                direction="outbound",
+                normalized_channel="dashboard",
+                raw_text="There is 1 active campaign.",
+                normalized_text="there is 1 active campaign.",
+                message_metadata={"message_kind": "tool_result", "tool_name": "coverage.list_active_campaigns"},
+                created_at=now,
+            ),
+            action_run=CopilotActionRunRead(
+                id=uuid4(),
+                copilot_session_id=session_id,
+                tool_name="coverage.list_active_campaigns",
+                status="executed",
+                input_payload={},
+                validation_result=CopilotValidationResultRead(ok=True, code="ok", message="ok"),
+                result_payload={"kind": "campaigns", "total_active_campaigns": 1, "items": []},
+                error_payload={},
+                started_at=now,
+                finished_at=now,
+            ),
+            tools=[],
+        )
+        await publisher(
+            CopilotSessionEventRead(
+                event_id=uuid4(),
+                event_type="assistant.message.completed",
+                trace_id=trace_id,
+                session_id=session_id,
+                occurred_at=now,
+                payload={"turn": turn.model_dump(mode="json")},
+            )
+        )
+        return turn
+
+    monkeypatch.setattr("app.api.routes.copilot.get_async_sessionmaker", lambda: FakeSessionmaker(fake_db))
+    monkeypatch.setattr("app.api.routes.copilot.auth_service.resolve_auth_context", fake_resolve_auth_context)
+    monkeypatch.setattr("app.api.routes.copilot.copilot_runtime.get_session_detail", fake_get_session_detail)
+    monkeypatch.setattr("app.api.routes.copilot.copilot_runtime.create_turn", fake_create_turn)
+
+    with client.websocket_connect(
+        f"/api/businesses/{business_id}/copilot/sessions/{session_id}/live",
+        headers={"cookie": "backfill_session=socket-token"},
+    ) as websocket:
+        ready_event = websocket.receive_json()
+        assert ready_event["event_type"] == "session.ready"
+        assert ready_event["payload"]["detail"]["session"]["id"] == str(session_id)
+
+        websocket.send_json(
+            {
+                "type": "user.message",
+                "text": "Show active coverage campaigns",
+                "normalized_channel": "dashboard",
+                "trace_id": "trace-live-websocket",
+            }
+        )
+        completed_event = websocket.receive_json()
+        assert completed_event["event_type"] == "assistant.message.completed"
+        assert completed_event["trace_id"] == "trace-live-websocket"
 
 
 @pytest.mark.asyncio
@@ -640,6 +762,82 @@ async def test_create_turn_uses_llm_planner_for_availability_update(monkeypatch)
     assert turn.action_run.result_payload["kind"] == "availability_update"
     assert turn.action_run.result_payload["day_count"] == 2
     assert turn.outbound_message.message_metadata["tool_name"] == "roster.update_availability"
+
+
+@pytest.mark.asyncio
+async def test_create_turn_emits_live_progress_events(monkeypatch):
+    business_id = uuid4()
+    auth_ctx = _make_auth_context(business_id=business_id)
+    detail = _detail(business_id=business_id, user_id=auth_ctx.user.id)
+    session_id = detail.session.id
+    emitted_events: list[CopilotSessionEventRead] = []
+
+    async def fake_get_session_detail(_db, **_kwargs):
+        return detail
+
+    async def fake_append_event(*_args, **_kwargs):
+        return None
+
+    async def fake_current_availability_rules(*_args, **_kwargs):
+        return []
+
+    async def fake_generate(_db, *, request):
+        assert request.metadata["trace_id"]
+        return llm_gateway.LlmGenerationResult(
+            provider="openai",
+            model="gpt-test",
+            output_text="List active campaigns.",
+            tool_calls=[
+                llm_gateway.LlmToolCall(
+                    tool_call_id="tool_1",
+                    name="coverage.list_active_campaigns",
+                    arguments={},
+                )
+            ],
+        )
+
+    async def fake_execute_active_campaigns(_db, **_kwargs):
+        return (
+            {"kind": "campaigns", "total_active_campaigns": 1, "running_count": 1, "queued_count": 0, "items": []},
+            "There is 1 active campaign.",
+        )
+
+    async def capture_event(event: CopilotSessionEventRead):
+        emitted_events.append(event)
+
+    monkeypatch.setattr("app.domain.copilot.runtime.get_session_detail", fake_get_session_detail)
+    monkeypatch.setattr("app.domain.copilot.runtime._append_copilot_event", fake_append_event)
+    monkeypatch.setattr("app.domain.copilot.runtime._current_availability_rules", fake_current_availability_rules)
+    monkeypatch.setattr("app.domain.copilot.runtime.llm_gateway.generate", fake_generate)
+    monkeypatch.setattr("app.domain.copilot.runtime._execute_active_campaigns", fake_execute_active_campaigns)
+
+    turn = await copilot_runtime.create_turn(
+        FakeCopilotSession(),
+        auth_ctx=auth_ctx,
+        business_id=business_id,
+        session_id=session_id,
+        payload=copilot_runtime.CopilotMessageCreate(
+            text="Show active coverage campaigns",
+            normalized_channel="dashboard",
+        ),
+        request_context=copilot_runtime.CopilotRequestContext(),
+        live_event_publisher=capture_event,
+        live_trace_id="trace-live-1",
+    )
+
+    assert turn.action_run.status == "executed"
+    assert [event.event_type for event in emitted_events] == [
+        "user.message.accepted",
+        "assistant.turn.started",
+        "assistant.progress",
+        "assistant.progress",
+        "assistant.progress",
+        "tool.started",
+        "tool.finished",
+        "assistant.message.completed",
+    ]
+    assert emitted_events[0].trace_id == "trace-live-1"
+    assert emitted_events[-1].payload["turn"]["action_run"]["tool_name"] == "coverage.list_active_campaigns"
 
 
 @pytest.mark.asyncio

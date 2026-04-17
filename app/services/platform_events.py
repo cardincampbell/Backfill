@@ -19,7 +19,9 @@ PLATFORM_EVENT_PAYLOAD_KEY = "_platform_event"
 
 class PlatformEventType:
     SCHEDULE_WEEK_PUBLISHED = "schedule.week.published"
+    SCHEDULE_WEEK_AMENDED = "schedule.week.amended"
     SCHEDULE_SHIFT_PUBLISHED = "schedule.shift.published"
+    SCHEDULE_SHIFT_AMENDED = "schedule.shift.amended"
     SCHEDULE_SHIFT_ASSIGNED = "schedule.shift.assigned"
     SCHEDULE_SHIFT_REASSIGNED = "schedule.shift.reassigned"
     SCHEDULE_SHIFT_UNASSIGNED = "schedule.shift.unassigned"
@@ -113,6 +115,11 @@ async def append(
 ) -> AuditLog:
     event_name = compatibility_event_name or event_type
     event_payload = dict(payload or {})
+    resolved_actor_user_id = await audit_service.resolve_actor_user_id(session, actor_user_id)
+    resolved_actor_membership_id = await audit_service.resolve_actor_membership_id(
+        session,
+        actor_membership_id,
+    )
     envelope = _platform_event_envelope(
         event_type=event_type,
         compatibility_event_name=event_name,
@@ -133,8 +140,8 @@ async def append(
             entity_type=target_type,
             entity_id=target_id,
             actor_type=actor_type,
-            actor_user_id=actor_user_id,
-            actor_membership_id=actor_membership_id,
+            actor_user_id=resolved_actor_user_id,
+            actor_membership_id=resolved_actor_membership_id,
             trace_id=str(event_metadata.get("trace_id") or uuid4()),
             ip_address=ip_address,
             user_agent=user_agent,
@@ -151,8 +158,8 @@ async def append(
         business_id=business_id,
         location_id=location_id,
         actor_type=actor_type,
-        actor_user_id=actor_user_id,
-        actor_membership_id=actor_membership_id,
+        actor_user_id=resolved_actor_user_id,
+        actor_membership_id=resolved_actor_membership_id,
         ip_address=ip_address,
         user_agent=user_agent,
         payload=event_payload,

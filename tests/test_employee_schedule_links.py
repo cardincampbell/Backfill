@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -41,21 +42,22 @@ class FakeExecuteResult:
 
 
 class FakeEmployeeScheduleSession:
-    def __init__(self):
+    def __init__(self, *, populate_timestamps: bool = True):
         self.get_map: dict[tuple[type, object], object] = {}
         self.scalar_queue: list[object] = []
         self.execute_queue: list[list[object]] = []
         self.added: list[object] = []
         self.flushed = 0
         self.commits = 0
+        self.populate_timestamps = populate_timestamps
 
     def add(self, obj):
         now = datetime.now(timezone.utc)
         if getattr(obj, "id", None) is None:
             obj.id = uuid4()
-        if getattr(obj, "created_at", None) is None:
+        if self.populate_timestamps and getattr(obj, "created_at", None) is None:
             obj.created_at = now
-        if getattr(obj, "updated_at", None) is None:
+        if self.populate_timestamps and getattr(obj, "updated_at", None) is None:
             obj.updated_at = now
         self.added.append(obj)
         self.get_map[(type(obj), obj.id)] = obj
@@ -260,6 +262,25 @@ def test_schedule_link_includes_week_and_location():
     assert str(location_id) in url
 
 
+def test_get_or_create_schedule_access_link_sets_timestamps_without_db_defaults():
+    fake_session = FakeEmployeeScheduleSession(populate_timestamps=False)
+    business_id = uuid4()
+    employee = _make_employee(business_id=business_id, employee_id=uuid4())
+
+    link, created = asyncio.run(
+        svc.get_or_create_schedule_access_link(
+            fake_session,
+            business_id=business_id,
+            employee=employee,
+        )
+    )
+
+    assert created is True
+    assert link.created_at is not None
+    assert link.updated_at is not None
+    assert fake_session.flushed == 1
+
+
 def test_get_employee_schedule_link_route_creates_and_commits():
     fake_session = FakeEmployeeScheduleSession()
     business_id = uuid4()
@@ -372,6 +393,8 @@ def test_public_employee_schedule_route_returns_schedule_and_headers():
         assert payload["employee_name"] == employee.full_name
         assert payload["selected_location_name"] == location.location_display_name
         assert payload["shifts"][0]["role_name"] == "Barista"
+        assert payload["shifts"][0]["display_status"] == "scheduled"
+        assert payload["shifts"][0]["historical_display"] is False
         assert response.headers["cache-control"] == "private, no-store"
         assert response.headers["x-robots-tag"] == "noindex, nofollow"
         assert fake_session.commits == 1
@@ -392,3 +415,250 @@ def test_public_employee_schedule_route_rejects_invalid_token():
         assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_employee_schedule_read_includes_cancelled_historical_shift_for_employee():
+    fake_session = FakeEmployeeScheduleSession()
+    business_id = uuid4()
+    employee_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    business = _make_business(business_id=business_id)
+    location = _make_location(business_id=business_id, location_id=location_id)
+    employee = _make_employee(business_id=business_id, employee_id=employee_id)
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    employee_location.location = location
+    employee.employee_locations = [employee_location]
+    link = _make_link(business_id=business_id, employee_id=employee_id)
+    link.employee = employee
+    link.business = business
+    token = svc.build_employee_schedule_token(link)
+    shift = _make_shift(
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        employee_id=employee_id,
+        employee=employee,
+        location=location,
+    )
+    shift.lifecycle_status = ShiftLifecycleStatus.cancelled
+    shift.staffing_status = ShiftStaffingStatus.open
+    shift.seats_filled = 0
+    shift.assignments[0].status = AssignmentStatus.cancelled
+    shift.assignments[0].cancelled_at = datetime.now(timezone.utc)
+    shift.assignments[0].assignment_metadata = {
+        "employee_name": employee.full_name,
+        "published_amendment_action": "cancel_shift",
+        "published_amendment_reason_code": "cancelled",
+    }
+    shift.shift_metadata = {
+        "published_amendment": {
+            "action": None,
+            "reason_code": None,
+            "amended_from_published": False,
+            "schedule_break": False,
+        }
+    }
+
+    fake_session.get_map[(EmployeeScheduleAccessLink, link.id)] = link
+    fake_session.execute_queue = [[shift]]
+
+    schedule_read, touched = asyncio.run(
+        svc.get_employee_schedule_read(
+            fake_session,
+            raw_token=token,
+            week_start=datetime(2026, 4, 13, tzinfo=timezone.utc).date(),
+            location_id=location_id,
+        )
+    )
+
+    assert touched is True
+    assert schedule_read is not None
+    assert len(schedule_read.shifts) == 1
+    assert schedule_read.shifts[0].display_status == "cancelled"
+    assert schedule_read.shifts[0].historical_display is True
+
+
+def test_employee_schedule_read_includes_reassigned_no_show_history_for_original_employee():
+    fake_session = FakeEmployeeScheduleSession()
+    business_id = uuid4()
+    employee_id = uuid4()
+    replacement_employee_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    business = _make_business(business_id=business_id)
+    location = _make_location(business_id=business_id, location_id=location_id)
+    employee = _make_employee(business_id=business_id, employee_id=employee_id)
+    replacement_employee = _make_employee(
+        business_id=business_id,
+        employee_id=replacement_employee_id,
+    )
+    replacement_employee.full_name = "Morgan Cover"
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    employee_location.location = location
+    employee.employee_locations = [employee_location]
+    replacement_employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=replacement_employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    replacement_employee_location.location = location
+    replacement_employee.employee_locations = [replacement_employee_location]
+    link = _make_link(business_id=business_id, employee_id=employee_id)
+    link.employee = employee
+    link.business = business
+    token = svc.build_employee_schedule_token(link)
+    shift = _make_shift(
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        employee_id=replacement_employee_id,
+        employee=replacement_employee,
+        location=location,
+    )
+    prior_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift.id,
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.no_show,
+        sequence_no=1,
+        assignment_metadata={
+            "employee_name": employee.full_name,
+            "published_amendment_action": "unassign_shift",
+            "published_amendment_reason_code": "no_show",
+        },
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        cancelled_at=datetime.now(timezone.utc),
+    )
+    prior_assignment.employee = employee
+    current_assignment = shift.assignments[0]
+    current_assignment.sequence_no = 2
+    shift.assignments = [prior_assignment, current_assignment]
+    shift.shift_metadata = {
+        "published_amendment": {
+            "action": None,
+            "reason_code": None,
+            "amended_from_published": False,
+            "schedule_break": False,
+            "historical_artifacts": [],
+        }
+    }
+
+    fake_session.get_map[(EmployeeScheduleAccessLink, link.id)] = link
+    fake_session.execute_queue = [[shift]]
+
+    schedule_read, _ = asyncio.run(
+        svc.get_employee_schedule_read(
+            fake_session,
+            raw_token=token,
+            week_start=datetime(2026, 4, 13, tzinfo=timezone.utc).date(),
+            location_id=location_id,
+        )
+    )
+
+    assert schedule_read is not None
+    assert len(schedule_read.shifts) == 1
+    assert schedule_read.shifts[0].display_status == "no_show"
+    assert schedule_read.shifts[0].historical_display is True
+
+
+def test_employee_schedule_read_includes_open_callout_shift_for_original_employee():
+    fake_session = FakeEmployeeScheduleSession()
+    business_id = uuid4()
+    employee_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    business = _make_business(business_id=business_id)
+    location = _make_location(business_id=business_id, location_id=location_id)
+    employee = _make_employee(business_id=business_id, employee_id=employee_id)
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    employee_location.location = location
+    employee.employee_locations = [employee_location]
+    link = _make_link(business_id=business_id, employee_id=employee_id)
+    link.employee = employee
+    link.business = business
+    token = svc.build_employee_schedule_token(link)
+    shift = _make_shift(
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        employee_id=employee_id,
+        employee=employee,
+        location=location,
+    )
+    shift.staffing_status = ShiftStaffingStatus.open
+    shift.seats_filled = 0
+    shift.assignments[0].status = AssignmentStatus.cancelled
+    shift.assignments[0].cancelled_at = datetime.now(timezone.utc)
+    shift.assignments[0].assignment_metadata = {
+        "employee_name": employee.full_name,
+        "published_amendment_action": "unassign_shift",
+        "published_amendment_reason_code": "callout",
+    }
+    shift.shift_metadata = {
+        "published_amendment": {
+            "action": None,
+            "reason_code": None,
+            "amended_from_published": False,
+            "schedule_break": False,
+        }
+    }
+
+    fake_session.get_map[(EmployeeScheduleAccessLink, link.id)] = link
+    fake_session.execute_queue = [[shift]]
+
+    schedule_read, _ = asyncio.run(
+        svc.get_employee_schedule_read(
+            fake_session,
+            raw_token=token,
+            week_start=datetime(2026, 4, 13, tzinfo=timezone.utc).date(),
+            location_id=location_id,
+        )
+    )
+
+    assert schedule_read is not None
+    assert len(schedule_read.shifts) == 1
+    assert schedule_read.shifts[0].display_status == "callout"
+    assert schedule_read.shifts[0].historical_display is True

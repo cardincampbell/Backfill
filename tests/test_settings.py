@@ -7,12 +7,12 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
-from app.models.business import Business, Location
+from app.models.business import Business, Location, Role
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
 from app.schemas.business import LocationRoleRead, RoleRead
-from app.services import shift_defaults
+from app.services import businesses as businesses_service, shift_defaults
 from app.services.auth import AuthContext
 
 
@@ -105,6 +105,24 @@ def _make_location(*, business_id, location_id) -> Location:
         settings={},
         google_place_metadata={},
         is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _make_role(*, business_id, role_id, name="Server", code="server") -> Role:
+    now = datetime.now(timezone.utc)
+    return Role(
+        id=role_id,
+        business_id=business_id,
+        code=code,
+        name=name,
+        category=None,
+        description=None,
+        min_notice_minutes=0,
+        default_shift_length_minutes=None,
+        coverage_priority=100,
+        metadata_json={},
         created_at=now,
         updated_at=now,
     )
@@ -593,6 +611,153 @@ def test_create_role_route_returns_conflict_for_duplicate_role(monkeypatch):
         )
         assert response.status_code == 409
         assert response.json()["detail"] == "role_already_exists"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_create_role_route_returns_existing_role_when_normalized_match_is_reused(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    role_id = uuid4()
+    role = _make_role(business_id=business_id, role_id=role_id, name="Barista", code="barista")
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_role(_session, incoming_business_id, payload):
+        assert incoming_business_id == business_id
+        assert payload.name == "Barrista"
+        return businesses_service.RoleCreateResult(
+            role=role,
+            decision="reused_existing",
+            normalized_name="Barista",
+            confidence=0.98,
+            reason="Corrected a spelling variation.",
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_role",
+        fake_create_role,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/roles",
+            json={"name": "Barrista"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["decision"] == "reused_existing"
+        assert payload["normalized_name"] == "Barista"
+        assert payload["role"]["id"] == str(role_id)
+        assert fake_session.commits == 1
+        assert not any(
+            isinstance(entry, AuditLog) and entry.event_name == "role.created"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_create_role_route_returns_created_role_payload(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    role_id = uuid4()
+    role = _make_role(business_id=business_id, role_id=role_id, name="Shift Captain", code="shift_captain")
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_role(_session, incoming_business_id, payload):
+        assert incoming_business_id == business_id
+        assert payload.name == "shift captain"
+        return businesses_service.RoleCreateResult(
+            role=role,
+            decision="created_new",
+            normalized_name="Shift Captain",
+            confidence=0.91,
+            reason="Normalized capitalization.",
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_role",
+        fake_create_role,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/roles",
+            json={"name": "shift captain"},
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["decision"] == "created_new"
+        assert payload["normalized_name"] == "Shift Captain"
+        assert payload["role"]["id"] == str(role_id)
+        assert any(
+            isinstance(entry, AuditLog) and entry.event_name == "role.created"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_create_role_route_returns_unprocessable_for_rejected_role_name(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_create_role(_session, incoming_business_id, payload):
+        assert incoming_business_id == business_id
+        assert payload.name == "test"
+        raise businesses_service.role_normalization.RoleNameRejectedError(
+            "Enter a real role name instead of a placeholder."
+        )
+
+    monkeypatch.setattr(
+        "app.api.routes.businesses.businesses.create_role",
+        fake_create_role,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/roles",
+            json={"name": "test"},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Enter a real role name instead of a placeholder."
     finally:
         app.dependency_overrides.clear()
 
