@@ -485,3 +485,71 @@ async def test_process_coverage_runtime_batch_runs_runtime_stages_in_order(monke
         },
         "processed_case_ids": ["case-running", "case-queued", "case-expired"],
     }
+
+
+@pytest.mark.asyncio
+async def test_process_coverage_runtime_batch_skips_queued_dispatch_when_blocked(monkeypatch):
+    session = FakeCoverageRuntimeSession()
+    calls: list[tuple[str, int]] = []
+
+    async def fake_reconcile(_session, *, limit):
+        calls.append(("reconcile", limit))
+        return {
+            "claimed_count": 0,
+            "filled_count": 0,
+            "cancelled_count": 0,
+            "exhausted_count": 0,
+            "unchanged_count": 0,
+            "failed_count": 0,
+            "processed_case_ids": ["case-running"],
+        }
+
+    async def fake_expire(_session, *, limit):
+        calls.append(("expire", limit))
+        return {
+            "expired_count": 0,
+            "exhausted_case_ids": ["case-expired"],
+            "advanced_offer_ids": [],
+        }
+
+    async def fail_if_queued(_session, *, limit):
+        raise AssertionError("queued dispatch should be skipped while projections are blocked")
+
+    async def fake_process_outbox(_session, *, limit):
+        calls.append(("delivery", limit))
+        return {
+            "claimed_count": 1,
+            "sent_count": 1,
+            "failed_count": 0,
+            "processed_event_ids": ["event-1"],
+        }
+
+    monkeypatch.setattr(coverage_runtime, "reconcile_running_coverage_cases", fake_reconcile)
+    monkeypatch.setattr(coverage_runtime.delivery, "expire_due_offers", fake_expire)
+    monkeypatch.setattr(coverage_runtime, "process_queued_coverage_cases", fail_if_queued)
+    monkeypatch.setattr(coverage_runtime.delivery, "process_outbox_batch", fake_process_outbox)
+
+    result = await coverage_runtime.process_coverage_runtime_batch(
+        session,
+        limit=7,
+        allow_queued_dispatch=False,
+        queue_block_reason="runtime_projections_too_stale",
+    )
+
+    assert calls == [
+        ("reconcile", 7),
+        ("expire", 7),
+        ("delivery", 7),
+    ]
+    assert result["queued_cases"] == {
+        "status": "blocked",
+        "reason": "runtime_projections_too_stale",
+        "claimed_count": 0,
+        "executed_count": 0,
+        "exhausted_count": 0,
+        "skipped_count": 0,
+        "failed_count": 0,
+        "processed_case_ids": [],
+    }
+    assert result["delivery"]["claimed_count"] == 1
+    assert result["processed_case_ids"] == ["case-running", "case-expired"]

@@ -29,42 +29,6 @@ def _offer_expiry_result(coverage_result: dict[str, Any]) -> dict[str, Any]:
     return coverage_result.get("offer_expiry") if isinstance(coverage_result.get("offer_expiry"), dict) else {}
 
 
-def _blocked_coverage_runtime_result(projection_health: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "status": "blocked",
-        "reason": projection_health.get("blocked_reason") or "runtime_projections_too_stale",
-        "reconcile": {
-            "claimed_count": 0,
-            "filled_count": 0,
-            "cancelled_count": 0,
-            "exhausted_count": 0,
-            "unchanged_count": 0,
-            "failed_count": 0,
-            "processed_case_ids": [],
-        },
-        "offer_expiry": {
-            "expired_count": 0,
-            "exhausted_case_ids": [],
-            "advanced_offer_ids": [],
-        },
-        "queued_cases": {
-            "claimed_count": 0,
-            "executed_count": 0,
-            "exhausted_count": 0,
-            "skipped_count": 0,
-            "failed_count": 0,
-            "processed_case_ids": [],
-        },
-        "delivery": {
-            "claimed_count": 0,
-            "sent_count": 0,
-            "failed_count": 0,
-            "processed_event_ids": [],
-        },
-        "processed_case_ids": [],
-    }
-
-
 async def process_runtime_tick(
     session: AsyncSession,
     *,
@@ -76,11 +40,18 @@ async def process_runtime_tick(
         business_limit=limit,
     )
     coverage_blocked = projection_health.get("status") == "blocked"
-    coverage_result = (
-        _blocked_coverage_runtime_result(projection_health)
-        if coverage_blocked
-        else await coverage_runtime.process_coverage_runtime_batch(session, limit=limit)
+    coverage_result = await coverage_runtime.process_coverage_runtime_batch(
+        session,
+        limit=limit,
+        allow_queued_dispatch=not coverage_blocked,
+        queue_block_reason=projection_health.get("blocked_reason") if coverage_blocked else None,
     )
+    if coverage_blocked:
+        coverage_result = {
+            "status": "blocked",
+            "reason": projection_health.get("blocked_reason") or "runtime_projections_too_stale",
+            **coverage_result,
+        }
 
     processed_case_ids = coverage_result.get("processed_case_ids", []) if isinstance(coverage_result, dict) else []
     delivery = coverage_result.get("delivery") if isinstance(coverage_result.get("delivery"), dict) else {}

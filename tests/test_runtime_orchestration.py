@@ -43,8 +43,10 @@ async def test_process_runtime_tick_runs_callback_and_coverage_batches_in_order(
             "blocked_business_ids": [],
         }
 
-    async def fake_runtime(_session, *, limit):
+    async def fake_runtime(_session, *, limit, allow_queued_dispatch=True, queue_block_reason=None):
         calls.append(("coverage_runtime", limit))
+        assert allow_queued_dispatch is True
+        assert queue_block_reason is None
         return {
             "reconcile": {
                 "claimed_count": 1,
@@ -252,7 +254,9 @@ async def test_process_runtime_tick_is_duplicate_safe_on_repeated_ticks(monkeypa
         processed_ids.extend(result["processed_callback_ids"])
         return result
 
-    async def fake_runtime(_session, *, limit):
+    async def fake_runtime(_session, *, limit, allow_queued_dispatch=True, queue_block_reason=None):
+        assert allow_queued_dispatch is True
+        assert queue_block_reason is None
         result = call_state["runtime"].pop(0)
         processed_ids.extend(result["processed_case_ids"])
         return result
@@ -301,7 +305,9 @@ async def test_process_runtime_tick_reports_processed_when_only_offer_expiry_did
             "processed_callback_ids": [],
         }
 
-    async def fake_runtime(_session, *, limit):
+    async def fake_runtime(_session, *, limit, allow_queued_dispatch=True, queue_block_reason=None):
+        assert allow_queued_dispatch is True
+        assert queue_block_reason is None
         return {
             "reconcile": {
                 "claimed_count": 0,
@@ -361,8 +367,9 @@ async def test_process_runtime_tick_reports_processed_when_only_offer_expiry_did
 
 
 @pytest.mark.asyncio
-async def test_process_runtime_tick_blocks_coverage_runtime_when_projection_health_is_too_stale(monkeypatch):
+async def test_process_runtime_tick_blocks_queued_dispatch_when_projection_health_is_too_stale(monkeypatch):
     session = DummyRuntimeSession()
+    calls: list[tuple[int, bool, str | None]] = []
 
     async def fake_callbacks(_session, *, limit):
         return {
@@ -388,17 +395,53 @@ async def test_process_runtime_tick_blocks_coverage_runtime_when_projection_heal
             "blocked_reason": "runtime_projections_too_stale",
         }
 
-    async def fail_if_called(_session, *, limit):
-        raise AssertionError("coverage runtime should not run when projections are blocked")
+    async def fake_runtime(_session, *, limit, allow_queued_dispatch=True, queue_block_reason=None):
+        calls.append((limit, allow_queued_dispatch, queue_block_reason))
+        return {
+            "reconcile": {
+                "claimed_count": 0,
+                "filled_count": 0,
+                "cancelled_count": 0,
+                "exhausted_count": 0,
+                "unchanged_count": 0,
+                "failed_count": 0,
+                "processed_case_ids": [],
+            },
+            "offer_expiry": {
+                "expired_count": 0,
+                "exhausted_case_ids": [],
+                "advanced_offer_ids": [],
+            },
+            "queued_cases": {
+                "status": "blocked",
+                "reason": queue_block_reason,
+                "claimed_count": 0,
+                "executed_count": 0,
+                "exhausted_count": 0,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "processed_case_ids": [],
+            },
+            "delivery": {
+                "claimed_count": 1,
+                "sent_count": 1,
+                "failed_count": 0,
+                "processed_event_ids": ["evt_1"],
+            },
+            "processed_case_ids": [],
+        }
 
     monkeypatch.setattr(runtime_orchestration.provider_callbacks, "process_callback_batch", fake_callbacks)
     monkeypatch.setattr(runtime_orchestration.runtime_projections, "monitor_runtime_projection_freshness", fake_projection_health)
-    monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fail_if_called)
+    monkeypatch.setattr(runtime_orchestration.coverage_runtime, "process_coverage_runtime_batch", fake_runtime)
 
     result = await runtime_orchestration.process_runtime_tick(session, limit=4)
 
     assert result["status"] == "blocked"
     assert result["runtime_projections"]["blocked_reason"] == "runtime_projections_too_stale"
-    assert result["coverage_runtime"]["status"] == "blocked"
+    assert result["coverage_runtime"]["queued_cases"]["status"] == "blocked"
+    assert result["coverage_runtime"]["delivery"]["claimed_count"] == 1
     assert result["summary"]["projection_blocked_business_count"] == 1
     assert result["summary"]["callback_processed_count"] == 1
+    assert result["summary"]["delivery_claimed_count"] == 1
+    assert calls == [(4, False, "runtime_projections_too_stale")]

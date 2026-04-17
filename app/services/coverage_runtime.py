@@ -564,10 +564,25 @@ async def process_coverage_runtime_batch(
     session: AsyncSession,
     *,
     limit: int = 20,
+    allow_queued_dispatch: bool = True,
+    queue_block_reason: str | None = None,
 ) -> dict[str, Any]:
     reconcile_result = await reconcile_running_coverage_cases(session, limit=limit)
     expiry_result = await delivery.expire_due_offers(session, limit=limit)
-    queued_result = await process_queued_coverage_cases(session, limit=limit)
+    queued_result = (
+        await process_queued_coverage_cases(session, limit=limit)
+        if allow_queued_dispatch
+        else {
+            "status": "blocked",
+            "reason": queue_block_reason or "queued_dispatch_blocked",
+            "claimed_count": 0,
+            "executed_count": 0,
+            "exhausted_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "processed_case_ids": [],
+        }
+    )
     delivery_result = await delivery.process_outbox_batch(session, limit=limit)
 
     processed_case_ids: list[str] = []

@@ -10,11 +10,11 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
 from app.models.business import Location
-from app.models.common import CoverageCaseStatus, MembershipRole, MembershipStatus, SessionRiskLevel, ShiftStatus
+from app.models.common import AssignmentStatus, CoverageCaseStatus, MembershipRole, MembershipStatus, SessionRiskLevel, ShiftStatus
 from app.models.coverage import CoverageCase
 from app.models.identity import Membership, Session, User
 from app.models.integrations import SchedulerConnection
-from app.models.scheduling import Shift
+from app.models.scheduling import Shift, ShiftAssignment
 from app.services import scheduler_sync
 from app.services.auth import AuthContext
 
@@ -218,7 +218,7 @@ class FakeVacancySession:
         self.scalar_queue: list[object] = [0, coverage_case]
         self.execute_queue: list[list[object]] = [[]]
 
-    async def get(self, model, object_id):
+    async def get(self, model, object_id, **kwargs):
         if model is Shift and object_id == self.shift.id:
             return self.shift
         if model is CoverageCase and object_id == self.coverage_case.id:
@@ -352,3 +352,74 @@ async def test_create_vacancy_delegates_general_dispatch_to_shared_runtime(monke
 
     assert result["coverage_case_id"] == case_id
     assert result["offers"] == [str(dispatched_offer_id)]
+
+
+@pytest.mark.asyncio
+async def test_create_vacancy_reuses_active_offers_and_skips_duplicate_dispatch(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    employee_id = uuid4()
+    existing_offer_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=10),
+        status=ShiftStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+    )
+    coverage_case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    session = FakeVacancySession(shift=shift, coverage_case=coverage_case)
+    session.execute_queue = [
+        [
+            ShiftAssignment(
+                shift_id=shift_id,
+                employee_id=employee_id,
+                status=AssignmentStatus.assigned,
+                assigned_via="scheduler_sync",
+                sequence_no=1,
+            )
+        ],
+        [SimpleNamespace(id=existing_offer_id)],
+    ]
+
+    async def fail_activate(*args, **kwargs):
+        raise AssertionError("standby activation should not run when active offers already exist")
+
+    async def fail_execute(*args, **kwargs):
+        raise AssertionError("general coverage dispatch should not run when active offers already exist")
+
+    monkeypatch.setattr(scheduler_sync.coverage_service, "activate_standby_queue", fail_activate)
+    monkeypatch.setattr(scheduler_sync.coverage_runtime, "execute_queued_case", fail_execute)
+
+    result = await scheduler_sync.create_vacancy_for_shift(
+        session,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        triggered_by="scheduler:test",
+    )
+
+    assert result["coverage_case_id"] == case_id
+    assert result["offers"] == [str(existing_offer_id)]
+    assert coverage_case.case_metadata["excluded_employee_ids"] == [str(employee_id)]

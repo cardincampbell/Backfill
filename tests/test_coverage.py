@@ -232,6 +232,98 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_execute_phase_1_run_excludes_callout_employee_from_case_metadata(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    excluded_employee_id = uuid4()
+    eligible_employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        ends_at=datetime.now(timezone.utc) + timedelta(hours=14),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={"excluded_employee_ids": [str(excluded_employee_id)]},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    session = FakeCoverageSession(shift=shift, case=case, business=business)
+    session.scalar_queue = [0]
+
+    ranked = [
+        CoverageCandidatePreview(
+            employee_id=excluded_employee_id,
+            employee_name="Original Caller",
+            phone_e164="+15555550101",
+            primary_location_id=location_id,
+            rank=1,
+            score=99.0,
+            scoring_factors={"total": 99.0},
+            availability_snapshot={"rule_match": True},
+        ),
+        CoverageCandidatePreview(
+            employee_id=eligible_employee_id,
+            employee_name="Eligible Coworker",
+            phone_e164="+15555550102",
+            primary_location_id=location_id,
+            rank=2,
+            score=92.0,
+            scoring_factors={"total": 92.0},
+            availability_snapshot={"rule_match": True},
+        ),
+    ]
+
+    async def fake_collect_phase_1_candidates(_session, _business_id, _shift_id):
+        return shift, ranked
+
+    monkeypatch.setattr(coverage, "_collect_phase_1_candidates", fake_collect_phase_1_candidates)
+
+    result = await coverage.execute_phase_1_run(
+        session,
+        business_id,
+        case_id,
+        Phase1ExecutionRequest(dispatch_limit=1, channel="sms", offer_ttl_minutes=10),
+    )
+
+    offers = [obj for obj in session.added if isinstance(obj, CoverageOffer)]
+    candidates = [obj for obj in session.added if isinstance(obj, CoverageCandidate)]
+
+    assert result.candidate_count == 1
+    assert len(candidates) == 1
+    assert len(offers) == 1
+    assert candidates[0].employee_id == eligible_employee_id
+    assert offers[0].employee_id == eligible_employee_id
+
+
+@pytest.mark.asyncio
 async def test_respond_to_offer_accepts_and_assigns_shift():
     business_id = uuid4()
     location_id = uuid4()

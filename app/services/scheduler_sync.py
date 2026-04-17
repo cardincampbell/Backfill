@@ -15,6 +15,7 @@ from app.models.business import Location, Role
 from app.models.common import (
     AssignmentStatus,
     CoverageCaseStatus,
+    OfferStatus,
     SchedulerConnectionStatus,
     SchedulerProvider,
     SchedulerSyncEventStatus,
@@ -23,7 +24,7 @@ from app.models.common import (
     ShiftLifecycleStatus,
     ShiftStaffingStatus,
 )
-from app.models.coverage import CoverageCase
+from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.integrations import (
     SchedulerConnection,
     SchedulerEvent,
@@ -865,7 +866,7 @@ async def create_vacancy_for_shift(
     reason_code: str = "scheduler_vacancy",
     auto_execute: bool = True,
 ) -> dict:
-    shift = await session.get(Shift, shift_id)
+    shift = await session.get(Shift, shift_id, with_for_update=True)
     if shift is None:
         raise LookupError("shift_not_found")
 
@@ -877,11 +878,14 @@ async def create_vacancy_for_shift(
     )
     active_assignments = list(result.scalars().all())
     now = datetime.now(timezone.utc)
+    excluded_employee_ids: set[UUID] = set()
     for assignment in active_assignments:
         if employee_id is not None and assignment.employee_id != employee_id:
             continue
         assignment.status = AssignmentStatus.cancelled
         assignment.cancelled_at = now
+        if assignment.employee_id is not None:
+            excluded_employee_ids.add(assignment.employee_id)
 
     remaining_active = await session.scalar(
         select(func.count(ShiftAssignment.id)).where(
@@ -929,11 +933,38 @@ async def create_vacancy_for_shift(
             requires_manager_approval=shift.requires_manager_approval,
             triggered_by=triggered_by,
             opened_at=now,
-            case_metadata={},
+            case_metadata={
+                "excluded_employee_ids": [str(value) for value in sorted(excluded_employee_ids, key=str)],
+            },
         )
         session.add(coverage_case)
         await session.flush()
     else:
+        metadata = dict(coverage_case.case_metadata or {})
+        existing_excluded = {
+            str(value).strip()
+            for value in metadata.get("excluded_employee_ids", [])
+            if str(value).strip()
+        }
+        existing_excluded.update(str(value) for value in excluded_employee_ids)
+        metadata["excluded_employee_ids"] = sorted(existing_excluded)
+        coverage_case.case_metadata = metadata
+
+        active_offer_result = await session.execute(
+            select(CoverageOffer).where(
+                CoverageOffer.coverage_case_id == coverage_case.id,
+                CoverageOffer.status.in_([OfferStatus.pending, OfferStatus.delivered]),
+            )
+        )
+        active_offers = list(active_offer_result.scalars().all())
+        if active_offers:
+            await session.flush()
+            return {
+                "shift_id": shift.id,
+                "coverage_case_id": coverage_case.id,
+                "offers": [str(offer.id) for offer in active_offers],
+            }
+
         coverage_case.status = CoverageCaseStatus.queued
         coverage_case.closed_at = None
 

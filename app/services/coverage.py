@@ -357,6 +357,39 @@ def _update_case_metadata(coverage_case: CoverageCase, **updates: object) -> Non
     }
 
 
+def _excluded_employee_ids_for_case(coverage_case: CoverageCase | None) -> set[UUID]:
+    if coverage_case is None:
+        return set()
+    metadata = coverage_case.case_metadata if isinstance(coverage_case.case_metadata, dict) else {}
+    raw_ids = metadata.get("excluded_employee_ids")
+    if not isinstance(raw_ids, list):
+        return set()
+    excluded: set[UUID] = set()
+    for raw in raw_ids:
+        parsed = _parse_uuid(raw)
+        if parsed is not None:
+            excluded.add(parsed)
+    return excluded
+
+
+def _filter_candidates_for_case(
+    coverage_case: CoverageCase | None,
+    candidates: list[CoverageCandidatePreview],
+) -> list[CoverageCandidatePreview]:
+    excluded_employee_ids = _excluded_employee_ids_for_case(coverage_case)
+    if not excluded_employee_ids:
+        return candidates
+    filtered = [
+        candidate
+        for candidate in candidates
+        if candidate.employee_id not in excluded_employee_ids
+    ]
+    return [
+        candidate.model_copy(update={"rank": index + 1})
+        for index, candidate in enumerate(filtered)
+    ]
+
+
 async def _next_undispatched_candidates(
     session: AsyncSession,
     *,
@@ -807,6 +840,7 @@ async def plan_campaign_execution(
 ) -> CoverageCampaignExecutionDecision:
     case, shift = await _load_campaign_shift(session, business_id, campaign_id)
     _, phase_1_candidates = await _collect_phase_1_candidates(session, business_id, shift.id)
+    phase_1_candidates = _filter_candidates_for_case(case, phase_1_candidates)
     phase_1_plan = await _build_execution_plan(
         session,
         business_id=business_id,
@@ -835,6 +869,7 @@ async def plan_campaign_execution(
         recommendation_reason = "phase_1_candidates_available"
     elif phase_2_plan.phase_2_eligible:
         _, phase_2_candidates = await _collect_phase_2_candidates(session, business_id, shift.id)
+        phase_2_candidates = _filter_candidates_for_case(case, phase_2_candidates)
         phase_2_candidate_count = len(phase_2_candidates)
         if phase_2_candidates:
             recommended_phase = "phase_2"
@@ -1350,6 +1385,7 @@ async def execute_phase_1_run(
         raise LookupError("shift_not_found")
 
     _, ranked = await _collect_phase_1_candidates(session, business_id, shift.id)
+    ranked = _filter_candidates_for_case(case, ranked)
     plan = await _build_execution_plan(
         session,
         business_id=business_id,
@@ -1476,6 +1512,7 @@ async def execute_phase_2_run(
         raise LookupError("shift_not_found")
 
     _, phase_1_candidates = await _collect_phase_1_candidates(session, business_id, shift.id)
+    phase_1_candidates = _filter_candidates_for_case(case, phase_1_candidates)
     plan = await _build_execution_plan(
         session,
         business_id=business_id,
@@ -1489,6 +1526,7 @@ async def execute_phase_2_run(
         raise ValueError(f"phase_2_not_allowed:{plan.phase_2_reason}")
 
     _, ranked = await _collect_phase_2_candidates(session, business_id, shift.id)
+    ranked = _filter_candidates_for_case(case, ranked)
 
     current_phase_no = await session.scalar(
         select(func.coalesce(func.max(CoverageCaseRun.phase_no), 0)).where(
