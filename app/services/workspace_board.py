@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.business import Business, Location, LocationRole, Role
-from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus
+from app.models.common import CoverageCaseStatus, MembershipRole, OfferStatus, ShiftLifecycleStatus
 from app.models.coverage import CoverageCase, CoverageOffer
+from app.models.events import PlatformEvent
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeRole
 from app.schemas.workspace_board import (
     WorkspaceBoardActionSummaryRead,
+    WorkspaceBoardPublishSummaryRead,
     WorkspaceBoardRoleRead,
     WorkspaceBoardShiftAssignmentRead,
     WorkspaceBoardShiftRead,
@@ -22,7 +24,7 @@ from app.schemas.workspace_board import (
     WorkspaceLocationBoardRead,
 )
 from app.services.schedule_weeks import effective_week_start_day, schedule_week_window
-from app.services import shift_assignments as shift_assignment_service
+from app.services import platform_events, shift_assignments as shift_assignment_service
 
 
 READ_ROLES = {
@@ -31,6 +33,11 @@ READ_ROLES = {
     MembershipRole.manager,
     MembershipRole.viewer,
 }
+
+
+def board_window(timezone_name: str, week_start_day: str | date | None, week_start: date | None = None):
+    return schedule_week_window(timezone_name, week_start_day, week_start)
+
 
 def _to_float(value: Decimal | float | int | None) -> float:
     if value is None:
@@ -93,6 +100,130 @@ def _manager_action_required(shift: Shift, case: CoverageCase | None) -> bool:
         case.requires_manager_approval
         and case.status in {CoverageCaseStatus.queued, CoverageCaseStatus.running}
         and shift.seats_filled < shift.seats_requested
+    )
+
+
+def _shift_lifecycle_status_value(shift: Shift) -> str:
+    lifecycle_status = shift.lifecycle_status
+    return lifecycle_status.value if hasattr(lifecycle_status, "value") else str(lifecycle_status)
+
+
+def _assignment_status_value(assignment: ShiftAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    status = assignment.status
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _shift_display_employee_id(shift: Shift) -> UUID | None:
+    current = _best_assignment(shift)
+    if current is not None and current.employee_id is not None:
+        return current.employee_id
+    latest = shift_assignment_service.latest_assignment(shift.assignments or [])
+    return latest.employee_id if latest is not None else None
+
+
+def _shift_is_live_operational_break(shift: Shift) -> bool:
+    if _best_assignment(shift) is not None:
+        return False
+    if _shift_lifecycle_status_value(shift) not in {
+        ShiftLifecycleStatus.scheduled.value,
+        ShiftLifecycleStatus.in_progress.value,
+    }:
+        return False
+    if (
+        shift.staffing_status.value
+        if hasattr(shift.staffing_status, "value")
+        else str(shift.staffing_status)
+    ) not in {"open", "filling"}:
+        return False
+    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
+    return _assignment_status_value(last_assignment) in {"cancelled", "no_show"}
+
+
+def _shift_is_historical_display(shift: Shift) -> bool:
+    if _shift_lifecycle_status_value(shift) != ShiftLifecycleStatus.cancelled.value:
+        return False
+    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
+    return _assignment_status_value(last_assignment) in {"cancelled", "no_show"}
+
+
+def _shift_amendment_reason_code(shift: Shift) -> str | None:
+    last_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
+    last_status = _assignment_status_value(last_assignment)
+    if _shift_is_live_operational_break(shift):
+        if last_status == "no_show":
+            return "no_show"
+        if last_status == "cancelled":
+            return "callout"
+    if _shift_is_historical_display(shift):
+        if last_status == "no_show":
+            return "no_show"
+        if last_status == "cancelled":
+            return "cancelled"
+    return None
+
+
+async def _build_publish_summary(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID,
+    week_start: date,
+    week_end: date,
+    shifts: list[Shift],
+) -> WorkspaceBoardPublishSummaryRead:
+    publish_event_rows = await session.execute(
+        select(PlatformEvent)
+        .where(
+            PlatformEvent.business_id == business_id,
+            PlatformEvent.location_id == location_id,
+            PlatformEvent.event_type == platform_events.PlatformEventType.SCHEDULE_WEEK_PUBLISHED,
+        )
+        .order_by(PlatformEvent.occurred_at.desc())
+        .limit(50)
+    )
+    publish_events = list(publish_event_rows.scalars().all())
+    published_event = next(
+        (
+            entry
+            for entry in publish_events
+            if isinstance(entry.payload, dict)
+            and entry.payload.get("week_start_date") == week_start.isoformat()
+            and entry.payload.get("week_end_date") == week_end.isoformat()
+        ),
+        None,
+    )
+    if published_event is None:
+        return WorkspaceBoardPublishSummaryRead()
+
+    published_shift_ids: set[UUID] = set()
+    amended_shift_ids: set[UUID] = set()
+    published_employee_ids: set[UUID] = set()
+    amended_employee_ids: set[UUID] = set()
+
+    for shift in shifts:
+        employee_id = _shift_display_employee_id(shift)
+        lifecycle_status = _shift_lifecycle_status_value(shift)
+        if lifecycle_status == ShiftLifecycleStatus.draft.value or _shift_is_live_operational_break(shift):
+            amended_shift_ids.add(shift.id)
+            if employee_id is not None:
+                amended_employee_ids.add(employee_id)
+            continue
+
+        published_shift_ids.add(shift.id)
+        if employee_id is not None:
+            published_employee_ids.add(employee_id)
+
+    state = "amended" if amended_shift_ids or amended_employee_ids else "published"
+    return WorkspaceBoardPublishSummaryRead(
+        state=state,
+        published_at=published_event.occurred_at,
+        amended_at=published_event.occurred_at if state == "amended" else None,
+        published_shift_ids=sorted(published_shift_ids, key=str),
+        amended_shift_ids=sorted(amended_shift_ids, key=str),
+        published_employee_ids=sorted(published_employee_ids, key=str),
+        amended_employee_ids=sorted(amended_employee_ids, key=str),
     )
 
 
@@ -304,12 +435,24 @@ async def get_location_board(
                 delivered_offer_count=delivered_offer_count,
                 standby_depth=standby_depth,
                 manager_action_required=manager_action_required,
+                amended_from_published=_shift_is_live_operational_break(shift),
+                amendment_reason_code=_shift_amendment_reason_code(shift),
+                schedule_break=_shift_is_live_operational_break(shift),
+                historical_display=_shift_is_historical_display(shift),
             )
         )
 
     business_name = business.display_name
     location_role_setup_required = not bool(location_roles)
     location_employee_setup_required = not any(worker.can_cover_here for worker in workers)
+    publish_summary = await _build_publish_summary(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        week_start=window.week_start,
+        week_end=window.week_end,
+        shifts=shifts,
+    )
     return WorkspaceLocationBoardRead(
         business_id=business.id,
         business_name=business_name,
@@ -334,6 +477,7 @@ async def get_location_board(
         available_roles=available_roles,
         workers=workers,
         shifts=shift_reads,
+        publish_summary=publish_summary,
         action_summary=WorkspaceBoardActionSummaryRead(
             total=approval_required + active_coverage,
             approval_required=approval_required,

@@ -201,6 +201,15 @@ export type WorkspaceBoard = {
     can_cover_here: boolean;
     can_blast_here: boolean;
   }>;
+  publish_summary: {
+    state: "draft" | "published" | "amended";
+    published_at?: string | null;
+    amended_at?: string | null;
+    published_shift_ids: string[];
+    amended_shift_ids: string[];
+    published_employee_ids: string[];
+    amended_employee_ids: string[];
+  };
   shifts: Array<{
     shift_id: string;
     role_id: string;
@@ -240,6 +249,10 @@ export type WorkspaceBoard = {
     delivered_offer_count: number;
     standby_depth: number;
     manager_action_required: boolean;
+    amended_from_published: boolean;
+    amendment_reason_code?: string | null;
+    schedule_break: boolean;
+    historical_display: boolean;
   }>;
   action_summary: {
     total: number;

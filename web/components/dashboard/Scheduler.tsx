@@ -11,6 +11,7 @@ import {
   Plus,
   X,
   Trash2,
+  Flag,
   Check,
   ChevronDown,
   Zap,
@@ -31,9 +32,12 @@ import {
   UserMinus,
   UserPlus,
   AlertTriangle,
+  Siren,
   GripVertical,
   Info,
   CalendarDays,
+  Lock,
+  LockOpen,
 } from 'lucide-react';
 import { useAppWorkspaceRefresh } from '@/components/app-workspace';
 import { useResolvedAppAppearance } from '@/components/app-session-gate';
@@ -132,6 +136,10 @@ interface Shift {
   currentAssignmentId?: string | null;
   lifecycleStatus: string;
   staffingStatus: string;
+  amendedFromPublished: boolean;
+  amendmentReasonCode?: string | null;
+  scheduleBreak: boolean;
+  historicalDisplay: boolean;
   roleId: string;
   day: number;
   startHour: number;
@@ -141,6 +149,8 @@ interface Shift {
   presetKey?: ShiftDefaultKey | null;
   presetLabel?: string | null;
 }
+
+type ShiftPublishState = 'published' | 'amended' | null;
 
 type DayWeather = {
   icon: typeof Sun;
@@ -193,6 +203,23 @@ function formatHour(h: number) {
 
 function shiftDuration(s: Shift) {
   return s.endHour > s.startHour ? s.endHour - s.startHour : 24 - s.startHour + s.endHour;
+}
+
+function isOperationalScheduleBreak(shift: Pick<Shift, 'scheduleBreak' | 'amendmentReasonCode'>) {
+  return shift.scheduleBreak && (shift.amendmentReasonCode === 'callout' || shift.amendmentReasonCode === 'no_show');
+}
+
+function isHistoricalOperationalArtifact(
+  shift: Pick<Shift, 'historicalDisplay' | 'amendmentReasonCode'>,
+) {
+  return shift.historicalDisplay
+    && (shift.amendmentReasonCode === 'callout' || shift.amendmentReasonCode === 'no_show');
+}
+
+function isHistoricalCancelledShift(
+  shift: Pick<Shift, 'historicalDisplay' | 'amendmentReasonCode'>,
+) {
+  return shift.historicalDisplay && shift.amendmentReasonCode === 'cancelled';
 }
 
 function describeShiftDeletionError(error: unknown) {
@@ -465,6 +492,10 @@ function boardShiftToSchedulerShift(
     currentAssignmentId: shift.current_assignment?.assignment_id ?? null,
     lifecycleStatus: shift.lifecycle_status,
     staffingStatus: shift.staffing_status,
+    amendedFromPublished: shift.amended_from_published,
+    amendmentReasonCode: shift.amendment_reason_code ?? null,
+    scheduleBreak: shift.schedule_break,
+    historicalDisplay: shift.historical_display,
     roleId: shift.role_id,
     day,
     startHour,
@@ -623,6 +654,7 @@ function DraggableShiftChip({
   onAddShift,
   onDragCopy,
   onDragCopyPreview,
+  publishState = null,
   dark = false,
   draggable = true,
 }: {
@@ -633,6 +665,7 @@ function DraggableShiftChip({
   onAddShift: () => void;
   onDragCopy?: (targetDays: number[]) => void;
   onDragCopyPreview?: (days: number[] | null) => void;
+  publishState?: ShiftPublishState;
   dark?: boolean;
   draggable?: boolean;
 }) {
@@ -643,13 +676,32 @@ function DraggableShiftChip({
   const shiftLabel = shift.presetLabel?.trim() || descriptor.label;
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
+  const isHistoricalShift = shift.historicalDisplay;
+  const isCancelledHistory = isHistoricalCancelledShift(shift);
+  const hasHistoricalOperationalArtifact = isHistoricalOperationalArtifact(shift);
+  const hasOperationalBreak = isOperationalScheduleBreak(shift);
+  const hasScheduleBreak = shift.scheduleBreak;
+  const showGenericBreakIndicator = hasScheduleBreak && !hasOperationalBreak;
+  const ShiftStateIcon = hasOperationalBreak || isHistoricalShift
+    ? null
+    : publishState === 'published'
+      ? Lock
+      : publishState === 'amended'
+        ? LockOpen
+        : null;
+  const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
+  const canInteract = !isHistoricalShift;
+  const showSecondaryFlag = canInteract && (publishState === 'published' || publishState === 'amended');
+  const shiftTintColor = isHistoricalShift ? '#9CA3AF' : hasOperationalBreak ? '#DC2626' : hasScheduleBreak ? '#E5484D' : shift.color;
+  const shiftLabelColor = isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : shift.color;
+  const mutedTextColor = isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : undefined;
 
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: DRAG_TYPE,
     item: { type: DRAG_TYPE, shiftId: shift.id } as DragItem,
-    canDrag: draggable,
+    canDrag: draggable && canInteract,
     collect: (monitor) => ({ isDragging: monitor.isDragging() }),
-  }), [draggable, shift.id]);
+  }), [canInteract, draggable, shift.id]);
 
   const handleDragCopyStart = (event: React.MouseEvent) => {
     if (!onDragCopy) {
@@ -705,52 +757,82 @@ function DraggableShiftChip({
         ref={dragRef as unknown as React.RefObject<HTMLDivElement>}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        onClick={onEdit}
+        onClick={canInteract ? onEdit : undefined}
         className={`relative rounded-lg overflow-hidden transition-all mx-1 my-0.5 ${
-          draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+          canInteract ? (draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : 'cursor-not-allowed'
         } ${
-          isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
+          isDragging ? 'opacity-40 scale-95' : canInteract ? 'hover:shadow-md' : 'opacity-90'
         }`}
         style={{ minHeight: 52 }}
       >
-        <div className="absolute inset-0 rounded-lg" style={{ background: shift.color, opacity: 0.08 }} />
-        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shift.color }} />
+        <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : 0.08 }} />
+        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor }} />
+        {isHistoricalShift || hasOperationalBreak ? (
+          <div
+            className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
+            style={{
+              backgroundImage: `repeating-linear-gradient(45deg, ${isHistoricalShift ? '#9CA3AF' : '#DC2626'} 0, ${isHistoricalShift ? '#9CA3AF' : '#DC2626'} 2px, transparent 2px, transparent 8px)`,
+            }}
+          />
+        ) : null}
 
         <div className="relative pl-2.5 pr-2 py-2 flex items-start gap-1.5">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1">
-              <DescIcon size={11} style={{ color: shift.color }} className="shrink-0" />
-              <span className="text-[10px] truncate" style={{ fontWeight: 560, color: shift.color }}>
+              <DescIcon size={11} style={{ color: shiftLabelColor }} className="shrink-0" />
+              <span className={`text-[10px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 560, color: shiftLabelColor }}>
                 {shiftLabel}
               </span>
             </div>
-            <p className={`text-[9px] mt-0.5 ${theme.textMuted}`} style={{ fontWeight: 420 }}>
+            <p className={`text-[9px] mt-0.5 ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: mutedTextColor }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
             </p>
-            <p className={`text-[9px] mt-px ${theme.textSubtle}`} style={{ fontWeight: 400 }}>
-              {dur}h
-            </p>
+            <div className="mt-px flex items-center gap-1">
+              <p className={`text-[9px] ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textSubtle}`} style={{ fontWeight: 400, color: mutedTextColor }}>
+                {dur}h
+              </p>
+              {hasOperationalBreak || hasHistoricalOperationalArtifact ? (
+                <Siren size={8} className="shrink-0 text-[#DC2626]" />
+              ) : showGenericBreakIndicator ? (
+                <AlertTriangle size={8} className="shrink-0 text-[#E5484D]" />
+              ) : null}
+              {ShiftStateIcon && shiftStateColor ? (
+                <ShiftStateIcon size={8} className="shrink-0" style={{ color: shiftStateColor }} />
+              ) : null}
+              {isCancelledHistory ? (
+                <Flag size={8} className="shrink-0 text-[#9CA3AF]" />
+              ) : null}
+            </div>
           </div>
 
           <AnimatePresence>
-            {hovered && !isDragging && (
+            {hovered && !isDragging && canInteract && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="mr-2 flex flex-col gap-0.5 shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onAddShift(); }}
                   className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Add shift">
                   <Plus size={9} className={theme.textMuted} />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                  className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
-                  <Trash2 size={9} className={theme.textMuted} />
-                </button>
+                {showSecondaryFlag ? (
+                  <div
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass}`}
+                    title={publishState === 'amended' ? 'Amended published shift' : 'Published shift'}
+                  >
+                    <Flag size={9} className={theme.textMuted} />
+                  </div>
+                ) : (
+                  <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
+                    <Trash2 size={9} className={theme.textMuted} />
+                  </button>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
         <AnimatePresence>
-          {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+          {hovered && !isDragging && !isDragCopying && canInteract && onDragCopy ? (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -758,7 +840,7 @@ function DraggableShiftChip({
               className="absolute right-0 top-1/2 z-10 flex h-8 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
               draggable={false}
               onMouseDown={handleDragCopyStart}
-              style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+              style={{ background: shiftTintColor, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
               title="Drag to copy across days"
             >
               <GripVertical size={10} className="text-white" style={{ opacity: 0.8 }} />
@@ -775,55 +857,85 @@ function DraggableShiftChip({
       ref={dragRef as unknown as React.RefObject<HTMLDivElement>}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={onEdit}
+      onClick={canInteract ? onEdit : undefined}
       className={`relative rounded-lg overflow-hidden transition-all mx-1 my-[1px] ${
-        draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+        canInteract ? (draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : 'cursor-not-allowed'
       } ${
-        isDragging ? 'opacity-40 scale-95' : 'hover:shadow-md'
+        isDragging ? 'opacity-40 scale-95' : canInteract ? 'hover:shadow-md' : 'opacity-90'
       }`}
       style={{ minHeight: 38 }}
     >
-      <div className="absolute inset-0 rounded-lg" style={{ background: shift.color, opacity: 0.08 }} />
-      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shift.color }} />
+      <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : 0.08 }} />
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor }} />
+      {isHistoricalShift || hasOperationalBreak ? (
+        <div
+          className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
+          style={{
+            backgroundImage: `repeating-linear-gradient(45deg, ${isHistoricalShift ? '#9CA3AF' : '#DC2626'} 0, ${isHistoricalShift ? '#9CA3AF' : '#DC2626'} 2px, transparent 2px, transparent 8px)`,
+          }}
+        />
+      ) : null}
 
       <div className="relative pl-2.5 pr-2 py-1.5">
         {/* Row 1: label + hours top-right */}
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-1 min-w-0">
-            <DescIcon size={9} style={{ color: shift.color }} className="shrink-0" />
-            <span className="text-[9px] truncate" style={{ fontWeight: 540, color: shift.color }}>
+            <DescIcon size={9} style={{ color: shiftLabelColor }} className="shrink-0" />
+            <span className={`text-[9px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 540, color: shiftLabelColor }}>
               {shiftLabel}
             </span>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
-            <span className={`text-[8px] ${theme.textSubtle}`} style={{ fontWeight: 420 }}>
+            <span className={`text-[8px] ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textSubtle}`} style={{ fontWeight: 420, color: mutedTextColor }}>
               {dur}h
             </span>
             <AnimatePresence>
-              {hovered && !isDragging && (
+              {hovered && !isDragging && canInteract && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="mr-2 flex gap-0.5">
                   <button onClick={(e) => { e.stopPropagation(); onAddShift(); }}
                     className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-[#635BFF]/30`} title="Add shift">
                     <Plus size={7} className={theme.textMuted} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                    className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
-                    <Trash2 size={7} className={theme.textMuted} />
-                  </button>
+                  {showSecondaryFlag ? (
+                    <div
+                      className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass}`}
+                      title={publishState === 'amended' ? 'Amended published shift' : 'Published shift'}
+                    >
+                      <Flag size={7} className={theme.textMuted} />
+                    </div>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                      className={`p-0.5 rounded shadow-sm border transition-all ${theme.iconButtonClass} hover:border-red-300`} title="Delete">
+                      <Trash2 size={7} className={theme.textMuted} />
+                    </button>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
         </div>
         {/* Row 2: time span */}
-        <p className={`text-[8px] mt-0.5 truncate ${theme.textMuted}`} style={{ fontWeight: 420 }}>
-          {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
-        </p>
+        <div className="mt-0.5 flex items-center gap-1">
+          <p className={`text-[8px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: mutedTextColor }}>
+            {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
+          </p>
+          {hasOperationalBreak || hasHistoricalOperationalArtifact ? (
+            <Siren size={7} className="shrink-0 text-[#DC2626]" />
+          ) : showGenericBreakIndicator ? (
+            <AlertTriangle size={7} className="shrink-0 text-[#E5484D]" />
+          ) : null}
+          {ShiftStateIcon && shiftStateColor ? (
+            <ShiftStateIcon size={7} className="shrink-0" style={{ color: shiftStateColor }} />
+          ) : null}
+          {isCancelledHistory ? (
+            <Flag size={7} className="shrink-0 text-[#9CA3AF]" />
+          ) : null}
+        </div>
       </div>
 
       <AnimatePresence>
-        {hovered && !isDragging && !isDragCopying && onDragCopy ? (
+        {hovered && !isDragging && !isDragCopying && canInteract && onDragCopy ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -831,7 +943,7 @@ function DraggableShiftChip({
             className="absolute right-0 top-1/2 z-10 flex h-6 w-2 -translate-y-1/2 cursor-ew-resize items-center justify-center"
             draggable={false}
             onMouseDown={handleDragCopyStart}
-            style={{ background: shift.color, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
+            style={{ background: shiftTintColor, opacity: 0.4, borderRadius: '0 4px 4px 0' }}
             title="Drag to copy across days"
           >
             <GripVertical size={8} className="text-white" style={{ opacity: 0.8 }} />
@@ -1415,6 +1527,26 @@ function SchedulerContent({
       })),
     [roleColorById, shifts],
   );
+
+  const publishSummary = board?.publish_summary ?? null;
+  const publishedShiftIds = useMemo(
+    () => new Set(publishSummary?.published_shift_ids ?? []),
+    [publishSummary?.published_shift_ids],
+  );
+  const amendedShiftIds = useMemo(
+    () => new Set(publishSummary?.amended_shift_ids ?? []),
+    [publishSummary?.amended_shift_ids],
+  );
+
+  const shiftPublishState = useCallback((shift: Shift): ShiftPublishState => {
+    if (amendedShiftIds.has(shift.id) || shift.amendedFromPublished) {
+      return 'amended';
+    }
+    if (publishedShiftIds.has(shift.id)) {
+      return 'published';
+    }
+    return null;
+  }, [amendedShiftIds, publishedShiftIds]);
 
   const removeEmployee = useCallback((employeeId: string) => {
     const employee = schedulerEmployees.find((item) => item.id === employeeId);
@@ -2605,6 +2737,7 @@ function SchedulerContent({
                                 {cellShifts.length > 0 ? (
                                   cellShifts.map(shift => (
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
+                                      publishState={shiftPublishState(shift)}
                                       dark={isDark}
                                       draggable
                                       onEdit={() => setEditingShift(shift)}

@@ -82,6 +82,7 @@ from app.schemas.workforce import (
 )
 from app.schemas.workspace_board import (
     WorkspaceBoardActionSummaryRead,
+    WorkspaceBoardPublishSummaryRead,
     WorkspaceBoardRoleRead,
     WorkspaceBoardShiftAssignmentRead,
     WorkspaceBoardShiftRead,
@@ -172,6 +173,7 @@ __all__ = [
     "WebhookSubscriptionRead",
     "WebhookSubscriptionUpdate",
     "WorkspaceBoardActionSummaryRead",
+    "WorkspaceBoardPublishSummaryRead",
     "WorkspaceBoardRoleRead",
     "WorkspaceBoardShiftAssignmentRead",
     "WorkspaceBoardShiftRead",
