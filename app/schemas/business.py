@@ -39,6 +39,11 @@ class BusinessProfileUpdate(BaseSchema):
             "saturday",
         ]
     ] = None
+    same_day_second_shift_allowed: Optional[bool] = None
+    same_location_overlap_minutes: Optional[int] = Field(default=None, ge=0)
+    cross_location_shift_coverage_allowed: Optional[bool] = None
+    cross_location_min_gap_minutes: Optional[int] = Field(default=None, ge=0)
+    cross_location_max_radius_miles: Optional[int] = Field(default=None, ge=0)
 
 
 class BusinessRead(BaseSchema):

@@ -17,7 +17,7 @@ from app.models.common import (
     ShiftStaffingStatus,
     ShiftStatus,
 )
-from app.models.business import Business, LocationRole
+from app.models.business import Business, Location, LocationRole
 from app.models.coverage import (
     CoverageCase,
     CoverageCandidate,
@@ -162,6 +162,221 @@ def test_shift_calendar_day_window_uses_local_shift_day():
     assert day_ends_at == datetime(2026, 4, 18, 7, 0, tzinfo=timezone.utc)
 
 
+def test_same_day_shift_policy_allows_same_location_second_shift_without_overlap():
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        locality="Pasadena",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        latitude=34.1478,
+        longitude=-118.1445,
+        settings={},
+        google_place_metadata={},
+    )
+    open_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    open_shift.location = location
+
+    earlier_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 18, 19, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+    )
+    earlier_shift.location = location
+
+    assignment = ShiftAssignment(
+        shift_id=earlier_shift.id,
+        employee_id=employee_id,
+        status=AssignmentStatus.assigned,
+    )
+    assignment.shift = earlier_shift
+
+    result = coverage._evaluate_same_day_shift_policy(
+        shift=open_shift,
+        assignments=[assignment],
+        policy=coverage._coverage_business_policy({}),
+    )
+
+    assert result.eligible is True
+    assert result.second_shift_detected is True
+    assert result.penalty_multiplier == 0.6
+
+
+def test_same_day_shift_policy_blocks_same_location_overlap_above_limit():
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        locality="Pasadena",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        latitude=34.1478,
+        longitude=-118.1445,
+        settings={},
+        google_place_metadata={},
+    )
+    open_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    open_shift.location = location
+
+    overlapping_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 20, 30, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 18, 22, 30, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+    )
+    overlapping_shift.location = location
+
+    assignment = ShiftAssignment(
+        shift_id=overlapping_shift.id,
+        employee_id=employee_id,
+        status=AssignmentStatus.assigned,
+    )
+    assignment.shift = overlapping_shift
+
+    result = coverage._evaluate_same_day_shift_policy(
+        shift=open_shift,
+        assignments=[assignment],
+        policy=coverage._coverage_business_policy({}),
+    )
+
+    assert result.eligible is False
+    assert result.details["reason"] == "same_location_overlap_exceeds_limit"
+
+
+def test_same_day_shift_policy_blocks_cross_location_without_business_opt_in():
+    business_id = uuid4()
+    open_location_id = uuid4()
+    other_location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+
+    open_location = Location(
+        id=open_location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        locality="Pasadena",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        latitude=34.1478,
+        longitude=-118.1445,
+        settings={},
+        google_place_metadata={},
+    )
+    other_location = Location(
+        id=other_location_id,
+        business_id=business_id,
+        name="Old Town",
+        display_name="Old Town",
+        slug="old-town",
+        locality="Pasadena",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        latitude=34.1467,
+        longitude=-118.1503,
+        settings={},
+        google_place_metadata={},
+    )
+    open_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=open_location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    open_shift.location = open_location
+
+    other_shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=other_location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 18, 15, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 18, 19, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+    )
+    other_shift.location = other_location
+
+    assignment = ShiftAssignment(
+        shift_id=other_shift.id,
+        employee_id=employee_id,
+        status=AssignmentStatus.assigned,
+    )
+    assignment.shift = other_shift
+
+    result = coverage._evaluate_same_day_shift_policy(
+        shift=open_shift,
+        assignments=[assignment],
+        policy=coverage._coverage_business_policy({}),
+    )
+
+    assert result.eligible is False
+    assert result.details["reason"] == "cross_location_shift_coverage_disabled"
+
+
 @pytest.mark.asyncio
 async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
     business_id = uuid4()
@@ -202,7 +417,7 @@ async def test_execute_phase_1_run_persists_run_candidates_offers(monkeypatch):
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)
@@ -297,6 +512,33 @@ async def test_collect_phase_1_candidates_excludes_callout_employee_and_requires
         created_at=now,
         updated_at=now,
     )
+    business = Business(
+        id=business_id,
+        name="Backfill LLC",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    business = Business(
+        id=business_id,
+        name="Backfill LLC",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    business = Business(
+        id=business_id,
+        name="Backfill LLC",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
 
     excluded_employee = Employee(
         id=excluded_employee_id,
@@ -370,7 +612,7 @@ async def test_collect_phase_1_candidates_excludes_callout_employee_and_requires
         )
     ]
 
-    session = FakeCoverageSession(shift=shift, case=case)
+    session = FakeCoverageSession(shift=shift, case=case, business=business)
     session.execute_queue = [
         [excluded_employee, eligible_employee],
         [],
@@ -451,7 +693,7 @@ async def test_execute_phase_1_run_excludes_callout_employee_from_case_metadata(
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)
@@ -536,6 +778,15 @@ async def test_collect_phase_1_candidates_include_policy_metadata(monkeypatch):
         created_at=now,
         updated_at=now,
     )
+    business = Business(
+        id=business_id,
+        name="Backfill LLC",
+        display_name="Backfill",
+        slug="backfill",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
 
     employee = Employee(
         id=employee_id,
@@ -568,7 +819,7 @@ async def test_collect_phase_1_candidates_include_policy_metadata(monkeypatch):
         ],
     )
 
-    session = FakeCoverageSession(shift=shift, case=case)
+    session = FakeCoverageSession(shift=shift, case=case, business=business)
     session.execute_queue = [[employee], []]
 
     class FrozenDateTime(datetime):
@@ -1439,7 +1690,7 @@ async def test_execute_phase_2_run_requires_exhaustion_or_opt_in(monkeypatch):
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)
@@ -1461,6 +1712,68 @@ async def test_execute_phase_2_run_requires_exhaustion_or_opt_in(monkeypatch):
     monkeypatch.setattr(coverage, "_collect_phase_2_candidates", fake_collect_phase_2_candidates)
 
     with pytest.raises(ValueError, match="phase_2_not_allowed:phase_1_candidates_available"):
+        await coverage.execute_phase_2_run(
+            session,
+            business_id,
+            case_id,
+            coverage.Phase2ExecutionRequest(channel="sms"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_phase_2_run_respects_business_cross_location_setting(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime.now(timezone.utc) + timedelta(hours=3),
+        ends_at=datetime.now(timezone.utc) + timedelta(hours=11),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_2",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    session = FakeCoverageSession(shift=shift, case=case, business=business)
+
+    async def fake_collect_phase_1_candidates(_session, _business_id, _shift_id):
+        return shift, []
+
+    async def fake_collect_phase_2_candidates(_session, _business_id, _shift_id):
+        return shift, []
+
+    monkeypatch.setattr(coverage, "_collect_phase_1_candidates", fake_collect_phase_1_candidates)
+    monkeypatch.setattr(coverage, "_collect_phase_2_candidates", fake_collect_phase_2_candidates)
+
+    with pytest.raises(ValueError, match="phase_2_not_allowed:business_cross_location_disabled"):
         await coverage.execute_phase_2_run(
             session,
             business_id,
@@ -1510,7 +1823,7 @@ async def test_execute_phase_2_run_uses_blast_mode_when_urgent(monkeypatch):
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)
@@ -1594,7 +1907,7 @@ async def test_plan_coverage_case_execution_prefers_phase_1_when_available(monke
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)
@@ -1655,7 +1968,7 @@ async def test_execute_next_coverage_phase_exhausts_case_when_no_candidates(monk
         display_name="Casa Vega",
         slug="casa-vega",
         timezone="America/Los_Angeles",
-        settings={},
+        settings={"coverage": {"cross_location_shift_coverage_allowed": True}},
         place_metadata={},
     )
     session = FakeCoverageSession(shift=shift, case=case, business=business)

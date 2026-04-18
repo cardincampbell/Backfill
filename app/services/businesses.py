@@ -323,6 +323,13 @@ async def update_business_profile(
         primary_email = primary_email.lower()
     company_address = _normalize_optional(payload.company_address)
     week_start_day = payload.week_start_day
+    coverage_field_map = {
+        "same_day_second_shift_allowed": payload.same_day_second_shift_allowed,
+        "same_location_overlap_minutes": payload.same_location_overlap_minutes,
+        "cross_location_shift_coverage_allowed": payload.cross_location_shift_coverage_allowed,
+        "cross_location_min_gap_minutes": payload.cross_location_min_gap_minutes,
+        "cross_location_max_radius_miles": payload.cross_location_max_radius_miles,
+    }
 
     changes: dict[str, object] = {}
     if business.display_name != display_name:
@@ -362,6 +369,34 @@ async def update_business_profile(
         else:
             settings["week_start_day"] = week_start_day
         changes["week_start_day"] = week_start_day
+
+    current_coverage_settings = settings.get("coverage")
+    coverage_settings = (
+        dict(current_coverage_settings)
+        if isinstance(current_coverage_settings, dict)
+        else {}
+    )
+    coverage_changed = False
+    for key, value in coverage_field_map.items():
+        if key not in payload.model_fields_set:
+            continue
+        current_value = coverage_settings.get(key)
+        if value is None:
+            if key in coverage_settings:
+                coverage_settings.pop(key, None)
+                coverage_changed = True
+                changes[key] = None
+            continue
+        if current_value != value:
+            coverage_settings[key] = value
+            coverage_changed = True
+            changes[key] = value
+
+    if coverage_changed:
+        if coverage_settings:
+            settings["coverage"] = coverage_settings
+        else:
+            settings.pop("coverage", None)
 
     if settings != current_settings:
         business.settings = settings

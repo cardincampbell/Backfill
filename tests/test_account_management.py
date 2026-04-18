@@ -429,6 +429,11 @@ def test_business_profile_route_updates_current_business():
                 "timezone": "America/New_York",
                 "company_address": "100 Market St, San Francisco, CA 94105",
                 "week_start_day": "monday",
+                "same_day_second_shift_allowed": True,
+                "same_location_overlap_minutes": 0,
+                "cross_location_shift_coverage_allowed": False,
+                "cross_location_min_gap_minutes": 60,
+                "cross_location_max_radius_miles": 20,
             },
         )
         assert response.status_code == 200
@@ -443,6 +448,11 @@ def test_business_profile_route_updates_current_business():
         assert business.timezone == "America/New_York"
         assert business.settings["company_profile_address"] == "100 Market St, San Francisco, CA 94105"
         assert business.settings["week_start_day"] == "monday"
+        assert business.settings["coverage"]["same_day_second_shift_allowed"] is True
+        assert business.settings["coverage"]["same_location_overlap_minutes"] == 0
+        assert business.settings["coverage"]["cross_location_shift_coverage_allowed"] is False
+        assert business.settings["coverage"]["cross_location_min_gap_minutes"] == 60
+        assert business.settings["coverage"]["cross_location_max_radius_miles"] == 20
         assert business.settings["display_name_source"] == "manual"
         assert business.settings["vertical_source"] == "manual"
         assert fake_session.commits == 1

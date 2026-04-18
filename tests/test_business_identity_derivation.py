@@ -455,6 +455,11 @@ async def test_update_business_profile_marks_brand_name_as_manual():
             timezone="America/New_York",
             company_address="100 Market St, San Francisco, CA 94105",
             week_start_day="monday",
+            same_day_second_shift_allowed=True,
+            same_location_overlap_minutes=0,
+            cross_location_shift_coverage_allowed=False,
+            cross_location_min_gap_minutes=60,
+            cross_location_max_radius_miles=20,
         ),
     )
 
@@ -462,6 +467,11 @@ async def test_update_business_profile_marks_brand_name_as_manual():
     assert business.settings["display_name_source"] == "manual"
     assert business.settings["vertical_source"] == "manual"
     assert business.settings["week_start_day"] == "monday"
+    assert business.settings["coverage"]["same_day_second_shift_allowed"] is True
+    assert business.settings["coverage"]["same_location_overlap_minutes"] == 0
+    assert business.settings["coverage"]["cross_location_shift_coverage_allowed"] is False
+    assert business.settings["coverage"]["cross_location_min_gap_minutes"] == 60
+    assert business.settings["coverage"]["cross_location_max_radius_miles"] == 20
 
 
 @pytest.mark.asyncio

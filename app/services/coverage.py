@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 from uuid import UUID
@@ -63,6 +64,12 @@ from app.services import (
 
 _COVERAGE_POLICY_VERSION = "coverage_policy_v1"
 _COVERAGE_POLICY_INPUTS_VERSION = "runtime_projection_inputs_v1"
+_SAME_DAY_SECOND_SHIFT_PENALTY_MULTIPLIER = 0.6
+_DEFAULT_SAME_DAY_SECOND_SHIFT_ALLOWED = True
+_DEFAULT_SAME_LOCATION_OVERLAP_MINUTES = 0
+_DEFAULT_CROSS_LOCATION_SHIFT_COVERAGE_ALLOWED = False
+_DEFAULT_CROSS_LOCATION_MIN_GAP_MINUTES = 60
+_DEFAULT_CROSS_LOCATION_MAX_RADIUS_MILES = 20
 
 
 def _shift_amendment_metadata(shift: Shift) -> dict:
@@ -94,6 +101,23 @@ def _policy_explanation_metadata(*, generated_at: datetime) -> dict[str, str]:
         "snapshot_generated_at": generated_at.isoformat(),
         "inputs_version": _COVERAGE_POLICY_INPUTS_VERSION,
     }
+
+
+@dataclass(frozen=True)
+class _CoverageBusinessPolicy:
+    same_day_second_shift_allowed: bool = _DEFAULT_SAME_DAY_SECOND_SHIFT_ALLOWED
+    same_location_overlap_minutes: int = _DEFAULT_SAME_LOCATION_OVERLAP_MINUTES
+    cross_location_shift_coverage_allowed: bool = _DEFAULT_CROSS_LOCATION_SHIFT_COVERAGE_ALLOWED
+    cross_location_min_gap_minutes: int = _DEFAULT_CROSS_LOCATION_MIN_GAP_MINUTES
+    cross_location_max_radius_miles: int = _DEFAULT_CROSS_LOCATION_MAX_RADIUS_MILES
+
+
+@dataclass(frozen=True)
+class _SameDayShiftPolicyResult:
+    eligible: bool
+    second_shift_detected: bool
+    penalty_multiplier: float
+    details: dict[str, object]
 
 
 def _coverage_assignment_source(response_channel: str) -> str:
@@ -173,6 +197,227 @@ def _distance_miles(
     return earth_radius_miles * c
 
 
+def _location_identity_key(location) -> tuple[str, str, str] | None:
+    locality = str(getattr(location, "locality", "") or "").strip().lower()
+    region = str(getattr(location, "region", "") or "").strip().lower()
+    country_code = str(getattr(location, "country_code", "") or "").strip().lower()
+    if not locality or not region:
+        return None
+    return locality, region, country_code
+
+
+def _same_day_shift_overlap_minutes(left: Shift, right: Shift) -> float:
+    overlap_seconds = min(left.ends_at, right.ends_at) - max(left.starts_at, right.starts_at)
+    return max(0.0, overlap_seconds.total_seconds() / 60)
+
+
+def _same_day_shift_gap_minutes(left: Shift, right: Shift) -> float:
+    if left.ends_at <= right.starts_at:
+        return max(0.0, (right.starts_at - left.ends_at).total_seconds() / 60)
+    if right.ends_at <= left.starts_at:
+        return max(0.0, (left.starts_at - right.ends_at).total_seconds() / 60)
+    return 0.0
+
+
+async def _load_same_day_assignments(
+    session: AsyncSession,
+    *,
+    employee_ids: list[UUID],
+    shift: Shift,
+) -> dict[UUID, list[ShiftAssignment]]:
+    if not employee_ids:
+        return {}
+
+    day_starts_at, day_ends_at = _shift_calendar_day_window(shift)
+    assignment_result = await session.execute(
+        select(ShiftAssignment)
+        .join(Shift, ShiftAssignment.shift_id == Shift.id)
+        .options(selectinload(ShiftAssignment.shift).selectinload(Shift.location))
+        .where(
+            ShiftAssignment.employee_id.in_(employee_ids),
+            ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
+            Shift.id != shift.id,
+            Shift.starts_at < day_ends_at,
+            Shift.ends_at > day_starts_at,
+        )
+    )
+    assignments_by_employee: dict[UUID, list[ShiftAssignment]] = {}
+    for assignment in assignment_result.scalars().all():
+        if assignment.employee_id is None:
+            continue
+        assignments_by_employee.setdefault(assignment.employee_id, []).append(assignment)
+    return assignments_by_employee
+
+
+def _evaluate_same_day_shift_policy(
+    *,
+    shift: Shift,
+    assignments: list[ShiftAssignment],
+    policy: _CoverageBusinessPolicy,
+) -> _SameDayShiftPolicyResult:
+    if not assignments:
+        return _SameDayShiftPolicyResult(
+            eligible=True,
+            second_shift_detected=False,
+            penalty_multiplier=1.0,
+            details={"second_shift_detected": False, "assignments_considered": 0},
+        )
+
+    details: dict[str, object] = {
+        "second_shift_detected": True,
+        "assignments_considered": len(assignments),
+        "same_location_overlap_limit_minutes": policy.same_location_overlap_minutes,
+        "cross_location_min_gap_minutes": policy.cross_location_min_gap_minutes,
+        "cross_location_max_radius_miles": policy.cross_location_max_radius_miles,
+        "cross_location_same_locality_required": True,
+        "existing_assignments": [],
+    }
+    if not policy.same_day_second_shift_allowed:
+        details["reason"] = "same_day_second_shift_disabled"
+        return _SameDayShiftPolicyResult(
+            eligible=False,
+            second_shift_detected=True,
+            penalty_multiplier=1.0,
+            details=details,
+        )
+
+    for assignment in assignments:
+        existing_shift = assignment.shift
+        if existing_shift is None:
+            details["reason"] = "existing_assignment_missing_shift"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        overlap_minutes = _same_day_shift_overlap_minutes(existing_shift, shift)
+        gap_minutes = _same_day_shift_gap_minutes(existing_shift, shift)
+        same_location = existing_shift.location_id == shift.location_id
+        assignment_details: dict[str, object] = {
+            "shift_id": str(existing_shift.id),
+            "location_id": str(existing_shift.location_id),
+            "same_location": same_location,
+            "overlap_minutes": round(overlap_minutes, 2),
+            "gap_minutes": round(gap_minutes, 2),
+        }
+
+        if same_location:
+            if overlap_minutes > float(policy.same_location_overlap_minutes):
+                assignment_details["reason"] = "same_location_overlap_exceeds_limit"
+                details["existing_assignments"].append(assignment_details)
+                details["reason"] = "same_location_overlap_exceeds_limit"
+                return _SameDayShiftPolicyResult(
+                    eligible=False,
+                    second_shift_detected=True,
+                    penalty_multiplier=1.0,
+                    details=details,
+                )
+            details["existing_assignments"].append(assignment_details)
+            continue
+
+        if not policy.cross_location_shift_coverage_allowed:
+            assignment_details["reason"] = "cross_location_shift_coverage_disabled"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_shift_coverage_disabled"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        if overlap_minutes > 0:
+            assignment_details["reason"] = "cross_location_overlap_not_allowed"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_overlap_not_allowed"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        if gap_minutes < float(policy.cross_location_min_gap_minutes):
+            assignment_details["reason"] = "cross_location_gap_below_minimum"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_gap_below_minimum"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        other_location = getattr(existing_shift, "location", None)
+        if other_location is None:
+            assignment_details["reason"] = "cross_location_missing_location"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_missing_location"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        open_location_key = _location_identity_key(shift.location)
+        other_location_key = _location_identity_key(other_location)
+        assignment_details["same_locality"] = (
+            open_location_key is not None and other_location_key is not None and open_location_key == other_location_key
+        )
+        if not assignment_details["same_locality"]:
+            assignment_details["reason"] = "cross_location_locality_mismatch"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_locality_mismatch"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        distance_miles = _distance_miles(
+            left_lat=float(shift.location.latitude) if getattr(shift.location, "latitude", None) is not None else None,
+            left_lng=float(shift.location.longitude) if getattr(shift.location, "longitude", None) is not None else None,
+            right_lat=float(other_location.latitude) if getattr(other_location, "latitude", None) is not None else None,
+            right_lng=float(other_location.longitude) if getattr(other_location, "longitude", None) is not None else None,
+        )
+        assignment_details["distance_miles"] = round(distance_miles, 2) if distance_miles is not None else None
+        if distance_miles is None:
+            assignment_details["reason"] = "cross_location_distance_unknown"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_distance_unknown"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        if distance_miles > float(policy.cross_location_max_radius_miles):
+            assignment_details["reason"] = "cross_location_outside_radius"
+            details["existing_assignments"].append(assignment_details)
+            details["reason"] = "cross_location_outside_radius"
+            return _SameDayShiftPolicyResult(
+                eligible=False,
+                second_shift_detected=True,
+                penalty_multiplier=1.0,
+                details=details,
+            )
+
+        details["existing_assignments"].append(assignment_details)
+
+    details["penalty_multiplier"] = _SAME_DAY_SECOND_SHIFT_PENALTY_MULTIPLIER
+    return _SameDayShiftPolicyResult(
+        eligible=True,
+        second_shift_detected=True,
+        penalty_multiplier=_SAME_DAY_SECOND_SHIFT_PENALTY_MULTIPLIER,
+        details=details,
+    )
+
+
 def _coverage_settings_enabled(payload: dict | None, *keys: str) -> Optional[bool]:
     if not payload:
         return None
@@ -187,6 +432,81 @@ def _coverage_settings_enabled(payload: dict | None, *keys: str) -> Optional[boo
         if isinstance(value, bool):
             return value
     return None
+
+
+def _coverage_settings_int(payload: dict | None, *keys: str) -> Optional[int]:
+    if not payload:
+        return None
+    coverage_settings = payload.get("coverage")
+    if isinstance(coverage_settings, dict):
+        for key in keys:
+            value = coverage_settings.get(key)
+            try:
+                if value is not None:
+                    return max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+    for key in keys:
+        value = payload.get(key)
+        try:
+            if value is not None:
+                return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _coverage_business_policy(payload: dict | None) -> _CoverageBusinessPolicy:
+    same_day_second_shift_allowed = _coverage_settings_enabled(
+        payload,
+        "same_day_second_shift_allowed",
+    )
+    same_location_overlap_minutes = _coverage_settings_int(
+        payload,
+        "same_location_overlap_minutes",
+    )
+    cross_location_shift_coverage_allowed = _coverage_settings_enabled(
+        payload,
+        "cross_location_shift_coverage_allowed",
+        "cross_location_enabled",
+        "phase_2_enabled",
+        "cross_location_opt_in",
+    )
+    cross_location_min_gap_minutes = _coverage_settings_int(
+        payload,
+        "cross_location_min_gap_minutes",
+    )
+    cross_location_max_radius_miles = _coverage_settings_int(
+        payload,
+        "cross_location_max_radius_miles",
+    )
+    return _CoverageBusinessPolicy(
+        same_day_second_shift_allowed=(
+            _DEFAULT_SAME_DAY_SECOND_SHIFT_ALLOWED
+            if same_day_second_shift_allowed is None
+            else same_day_second_shift_allowed
+        ),
+        same_location_overlap_minutes=(
+            _DEFAULT_SAME_LOCATION_OVERLAP_MINUTES
+            if same_location_overlap_minutes is None
+            else same_location_overlap_minutes
+        ),
+        cross_location_shift_coverage_allowed=(
+            _DEFAULT_CROSS_LOCATION_SHIFT_COVERAGE_ALLOWED
+            if cross_location_shift_coverage_allowed is None
+            else cross_location_shift_coverage_allowed
+        ),
+        cross_location_min_gap_minutes=(
+            _DEFAULT_CROSS_LOCATION_MIN_GAP_MINUTES
+            if cross_location_min_gap_minutes is None
+            else cross_location_min_gap_minutes
+        ),
+        cross_location_max_radius_miles=(
+            _DEFAULT_CROSS_LOCATION_MAX_RADIUS_MILES
+            if cross_location_max_radius_miles is None
+            else cross_location_max_radius_miles
+        ),
+    )
 
 
 def _premium_cents_from_rules(payload: dict | None) -> int:
@@ -242,6 +562,7 @@ async def _resolve_phase_2_policy(
     phase_1_candidate_count: int | None,
 ) -> tuple[bool, str]:
     business = await _get_shift_business(session, business_id)
+    business_policy = _coverage_business_policy(business.settings)
     location_role = await _get_location_role_for_shift(session, shift)
 
     location_enabled = _coverage_settings_enabled(
@@ -260,17 +581,14 @@ async def _resolve_phase_2_policy(
     if role_enabled is False:
         return False, "role_opt_out"
 
+    if not business_policy.cross_location_shift_coverage_allowed:
+        return False, "business_cross_location_disabled"
+
     if phase_1_candidate_count == 0:
         return True, "phase_1_exhausted"
 
-    business_opt_in = _coverage_settings_enabled(
-        business.settings,
-        "cross_location_enabled",
-        "phase_2_enabled",
-        "cross_location_opt_in",
-    )
-    if business_opt_in is True or location_enabled is True or role_enabled is True:
-        return True, "cross_location_opt_in"
+    if location_enabled is True or role_enabled is True:
+        return True, "cross_location_enabled"
 
     return False, "phase_1_candidates_available"
 
@@ -1176,6 +1494,8 @@ async def _collect_phase_1_candidates(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
+    business = await _get_shift_business(session, business_id)
+    business_policy = _coverage_business_policy(business.settings)
     excluded_employee_ids = _excluded_employee_ids_for_shift(shift)
 
     result = await session.execute(
@@ -1196,20 +1516,11 @@ async def _collect_phase_1_candidates(
     employees = list(result.scalars().unique().all())
 
     employee_ids = [employee.id for employee in employees]
-    busy_employee_ids: set[UUID] = set()
-    if employee_ids:
-        day_starts_at, day_ends_at = _shift_calendar_day_window(shift)
-        busy_result = await session.execute(
-            select(ShiftAssignment.employee_id)
-            .join(Shift, ShiftAssignment.shift_id == Shift.id)
-            .where(
-                ShiftAssignment.employee_id.in_(employee_ids),
-                ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
-                Shift.starts_at < day_ends_at,
-                Shift.ends_at > day_starts_at,
-            )
-        )
-        busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
+    same_day_assignments_by_employee = await _load_same_day_assignments(
+        session,
+        employee_ids=employee_ids,
+        shift=shift,
+    )
 
     reference_time = datetime.now(timezone.utc)
     policy_metadata = _policy_explanation_metadata(generated_at=reference_time)
@@ -1241,8 +1552,6 @@ async def _collect_phase_1_candidates(
         )
         if employee_location is None:
             continue
-        if employee.id in busy_employee_ids:
-            continue
 
         available, availability_snapshot = _is_available_for_shift(employee, shift)
         if not available:
@@ -1265,11 +1574,22 @@ async def _collect_phase_1_candidates(
         if bool(guardrails.get("hard_excluded")):
             continue
         guardrail_multiplier = float(guardrails.get("overall_multiplier") or 1.0)
-        score = round(score * guardrail_multiplier, 3)
         scoring_factors["outreach_guardrails"] = guardrails
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         if isinstance(guardrails.get("overtime_projection"), dict):
             scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
+        same_day_policy = _evaluate_same_day_shift_policy(
+            shift=shift,
+            assignments=same_day_assignments_by_employee.get(employee.id, []),
+            policy=business_policy,
+        )
+        if not same_day_policy.eligible:
+            continue
+        second_shift_multiplier = float(same_day_policy.penalty_multiplier or 1.0)
+        score = round(score * second_shift_multiplier, 3)
+        score = round(score * guardrail_multiplier, 3)
+        scoring_factors["same_day_shift_policy"] = same_day_policy.details
+        scoring_factors["same_day_shift_penalty_multiplier"] = second_shift_multiplier
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
@@ -1312,6 +1632,8 @@ async def _collect_phase_2_candidates(
     if shift is None or shift.business_id != business_id:
         raise LookupError("shift_not_found")
 
+    business = await _get_shift_business(session, business_id)
+    business_policy = _coverage_business_policy(business.settings)
     excluded_employee_ids = _excluded_employee_ids_for_shift(shift)
 
     result = await session.execute(
@@ -1332,22 +1654,8 @@ async def _collect_phase_2_candidates(
     employees = list(result.scalars().unique().all())
 
     employee_ids = [employee.id for employee in employees]
-    busy_employee_ids: set[UUID] = set()
     worked_location_counts: dict[UUID, int] = {}
     if employee_ids:
-        day_starts_at, day_ends_at = _shift_calendar_day_window(shift)
-        busy_result = await session.execute(
-            select(ShiftAssignment.employee_id)
-            .join(Shift, ShiftAssignment.shift_id == Shift.id)
-            .where(
-                ShiftAssignment.employee_id.in_(employee_ids),
-                ShiftAssignment.status.in_([AssignmentStatus.assigned, AssignmentStatus.accepted]),
-                Shift.starts_at < day_ends_at,
-                Shift.ends_at > day_starts_at,
-            )
-        )
-        busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
-
         historical_result = await session.execute(
             select(ShiftAssignment.employee_id, func.count(ShiftAssignment.id))
             .join(Shift, ShiftAssignment.shift_id == Shift.id)
@@ -1369,6 +1677,11 @@ async def _collect_phase_2_candidates(
             for employee_id, count in historical_result.all()
             if employee_id is not None
         }
+    same_day_assignments_by_employee = await _load_same_day_assignments(
+        session,
+        employee_ids=employee_ids,
+        shift=shift,
+    )
 
     reference_time = datetime.now(timezone.utc)
     policy_metadata = _policy_explanation_metadata(generated_at=reference_time)
@@ -1390,8 +1703,6 @@ async def _collect_phase_2_candidates(
         if employee.id in excluded_employee_ids:
             continue
         if employee.primary_location_id == shift.location_id:
-            continue
-        if employee.id in busy_employee_ids:
             continue
 
         employee_location = next(
@@ -1437,11 +1748,22 @@ async def _collect_phase_2_candidates(
         if bool(guardrails.get("hard_excluded")):
             continue
         guardrail_multiplier = float(guardrails.get("overall_multiplier") or 1.0)
-        score = round(score * guardrail_multiplier, 3)
         scoring_factors["outreach_guardrails"] = guardrails
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         if isinstance(guardrails.get("overtime_projection"), dict):
             scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
+        same_day_policy = _evaluate_same_day_shift_policy(
+            shift=shift,
+            assignments=same_day_assignments_by_employee.get(employee.id, []),
+            policy=business_policy,
+        )
+        if not same_day_policy.eligible:
+            continue
+        second_shift_multiplier = float(same_day_policy.penalty_multiplier or 1.0)
+        score = round(score * second_shift_multiplier, 3)
+        score = round(score * guardrail_multiplier, 3)
+        scoring_factors["same_day_shift_policy"] = same_day_policy.details
+        scoring_factors["same_day_shift_penalty_multiplier"] = second_shift_multiplier
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
