@@ -23,6 +23,7 @@ from app.schemas.business import (
 from app.services import (
     business_classification,
     business_identity_derivation,
+    labor_rule_resolution,
     role_derivation,
     role_normalization,
     shift_defaults,
@@ -447,6 +448,11 @@ async def create_location_record(
             )
     if derive_roles:
         await business_classification.sync_business_classification(session, business, locations=existing_locations)
+        await labor_rule_resolution.sync_location_labor_rule_resolution(
+            session,
+            business=business,
+            location=location,
+        )
     return location
 
 

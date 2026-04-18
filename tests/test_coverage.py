@@ -8,8 +8,9 @@ import pytest
 from app.models.common import (
     AssignmentStatus,
     CoverageCaseStatus,
-    CoverageRunStatus,
     CoverageOperatingMode,
+    CoverageRunStatus,
+    EmployeeStatus,
     OfferStatus,
     OutboxStatus,
     ShiftLifecycleStatus,
@@ -499,6 +500,112 @@ async def test_execute_phase_1_run_excludes_callout_employee_from_case_metadata(
     assert len(offers) == 1
     assert candidates[0].employee_id == eligible_employee_id
     assert offers[0].employee_id == eligible_employee_id
+
+
+@pytest.mark.asyncio
+async def test_collect_phase_1_candidates_include_policy_metadata(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    now = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=6),
+        ends_at=now + timedelta(hours=14),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=uuid4(),
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Eligible Employee",
+        phone_e164="+15555550123",
+        status=EmployeeStatus.active,
+        reliability_score=0.9,
+        avg_response_time_seconds=60,
+        employee_roles=[
+            EmployeeRole(
+                employee_id=employee_id,
+                role_id=role_id,
+                is_primary=True,
+                proficiency_level=3,
+            )
+        ],
+        employee_locations=[
+            EmployeeLocation(
+                employee_id=employee_id,
+                location_id=location_id,
+                is_primary=True,
+                access_level="approved",
+                can_cover_last_minute=True,
+                can_blast=True,
+                location_metadata={},
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case)
+    session.execute_queue = [[employee], []]
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz is None else now.astimezone(tz)
+
+    monkeypatch.setattr(coverage, "datetime", FrozenDateTime)
+    monkeypatch.setattr(
+        coverage,
+        "_is_available_for_shift",
+        lambda _employee, _shift: (True, {"rule_match": True}),
+    )
+
+    async def fake_refresh_employee_score_snapshots(*_args, **_kwargs):
+        return {employee_id: {"status": "fresh"}}
+
+    async def fake_build_outreach_guardrail_snapshots(*_args, **_kwargs):
+        return {employee_id: {"overall_multiplier": 1.0, "hard_excluded": False}}
+
+    monkeypatch.setattr(
+        coverage.runtime_projections,
+        "refresh_employee_score_snapshots",
+        fake_refresh_employee_score_snapshots,
+    )
+    monkeypatch.setattr(
+        coverage.runtime_projections,
+        "build_outreach_guardrail_snapshots",
+        fake_build_outreach_guardrail_snapshots,
+    )
+
+    _shift, ranked = await coverage._collect_phase_1_candidates(session, business_id, shift_id)
+
+    assert len(ranked) == 1
+    assert ranked[0].scoring_factors["policy_version"] == "coverage_policy_v1"
+    assert ranked[0].scoring_factors["inputs_version"] == "runtime_projection_inputs_v1"
+    assert ranked[0].scoring_factors["snapshot_generated_at"] == now.isoformat()
 
 
 @pytest.mark.asyncio

@@ -149,6 +149,25 @@ class Settings:
         "BACKFILL_BUSINESS_CLASSIFICATION_MODEL",
         os.environ.get("BACKFILL_ROLE_DERIVATION_MODEL", os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "")),
     ).strip()
+    labor_rules_mode: str = os.environ.get(
+        "BACKFILL_LABOR_RULES_MODE",
+        "shadow",
+    ).strip().lower()
+    labor_rule_update_model: str = os.environ.get(
+        "BACKFILL_LABOR_RULE_UPDATE_MODEL",
+        os.environ.get("BACKFILL_BUSINESS_CLASSIFICATION_MODEL", os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "")),
+    ).strip()
+    labor_rule_profile_selection_model: str = os.environ.get(
+        "BACKFILL_LABOR_RULE_PROFILE_SELECTION_MODEL",
+        os.environ.get("BACKFILL_BUSINESS_CLASSIFICATION_MODEL", os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", "")),
+    ).strip()
+    labor_rule_source_refresh_hours: int = int(
+        os.environ.get("BACKFILL_LABOR_RULE_SOURCE_REFRESH_HOURS", "24")
+    )
+    labor_rule_proposal_autoqueue: bool = os.environ.get(
+        "BACKFILL_LABOR_RULE_PROPOSAL_AUTOQUEUE",
+        "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     role_derivation_model: str = os.environ.get(
         "BACKFILL_ROLE_DERIVATION_MODEL",
         os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", ""),

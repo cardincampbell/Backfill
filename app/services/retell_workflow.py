@@ -88,6 +88,7 @@ _OPENAI_OUTBOUND_INTENT_ENUM = (
     "follow_up_needed",
     "unknown",
 )
+RETELL_NORMALIZED_CALLBACK_VERSION = "retell_normalized_callback_v1"
 
 
 def _first_name(full_name: str | None) -> str | None:
@@ -374,6 +375,108 @@ def _uuid_from_mapping(*mappings: dict[str, Any], keys: tuple[str, ...]) -> UUID
         return None
 
 
+def _retell_contract_versions(*mappings: dict[str, Any]) -> dict[str, str]:
+    versions: dict[str, str] = {}
+    metadata_version = _pick_normalized_value(
+        *mappings,
+        keys=("backfill_metadata_contract_version", "metadata_contract_version"),
+    )
+    dynamic_variables_version = _pick_normalized_value(
+        *mappings,
+        keys=(
+            "backfill_dynamic_variables_contract_version",
+            "backfill_dynamic_contract_version",
+            "dynamic_variables_contract_version",
+        ),
+    )
+    callback_version = _pick_normalized_value(
+        *mappings,
+        keys=(
+            "backfill_callback_contract_version",
+            "callback_contract_version",
+            "contract_version",
+        ),
+    )
+    if metadata_version not in (None, ""):
+        versions["metadata_contract_version"] = str(metadata_version).strip()
+    if dynamic_variables_version not in (None, ""):
+        versions["dynamic_variables_contract_version"] = str(dynamic_variables_version).strip()
+    if callback_version not in (None, ""):
+        versions["callback_contract_version"] = str(callback_version).strip()
+    return versions
+
+
+def _normalized_retell_linkage(
+    *,
+    conversation: RetellConversation,
+    metadata: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    metadata_mapping = metadata if isinstance(metadata, dict) else {}
+    body_mapping = body if isinstance(body, dict) else {}
+    nested_linkage = metadata_mapping.get("backfill_linkage")
+    linkage_mapping = nested_linkage if isinstance(nested_linkage, dict) else {}
+
+    normalized: dict[str, str] = {}
+    offer_id = _uuid_from_mapping(linkage_mapping, metadata_mapping, body_mapping, keys=("offer_id", "coverage_offer_id"))
+    coverage_case_id = _uuid_from_mapping(linkage_mapping, metadata_mapping, body_mapping, keys=("coverage_case_id",))
+    coverage_case_run_id = _uuid_from_mapping(linkage_mapping, metadata_mapping, body_mapping, keys=("coverage_case_run_id",))
+    shift_id = _uuid_from_mapping(linkage_mapping, metadata_mapping, body_mapping, keys=("shift_id",))
+    employee_id = _uuid_from_mapping(linkage_mapping, metadata_mapping, body_mapping, keys=("employee_id", "worker_id"))
+    if offer_id or conversation.coverage_offer_id:
+        normalized["offer_id"] = str(offer_id or conversation.coverage_offer_id)
+    if coverage_case_id or conversation.coverage_case_id:
+        normalized["coverage_case_id"] = str(coverage_case_id or conversation.coverage_case_id)
+    if coverage_case_run_id:
+        normalized["coverage_case_run_id"] = str(coverage_case_run_id)
+    if shift_id or conversation.shift_id:
+        normalized["shift_id"] = str(shift_id or conversation.shift_id)
+    if employee_id or conversation.employee_id:
+        normalized["employee_id"] = str(employee_id or conversation.employee_id)
+
+    contract_version = _retell_contract_versions(linkage_mapping, metadata_mapping, body_mapping).get(
+        "callback_contract_version"
+    )
+    if contract_version:
+        normalized["contract_version"] = contract_version
+    return normalized
+
+
+def _set_normalized_callback_summary(
+    conversation: RetellConversation,
+    *,
+    intent_signal: dict[str, Any] | None = None,
+    secondary_intent_signal: dict[str, Any] | None = None,
+    agreement_signal: dict[str, Any] | None = None,
+) -> None:
+    metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+    contracts = metadata.get("backfill_contract")
+    contract_block = contracts if isinstance(contracts, dict) else {}
+    normalized_callback = {
+        "version": RETELL_NORMALIZED_CALLBACK_VERSION,
+        "event": str(conversation.event_type or "").strip(),
+        "conversation_type": conversation.conversation_type.value,
+        "direction": str(conversation.direction or "").strip().lower() or None,
+        "status": str(conversation.status or "").strip() or None,
+        "external_id": str(conversation.external_id or "").strip(),
+        "agent_id": str(conversation.agent_id or "").strip() or None,
+        "linkage": _normalized_retell_linkage(conversation=conversation, metadata=metadata),
+        "contracts": contract_block,
+    }
+    if intent_signal is not None:
+        normalized_callback["intent"] = dict(intent_signal)
+    if secondary_intent_signal is not None:
+        normalized_callback["secondary_intent"] = dict(secondary_intent_signal)
+    if agreement_signal is not None:
+        normalized_callback["agreement"] = dict(agreement_signal)
+
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
+    conversation.analysis = {
+        **analysis,
+        "normalized_callback": normalized_callback,
+    }
+
+
 async def persist_payload(session: AsyncSession, body: dict) -> RetellConversation | None:
     event = str(body.get("event") or "").strip()
     if not event:
@@ -433,10 +536,33 @@ async def persist_payload(session: AsyncSession, body: dict) -> RetellConversati
         **analysis,
     }
     existing_metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
-    conversation.metadata_json = {
+    normalized_metadata = {
         **existing_metadata,
         **metadata,
     }
+    contract_versions = _retell_contract_versions(metadata, body)
+    if contract_versions:
+        prior_contract_block = (
+            normalized_metadata.get("backfill_contract")
+            if isinstance(normalized_metadata.get("backfill_contract"), dict)
+            else {}
+        )
+        normalized_metadata["backfill_contract"] = {
+            **prior_contract_block,
+            **contract_versions,
+        }
+    conversation.metadata_json = normalized_metadata
+    normalized_linkage = _normalized_retell_linkage(
+        conversation=conversation,
+        metadata=conversation.metadata_json,
+        body=body,
+    )
+    if normalized_linkage:
+        current_metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
+        conversation.metadata_json = {
+            **current_metadata,
+            "backfill_linkage": normalized_linkage,
+        }
     conversation.raw_payload = body
     conversation.started_at = _normalize_timestamp(_pick_value(payload, body, keys=("started_at", "start_timestamp", "start_time"))) or conversation.started_at
     conversation.ended_at = _normalize_timestamp(_pick_value(payload, body, keys=("ended_at", "end_timestamp", "end_time"))) or conversation.ended_at
@@ -1252,6 +1378,13 @@ async def process_inbound_conversation_completion(
                 "secondary_intent": secondary_intent_signal,
             }
 
+    _set_normalized_callback_summary(
+        conversation,
+        intent_signal=intent_signal or {"provider": "heuristic_fallback"},
+        secondary_intent_signal=secondary_intent_signal,
+        agreement_signal=intent_agreement_signal,
+    )
+
     consent_state = processing_state.get("consent") if isinstance(processing_state.get("consent"), dict) else {}
     if consent_state.get("status") in {"consent_revoked", "consent_granted"}:
         consent_result = dict(consent_state)
@@ -1402,8 +1535,10 @@ async def process_inbound_conversation_completion(
     }
     _set_processing_state(conversation, updated_state)
     await session.flush()
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
     return {
         "status": "processed",
+        "normalized_callback": analysis.get("normalized_callback"),
         "consent": consent_result,
         "callout": callout_result,
     }
@@ -1535,6 +1670,13 @@ async def process_outbound_conversation_completion(
                 "confidence": intent_signal.get("confidence"),
                 "secondary_intent": secondary_intent_signal,
             }
+
+    _set_normalized_callback_summary(
+        conversation,
+        intent_signal=intent_signal or {"provider": "no_retell_outbound_intent"},
+        secondary_intent_signal=secondary_intent_signal,
+        agreement_signal=intent_agreement_signal,
+    )
 
     consent_state = (
         processing_state.get("consent")
@@ -1695,8 +1837,10 @@ async def process_outbound_conversation_completion(
     }
     _set_processing_state(conversation, updated_state)
     await session.flush()
+    analysis = conversation.analysis if isinstance(conversation.analysis, dict) else {}
     return {
         "status": "processed",
+        "normalized_callback": analysis.get("normalized_callback"),
         "consent": consent_result,
         "offer_response": offer_response,
     }

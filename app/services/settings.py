@@ -15,7 +15,7 @@ from app.schemas.settings import (
     LocationShiftDefaultsUpdate,
     ShiftPresetRead,
 )
-from app.services import businesses
+from app.services import businesses, labor_rule_resolution
 from app.services import shift_defaults as shift_defaults_service
 
 
@@ -239,17 +239,29 @@ async def update_location_settings(
     location_id: UUID,
     payload: LocationSettingsUpdate,
 ) -> LocationSettingsRead:
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
     location = await businesses.get_location(session, business_id, location_id)
     if location is None:
         raise LookupError("location_not_found")
 
     next_settings = dict(location.settings or {})
     updates = payload.model_dump(exclude_unset=True)
+    timezone_changed = False
 
     if "timezone" in updates:
-        location.timezone = updates.pop("timezone") or location.timezone
+        next_timezone = updates.pop("timezone") or location.timezone
+        timezone_changed = next_timezone != location.timezone
+        location.timezone = next_timezone
 
     next_settings.update(updates)
     location.settings = next_settings
     await session.flush()
+    if timezone_changed:
+        await labor_rule_resolution.sync_location_labor_rule_resolution(
+            session,
+            business=business,
+            location=location,
+        )
     return _read_location_settings(location)

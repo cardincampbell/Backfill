@@ -21,6 +21,7 @@ from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.services import (
     communication_suppressions,
+    coverage_transitions,
     messaging,
     outreach as outreach_service,
     platform_events,
@@ -162,6 +163,9 @@ class ActionableOfferContext:
 _DELIVERY_MAX_ATTEMPTS = 3
 COVERAGE_OFFER_OUTBOX_TOPIC = "coverage.offer.created"
 SCHEDULE_PUBLISH_NOTIFICATION_TOPIC = "schedule.week.published_notification"
+RETELL_OUTBOUND_METADATA_CONTRACT_VERSION = "backfill_retell_outbound_metadata_v1"
+RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION = "backfill_retell_outbound_dynamic_variables_v1"
+RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION = "backfill_retell_callback_v1"
 
 
 def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
@@ -182,6 +186,19 @@ def build_coverage_offer_sms(*, offer: CoverageOffer, shift: Shift) -> str:
         f"Backfill: {location_name} needs a {role_name} for {start_label}-{end_label}{premium_copy}. "
         "Reply YES to take it or NO to decline."
     )
+
+
+def _retell_outbound_linkage(*, offer: CoverageOffer, shift: Shift) -> dict[str, str]:
+    linkage = {
+        "offer_id": str(offer.id),
+        "coverage_case_id": str(offer.coverage_case_id),
+        "shift_id": str(shift.id),
+        "employee_id": str(offer.employee_id),
+        "contract_version": RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION,
+    }
+    if offer.coverage_case_run_id:
+        linkage["coverage_case_run_id"] = str(offer.coverage_case_run_id)
+    return linkage
 
 
 def _full_name_parts(full_name: str | None) -> tuple[str, str]:
@@ -333,7 +350,12 @@ def build_coverage_offer_voice_metadata(*, offer: CoverageOffer, shift: Shift, o
     role_name = getattr(getattr(shift, "role", None), "name", None) or "team member"
     payload = outbox_payload if isinstance(outbox_payload, dict) else {}
     shift_context = payload.get("shift_context") if isinstance(payload.get("shift_context"), dict) else None
+    linkage = _retell_outbound_linkage(offer=offer, shift=shift)
     return {
+        "backfill_metadata_contract_version": RETELL_OUTBOUND_METADATA_CONTRACT_VERSION,
+        "backfill_dynamic_variables_contract_version": RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION,
+        "backfill_callback_contract_version": RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION,
+        "backfill_linkage": linkage,
         "offer_id": str(offer.id),
         "coverage_case_id": str(offer.coverage_case_id),
         "coverage_case_run_id": str(offer.coverage_case_run_id) if offer.coverage_case_run_id else None,
@@ -379,6 +401,8 @@ def build_coverage_offer_voice_dynamic_variables(
         shift_start_time = shift_start_time or str(offered_shift.get("start_time") or "")
         shift_end_time = shift_end_time or str(offered_shift.get("end_time") or "")
     return {
+        "backfill_dynamic_contract_version": RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION,
+        "backfill_callback_contract_version": RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION,
         "employee_first_name": str(payload.get("employee_first_name") or "").strip(),
         "employee_last_name": str(payload.get("employee_last_name") or "").strip(),
         "location_name": location_name,
@@ -766,6 +790,343 @@ async def _get_or_create_contact_attempt(
     return attempt
 
 
+async def process_outbox_event(
+    session: AsyncSession,
+    *,
+    outbox_event: OutboxEvent,
+    provider: DeliveryProvider | None = None,
+    now: datetime | None = None,
+) -> dict:
+    reference_time = now or datetime.now(timezone.utc)
+
+    if outbox_event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
+        try:
+            result = await _send_schedule_publish_notification(session, outbox_event=outbox_event)
+        except Exception as exc:
+            retryable = outbox_event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+            error_message = str(exc)
+            if retryable:
+                worker_runtime.mark_outbox_event_retry(
+                    outbox_event,
+                    now=reference_time,
+                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(outbox_event.attempt_count),
+                    error_message=error_message,
+                    result_payload={"topic": outbox_event.topic},
+                )
+            else:
+                worker_runtime.mark_outbox_event_cancelled(
+                    outbox_event,
+                    now=reference_time,
+                    error_message=error_message,
+                    result_payload={"topic": outbox_event.topic},
+                )
+            return {
+                "processed": True,
+                "sent": False,
+                "failed": True,
+                "error_message": error_message,
+                "result_payload": {"topic": outbox_event.topic},
+            }
+
+        if result.success:
+            worker_runtime.mark_outbox_event_sent(
+                outbox_event,
+                now=reference_time,
+                result_payload=result.result_payload,
+            )
+            return {
+                "processed": True,
+                "sent": True,
+                "failed": False,
+                "error_message": None,
+                "result_payload": result.result_payload,
+            }
+
+        retryable = bool(result.retryable) and outbox_event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+        if retryable:
+            worker_runtime.mark_outbox_event_retry(
+                outbox_event,
+                now=reference_time,
+                next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(outbox_event.attempt_count),
+                error_message=result.error_message or "delivery_retry_scheduled",
+                result_payload=result.result_payload,
+            )
+        else:
+            worker_runtime.mark_outbox_event_cancelled(
+                outbox_event,
+                now=reference_time,
+                error_message=result.error_message or "delivery_failed",
+                result_payload=result.result_payload,
+            )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": result.error_message or "delivery_failed",
+            "result_payload": result.result_payload,
+        }
+
+    offer = await session.get(CoverageOffer, outbox_event.aggregate_id)
+    if offer is None:
+        worker_runtime.mark_outbox_event_cancelled(
+            outbox_event,
+            now=reference_time,
+            error_message="coverage_offer_not_found",
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": "coverage_offer_not_found",
+            "result_payload": {},
+        }
+
+    shift_id_raw = offer.offer_metadata.get("shift_id")
+    shift = (
+        await session.scalar(
+            select(Shift)
+            .options(selectinload(Shift.location), selectinload(Shift.role))
+            .where(Shift.id == UUID(str(shift_id_raw)))
+        )
+        if shift_id_raw
+        else None
+    )
+    if shift is None:
+        worker_runtime.mark_outbox_event_cancelled(
+            outbox_event,
+            now=reference_time,
+            error_message="shift_not_found",
+        )
+        coverage_transitions.mark_offer_failed(
+            offer,
+            occurred_at=reference_time,
+            reason="shift_not_found",
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": "shift_not_found",
+            "result_payload": {},
+        }
+
+    attempt = await _get_or_create_contact_attempt(
+        session,
+        outbox_event=outbox_event,
+        offer=offer,
+        shift=shift,
+        now=reference_time,
+    )
+
+    destination = None
+    channel_value = offer.channel.value if hasattr(offer.channel, "value") else str(offer.channel)
+    if channel_value == "sms":
+        raw_phone = outbox_event.payload.get("phone_e164") or offer.offer_metadata.get("phone_e164")
+        destination = str(raw_phone).strip() if raw_phone else None
+    elif channel_value == "email":
+        raw_email = outbox_event.payload.get("email") or offer.offer_metadata.get("email")
+        destination = str(raw_email).strip() if raw_email else None
+
+    suppressed_result = await _suppressed_delivery_result(
+        session,
+        channel_value=channel_value,
+        destination=destination,
+        topic=outbox_event.topic,
+    )
+    if suppressed_result is not None:
+        advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+            session,
+            offer=offer,
+            attempt=attempt,
+            reference_time=reference_time,
+            error_message=suppressed_result.error_message or "destination_suppressed",
+            result_payload=suppressed_result.result_payload,
+        )
+        result_payload = {
+            **suppressed_result.result_payload,
+            "advanced_offer_ids": advanced_offer_ids,
+            "exhausted_case_id": exhausted_case_id,
+        }
+        worker_runtime.mark_outbox_event_cancelled(
+            outbox_event,
+            now=reference_time,
+            error_message=suppressed_result.error_message or "destination_suppressed",
+            result_payload=result_payload,
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": suppressed_result.error_message or "destination_suppressed",
+            "result_payload": result_payload,
+        }
+
+    active_provider = provider or _resolve_provider_for_channel(offer.channel)
+    if channel_value == "voice":
+        retell_context = await _build_retell_voice_outbound_context(
+            session,
+            offer=offer,
+            shift=shift,
+        )
+        outbox_event.payload = {
+            **(outbox_event.payload or {}),
+            **retell_context,
+        }
+    try:
+        result = await active_provider.send_coverage_offer(
+            outbox_event=outbox_event,
+            offer=offer,
+            shift=shift,
+        )
+    except Exception as exc:
+        retryable = outbox_event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+        error_message = str(exc)
+        if retryable:
+            attempt.status = CoverageAttemptStatus.failed
+            attempt.responded_at = reference_time
+            attempt.attempt_metadata = {
+                **(attempt.attempt_metadata or {}),
+                "worker_error": error_message,
+            }
+            coverage_transitions.mark_offer_pending(offer)
+            worker_runtime.mark_outbox_event_retry(
+                outbox_event,
+                now=reference_time,
+                next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(outbox_event.attempt_count),
+                error_message=error_message,
+            )
+            return {
+                "processed": True,
+                "sent": False,
+                "failed": True,
+                "error_message": error_message,
+                "result_payload": {},
+            }
+
+        advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+            session,
+            offer=offer,
+            attempt=attempt,
+            reference_time=reference_time,
+            error_message=error_message,
+        )
+        result_payload = {
+            "advanced_offer_ids": advanced_offer_ids,
+            "exhausted_case_id": exhausted_case_id,
+        }
+        worker_runtime.mark_outbox_event_cancelled(
+            outbox_event,
+            now=reference_time,
+            error_message=error_message,
+            result_payload=result_payload,
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": error_message,
+            "result_payload": result_payload,
+        }
+
+    if result.success:
+        sent_at = result.sent_at or reference_time
+        delivered_at = result.delivered_at
+        offer.delivery_provider = result.provider
+        offer.provider_message_id = result.provider_message_id
+        coverage_transitions.mark_offer_delivered(
+            offer,
+            sent_at=sent_at,
+            delivered_at=delivered_at,
+        )
+
+        attempt.status = CoverageAttemptStatus.delivered if delivered_at is not None else CoverageAttemptStatus.pending
+        attempt.delivery_provider = result.provider
+        attempt.provider_message_id = result.provider_message_id
+        attempt.sent_at = sent_at
+        attempt.delivered_at = delivered_at
+        attempt.attempt_metadata = {
+            **(attempt.attempt_metadata or {}),
+            **result.result_payload,
+        }
+
+        worker_runtime.mark_outbox_event_sent(
+            outbox_event,
+            now=reference_time,
+            result_payload=result.result_payload,
+        )
+        await outreach_service.append_outreach_attempt_event(
+            session,
+            event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_AWAITING_RESPONSE,
+            offer=offer,
+            business_id=shift.business_id,
+            location_id=shift.location_id,
+            shift_id=shift.id,
+            attempt=attempt,
+            metadata={
+                "channel": "worker_runtime",
+                "provider": result.provider,
+            },
+        )
+        return {
+            "processed": True,
+            "sent": True,
+            "failed": False,
+            "error_message": None,
+            "result_payload": result.result_payload,
+        }
+
+    retryable = bool(result.retryable) and outbox_event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+    if retryable:
+        attempt.status = CoverageAttemptStatus.failed
+        attempt.responded_at = reference_time
+        attempt.attempt_metadata = {
+            **(attempt.attempt_metadata or {}),
+            **result.result_payload,
+        }
+        coverage_transitions.mark_offer_pending(offer)
+        worker_runtime.mark_outbox_event_retry(
+            outbox_event,
+            now=reference_time,
+            next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(outbox_event.attempt_count),
+            error_message=result.error_message or "delivery_retry_scheduled",
+            result_payload=result.result_payload,
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": result.error_message or "delivery_retry_scheduled",
+            "result_payload": result.result_payload,
+        }
+
+    advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
+        session,
+        offer=offer,
+        attempt=attempt,
+        reference_time=reference_time,
+        error_message=result.error_message or "delivery_failed",
+        result_payload=result.result_payload,
+    )
+    result_payload = {
+        **result.result_payload,
+        "advanced_offer_ids": advanced_offer_ids,
+        "exhausted_case_id": exhausted_case_id,
+    }
+    worker_runtime.mark_outbox_event_cancelled(
+        outbox_event,
+        now=reference_time,
+        error_message=result.error_message or "delivery_failed",
+        result_payload=result_payload,
+    )
+    return {
+        "processed": True,
+        "sent": False,
+        "failed": True,
+        "error_message": result.error_message or "delivery_failed",
+        "result_payload": result_payload,
+    }
+
+
 async def process_outbox_batch(
     session: AsyncSession,
     *,
@@ -787,267 +1148,16 @@ async def process_outbox_batch(
     processed_event_ids: list[str] = []
 
     for event in events:
-        if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
-            try:
-                result = await _send_schedule_publish_notification(session, outbox_event=event)
-            except Exception as exc:
-                retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
-                error_message = str(exc)
-                if retryable:
-                    worker_runtime.mark_outbox_event_retry(
-                        event,
-                        now=reference_time,
-                        next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
-                        error_message=error_message,
-                        result_payload={"topic": event.topic},
-                    )
-                else:
-                    worker_runtime.mark_outbox_event_cancelled(
-                        event,
-                        now=reference_time,
-                        error_message=error_message,
-                        result_payload={"topic": event.topic},
-                    )
-                failed_count += 1
-                processed_event_ids.append(str(event.id))
-                continue
-
-            if result.success:
-                worker_runtime.mark_outbox_event_sent(
-                    event,
-                    now=reference_time,
-                    result_payload=result.result_payload,
-                )
-                sent_count += 1
-            else:
-                retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
-                if retryable:
-                    worker_runtime.mark_outbox_event_retry(
-                        event,
-                        now=reference_time,
-                        next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
-                        error_message=result.error_message or "delivery_retry_scheduled",
-                        result_payload=result.result_payload,
-                    )
-                else:
-                    worker_runtime.mark_outbox_event_cancelled(
-                        event,
-                        now=reference_time,
-                        error_message=result.error_message or "delivery_failed",
-                        result_payload=result.result_payload,
-                    )
-                failed_count += 1
-            processed_event_ids.append(str(event.id))
-            continue
-
-        offer = await session.get(CoverageOffer, event.aggregate_id)
-        if offer is None:
-            worker_runtime.mark_outbox_event_cancelled(
-                event,
-                now=reference_time,
-                error_message="coverage_offer_not_found",
-            )
-            failed_count += 1
-            processed_event_ids.append(str(event.id))
-            continue
-
-        shift_id_raw = offer.offer_metadata.get("shift_id")
-        shift = (
-            await session.scalar(
-                select(Shift)
-                .options(selectinload(Shift.location), selectinload(Shift.role))
-                .where(Shift.id == UUID(str(shift_id_raw)))
-            )
-            if shift_id_raw
-            else None
-        )
-        if shift is None:
-            worker_runtime.mark_outbox_event_cancelled(
-                event,
-                now=reference_time,
-                error_message="shift_not_found",
-            )
-            offer.status = OfferStatus.failed
-            failed_count += 1
-            processed_event_ids.append(str(event.id))
-            continue
-
-        attempt = await _get_or_create_contact_attempt(
+        event_result = await process_outbox_event(
             session,
             outbox_event=event,
-            offer=offer,
-            shift=shift,
+            provider=provider,
             now=reference_time,
         )
-
-        destination = None
-        channel_value = offer.channel.value if hasattr(offer.channel, "value") else str(offer.channel)
-        if channel_value == "sms":
-            raw_phone = event.payload.get("phone_e164") or offer.offer_metadata.get("phone_e164")
-            destination = str(raw_phone).strip() if raw_phone else None
-        elif channel_value == "email":
-            raw_email = event.payload.get("email") or offer.offer_metadata.get("email")
-            destination = str(raw_email).strip() if raw_email else None
-
-        suppressed_result = await _suppressed_delivery_result(
-            session,
-            channel_value=channel_value,
-            destination=destination,
-            topic=event.topic,
-        )
-        if suppressed_result is not None:
-            advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
-                session,
-                offer=offer,
-                attempt=attempt,
-                reference_time=reference_time,
-                error_message=suppressed_result.error_message or "destination_suppressed",
-                result_payload=suppressed_result.result_payload,
-            )
-            worker_runtime.mark_outbox_event_cancelled(
-                event,
-                now=reference_time,
-                error_message=suppressed_result.error_message or "destination_suppressed",
-                result_payload={
-                    **suppressed_result.result_payload,
-                    "advanced_offer_ids": advanced_offer_ids,
-                    "exhausted_case_id": exhausted_case_id,
-                },
-            )
-            failed_count += 1
-            processed_event_ids.append(str(event.id))
-            continue
-
-        active_provider = provider or _resolve_provider_for_channel(offer.channel)
-        if channel_value == "voice":
-            retell_context = await _build_retell_voice_outbound_context(
-                session,
-                offer=offer,
-                shift=shift,
-            )
-            event.payload = {
-                **(event.payload or {}),
-                **retell_context,
-            }
-        try:
-            result = await active_provider.send_coverage_offer(
-                outbox_event=event,
-                offer=offer,
-                shift=shift,
-            )
-        except Exception as exc:
-            retryable = event.attempt_count < _DELIVERY_MAX_ATTEMPTS
-            error_message = str(exc)
-            if retryable:
-                attempt.status = CoverageAttemptStatus.failed
-                attempt.responded_at = reference_time
-                attempt.attempt_metadata = {
-                    **(attempt.attempt_metadata or {}),
-                    "worker_error": error_message,
-                }
-                offer.status = OfferStatus.pending
-                worker_runtime.mark_outbox_event_retry(
-                    event,
-                    now=reference_time,
-                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
-                    error_message=error_message,
-                )
-            else:
-                advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
-                    session,
-                    offer=offer,
-                    attempt=attempt,
-                    reference_time=reference_time,
-                    error_message=error_message,
-                )
-                worker_runtime.mark_outbox_event_cancelled(
-                    event,
-                    now=reference_time,
-                    error_message=error_message,
-                    result_payload={
-                        "advanced_offer_ids": advanced_offer_ids,
-                        "exhausted_case_id": exhausted_case_id,
-                    },
-                )
-            failed_count += 1
-            processed_event_ids.append(str(event.id))
-            continue
-
-        if result.success:
-            sent_at = result.sent_at or reference_time
-            delivered_at = result.delivered_at
-            offer.delivery_provider = result.provider
-            offer.provider_message_id = result.provider_message_id
-            offer.sent_at = sent_at
-            offer.status = OfferStatus.delivered if delivered_at is not None else OfferStatus.pending
-
-            attempt.status = CoverageAttemptStatus.delivered if delivered_at is not None else CoverageAttemptStatus.pending
-            attempt.delivery_provider = result.provider
-            attempt.provider_message_id = result.provider_message_id
-            attempt.sent_at = sent_at
-            attempt.delivered_at = delivered_at
-            attempt.attempt_metadata = {
-                **(attempt.attempt_metadata or {}),
-                **result.result_payload,
-            }
-
-            worker_runtime.mark_outbox_event_sent(
-                event,
-                now=reference_time,
-                result_payload=result.result_payload,
-            )
-            await outreach_service.append_outreach_attempt_event(
-                session,
-                event_type=platform_events.PlatformEventType.COVERAGE_OUTREACH_ATTEMPT_AWAITING_RESPONSE,
-                offer=offer,
-                business_id=shift.business_id,
-                location_id=shift.location_id,
-                shift_id=shift.id,
-                attempt=attempt,
-                metadata={
-                    "channel": "worker_runtime",
-                    "provider": result.provider,
-                },
-            )
+        if event_result.get("sent"):
             sent_count += 1
-        else:
-            retryable = bool(result.retryable) and event.attempt_count < _DELIVERY_MAX_ATTEMPTS
-            if retryable:
-                attempt.status = CoverageAttemptStatus.failed
-                attempt.responded_at = reference_time
-                attempt.attempt_metadata = {
-                    **(attempt.attempt_metadata or {}),
-                    **result.result_payload,
-                }
-                offer.status = OfferStatus.pending
-                worker_runtime.mark_outbox_event_retry(
-                    event,
-                    now=reference_time,
-                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(event.attempt_count),
-                    error_message=result.error_message or "delivery_retry_scheduled",
-                    result_payload=result.result_payload,
-                )
-            else:
-                advanced_offer_ids, exhausted_case_id = await _handle_terminal_offer_failure(
-                    session,
-                    offer=offer,
-                    attempt=attempt,
-                    reference_time=reference_time,
-                    error_message=result.error_message or "delivery_failed",
-                    result_payload=result.result_payload,
-                )
-                worker_runtime.mark_outbox_event_cancelled(
-                    event,
-                    now=reference_time,
-                    error_message=result.error_message or "delivery_failed",
-                    result_payload={
-                        **result.result_payload,
-                        "advanced_offer_ids": advanced_offer_ids,
-                        "exhausted_case_id": exhausted_case_id,
-                    },
-                )
+        elif event_result.get("failed"):
             failed_count += 1
-
         processed_event_ids.append(str(event.id))
 
     await session.commit()
@@ -1084,12 +1194,11 @@ async def _handle_terminal_offer_failure(
     error_message: str,
     result_payload: dict | None = None,
 ) -> tuple[list[str], str | None]:
-    offer.status = OfferStatus.failed
-    offer.offer_metadata = {
-        **(offer.offer_metadata or {}),
-        "terminal_failure_at": reference_time.isoformat(),
-        "terminal_failure_reason": error_message,
-    }
+    coverage_transitions.mark_offer_failed(
+        offer,
+        occurred_at=reference_time,
+        reason=error_message,
+    )
     if attempt is not None:
         attempt.status = CoverageAttemptStatus.failed
         attempt.responded_at = reference_time
@@ -1133,8 +1242,7 @@ async def expire_due_offers(
     advanced_offer_ids: list[str] = []
 
     for offer in offers:
-        offer.status = OfferStatus.expired
-        offer.offer_metadata = {**offer.offer_metadata, "expired_at": reference_time.isoformat()}
+        coverage_transitions.mark_offer_expired(offer, occurred_at=reference_time)
         attempt = await mark_offer_attempt_outcome(
             session,
             offer,
@@ -1221,7 +1329,11 @@ async def apply_twilio_status_callback(
     advanced_offer_ids: list[str] = []
     exhausted_case_id = None
     if normalized_status in {"sent", "delivered"}:
-        offer.status = OfferStatus.delivered
+        coverage_transitions.mark_offer_delivered(
+            offer,
+            sent_at=offer.sent_at or reference_time,
+            delivered_at=reference_time if normalized_status == "delivered" else None,
+        )
         if attempt is not None:
             attempt.status = CoverageAttemptStatus.delivered
             attempt.sent_at = attempt.sent_at or reference_time
@@ -1232,7 +1344,11 @@ async def apply_twilio_status_callback(
                 "callback": raw_payload or {},
             }
     elif terminal_failure:
-        offer.status = OfferStatus.failed
+        coverage_transitions.mark_offer_failed(
+            offer,
+            occurred_at=reference_time,
+            reason=error_message or "provider_delivery_failed",
+        )
         if attempt is not None:
             attempt.status = CoverageAttemptStatus.failed
             attempt.responded_at = reference_time

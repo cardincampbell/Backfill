@@ -923,6 +923,7 @@ async def test_process_outbox_batch_enriches_retell_voice_call_with_employee_shi
     role_id = uuid4()
     shift_id = uuid4()
     offer_id = uuid4()
+    case_id = uuid4()
     employee_id = uuid4()
 
     business = Business(
@@ -989,7 +990,7 @@ async def test_process_outbox_batch_enriches_retell_voice_call_with_employee_shi
     )
     offer = CoverageOffer(
         id=offer_id,
-        coverage_case_id=uuid4(),
+        coverage_case_id=case_id,
         employee_id=employee_id,
         channel="voice",
         status=OfferStatus.pending,
@@ -1039,6 +1040,16 @@ async def test_process_outbox_batch_enriches_retell_voice_call_with_employee_shi
     assert captured["agent_kind"] == "outbound"
     metadata = captured["metadata"]
     dynamic_variables = captured["dynamic_variables"]
+    assert metadata["backfill_metadata_contract_version"] == delivery.RETELL_OUTBOUND_METADATA_CONTRACT_VERSION
+    assert metadata["backfill_dynamic_variables_contract_version"] == delivery.RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION
+    assert metadata["backfill_callback_contract_version"] == delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION
+    assert metadata["backfill_linkage"]["offer_id"] == str(offer_id)
+    assert metadata["backfill_linkage"]["coverage_case_id"] == str(case_id)
+    assert metadata["backfill_linkage"]["shift_id"] == str(shift_id)
+    assert metadata["backfill_linkage"]["employee_id"] == str(employee_id)
+    assert metadata["backfill_linkage"]["contract_version"] == delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION
+    assert dynamic_variables["backfill_dynamic_contract_version"] == delivery.RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION
+    assert dynamic_variables["backfill_callback_contract_version"] == delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION
     assert dynamic_variables["employee_first_name"] == "Taylor"
     assert dynamic_variables["employee_last_name"] == "Smith"
     assert dynamic_variables["location_name"] == "Casa Vega West"

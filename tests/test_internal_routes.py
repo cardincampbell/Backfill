@@ -337,6 +337,177 @@ def test_runtime_tick_route_returns_orchestration_batch_result(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_coverage_invariants_route_returns_scan_result(monkeypatch):
+    async def fake_scan(_session, *, limit_per_code: int):
+        assert limit_per_code == 12
+        return {
+            "checked_at": "2026-04-17T20:00:00Z",
+            "issue_count": 2,
+            "counts_by_code": {
+                "employee_missing_availability_rules": 1,
+                "coverage_case_terminal_with_actionable_offers": 1,
+            },
+            "counts_by_severity": {
+                "high": 2,
+            },
+            "issues": [
+                {
+                    "code": "employee_missing_availability_rules",
+                    "severity": "high",
+                    "aggregate_type": "employee",
+                    "aggregate_id": str(uuid4()),
+                    "message": "Active employee has no recurring availability rules.",
+                    "metadata": {"employee_name": "Taylor Smith"},
+                },
+                {
+                    "code": "coverage_case_terminal_with_actionable_offers",
+                    "severity": "high",
+                    "aggregate_type": "coverage_case",
+                    "aggregate_id": str(uuid4()),
+                    "message": "Terminal coverage case still has actionable offers.",
+                    "metadata": {"offer_ids": [str(uuid4())]},
+                },
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.invariants.scan_scheduler_coverage_invariants", fake_scan)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/internal/coverage/invariants?limit_per_code=12",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["issue_count"] == 2
+        assert body["counts_by_code"]["employee_missing_availability_rules"] == 1
+        assert body["issues"][0]["severity"] == "high"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_provider_callback_replay_route_returns_recovery_result(monkeypatch):
+    callback_log_id = uuid4()
+
+    async def fake_replay(_session, *, callback_log_id, mode):
+        return {
+            "callback_log_id": callback_log_id,
+            "mode": mode,
+            "action": "preview",
+            "allowed": False,
+            "reason_codes": ["callback_already_processed"],
+            "warnings": [],
+            "provider": "retell",
+            "route_key": "retell_webhook",
+            "status_before": "processed",
+            "status_after": "processed",
+            "error_message": None,
+            "response_kind": None,
+            "response_payload": {},
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.recovery.replay_provider_callback_log", fake_replay)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/internal/providers/callbacks/{callback_log_id}/replay",
+                json={"mode": "dry_run"},
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        assert response.json() == {
+            "callback_log_id": str(callback_log_id),
+            "mode": "dry_run",
+            "action": "preview",
+            "allowed": False,
+            "reason_codes": ["callback_already_processed"],
+            "warnings": [],
+            "provider": "retell",
+            "route_key": "retell_webhook",
+            "status_before": "processed",
+            "status_after": "processed",
+            "error_message": None,
+            "response_kind": None,
+            "response_payload": {},
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_coverage_outbox_replay_route_returns_recovery_result(monkeypatch):
+    outbox_event_id = uuid4()
+    offer_id = uuid4()
+    coverage_case_id = uuid4()
+
+    async def fake_replay(_session, *, outbox_event_id, mode):
+        return {
+            "outbox_event_id": outbox_event_id,
+            "mode": mode,
+            "action": "reprocessed",
+            "allowed": True,
+            "reason_codes": [],
+            "warnings": [],
+            "topic": "coverage.offer.created",
+            "status_before": "failed",
+            "status_after": "sent",
+            "offer_id": offer_id,
+            "coverage_case_id": coverage_case_id,
+            "processed": True,
+            "sent": True,
+            "failed": False,
+            "error_message": None,
+            "result_payload": {"provider_message_id": "msg_123"},
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr("app.api.routes.internal.recovery.replay_coverage_outbox_event", fake_replay)
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/internal/coverage/outbox/{outbox_event_id}/replay",
+                json={"mode": "reprocess_if_preconditions_match"},
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        assert response.json() == {
+            "outbox_event_id": str(outbox_event_id),
+            "mode": "reprocess_if_preconditions_match",
+            "action": "reprocessed",
+            "allowed": True,
+            "reason_codes": [],
+            "warnings": [],
+            "topic": "coverage.offer.created",
+            "status_before": "failed",
+            "status_after": "sent",
+            "offer_id": str(offer_id),
+            "coverage_case_id": str(coverage_case_id),
+            "processed": True,
+            "sent": True,
+            "failed": False,
+            "error_message": None,
+            "result_payload": {"provider_message_id": "msg_123"},
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_feed_projection_process_route_rejects_invalid_worker_key(monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.internal.settings",

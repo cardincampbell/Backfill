@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 from uuid import UUID
 
@@ -25,11 +26,77 @@ class WorkerBatchRequest(BaseSchema):
     limit: int = 20
 
 
+class ReplayMode(str, Enum):
+    dry_run = "dry_run"
+    reprocess_if_preconditions_match = "reprocess_if_preconditions_match"
+    force_requeue = "force_requeue"
+
+
+class CallbackReplayRequest(BaseSchema):
+    mode: ReplayMode = ReplayMode.dry_run
+
+
+class CallbackReplayResponse(BaseSchema):
+    callback_log_id: UUID
+    mode: ReplayMode
+    action: str
+    allowed: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    route_key: str | None = None
+    status_before: str | None = None
+    status_after: str | None = None
+    error_message: str | None = None
+    response_kind: str | None = None
+    response_payload: dict = Field(default_factory=dict)
+
+
+class OutboxReplayRequest(BaseSchema):
+    mode: ReplayMode = ReplayMode.dry_run
+
+
+class OutboxReplayResponse(BaseSchema):
+    outbox_event_id: UUID
+    mode: ReplayMode
+    action: str
+    allowed: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    topic: str | None = None
+    status_before: str | None = None
+    status_after: str | None = None
+    offer_id: UUID | None = None
+    coverage_case_id: UUID | None = None
+    processed: bool = False
+    sent: bool = False
+    failed: bool = False
+    error_message: str | None = None
+    result_payload: dict = Field(default_factory=dict)
+
+
 class OutboxProcessResponse(BaseSchema):
     claimed_count: int
     sent_count: int
     failed_count: int
     processed_event_ids: list[str] = Field(default_factory=list)
+
+
+class InvariantIssue(BaseSchema):
+    code: str
+    severity: str
+    aggregate_type: str
+    aggregate_id: str
+    message: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class InvariantScanResponse(BaseSchema):
+    checked_at: datetime
+    issue_count: int
+    counts_by_code: dict[str, int] = Field(default_factory=dict)
+    counts_by_severity: dict[str, int] = Field(default_factory=dict)
+    issues: list[InvariantIssue] = Field(default_factory=list)
 
 
 class WebhookProcessResponse(BaseSchema):

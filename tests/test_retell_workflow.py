@@ -19,7 +19,7 @@ from app.models.identity import User
 from app.models.integrations import RetellConversation
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
-from app.services import retell_workflow
+from app.services import delivery, retell_workflow
 
 
 class _ScalarResult:
@@ -753,6 +753,51 @@ async def test_persist_payload_preserves_existing_transcript_and_metadata_on_cal
 
 
 @pytest.mark.asyncio
+async def test_persist_payload_adds_normalized_retell_contract_and_linkage_metadata():
+    session = FakeSession()
+    call_id = "call_coverage_contract"
+    offer_id = uuid4()
+    case_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    conversation = await retell_workflow.persist_payload(
+        session,
+        {
+            "event": "call_ended",
+            "call": {
+                "call_id": call_id,
+                "direction": "outbound",
+                "call_status": "ended",
+                "agent_id": "agent_outbound_123",
+                "to_number": "+15555550199",
+                "metadata": {
+                    "backfill_metadata_contract_version": delivery.RETELL_OUTBOUND_METADATA_CONTRACT_VERSION,
+                    "backfill_dynamic_variables_contract_version": delivery.RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION,
+                    "backfill_callback_contract_version": delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION,
+                    "backfill_linkage": {
+                        "offer_id": str(offer_id),
+                        "coverage_case_id": str(case_id),
+                        "shift_id": str(shift_id),
+                        "employee_id": str(employee_id),
+                        "contract_version": delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION,
+                    },
+                },
+            },
+        },
+    )
+
+    assert conversation.metadata_json["backfill_contract"]["metadata_contract_version"] == delivery.RETELL_OUTBOUND_METADATA_CONTRACT_VERSION
+    assert conversation.metadata_json["backfill_contract"]["dynamic_variables_contract_version"] == delivery.RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION
+    assert conversation.metadata_json["backfill_contract"]["callback_contract_version"] == delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION
+    assert conversation.metadata_json["backfill_linkage"]["offer_id"] == str(offer_id)
+    assert conversation.metadata_json["backfill_linkage"]["coverage_case_id"] == str(case_id)
+    assert conversation.metadata_json["backfill_linkage"]["shift_id"] == str(shift_id)
+    assert conversation.metadata_json["backfill_linkage"]["employee_id"] == str(employee_id)
+    assert conversation.metadata_json["backfill_linkage"]["contract_version"] == delivery.RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION
+
+
+@pytest.mark.asyncio
 async def test_process_inbound_conversation_completion_creates_callout_from_transcript(monkeypatch):
     session = FakeSession()
     employee_id = uuid4()
@@ -829,6 +874,9 @@ async def test_process_inbound_conversation_completion_creates_callout_from_tran
     assert result["callout"]["status"] == "vacancy_created"
     assert result["consent"]["status"] == "no_consent_change"
     assert conversation.analysis["backfill_processing"]["callout"]["status"] == "vacancy_created"
+    assert result["normalized_callback"]["version"] == retell_workflow.RETELL_NORMALIZED_CALLBACK_VERSION
+    assert result["normalized_callback"]["intent"]["provider"] == "heuristic_fallback"
+    assert result["normalized_callback"]["linkage"]["employee_id"] == str(employee_id)
 
 
 @pytest.mark.asyncio
@@ -1549,6 +1597,10 @@ async def test_process_outbound_conversation_completion_accepts_high_confidence_
     assert result["offer_response"]["intent"] == "accept_shift"
     assert result["offer_response"]["confidence"] == "high"
     assert conversation.analysis["backfill_processing"]["intent"]["intent"] == "accept_shift"
+    assert result["normalized_callback"]["version"] == retell_workflow.RETELL_NORMALIZED_CALLBACK_VERSION
+    assert result["normalized_callback"]["linkage"]["offer_id"] == str(offer_id)
+    assert result["normalized_callback"]["linkage"]["shift_id"] == str(shift_id)
+    assert result["normalized_callback"]["intent"]["intent"] == "accept_shift"
 
 
 @pytest.mark.asyncio

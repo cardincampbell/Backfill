@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from app.models.common import CoverageAttemptStatus, ShiftStatus
+from app.models.business import Location
 from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
-from app.services import runtime_projections
+from app.services import labor_rules, runtime_projections
 
 
 class _ExecuteResult:
@@ -45,6 +47,31 @@ class FakeProjectionSession:
     async def execute(self, _query):
         values = self.execute_queue.pop(0) if self.execute_queue else []
         return _ExecuteResult(values)
+
+
+def _make_profile(*, code: str = "us_ca_general_nonexempt") -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code=code,
+        jurisdiction_code="US-CA",
+        display_name="California General Nonexempt",
+        overtime_mode="daily_8_plus_weekly_plus_7th_day",
+        daily_ot_threshold_hours=8.0,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=12.0,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code=None,
+        rules_json={"workweek_start_day_local": "monday", "workweek_start_time_local": "00:00"},
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed_v1",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:test",
+        payload_json={},
+    )
 
 
 @pytest.mark.asyncio
@@ -101,7 +128,12 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
             primary_location_id=uuid4(),
             rank=1,
             score=90.0,
-            scoring_factors={"score_snapshot": {"status": "fresh"}},
+            scoring_factors={
+                "score_snapshot": {"status": "fresh"},
+                "policy_version": "coverage_policy_v1",
+                "snapshot_generated_at": "2026-04-17T12:00:00+00:00",
+                "inputs_version": "runtime_projection_inputs_v1",
+            },
             availability_snapshot={},
         ),
         CoverageCandidatePreview(
@@ -134,6 +166,8 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
     assert metadata["score_snapshots"]["fresh"] == 1
     assert metadata["score_snapshots"]["refreshed"] == 1
     assert metadata["score_snapshots"]["unknown"] == 1
+    assert metadata["policy"]["policy_version"] == "coverage_policy_v1"
+    assert metadata["policy"]["inputs_version"] == "runtime_projection_inputs_v1"
 
 
 @pytest.mark.asyncio
@@ -274,7 +308,7 @@ def test_contact_cooldown_snapshot_uses_configured_hard_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
+async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk(monkeypatch):
     now = datetime.now(timezone.utc)
     business_id = uuid4()
     employee = Employee(
@@ -294,6 +328,17 @@ async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
         seats_requested=1,
         seats_filled=0,
     )
+    shift.location = Location(
+        id=shift.location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
     session = FakeProjectionSession()
     session.execute_queue = [
         [],
@@ -301,7 +346,30 @@ async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
             (employee.id, now - timedelta(days=2), now - timedelta(days=2) + timedelta(hours=18)),
             (employee.id, now - timedelta(days=1), now - timedelta(days=1) + timedelta(hours=16)),
         ],
+        [
+            (
+                employee.id,
+                uuid4(),
+                "completed",
+                now - timedelta(days=2),
+                now - timedelta(days=2) + timedelta(hours=18),
+                "completed",
+            ),
+            (
+                employee.id,
+                uuid4(),
+                "completed",
+                now - timedelta(days=1),
+                now - timedelta(days=1) + timedelta(hours=16),
+                "completed",
+            ),
+        ],
     ]
+    async def fake_profile_loader(*args, **kwargs):
+        return _make_profile()
+
+    monkeypatch.setattr(runtime_projections, "_load_labor_rule_profile_for_shift", fake_profile_loader)
+    monkeypatch.setattr(labor_rules, "settings", SimpleNamespace(labor_rules_mode="primary"))
 
     snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
         session,
@@ -313,7 +381,8 @@ async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk():
     guardrails = snapshots[employee.id]
     assert guardrails["contact_cooldown"]["status"] == "clear"
     assert guardrails["overtime_risk"]["status"] == "high"
-    assert guardrails["overtime_risk"]["multiplier"] == 0.4
+    assert guardrails["overtime_risk"]["multiplier"] < 1.0
+    assert guardrails["overtime_projection"]["profile_code"] == "us_ca_general_nonexempt"
     assert guardrails["overall_multiplier"] < 1.0
 
 

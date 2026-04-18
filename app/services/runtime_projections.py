@@ -13,7 +13,7 @@ from app.models.coverage import CoverageCase, CoverageContactAttempt
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
-from app.services import delivery
+from app.services import delivery, labor_rules
 
 SCORE_SNAPSHOT_STALE_AFTER = timedelta(minutes=15)
 RECENT_BURDEN_WINDOW = timedelta(days=7)
@@ -218,6 +218,7 @@ async def monitor_runtime_projection_freshness(
 def build_runtime_projection_metadata(
     candidates: Iterable[CoverageCandidatePreview],
 ) -> dict[str, object]:
+    candidate_list = list(candidates)
     counts = {
         "fresh": 0,
         "stale": 0,
@@ -226,7 +227,7 @@ def build_runtime_projection_metadata(
         "unknown": 0,
     }
 
-    for candidate in candidates:
+    for candidate in candidate_list:
         scoring_factors = candidate.scoring_factors if isinstance(candidate.scoring_factors, dict) else {}
         snapshot = scoring_factors.get("score_snapshot")
         if not isinstance(snapshot, dict):
@@ -236,6 +237,29 @@ def build_runtime_projection_metadata(
         if status not in counts:
             status = "unknown"
         counts[status] += 1
+
+    overtime_projection_counts = {
+        "resolved": 0,
+        "unresolved": 0,
+        "elevated_or_higher": 0,
+    }
+    policy_version = None
+    snapshot_generated_at = None
+    inputs_version = None
+    for candidate in candidate_list:
+        scoring_factors = candidate.scoring_factors if isinstance(candidate.scoring_factors, dict) else {}
+        policy_version = policy_version or scoring_factors.get("policy_version")
+        snapshot_generated_at = snapshot_generated_at or scoring_factors.get("snapshot_generated_at")
+        inputs_version = inputs_version or scoring_factors.get("inputs_version")
+        projection = scoring_factors.get("overtime_projection")
+        if not isinstance(projection, dict):
+            continue
+        if str(projection.get("status") or "").lower() == "unresolved":
+            overtime_projection_counts["unresolved"] += 1
+        else:
+            overtime_projection_counts["resolved"] += 1
+        if str(projection.get("status") or "").lower() in {"elevated", "high"}:
+            overtime_projection_counts["elevated_or_higher"] += 1
 
     return {
         "eligibility": {
@@ -254,6 +278,16 @@ def build_runtime_projection_metadata(
             "freshness_target_seconds": int(SCORE_SNAPSHOT_STALE_AFTER.total_seconds()),
             "candidate_count": sum(counts.values()),
             **counts,
+        },
+        "overtime_projection": {
+            "source": "labor_rule_engine",
+            "mode": labor_rules.labor_rules_mode(),
+            **overtime_projection_counts,
+        },
+        "policy": {
+            "policy_version": policy_version,
+            "snapshot_generated_at": snapshot_generated_at,
+            "inputs_version": inputs_version,
         },
     }
 
@@ -341,6 +375,24 @@ def _overtime_risk_snapshot(
     }
 
 
+async def _load_labor_rule_profile_for_shift(
+    session: AsyncSession,
+    *,
+    shift: Shift,
+    now: datetime,
+) -> labor_rules.LaborRuleProfileSnapshot | None:
+    location = getattr(shift, "location", None)
+    if location is None:
+        return None
+    business = getattr(location, "business", None)
+    return await labor_rules.runtime_resolved_profile(
+        session,
+        location=location,
+        business=business,
+        as_of=now,
+    )
+
+
 async def build_outreach_guardrail_snapshots(
     session: AsyncSession,
     employees: Iterable[Employee],
@@ -410,7 +462,22 @@ async def build_outreach_guardrail_snapshots(
             (ends_at - starts_at).total_seconds() / 3600,
         )
 
-    current_shift_hours = _shift_duration_hours(shift)
+    resolved_profile = await _load_labor_rule_profile_for_shift(
+        session,
+        shift=shift,
+        now=reference_time,
+    )
+    hours_snapshots = (
+        await labor_rules.build_hours_snapshots(
+            session,
+            employees=employees_list,
+            shift=shift,
+            profile=resolved_profile,
+            now=reference_time,
+        )
+        if resolved_profile is not None
+        else {}
+    )
     snapshots: dict[UUID, dict[str, object]] = {}
     for employee in employees_list:
         attempts = attempts_by_employee.get(employee.id, [])
@@ -424,6 +491,7 @@ async def build_outreach_guardrail_snapshots(
             for _requested_at, status in attempts
             if str(status.value if hasattr(status, "value") else status) == CoverageAttemptStatus.accepted.value
         )
+        employee_hours_snapshot = hours_snapshots.get(employee.id)
         recent_assignment_hours = assignment_hours_by_employee.get(employee.id, 0.0)
 
         cooldown = _contact_cooldown_snapshot(last_contact_at=last_contact_at, now=reference_time)
@@ -432,18 +500,26 @@ async def build_outreach_guardrail_snapshots(
             recent_accept_count=recent_accept_count,
             recent_assignment_hours=recent_assignment_hours,
         )
-        overtime = _overtime_risk_snapshot(
-            projected_hours=recent_assignment_hours + current_shift_hours,
+        overtime_projection = labor_rules.evaluate_overtime_projection(
+            resolved_profile,
+            candidate_shift=shift,
+            counted_intervals=employee_hours_snapshot.counted_intervals if employee_hours_snapshot is not None else (),
+            reference_time=reference_time,
+        )
+        overtime_multiplier = labor_rules.overtime_multiplier_for_projection(
+            overtime_projection,
+            apply_to_ranking=labor_rules.labor_rules_primary_enabled(),
         )
         overall = round(
-            float(cooldown["multiplier"]) * float(burden["multiplier"]) * float(overtime["multiplier"]),
+            float(cooldown["multiplier"]) * float(burden["multiplier"]) * overtime_multiplier,
             3,
         )
 
         snapshots[employee.id] = {
             "contact_cooldown": cooldown,
             "recent_burden": burden,
-            "overtime_risk": overtime,
+            "overtime_risk": labor_rules.legacy_overtime_risk_snapshot(overtime_projection),
+            "overtime_projection": overtime_projection,
             "overall_multiplier": overall,
             "hard_excluded": float(cooldown["multiplier"]) == 0.0,
         }

@@ -26,6 +26,15 @@ from app.models.integrations import (
     SchedulerSyncJob,
     SchedulerSyncRun,
 )
+from app.models.labor_rules import (
+    LaborIndustryProfile,
+    LaborRuleProfile,
+    LaborRuleProfileVersion,
+    LaborRuleResolutionRun,
+    LaborRuleSourceDocument,
+    LaborRuleUpdateProposal,
+    LocationLaborRuleResolution,
+)
 from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.role_taxonomy import (
     BusinessPlaceType,
@@ -74,7 +83,14 @@ __all__ = [
     "EmployeeScheduleAccessLink",
     "FeedProjection",
     "LlmGeneration",
+    "LaborIndustryProfile",
+    "LaborRuleProfile",
+    "LaborRuleProfileVersion",
+    "LaborRuleResolutionRun",
+    "LaborRuleSourceDocument",
+    "LaborRuleUpdateProposal",
     "Location",
+    "LocationLaborRuleResolution",
     "LocationRole",
     "ManagerInvite",
     "Membership",

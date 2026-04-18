@@ -7,9 +7,14 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 from app.api.deps import SessionDep
 from app.config import settings
 from app.schemas.internal import (
+    CallbackReplayRequest,
+    CallbackReplayResponse,
     FeedProjectionProcessResponse,
     FeedProjectionRebuildResponse,
+    InvariantScanResponse,
     OfferExpiryResponse,
+    OutboxReplayRequest,
+    OutboxReplayResponse,
     OutboxProcessResponse,
     ProjectionStatus,
     SchedulerSyncProcessResponse,
@@ -21,7 +26,9 @@ from app.services import (
     coverage_runtime,
     delivery,
     feed_projections,
+    invariants,
     provider_callbacks,
+    recovery,
     runtime_orchestration,
     scheduler_sync,
     webhooks,
@@ -55,6 +62,19 @@ async def expire_coverage_offers(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await delivery.expire_due_offers(session, limit=payload.limit)
+
+
+@router.get("/coverage/invariants", response_model=InvariantScanResponse)
+async def scan_coverage_invariants(
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+    limit_per_code: int = Query(default=25, ge=1, le=100),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await invariants.scan_scheduler_coverage_invariants(
+        session,
+        limit_per_code=limit_per_code,
+    )
 
 
 @router.post("/coverage/cases/process")
@@ -190,6 +210,36 @@ async def get_provider_callback_log(
     if row is None:
         raise HTTPException(status_code=404, detail="provider_callback_log_not_found")
     return ProviderCallbackLogRead.model_validate(row)
+
+
+@router.post("/providers/callbacks/{callback_log_id}/replay", response_model=CallbackReplayResponse)
+async def replay_provider_callback_log(
+    callback_log_id: UUID,
+    payload: CallbackReplayRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await recovery.replay_provider_callback_log(
+        session,
+        callback_log_id=callback_log_id,
+        mode=str(payload.mode),
+    )
+
+
+@router.post("/coverage/outbox/{outbox_event_id}/replay", response_model=OutboxReplayResponse)
+async def replay_coverage_outbox_event(
+    outbox_event_id: UUID,
+    payload: OutboxReplayRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    return await recovery.replay_coverage_outbox_event(
+        session,
+        outbox_event_id=outbox_event_id,
+        mode=str(payload.mode),
+    )
 
 
 @router.post("/webhooks/process", response_model=WebhookProcessResponse)

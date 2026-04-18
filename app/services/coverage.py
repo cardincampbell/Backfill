@@ -53,7 +53,16 @@ from app.schemas.coverage import (
     Phase2ExecutionRequest,
     Phase2ExecutionResult,
 )
-from app.services import delivery as delivery_service, outreach as outreach_service, platform_events, runtime_projections
+from app.services import (
+    coverage_transitions,
+    delivery as delivery_service,
+    outreach as outreach_service,
+    platform_events,
+    runtime_projections,
+)
+
+_COVERAGE_POLICY_VERSION = "coverage_policy_v1"
+_COVERAGE_POLICY_INPUTS_VERSION = "runtime_projection_inputs_v1"
 
 
 def _shift_amendment_metadata(shift: Shift) -> dict:
@@ -77,6 +86,14 @@ def _should_accept_via_published_reassignment(shift: Shift) -> bool:
         and _shift_schedule_break(shift)
         and shift.seats_filled < shift.seats_requested
     )
+
+
+def _policy_explanation_metadata(*, generated_at: datetime) -> dict[str, str]:
+    return {
+        "policy_version": _COVERAGE_POLICY_VERSION,
+        "snapshot_generated_at": generated_at.isoformat(),
+        "inputs_version": _COVERAGE_POLICY_INPUTS_VERSION,
+    }
 
 
 def _coverage_assignment_source(response_channel: str) -> str:
@@ -587,8 +604,7 @@ async def activate_standby_queue(
         created.append(reactivation_offer)
 
     if created:
-        coverage_case.status = CoverageCaseStatus.running
-        coverage_case.closed_at = None
+        coverage_transitions.mark_case_running(coverage_case)
         _update_case_metadata(
             coverage_case,
             standby_queue=standby_queue,
@@ -694,18 +710,16 @@ async def advance_case_after_terminal_offer(
         dispatch_limit=1,
     )
     if standby_offers:
-        coverage_case.status = CoverageCaseStatus.running
+        coverage_transitions.mark_case_running(coverage_case)
         return standby_offers, None
 
     if offer.coverage_case_run_id is None:
-        coverage_case.status = CoverageCaseStatus.exhausted
-        coverage_case.closed_at = reference_time
+        coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
         return [], str(coverage_case.id)
 
     run = await session.get(CoverageCaseRun, offer.coverage_case_run_id)
     if run is None:
-        coverage_case.status = CoverageCaseStatus.exhausted
-        coverage_case.closed_at = reference_time
+        coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
         return [], str(coverage_case.id)
 
     next_offers = await _dispatch_next_offer_batch(
@@ -717,11 +731,10 @@ async def advance_case_after_terminal_offer(
         channel=offer.channel.value if hasattr(offer.channel, "value") else str(offer.channel),
     )
     if next_offers:
-        coverage_case.status = CoverageCaseStatus.running
+        coverage_transitions.mark_case_running(coverage_case)
         return next_offers, None
 
-    coverage_case.status = CoverageCaseStatus.exhausted
-    coverage_case.closed_at = reference_time
+    coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
     return [], str(coverage_case.id)
 
 
@@ -1042,8 +1055,7 @@ async def execute_next_campaign_phase(
         )
 
     case, _shift = await _load_campaign_shift(session, business_id, campaign_id)
-    case.status = CoverageCaseStatus.exhausted
-    case.closed_at = datetime.now(timezone.utc)
+    coverage_transitions.mark_case_exhausted(case, occurred_at=datetime.now(timezone.utc))
     await session.commit()
     await session.refresh(case)
     return CoverageCampaignDispatchResult(
@@ -1200,6 +1212,7 @@ async def _collect_phase_1_candidates(
         busy_employee_ids = {row for row in busy_result.scalars().all() if row is not None}
 
     reference_time = datetime.now(timezone.utc)
+    policy_metadata = _policy_explanation_metadata(generated_at=reference_time)
     score_snapshot_states = await runtime_projections.refresh_employee_score_snapshots(
         session,
         employees,
@@ -1255,10 +1268,13 @@ async def _collect_phase_1_candidates(
         score = round(score * guardrail_multiplier, 3)
         scoring_factors["outreach_guardrails"] = guardrails
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
+        if isinstance(guardrails.get("overtime_projection"), dict):
+            scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
         )
+        scoring_factors.update(policy_metadata)
         scoring_factors["total"] = score
 
         candidates.append(
@@ -1355,6 +1371,7 @@ async def _collect_phase_2_candidates(
         }
 
     reference_time = datetime.now(timezone.utc)
+    policy_metadata = _policy_explanation_metadata(generated_at=reference_time)
     score_snapshot_states = await runtime_projections.refresh_employee_score_snapshots(
         session,
         employees,
@@ -1423,10 +1440,13 @@ async def _collect_phase_2_candidates(
         score = round(score * guardrail_multiplier, 3)
         scoring_factors["outreach_guardrails"] = guardrails
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
+        if isinstance(guardrails.get("overtime_projection"), dict):
+            scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
         scoring_factors["score_snapshot"] = score_snapshot_states.get(
             employee.id,
             runtime_projections.score_snapshot_state(employee, now=reference_time),
         )
+        scoring_factors.update(policy_metadata)
         scoring_factors["total"] = score
 
         candidates.append(
@@ -1561,9 +1581,10 @@ async def execute_phase_1_run(
     run.status = CoverageRunStatus.completed
     run.finished_at = datetime.now(timezone.utc)
 
-    case.status = CoverageCaseStatus.running if offers else CoverageCaseStatus.exhausted
-    if not offers:
-        case.closed_at = run.finished_at
+    if offers:
+        coverage_transitions.mark_case_running(case)
+    else:
+        coverage_transitions.mark_case_exhausted(case, occurred_at=run.finished_at or started_at)
 
     await session.commit()
     await session.refresh(case)
@@ -1693,9 +1714,10 @@ async def execute_phase_2_run(
     run.status = CoverageRunStatus.completed
     run.finished_at = datetime.now(timezone.utc)
 
-    case.status = CoverageCaseStatus.running if offers else CoverageCaseStatus.exhausted
-    if not offers:
-        case.closed_at = run.finished_at
+    if offers:
+        coverage_transitions.mark_case_running(case)
+    else:
+        coverage_transitions.mark_case_exhausted(case, occurred_at=run.finished_at or started_at)
 
     await session.commit()
     await session.refresh(case)
@@ -1814,7 +1836,7 @@ async def respond_to_offer(
     action = payload.response.strip().lower()
     if action not in {"accepted", "declined"}:
         raise ValueError("response must be accepted or declined")
-    if offer.status not in {OfferStatus.pending, OfferStatus.delivered}:
+    if not coverage_transitions.coverage_state.is_actionable_offer_status(offer.status):
         raise ValueError("offer is no longer actionable")
 
     responded_at = datetime.now(timezone.utc)
@@ -1832,12 +1854,10 @@ async def respond_to_offer(
     assignment_status: str | None = None
     publish_note: str | None = None
     if action == "accepted":
-        offer.status = OfferStatus.accepted
-        offer.accepted_at = responded_at
+        coverage_transitions.mark_offer_accepted(offer, occurred_at=responded_at)
         if shift.seats_filled >= shift.seats_requested:
             shift.status = ShiftStatus.covered
-            coverage_case.status = CoverageCaseStatus.filled
-            coverage_case.closed_at = coverage_case.closed_at or responded_at
+            coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
             standby_queue = _standby_queue_for_case(coverage_case)
             standby_position = next(
                 (
@@ -1894,8 +1914,7 @@ async def respond_to_offer(
                         occurred_at=responded_at,
                         assignment=assignment,
                     )
-                coverage_case.status = CoverageCaseStatus.filled
-                coverage_case.closed_at = responded_at
+                coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
                 _update_case_metadata(
                     coverage_case,
                     confirmed_offer_id=str(offer.id),
@@ -1981,8 +2000,7 @@ async def respond_to_offer(
                 shift.seats_filled += 1
                 if shift.seats_filled >= shift.seats_requested:
                     shift.status = ShiftStatus.covered
-                    coverage_case.status = CoverageCaseStatus.filled
-                    coverage_case.closed_at = responded_at
+                    coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
                     _update_case_metadata(
                         coverage_case,
                         confirmed_offer_id=str(offer.id),
@@ -1990,7 +2008,7 @@ async def respond_to_offer(
                     )
                 else:
                     shift.status = ShiftStatus.filling
-                    coverage_case.status = CoverageCaseStatus.running
+                    coverage_transitions.mark_case_running(coverage_case)
 
             sibling_result = await session.execute(
                 select(CoverageOffer).where(
@@ -2000,7 +2018,11 @@ async def respond_to_offer(
                 )
             )
             for sibling in sibling_result.scalars().all():
-                sibling.status = OfferStatus.cancelled
+                coverage_transitions.mark_offer_cancelled(
+                    sibling,
+                    occurred_at=responded_at,
+                    reason="shift_filled",
+                )
                 await delivery_service.mark_offer_attempt_outcome(
                     session,
                     sibling,
@@ -2026,8 +2048,7 @@ async def respond_to_offer(
             await scheduler_sync.enqueue_writeback(session, shift_id=shift.id)
 
     else:
-        offer.status = OfferStatus.declined
-        offer.declined_at = responded_at
+        coverage_transitions.mark_offer_declined(offer, occurred_at=responded_at)
 
         if _is_standby_activation_offer(offer):
             _record_standby_queue_result(
@@ -2048,8 +2069,7 @@ async def respond_to_offer(
                 "next_offer_ids": [str(next_offer.id) for next_offer in next_offers],
             }
         elif exhausted_case_id is not None:
-            coverage_case.status = CoverageCaseStatus.exhausted
-            coverage_case.closed_at = responded_at
+            coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=responded_at)
 
     if action == "accepted":
         contact_attempt = await delivery_service.mark_offer_attempt_outcome(
