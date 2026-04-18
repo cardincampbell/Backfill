@@ -2864,7 +2864,7 @@ function SchedulerContent({
   const EMP_COL = 'w-[220px] min-w-[220px]';
 
   const content = (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }} className={`flex flex-col h-full -mx-4 sm:-mx-6 md:-mx-8 -mt-2 ${theme.pageClass}`}>
 
         {/* ─── Top Bar: Location | Week Nav | Buttons ─── */}
         <div ref={schedulerTopBarRef} className={`px-4 sm:px-6 md:px-8 pt-4 pb-4 border-b sticky top-0 z-30 ${theme.topBarClass}`}>
@@ -3094,7 +3094,7 @@ function SchedulerContent({
         {initialSchedulerLoad ? (
           <div className="flex-1 overflow-auto">
             <div className="min-w-[900px] px-4 sm:px-6 md:px-8 py-4">
-              <div className={`animate-pulse overflow-hidden rounded-3xl border ${theme.cardClass}`}>
+              <div className={`overflow-hidden rounded-3xl border ${theme.cardClass}`}>
                 <div className={`flex border-b ${theme.stickyHeaderClass}`}>
                   <div className={`${EMP_COL} shrink-0 px-4 py-4`}>
                     <div className={`h-4 w-24 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-[#E5E7EB]'}`} />
@@ -3229,7 +3229,7 @@ function SchedulerContent({
                   </div>
 
                   {/* Employee Rows */}
-                  <AnimatePresence>
+                  <AnimatePresence initial={false}>
                     {!isCollapsed && roleEmps.map(emp => {
                       const empWeekHours = getEmployeeWeekHours(emp.id);
                       const isHovered = hoveredEmployeeId === emp.id;
