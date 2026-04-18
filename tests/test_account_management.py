@@ -434,6 +434,8 @@ def test_business_profile_route_updates_current_business():
                 "cross_location_shift_coverage_allowed": False,
                 "cross_location_min_gap_minutes": 60,
                 "cross_location_max_radius_miles": 20,
+                "auto_scheduler_labor_rule_mode": "hard_block",
+                "auto_scheduler_fairness_mode": "balanced_hours",
             },
         )
         assert response.status_code == 200
@@ -453,6 +455,8 @@ def test_business_profile_route_updates_current_business():
         assert business.settings["coverage"]["cross_location_shift_coverage_allowed"] is False
         assert business.settings["coverage"]["cross_location_min_gap_minutes"] == 60
         assert business.settings["coverage"]["cross_location_max_radius_miles"] == 20
+        assert business.settings["auto_scheduler"]["labor_rule_mode"] == "hard_block"
+        assert business.settings["auto_scheduler"]["fairness_mode"] == "balanced_hours"
         assert business.settings["display_name_source"] == "manual"
         assert business.settings["vertical_source"] == "manual"
         assert fake_session.commits == 1

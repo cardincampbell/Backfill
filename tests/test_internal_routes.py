@@ -8,6 +8,17 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_db_session
 from app.main import app
+from app.models.auto_scheduler import (
+    ReplayRun,
+    ScheduleRun,
+    ScheduleRunApply,
+    ScheduleRunAssignment,
+    ScheduleRunExplanation,
+    ScheduleRunInput,
+    ScheduleRunMetric,
+    ScheduleRunRejection,
+)
+from app.models.common import ScheduleApplyStatus, ScheduleRunStatus, ScheduleRunType
 from app.models.integrations import ProviderCallbackLog
 
 
@@ -21,6 +32,143 @@ class DummyInternalSession:
 
 async def _override_db():
     yield DummyInternalSession()
+
+
+def _schedule_run_read_fixture() -> ScheduleRun:
+    now = datetime.now(timezone.utc)
+    return ScheduleRun(
+        id=uuid4(),
+        business_id=uuid4(),
+        location_id=uuid4(),
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        run_type=ScheduleRunType.draft_generate,
+        status=ScheduleRunStatus.completed,
+        optimizer_engine="ortools_cp_sat_v1",
+        objective_version="v1",
+        constraints_version="v1",
+        policy_version="v1",
+        input_snapshot_version="v1",
+        input_snapshot_hash="sha256:authoring",
+        run_metadata={"scope_shift_count": 1},
+        started_at=now,
+        completed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _schedule_run_apply_fixture(schedule_run: ScheduleRun) -> ScheduleRunApply:
+    now = datetime.now(timezone.utc)
+    return ScheduleRunApply(
+        id=uuid4(),
+        schedule_run_id=schedule_run.id,
+        business_id=schedule_run.business_id,
+        location_id=schedule_run.location_id,
+        planning_window_start=schedule_run.planning_window_start,
+        planning_window_end=schedule_run.planning_window_end,
+        status=ScheduleApplyStatus.applied,
+        target_snapshot_hash="sha256:target",
+        current_snapshot_hash="sha256:current",
+        stale_reason=None,
+        apply_metadata={"applied_assignment_count": 1},
+        applied_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _schedule_run_detail_fixture() -> ScheduleRun:
+    schedule_run = _schedule_run_read_fixture()
+    schedule_run.inputs = ScheduleRunInput(
+        schedule_run_id=schedule_run.id,
+        shift_payload={"shifts": [{"shift_id": str(uuid4())}]},
+        employee_payload={"employees": [{"employee_id": str(uuid4())}]},
+        availability_payload={"eligible_employee_ids_by_shift": {}},
+        policy_payload={"publish_mode": "draft_only"},
+        labor_payload={"employees": {}},
+        reliability_payload={"employees": []},
+        reliability_snapshot_generated_at=schedule_run.created_at,
+        reliability_snapshot_hash="sha256:reliability",
+        reliability_snapshot_version="v1",
+        source_metadata={"authoring_snapshot_hash": "sha256:authoring"},
+        created_at=schedule_run.created_at,
+        updated_at=schedule_run.updated_at,
+    )
+    schedule_run.assignments = [
+        ScheduleRunAssignment(
+            id=uuid4(),
+            schedule_run_id=schedule_run.id,
+            shift_id=uuid4(),
+            employee_id=uuid4(),
+            decision_score=95.0,
+            decision_rank=1,
+            assignment_payload={"source": "optimizer"},
+            created_at=schedule_run.created_at,
+            updated_at=schedule_run.updated_at,
+        )
+    ]
+    schedule_run.rejections = [
+        ScheduleRunRejection(
+            id=uuid4(),
+            schedule_run_id=schedule_run.id,
+            shift_id=uuid4(),
+            employee_id=uuid4(),
+            candidate_rank=2,
+            rejection_reason_codes=["lower_ranked_candidate"],
+            score_payload={"total_score": 80.0},
+            constraint_failure_payload={},
+            created_at=schedule_run.created_at,
+            updated_at=schedule_run.updated_at,
+        )
+    ]
+    schedule_run.explanation = ScheduleRunExplanation(
+        schedule_run_id=schedule_run.id,
+        summary_payload={"assigned_shift_count": 1},
+        fairness_payload={},
+        overtime_payload={},
+        coverage_payload={},
+        unassigned_shift_payload={},
+        created_at=schedule_run.created_at,
+        updated_at=schedule_run.updated_at,
+    )
+    schedule_run.metrics = ScheduleRunMetric(
+        schedule_run_id=schedule_run.id,
+        shift_count=1,
+        assigned_shift_count=1,
+        unassigned_shift_count=0,
+        candidate_considered_count=2,
+        overtime_assignment_count=0,
+        fairness_spread_metrics={"avg_hours": 6.0},
+        solver_runtime_ms=12,
+        objective_value=95.0,
+        created_at=schedule_run.created_at,
+        updated_at=schedule_run.updated_at,
+    )
+    schedule_run.applies = [_schedule_run_apply_fixture(schedule_run)]
+    schedule_run.replay_runs = [
+        ReplayRun(
+            id=uuid4(),
+            schedule_run_id=schedule_run.id,
+            business_id=schedule_run.business_id,
+            location_id=schedule_run.location_id,
+            planning_window_start=schedule_run.planning_window_start,
+            planning_window_end=schedule_run.planning_window_end,
+            status=ScheduleRunStatus.completed,
+            comparison_version="v1",
+            target_snapshot_hash="sha256:target",
+            actual_snapshot_hash="sha256:actual",
+            actual_assignment_payload={},
+            actual_outcome_payload={},
+            metrics_payload={},
+            replay_metadata={},
+            started_at=schedule_run.created_at,
+            completed_at=schedule_run.created_at,
+            created_at=schedule_run.created_at,
+            updated_at=schedule_run.updated_at,
+        )
+    ]
+    return schedule_run
 
 
 def test_coverage_runtime_process_route_rejects_invalid_worker_key(monkeypatch):
@@ -39,6 +187,175 @@ def test_coverage_runtime_process_route_rejects_invalid_worker_key(monkeypatch):
         )
         assert response.status_code == 401
         assert response.json() == {"detail": "worker_auth_failed"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_auto_scheduler_generate_route_returns_completed_run(monkeypatch):
+    captured: dict[str, object] = {}
+    schedule_run = _schedule_run_read_fixture()
+
+    async def fake_generate(
+        _session,
+        *,
+        business_id,
+        location_id,
+        planning_window_start,
+        planning_window_end,
+        source_metadata,
+        optimizer=None,
+    ):
+        captured["business_id"] = business_id
+        captured["location_id"] = location_id
+        captured["planning_window_start"] = planning_window_start
+        captured["planning_window_end"] = planning_window_end
+        captured["source_metadata"] = source_metadata
+        captured["optimizer"] = optimizer
+        return schedule_run
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.auto_scheduler.create_and_execute_schedule_run_for_scope",
+        fake_generate,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/internal/auto-scheduler/runs/generate",
+                json={
+                    "business_id": str(schedule_run.business_id),
+                    "location_id": str(schedule_run.location_id),
+                    "planning_window_start": "2026-04-20T07:00:00Z",
+                    "planning_window_end": "2026-04-27T07:00:00Z",
+                    "source_metadata": {"request_id": "req_123"},
+                },
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == str(schedule_run.id)
+        assert payload["status"] == "completed"
+        assert payload["run_metadata"]["scope_shift_count"] == 1
+        assert captured["business_id"] == schedule_run.business_id
+        assert captured["location_id"] == schedule_run.location_id
+        assert captured["source_metadata"] == {"request_id": "req_123"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_auto_scheduler_apply_route_returns_apply_record(monkeypatch):
+    captured: dict[str, object] = {}
+    schedule_run = _schedule_run_read_fixture()
+    apply_record = _schedule_run_apply_fixture(schedule_run)
+
+    async def fake_apply(_session, schedule_run_id):
+        captured["schedule_run_id"] = schedule_run_id
+        return apply_record
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.auto_scheduler.apply_schedule_run_from_live_scope",
+        fake_apply,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/internal/auto-scheduler/runs/{schedule_run.id}/apply",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == str(apply_record.id)
+        assert payload["schedule_run_id"] == str(schedule_run.id)
+        assert payload["status"] == "applied"
+        assert payload["apply_metadata"]["applied_assignment_count"] == 1
+        assert captured["schedule_run_id"] == schedule_run.id
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_auto_scheduler_list_runs_route_returns_runs(monkeypatch):
+    schedule_run = _schedule_run_read_fixture()
+    captured: dict[str, object] = {}
+
+    async def fake_list(_session, *, business_id, location_id=None, limit=25, status=None):
+        captured["business_id"] = business_id
+        captured["location_id"] = location_id
+        captured["limit"] = limit
+        captured["status"] = status
+        return [schedule_run]
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.auto_scheduler.list_schedule_runs",
+        fake_list,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/internal/auto-scheduler/runs?business_id={schedule_run.business_id}&location_id={schedule_run.location_id}&status=completed&limit=10",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["id"] == str(schedule_run.id)
+        assert payload[0]["status"] == "completed"
+        assert captured["business_id"] == schedule_run.business_id
+        assert captured["location_id"] == schedule_run.location_id
+        assert captured["limit"] == 10
+        assert captured["status"] == "completed"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_auto_scheduler_detail_route_returns_run_detail(monkeypatch):
+    schedule_run = _schedule_run_detail_fixture()
+
+    async def fake_get(_session, schedule_run_id):
+        assert schedule_run_id == schedule_run.id
+        return schedule_run
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.auto_scheduler.get_schedule_run_detail",
+        fake_get,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/internal/auto-scheduler/runs/{schedule_run.id}",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == str(schedule_run.id)
+        assert payload["inputs"]["reliability_snapshot_hash"] == "sha256:reliability"
+        assert payload["assignments"][0]["decision_rank"] == 1
+        assert payload["rejections"][0]["rejection_reason_codes"] == ["lower_ranked_candidate"]
+        assert payload["metrics"]["candidate_considered_count"] == 2
+        assert payload["applies"][0]["status"] == "applied"
+        assert payload["replay_run_ids"] == [str(schedule_run.replay_runs[0].id)]
     finally:
         app.dependency_overrides.clear()
 

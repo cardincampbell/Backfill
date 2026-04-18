@@ -71,6 +71,14 @@ class ScheduleRunInputContract(BaseSchema):
     source_metadata: dict = Field(default_factory=dict)
 
 
+class ScheduleRunGenerateRequest(BaseSchema):
+    business_id: UUID
+    location_id: Optional[UUID] = None
+    planning_window_start: datetime
+    planning_window_end: datetime
+    source_metadata: dict = Field(default_factory=dict)
+
+
 class ScheduleRunRead(BaseSchema):
     id: UUID
     business_id: UUID
@@ -90,6 +98,71 @@ class ScheduleRunRead(BaseSchema):
     completed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+class ScheduleRunInputRead(BaseSchema):
+    shift_payload: dict
+    employee_payload: dict
+    availability_payload: dict
+    policy_payload: dict
+    labor_payload: dict
+    reliability_payload: dict
+    reliability_snapshot_generated_at: Optional[datetime] = None
+    reliability_snapshot_hash: Optional[str] = None
+    reliability_snapshot_version: Optional[str] = None
+    source_metadata: dict
+
+
+class ScheduleRunAssignmentRead(BaseSchema):
+    id: UUID
+    shift_id: Optional[UUID] = None
+    employee_id: Optional[UUID] = None
+    decision_score: float
+    decision_rank: int
+    assignment_payload: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScheduleRunRejectionRead(BaseSchema):
+    id: UUID
+    shift_id: Optional[UUID] = None
+    employee_id: Optional[UUID] = None
+    candidate_rank: int
+    rejection_reason_codes: list = Field(default_factory=list)
+    score_payload: dict = Field(default_factory=dict)
+    constraint_failure_payload: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ScheduleRunExplanationRead(BaseSchema):
+    summary_payload: dict = Field(default_factory=dict)
+    fairness_payload: dict = Field(default_factory=dict)
+    overtime_payload: dict = Field(default_factory=dict)
+    coverage_payload: dict = Field(default_factory=dict)
+    unassigned_shift_payload: dict = Field(default_factory=dict)
+
+
+class ScheduleRunMetricRead(BaseSchema):
+    shift_count: int
+    assigned_shift_count: int
+    unassigned_shift_count: int
+    candidate_considered_count: int
+    overtime_assignment_count: int
+    fairness_spread_metrics: dict = Field(default_factory=dict)
+    solver_runtime_ms: int
+    objective_value: Optional[float] = None
+
+
+class ScheduleRunDetailRead(ScheduleRunRead):
+    inputs: Optional[ScheduleRunInputRead] = None
+    assignments: list[ScheduleRunAssignmentRead] = Field(default_factory=list)
+    rejections: list[ScheduleRunRejectionRead] = Field(default_factory=list)
+    explanation: Optional[ScheduleRunExplanationRead] = None
+    metrics: Optional[ScheduleRunMetricRead] = None
+    applies: list["ScheduleRunApplyRead"] = Field(default_factory=list)
+    replay_run_ids: list[UUID] = Field(default_factory=list)
 
 
 class ScheduleRunApplyRead(BaseSchema):

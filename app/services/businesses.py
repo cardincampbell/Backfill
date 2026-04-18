@@ -330,6 +330,10 @@ async def update_business_profile(
         "cross_location_min_gap_minutes": payload.cross_location_min_gap_minutes,
         "cross_location_max_radius_miles": payload.cross_location_max_radius_miles,
     }
+    auto_scheduler_field_map = {
+        "labor_rule_mode": payload.auto_scheduler_labor_rule_mode,
+        "fairness_mode": payload.auto_scheduler_fairness_mode,
+    }
 
     changes: dict[str, object] = {}
     if business.display_name != display_name:
@@ -397,6 +401,35 @@ async def update_business_profile(
             settings["coverage"] = coverage_settings
         else:
             settings.pop("coverage", None)
+
+    current_auto_scheduler_settings = settings.get("auto_scheduler")
+    auto_scheduler_settings = (
+        dict(current_auto_scheduler_settings)
+        if isinstance(current_auto_scheduler_settings, dict)
+        else {}
+    )
+    auto_scheduler_changed = False
+    for key, value in auto_scheduler_field_map.items():
+        field_name = f"auto_scheduler_{key}"
+        if field_name not in payload.model_fields_set:
+            continue
+        current_value = auto_scheduler_settings.get(key)
+        if value is None:
+            if key in auto_scheduler_settings:
+                auto_scheduler_settings.pop(key, None)
+                auto_scheduler_changed = True
+                changes[field_name] = None
+            continue
+        if current_value != value:
+            auto_scheduler_settings[key] = value
+            auto_scheduler_changed = True
+            changes[field_name] = value
+
+    if auto_scheduler_changed:
+        if auto_scheduler_settings:
+            settings["auto_scheduler"] = auto_scheduler_settings
+        else:
+            settings.pop("auto_scheduler", None)
 
     if settings != current_settings:
         business.settings = settings

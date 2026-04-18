@@ -93,6 +93,10 @@ class ScheduleRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="schedule_run",
         cascade="all, delete-orphan",
     )
+    replay_runs: Mapped[List["ReplayRun"]] = relationship(
+        back_populates="schedule_run",
+        cascade="all, delete-orphan",
+    )
 
 
 class ScheduleRunInput(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -341,5 +345,66 @@ class ScheduleRunApply(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="applies")
+    business: Mapped["Business"] = relationship()
+    location: Mapped[Optional["Location"]] = relationship()
+
+
+class ReplayRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "replay_runs"
+    __table_args__ = (
+        Index("ix_replay_runs_schedule_run_id_created_at", "schedule_run_id", "created_at"),
+        Index("ix_replay_runs_business_id_created_at", "business_id", "created_at"),
+        Index("ix_replay_runs_status_created_at", "status", "created_at"),
+    )
+
+    schedule_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schedule_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL")
+    )
+    planning_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    planning_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[ScheduleRunStatus] = mapped_column(
+        Enum(ScheduleRunStatus, name="schedule_run_status"),
+        nullable=False,
+        server_default=ScheduleRunStatus.queued.value,
+    )
+    comparison_version: Mapped[str] = mapped_column(String(64), nullable=False, server_default="v1")
+    target_snapshot_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    actual_snapshot_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    actual_assignment_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    actual_outcome_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    metrics_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    replay_metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="replay_runs")
     business: Mapped["Business"] = relationship()
     location: Mapped[Optional["Location"]] = relationship()

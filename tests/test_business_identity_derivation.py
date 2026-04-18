@@ -460,6 +460,8 @@ async def test_update_business_profile_marks_brand_name_as_manual():
             cross_location_shift_coverage_allowed=False,
             cross_location_min_gap_minutes=60,
             cross_location_max_radius_miles=20,
+            auto_scheduler_labor_rule_mode="hard_block",
+            auto_scheduler_fairness_mode="balanced_hours",
         ),
     )
 
@@ -472,6 +474,8 @@ async def test_update_business_profile_marks_brand_name_as_manual():
     assert business.settings["coverage"]["cross_location_shift_coverage_allowed"] is False
     assert business.settings["coverage"]["cross_location_min_gap_minutes"] == 60
     assert business.settings["coverage"]["cross_location_max_radius_miles"] == 20
+    assert business.settings["auto_scheduler"]["labor_rule_mode"] == "hard_block"
+    assert business.settings["auto_scheduler"]["fairness_mode"] == "balanced_hours"
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from app.models.ai import LlmGeneration
 from app.models.auto_scheduler import (
+    ReplayRun,
     ScheduleRun,
     ScheduleRunApply,
     ScheduleRunAssignment,
@@ -45,6 +46,7 @@ from app.models.labor_rules import (
     LocationLaborRuleResolution,
 )
 from app.models.projections import FeedProjection, ProjectionCursor
+from app.models.reliability import ReliabilityEvent, ReliabilitySnapshot
 from app.models.role_taxonomy import (
     BusinessPlaceType,
     BusinessRoleArchetype,
@@ -107,6 +109,9 @@ __all__ = [
     "OutboxEvent",
     "PlatformEvent",
     "ProjectionCursor",
+    "ReliabilityEvent",
+    "ReliabilitySnapshot",
+    "ReplayRun",
     "ProviderCallbackLog",
     "RetellConversation",
     "Role",

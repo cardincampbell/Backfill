@@ -6,6 +6,12 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 
 from app.api.deps import SessionDep
 from app.config import settings
+from app.schemas.auto_scheduler import (
+    ScheduleRunApplyRead,
+    ScheduleRunDetailRead,
+    ScheduleRunGenerateRequest,
+    ScheduleRunRead,
+)
 from app.schemas.internal import (
     CallbackReplayRequest,
     CallbackReplayResponse,
@@ -23,6 +29,7 @@ from app.schemas.internal import (
 )
 from app.schemas.ops import ProviderCallbackLogRead
 from app.services import (
+    auto_scheduler,
     coverage_runtime,
     delivery,
     feed_projections,
@@ -62,6 +69,85 @@ async def expire_coverage_offers(
 ):
     _assert_worker_key(x_backfill_worker_key)
     return await delivery.expire_due_offers(session, limit=payload.limit)
+
+
+@router.post("/auto-scheduler/runs/generate", response_model=ScheduleRunRead)
+async def generate_auto_scheduler_run(
+    payload: ScheduleRunGenerateRequest,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    schedule_run = await auto_scheduler.create_and_execute_schedule_run_for_scope(
+        session,
+        business_id=payload.business_id,
+        location_id=payload.location_id,
+        planning_window_start=payload.planning_window_start,
+        planning_window_end=payload.planning_window_end,
+        source_metadata=payload.source_metadata,
+    )
+    return ScheduleRunRead.model_validate(schedule_run)
+
+
+@router.get("/auto-scheduler/runs", response_model=list[ScheduleRunRead])
+async def list_auto_scheduler_runs(
+    session: SessionDep,
+    business_id: UUID,
+    x_backfill_worker_key: str | None = Header(default=None),
+    location_id: UUID | None = None,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    runs = await auto_scheduler.list_schedule_runs(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        limit=limit,
+        status=status,
+    )
+    return [ScheduleRunRead.model_validate(item) for item in runs]
+
+
+@router.get("/auto-scheduler/runs/{schedule_run_id}", response_model=ScheduleRunDetailRead)
+async def get_auto_scheduler_run(
+    schedule_run_id: UUID,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    schedule_run = await auto_scheduler.get_schedule_run_detail(
+        session,
+        schedule_run_id,
+    )
+    if schedule_run is None:
+        raise HTTPException(status_code=404, detail="schedule_run_not_found")
+    return ScheduleRunDetailRead.model_validate(
+        {
+            **ScheduleRunRead.model_validate(schedule_run).model_dump(),
+            "inputs": schedule_run.inputs,
+            "assignments": list(schedule_run.assignments or []),
+            "rejections": list(schedule_run.rejections or []),
+            "explanation": schedule_run.explanation,
+            "metrics": schedule_run.metrics,
+            "applies": list(schedule_run.applies or []),
+            "replay_run_ids": [replay_run.id for replay_run in (schedule_run.replay_runs or [])],
+        }
+    )
+
+
+@router.post("/auto-scheduler/runs/{schedule_run_id}/apply", response_model=ScheduleRunApplyRead)
+async def apply_auto_scheduler_run(
+    schedule_run_id: UUID,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    apply_record = await auto_scheduler.apply_schedule_run_from_live_scope(
+        session,
+        schedule_run_id,
+    )
+    return ScheduleRunApplyRead.model_validate(apply_record)
 
 
 @router.get("/coverage/invariants", response_model=InvariantScanResponse)
