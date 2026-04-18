@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
 from app.models.scheduling import ShiftAssignment
+from app.schemas.auto_scheduler import ScheduleRunApplyRead, ScheduleRunDetailRead, ScheduleRunRead
 from app.schemas.scheduling import (
     PublishedShiftAmendmentRead,
     PublishedShiftAmendmentWrite,
@@ -22,11 +23,27 @@ from app.schemas.scheduling import (
     ShiftUpdate,
 )
 from app.services import audit as audit_service
-from app.services import auth as auth_service, outreach as outreach_service, platform_events, scheduling
+from app.services import auth as auth_service, auto_scheduler, businesses as businesses_service, outreach as outreach_service, platform_events, scheduling
+from app.services.schedule_weeks import schedule_week_window
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["scheduling"])
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
 logger = logging.getLogger(__name__)
+
+
+def _schedule_run_detail_read(schedule_run) -> ScheduleRunDetailRead:
+    return ScheduleRunDetailRead.model_validate(
+        {
+            **ScheduleRunRead.model_validate(schedule_run).model_dump(),
+            "inputs": schedule_run.inputs,
+            "assignments": list(schedule_run.assignments or []),
+            "rejections": list(schedule_run.rejections or []),
+            "explanation": schedule_run.explanation,
+            "metrics": schedule_run.metrics,
+            "applies": list(schedule_run.applies or []),
+            "replay_run_ids": [replay_run.id for replay_run in (schedule_run.replay_runs or [])],
+        }
+    )
 
 
 def _assignment_conflict_payload(assignment: ShiftAssignment | None) -> dict | None:
@@ -212,6 +229,111 @@ async def publish_schedule_week(
 
     await session.commit()
     return response
+
+
+@router.post(
+    "/locations/{location_id}/schedule-weeks/{week_start_date}/predictive-schedule",
+    response_model=ScheduleRunDetailRead,
+)
+async def ensure_predictive_schedule_week(
+    business_id: UUID,
+    location_id: UUID,
+    week_start_date: date,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+
+    location = await businesses_service.get_location(session, business_id, location_id)
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location_not_found")
+
+    window = schedule_week_window(location.timezone, week_start_date)
+    current_snapshot_hash = await auto_scheduler.current_scope_snapshot_hash(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        planning_window_start=window.starts_at,
+        planning_window_end=window.ends_at,
+    )
+    schedule_run = await auto_scheduler.latest_schedule_run_for_scope(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        planning_window_start=window.starts_at,
+        planning_window_end=window.ends_at,
+    )
+
+    if (
+        schedule_run is None
+        or schedule_run.input_snapshot_hash != current_snapshot_hash
+        or str(schedule_run.status) in {"failed", "cancelled"}
+    ):
+        schedule_run = await auto_scheduler.create_and_execute_schedule_run_for_scope(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+            planning_window_start=window.starts_at,
+            planning_window_end=window.ends_at,
+            source_metadata={
+                "source": "scheduler_ui_predictive_preview",
+                "week_start_date": week_start_date.isoformat(),
+            },
+        )
+
+    detail = await auto_scheduler.get_schedule_run_detail(session, schedule_run.id)
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="schedule_run_not_found")
+    return _schedule_run_detail_read(detail)
+
+
+@router.post(
+    "/locations/{location_id}/schedule-weeks/{week_start_date}/predictive-schedule/{schedule_run_id}/apply",
+    response_model=ScheduleRunApplyRead,
+)
+async def apply_predictive_schedule_week(
+    business_id: UUID,
+    location_id: UUID,
+    week_start_date: date,
+    schedule_run_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+
+    location = await businesses_service.get_location(session, business_id, location_id)
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location_not_found")
+    window = schedule_week_window(location.timezone, week_start_date)
+
+    schedule_run = await auto_scheduler.load_schedule_run(session, schedule_run_id)
+    if schedule_run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="schedule_run_not_found")
+    if schedule_run.business_id != business_id or schedule_run.location_id != location_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="schedule_run_not_found")
+    if (
+        schedule_run.planning_window_start != window.starts_at
+        or schedule_run.planning_window_end != window.ends_at
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="schedule_run_scope_mismatch")
+
+    apply_record = await auto_scheduler.apply_schedule_run_from_live_scope(
+        session,
+        schedule_run_id,
+    )
+    return ScheduleRunApplyRead.model_validate(apply_record)
 
 
 @router.post("/shifts/{shift_id}/published-amendment", response_model=PublishedShiftAmendmentRead)

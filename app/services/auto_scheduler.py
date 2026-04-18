@@ -543,6 +543,7 @@ async def load_schedule_run(
             selectinload(ScheduleRun.explanation),
             selectinload(ScheduleRun.metrics),
             selectinload(ScheduleRun.applies),
+            selectinload(ScheduleRun.replay_runs),
         ),
     )
 
@@ -570,6 +571,35 @@ async def list_schedule_runs(
         stmt = stmt.where(ScheduleRun.status == normalized_status)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def latest_schedule_run_for_scope(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location_id: UUID | None,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+) -> ScheduleRun | None:
+    stmt = (
+        select(ScheduleRun.id)
+        .where(
+            ScheduleRun.business_id == business_id,
+            ScheduleRun.planning_window_start == planning_window_start,
+            ScheduleRun.planning_window_end == planning_window_end,
+        )
+        .order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc())
+        .limit(1)
+    )
+    if location_id is None:
+        stmt = stmt.where(ScheduleRun.location_id.is_(None))
+    else:
+        stmt = stmt.where(ScheduleRun.location_id == location_id)
+    result = await session.execute(stmt)
+    schedule_run_id = result.scalar_one_or_none()
+    if schedule_run_id is None:
+        return None
+    return await load_schedule_run(session, schedule_run_id)
 
 
 async def get_schedule_run_detail(

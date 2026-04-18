@@ -369,6 +369,111 @@ export type PublishedShiftAmendmentResponse = {
   current_assignment?: WorkspaceBoard["shifts"][number]["current_assignment"] | null;
 };
 
+export type PredictiveScheduleRun = {
+  id: string;
+  business_id: string;
+  location_id?: string | null;
+  planning_window_start: string;
+  planning_window_end: string;
+  run_type: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  optimizer_engine: string;
+  objective_version: string;
+  constraints_version: string;
+  policy_version: string;
+  input_snapshot_version: string;
+  input_snapshot_hash: string;
+  run_metadata: Record<string, unknown>;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  inputs?: {
+    shift_payload: Record<string, unknown>;
+    employee_payload: Record<string, unknown>;
+    availability_payload: Record<string, unknown>;
+    policy_payload: Record<string, unknown>;
+    labor_payload: Record<string, unknown>;
+    reliability_payload: Record<string, unknown>;
+    reliability_snapshot_generated_at?: string | null;
+    reliability_snapshot_hash?: string | null;
+    reliability_snapshot_version?: string | null;
+    source_metadata: Record<string, unknown>;
+  } | null;
+  assignments: Array<{
+    id: string;
+    shift_id?: string | null;
+    employee_id?: string | null;
+    decision_score: number;
+    decision_rank: number;
+    assignment_payload: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }>;
+  rejections: Array<{
+    id: string;
+    shift_id?: string | null;
+    employee_id?: string | null;
+    candidate_rank: number;
+    rejection_reason_codes: unknown[];
+    score_payload: Record<string, unknown>;
+    constraint_failure_payload: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }>;
+  explanation?: {
+    summary_payload: Record<string, unknown>;
+    fairness_payload: Record<string, unknown>;
+    overtime_payload: Record<string, unknown>;
+    coverage_payload: Record<string, unknown>;
+    unassigned_shift_payload: Record<string, unknown>;
+  } | null;
+  metrics?: {
+    shift_count: number;
+    assigned_shift_count: number;
+    unassigned_shift_count: number;
+    candidate_considered_count: number;
+    overtime_assignment_count: number;
+    fairness_spread_metrics: Record<string, unknown>;
+    solver_runtime_ms: number;
+    objective_value?: number | null;
+  } | null;
+  applies: Array<{
+    id: string;
+    schedule_run_id: string;
+    business_id: string;
+    location_id?: string | null;
+    planning_window_start: string;
+    planning_window_end: string;
+    status: string;
+    target_snapshot_hash: string;
+    current_snapshot_hash: string;
+    stale_reason?: string | null;
+    apply_metadata: Record<string, unknown>;
+    applied_at?: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  replay_run_ids: string[];
+};
+
+export type PredictiveScheduleApplyResult = {
+  id: string;
+  schedule_run_id: string;
+  business_id: string;
+  location_id?: string | null;
+  planning_window_start: string;
+  planning_window_end: string;
+  status: "queued" | "applied" | "stale_rejected" | "failed" | "no_op" | string;
+  target_snapshot_hash: string;
+  current_snapshot_hash: string;
+  stale_reason?: string | null;
+  apply_metadata: Record<string, unknown>;
+  applied_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export class ShiftAssignmentConflictError extends Error {
   currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"];
 
@@ -961,6 +1066,41 @@ export async function publishScheduleWeek(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as ScheduleWeekPublishResponse;
+}
+
+export async function ensurePredictiveSchedule(
+  businessId: string,
+  locationId: string,
+  weekStartDate: string,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/schedule-weeks/${weekStartDate}/predictive-schedule`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as PredictiveScheduleRun;
+}
+
+export async function applyPredictiveSchedule(
+  businessId: string,
+  locationId: string,
+  weekStartDate: string,
+  scheduleRunId: string,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/schedule-weeks/${weekStartDate}/predictive-schedule/${scheduleRunId}/apply`,
+    {
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as PredictiveScheduleApplyResult;
 }
 
 function normalizeCoverageCampaign(

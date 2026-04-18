@@ -54,13 +54,16 @@ import {
   type LocationRoleAssignment,
 } from '@/lib/api/businesses';
 import {
+  applyPredictiveSchedule,
   amendPublishedShift,
   assignShift as assignWorkspaceShift,
   createShift as createWorkspaceShift,
   deleteLocation as deleteWorkspaceLocation,
   deleteShift as deleteWorkspaceShift,
+  ensurePredictiveSchedule,
   getLocationBoard,
   getLocationShiftDefaults,
+  type PredictiveScheduleRun,
   publishScheduleWeek,
   ScheduleWeekPublishConflictError,
   updateLocationSettings,
@@ -150,6 +153,9 @@ interface Shift {
   color: string;
   presetKey?: ShiftDefaultKey | null;
   presetLabel?: string | null;
+  predictivePreview?: boolean;
+  predictiveDecisionScore?: number | null;
+  predictiveRunId?: string | null;
 }
 
 type DayWeather = {
@@ -273,6 +279,22 @@ function formatPublishedDate(value: string | null | undefined) {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatPredictiveGeneratedDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  const generatedAt = new Date(value);
+  if (Number.isNaN(generatedAt.getTime())) {
+    return null;
+  }
+  return generatedAt.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   });
@@ -723,6 +745,7 @@ function DraggableShiftChip({
   const dur = shiftDuration(shift);
   const theme = getSchedulerTheme(dark);
   const isHistoricalShift = shift.historicalDisplay;
+  const isPredictivePreview = Boolean(shift.predictivePreview);
   const isCancelledHistory = isHistoricalCancelledShift(shift);
   const hasHistoricalOperationalArtifact = isHistoricalOperationalArtifact(shift);
   const hasOperationalBreak = isOperationalScheduleBreak(shift);
@@ -730,7 +753,7 @@ function DraggableShiftChip({
   const showGenericBreakIndicator = hasScheduleBreak && !hasOperationalBreak;
   const ShiftStateIcon = hasOperationalBreak || isHistoricalShift ? null : publishState === 'published' ? Lock : publishState === 'amended' ? LockOpen : null;
   const shiftStateColor = publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
-  const canInteract = !isHistoricalShift;
+  const canInteract = !isHistoricalShift && !isPredictivePreview;
   const canDragChip = draggable && canInteract;
   const showInlineActions = canInteract;
   const isFlagAction = publishState === 'published' || publishState === 'amended';
@@ -804,12 +827,12 @@ function DraggableShiftChip({
           canInteract ? (canDragChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : 'cursor-not-allowed'
         } ${
           isDragging ? 'opacity-40 scale-95' : canInteract ? 'hover:shadow-md' : 'opacity-90'
-        } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
+        } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : isPredictivePreview ? 'ring-1 ring-dashed ring-[#B0B8C1]' : ''} ${isPredictivePreview ? 'opacity-50' : ''}`}
         style={{ minHeight: 52 }}
-        title={isHistoricalShift ? 'Historical shift' : undefined}
+        title={isHistoricalShift ? 'Historical shift' : isPredictivePreview ? 'Predictive preview shift' : undefined}
       >
-        <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : 0.08 }} />
-        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor }} />
+        <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : isPredictivePreview ? 0.04 : 0.08 }} />
+        <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor, opacity: isPredictivePreview ? 0.4 : 1 }} />
         {isHistoricalShift || hasOperationalBreak ? (
           <div
             className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
@@ -826,6 +849,7 @@ function DraggableShiftChip({
               <span className={`text-[10px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 560, color: shiftLabelColor }}>
                 {shiftLabel}
               </span>
+              {isPredictivePreview ? <Zap size={9} className="shrink-0 text-[#635BFF]" /> : null}
             </div>
             <p className={`text-[9px] mt-0.5 ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: mutedTextColor }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
@@ -893,12 +917,12 @@ function DraggableShiftChip({
         canInteract ? (canDragChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : 'cursor-not-allowed'
       } ${
         isDragging ? 'opacity-40 scale-95' : canInteract ? 'hover:shadow-md' : 'opacity-90'
-      } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : ''}`}
+      } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : isPredictivePreview ? 'ring-1 ring-dashed ring-[#B0B8C1]' : ''} ${isPredictivePreview ? 'opacity-50' : ''}`}
       style={{ minHeight: 38 }}
-      title={isHistoricalShift ? 'Historical shift' : undefined}
+      title={isHistoricalShift ? 'Historical shift' : isPredictivePreview ? 'Predictive preview shift' : undefined}
     >
-      <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : 0.08 }} />
-      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor }} />
+      <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : isPredictivePreview ? 0.04 : 0.08 }} />
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor, opacity: isPredictivePreview ? 0.4 : 1 }} />
       {isHistoricalShift || hasOperationalBreak ? (
         <div
           className="absolute inset-0 rounded-lg opacity-10 pointer-events-none"
@@ -916,6 +940,7 @@ function DraggableShiftChip({
             <span className={`text-[9px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 540, color: shiftLabelColor }}>
               {shiftLabel}
             </span>
+            {isPredictivePreview ? <Zap size={8} className="shrink-0 text-[#635BFF]" /> : null}
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
             <span className={`text-[8px] ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textSubtle}`} style={{ fontWeight: 420, color: mutedTextColor }}>
@@ -1093,6 +1118,11 @@ function SchedulerContent({
   );
   const [schedulerError, setSchedulerError] = useState<string | null>(null);
   const [weatherByDateKey, setWeatherByDateKey] = useState<Record<string, DayWeather>>({});
+  const [predictiveRun, setPredictiveRun] = useState<PredictiveScheduleRun | null>(null);
+  const [loadingPredictiveRun, setLoadingPredictiveRun] = useState(false);
+  const [predictiveRunError, setPredictiveRunError] = useState<string | null>(null);
+  const [dismissedPredictiveWeeks, setDismissedPredictiveWeeks] = useState<Set<string>>(new Set());
+  const [acceptingPredictiveRun, setAcceptingPredictiveRun] = useState(false);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [creatingAt, setCreatingAt] = useState<{
     day: number;
@@ -1437,10 +1467,164 @@ function SchedulerContent({
     [board, shiftDefaults],
   );
 
+  const publishSummary = board?.publish_summary;
+  const weekPublishState = publishSummary?.state ?? 'draft';
+  const isWeekPublished = weekPublishState === 'published';
+  const isWeekAmended = weekPublishState === 'amended';
+  const hasDraftShifts = useMemo(
+    () => shifts.some((shift) => shift.lifecycleStatus === 'draft'),
+    [shifts],
+  );
+  const hasAssignedDraftShifts = useMemo(
+    () =>
+      shifts.some(
+        (shift) => shift.lifecycleStatus === 'draft' && Boolean(shift.employeeId),
+      ),
+    [shifts],
+  );
+  const predictiveScopeFingerprint = useMemo(
+    () =>
+      shifts
+        .map((shift) => [
+          shift.id,
+          shift.roleId,
+          shift.day,
+          shift.startHour,
+          shift.endHour,
+          shift.employeeId ?? 'open',
+        ].join(':'))
+        .sort()
+        .join('|'),
+    [shifts],
+  );
+  const isFuturePreviewWeek = useMemo(
+    () =>
+      Boolean(
+        board?.week_start_date
+          && currentWeekStart
+          && board.week_start_date > currentWeekStart,
+      ),
+    [board?.week_start_date, currentWeekStart],
+  );
+  const predictivePreviewEligible = Boolean(
+    board
+      && weekPublishState === 'draft'
+      && isFuturePreviewWeek
+      && hasDraftShifts
+      && !hasAssignedDraftShifts
+      && !dismissedPredictiveWeeks.has(board.week_start_date),
+  );
+
+  useEffect(() => {
+    if (!predictivePreviewEligible || !board) {
+      setPredictiveRun(null);
+      setPredictiveRunError(null);
+      setLoadingPredictiveRun(false);
+      return;
+    }
+
+    let cancelled = false;
+    const weekStartDate = board.week_start_date;
+
+    async function loadPredictiveRun() {
+      try {
+        setLoadingPredictiveRun(true);
+        setPredictiveRunError(null);
+        const run = await ensurePredictiveSchedule(
+          location.business_id,
+          location.location_id,
+          weekStartDate,
+        );
+        if (cancelled) {
+          return;
+        }
+        setPredictiveRun(run);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setPredictiveRun(null);
+        setPredictiveRunError(
+          error instanceof Error
+            ? error.message
+            : 'Could not build the predictive schedule.',
+        );
+      } finally {
+        if (!cancelled) {
+          setLoadingPredictiveRun(false);
+        }
+      }
+    }
+
+    void loadPredictiveRun();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    board,
+    location.business_id,
+    location.location_id,
+    predictivePreviewEligible,
+    predictiveScopeFingerprint,
+  ]);
+
+  const predictiveAssignmentsByShiftId = useMemo(() => {
+    if (!predictiveRun || predictiveRun.status !== 'completed') {
+      return new Map<string, PredictiveScheduleRun['assignments'][number]>();
+    }
+    return new Map(
+      predictiveRun.assignments
+        .filter(
+          (assignment): assignment is PredictiveScheduleRun['assignments'][number] & {
+            shift_id: string;
+          } => Boolean(assignment.shift_id),
+        )
+        .map((assignment) => [assignment.shift_id, assignment]),
+    );
+  }, [predictiveRun]);
+
+  const predictivePreviewActive = Boolean(
+    predictivePreviewEligible
+      && predictiveRun
+      && predictiveRun.status === 'completed'
+      && predictiveAssignmentsByShiftId.size > 0,
+  );
+  const predictiveBannerVisible = Boolean(
+    predictivePreviewEligible
+      && (loadingPredictiveRun || predictiveRunError || predictiveRun),
+  );
+
   const boardWorkersById = useMemo(
     () => new Map((board?.workers ?? []).map((worker) => [worker.employee_id, worker])),
     [board],
   );
+
+  const schedulerSourceShifts = useMemo(() => {
+    if (!predictivePreviewActive) {
+      return shifts;
+    }
+    const employeeNamesById = new Map(
+      businessEmployees.map((employee) => [employee.id, employee.full_name]),
+    );
+    return shifts.map((shift) => {
+      const predictiveAssignment = predictiveAssignmentsByShiftId.get(shift.id);
+      if (!predictiveAssignment?.employee_id) {
+        return shift;
+      }
+      return {
+        ...shift,
+        employeeId: predictiveAssignment.employee_id,
+        displayEmployeeId: predictiveAssignment.employee_id,
+        displayEmployeeName:
+          employeeNamesById.get(predictiveAssignment.employee_id)
+          ?? shift.displayEmployeeName
+          ?? null,
+        predictivePreview: true,
+        predictiveDecisionScore: predictiveAssignment.decision_score,
+        predictiveRunId: predictiveRun?.id ?? null,
+      } satisfies Shift;
+    });
+  }, [businessEmployees, predictiveAssignmentsByShiftId, predictivePreviewActive, predictiveRun?.id, shifts]);
 
   const schedulerEmployeeIds = useMemo(() => {
     const next = new Set<string>();
@@ -1449,13 +1633,13 @@ function SchedulerContent({
         next.add(worker.employee_id);
       }
     });
-    shifts.forEach((shift) => {
+    schedulerSourceShifts.forEach((shift) => {
       if (shift.displayEmployeeId) {
         next.add(shift.displayEmployeeId);
       }
     });
     return next;
-  }, [board, shifts]);
+  }, [board, schedulerSourceShifts]);
 
   const locationEmployeeIds = useMemo(() => {
     const next = new Set<string>();
@@ -1464,18 +1648,18 @@ function SchedulerContent({
         next.add(employee.id);
       }
     });
-    shifts.forEach((shift) => {
+    schedulerSourceShifts.forEach((shift) => {
       if (shift.displayEmployeeId) {
         next.add(shift.displayEmployeeId);
       }
     });
     return next;
-  }, [businessEmployees, location.location_id, shifts]);
+  }, [businessEmployees, location.location_id, schedulerSourceShifts]);
 
   const schedulerEmployees = useMemo(() => {
     const employeeMap = new Map(businessEmployees.map((employee) => [employee.id, employee]));
     const assignedShiftNames = new Map<string, string>();
-    shifts.forEach((shift) => {
+    schedulerSourceShifts.forEach((shift) => {
       if (!shift.displayEmployeeId) {
         return;
       }
@@ -1501,7 +1685,7 @@ function SchedulerContent({
           return null;
         }
         const assignedRole =
-          shifts.find((shift) => shift.displayEmployeeId === employeeId)?.role ?? 'Assigned';
+          schedulerSourceShifts.find((shift) => shift.displayEmployeeId === employeeId)?.role ?? 'Assigned';
         return {
           id: employeeId,
           name: fallbackName,
@@ -1511,7 +1695,7 @@ function SchedulerContent({
       })
       .filter((employee): employee is Employee => employee !== null)
       .sort((left, right) => left.name.localeCompare(right.name));
-  }, [board?.shifts, boardWorkersById, businessEmployees, schedulerEmployeeIds, shifts]);
+  }, [board?.shifts, boardWorkersById, businessEmployees, schedulerEmployeeIds, schedulerSourceShifts]);
 
   const activeEmployees = schedulerEmployees;
 
@@ -1523,7 +1707,7 @@ function SchedulerContent({
         name: role.role_name,
       });
     });
-    shifts.forEach((shift) => {
+    schedulerSourceShifts.forEach((shift) => {
       if (!rolesById.has(shift.roleId)) {
         rolesById.set(shift.roleId, {
           id: shift.roleId,
@@ -1539,7 +1723,7 @@ function SchedulerContent({
         }
         return left.name.localeCompare(right.name);
       });
-  }, [activeEmployees, board?.roles, shifts]);
+  }, [activeEmployees, board?.roles, schedulerSourceShifts]);
 
   const roleColorById = useMemo(() => {
     const next = new Map<string, string>();
@@ -1562,7 +1746,7 @@ function SchedulerContent({
 
   const displayShifts = useMemo(
     () =>
-      shifts.map((shift) => ({
+      schedulerSourceShifts.map((shift) => ({
         ...shift,
         color:
           shift.historicalDisplay
@@ -1571,10 +1755,8 @@ function SchedulerContent({
               ? roleColorById.get(shift.roleId) ?? shift.color
               : OPEN_SHIFT_COLOR,
       })),
-    [roleColorById, shifts],
+    [roleColorById, schedulerSourceShifts],
   );
-
-  const publishSummary = board?.publish_summary;
   const publishedShiftIds = useMemo(
     () => new Set(publishSummary?.published_shift_ids ?? []),
     [publishSummary?.published_shift_ids],
@@ -1595,10 +1777,19 @@ function SchedulerContent({
     () => formatPublishedDate(publishSummary?.published_at),
     [publishSummary?.published_at],
   );
-  const weekPublishState = publishSummary?.state ?? 'draft';
-  const isWeekPublished = weekPublishState === 'published';
-  const isWeekAmended = weekPublishState === 'amended';
   const canPublishWeek = displayShifts.some((shift) => shift.lifecycleStatus === 'draft') || isWeekAmended;
+  const predictiveGeneratedLabel = useMemo(
+    () => formatPredictiveGeneratedDate(predictiveRun?.created_at),
+    [predictiveRun?.created_at],
+  );
+  const canAcceptPredictiveSchedule = Boolean(
+    predictiveRun
+      && predictiveRun.status === 'completed'
+      && predictiveAssignmentsByShiftId.size > 0,
+  );
+  const schedulerInteractionLocked = Boolean(
+    predictivePreviewActive || loadingPredictiveRun,
+  );
 
   const shiftPublishState = useCallback((shift: Shift): ShiftPublishState => {
     if (amendedShiftIds.has(shift.id) || shift.lifecycleStatus === 'draft') {
@@ -1754,6 +1945,103 @@ function SchedulerContent({
     setAddEmployeeTab('existing');
     setAddEmployeeContext({ roleId, roleName });
   }, []);
+
+  const dismissPredictivePreview = useCallback(() => {
+    if (!board) {
+      return;
+    }
+    setDismissedPredictiveWeeks((current) => {
+      const next = new Set(current);
+      next.add(board.week_start_date);
+      return next;
+    });
+    setPredictiveRun(null);
+    setPredictiveRunError(null);
+  }, [board]);
+
+  const retryPredictivePreview = useCallback(() => {
+    if (!board) {
+      return;
+    }
+    setDismissedPredictiveWeeks((current) => {
+      const next = new Set(current);
+      next.delete(board.week_start_date);
+      return next;
+    });
+    setPredictiveRun(null);
+    setPredictiveRunError(null);
+  }, [board]);
+
+  const acceptPredictiveSchedule = useCallback(() => {
+    if (!board || !predictiveRun || !canAcceptPredictiveSchedule || acceptingPredictiveRun) {
+      return;
+    }
+
+    setAcceptingPredictiveRun(true);
+    void (async () => {
+      try {
+        const applyResult = await applyPredictiveSchedule(
+          location.business_id,
+          location.location_id,
+          board.week_start_date,
+          predictiveRun.id,
+        );
+
+        if (applyResult.status === 'applied' || applyResult.status === 'no_op') {
+          await refreshSchedulerData({ force: true });
+          setPredictiveRun(null);
+          setPredictiveRunError(null);
+          setSchedulerNotice({
+            tone: 'success',
+            title:
+              applyResult.status === 'applied'
+                ? 'Predictive schedule accepted'
+                : 'Predictive schedule already applied',
+            detail:
+              applyResult.status === 'applied'
+                ? 'The predictive schedule is now your draft baseline for this week.'
+                : 'This predictive schedule is already reflected in the draft week.',
+          });
+          return;
+        }
+
+        if (applyResult.status === 'stale_rejected') {
+          setPredictiveRun(null);
+          setPredictiveRunError('The predictive schedule is out of date. Refreshing a new preview.');
+          await refreshSchedulerData({ force: true, silent: true });
+          setSchedulerNotice({
+            tone: 'info',
+            title: 'Predictive schedule out of date',
+            detail: 'The draft week changed before accept. Backfill is refreshing the preview.',
+          });
+          return;
+        }
+
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not accept predictive schedule',
+          detail: 'Please try again.',
+        });
+      } catch (error) {
+        setSchedulerNotice({
+          tone: 'error',
+          title: 'Could not accept predictive schedule',
+          detail:
+            error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setAcceptingPredictiveRun(false);
+      }
+    })();
+  }, [
+    acceptingPredictiveRun,
+    board,
+    canAcceptPredictiveSchedule,
+    location.business_id,
+    location.location_id,
+    predictiveRun,
+    refreshSchedulerData,
+  ]);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
     displayShifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
@@ -3062,16 +3350,84 @@ function SchedulerContent({
                 <span className="hidden lg:inline">Copy Schedule</span>
                 <span className="lg:hidden">Copy</span>
               </button>
-              <motion.button
-                whileTap={{ scale: 0.97 }}
-                onClick={() => setShowPublishModal(true)}
-                disabled={!canPublishWeek}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
-                style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
-                <Zap size={13} />
-                <span className="hidden lg:inline">Publish Week</span>
-                <span className="lg:hidden">Publish</span>
-              </motion.button>
+              {predictiveBannerVisible ? (
+                <>
+                  {!loadingPredictiveRun ? (
+                    <button
+                      onClick={dismissPredictivePreview}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+                      style={{ fontWeight: 500 }}
+                      type="button"
+                    >
+                      <span className="hidden lg:inline">Start from Scratch</span>
+                      <span className="lg:hidden">Scratch</span>
+                    </button>
+                  ) : null}
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={
+                      predictiveRunError
+                        ? retryPredictivePreview
+                        : acceptPredictiveSchedule
+                    }
+                    disabled={
+                      acceptingPredictiveRun
+                      || (loadingPredictiveRun && !predictiveRunError)
+                      || (!predictiveRunError && !canAcceptPredictiveSchedule)
+                    }
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                    style={{
+                      fontWeight: 540,
+                      background: predictiveRunError
+                        ? 'linear-gradient(135deg, #635BFF, #8B5CF6)'
+                        : 'linear-gradient(135deg, #00B893, #00A080)',
+                      boxShadow: predictiveRunError
+                        ? '0 0 20px rgba(99,91,255,0.2)'
+                        : '0 0 20px rgba(0,184,147,0.24)',
+                    }}
+                    type="button"
+                  >
+                    <Zap size={13} />
+                    {loadingPredictiveRun ? (
+                      <>
+                        <span className="hidden lg:inline">Building Predictive Schedule</span>
+                        <span className="lg:hidden">Building</span>
+                      </>
+                    ) : acceptingPredictiveRun ? (
+                      <>
+                        <span className="hidden lg:inline">Accepting Predictive Schedule</span>
+                        <span className="lg:hidden">Accepting</span>
+                      </>
+                    ) : predictiveRunError ? (
+                      <>
+                        <span className="hidden lg:inline">Retry Predictive Schedule</span>
+                        <span className="lg:hidden">Retry</span>
+                      </>
+                    ) : canAcceptPredictiveSchedule ? (
+                      <>
+                        <span className="hidden lg:inline">Accept Predictive Schedule</span>
+                        <span className="lg:hidden">Accept</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="hidden lg:inline">No Predictive Assignments</span>
+                        <span className="lg:hidden">No Assignments</span>
+                      </>
+                    )}
+                  </motion.button>
+                </>
+              ) : (
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setShowPublishModal(true)}
+                  disabled={!canPublishWeek}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all hover:shadow-[0_0_20px_rgba(99,91,255,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-none"
+                  style={{ fontWeight: 540, background: 'linear-gradient(135deg, #635BFF, #8B5CF6)' }}>
+                  <Zap size={13} />
+                  <span className="hidden lg:inline">Publish Week</span>
+                  <span className="lg:hidden">Publish</span>
+                </motion.button>
+              )}
             </div>
           </div>
         </div>
@@ -3090,6 +3446,65 @@ function SchedulerContent({
             </button>
           ))}
         </div>
+
+        <AnimatePresence initial={false}>
+          {predictiveBannerVisible ? (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className={`border-b ${isDark ? 'border-[#635BFF]/25 bg-[linear-gradient(90deg,rgba(99,91,255,0.16),rgba(139,92,246,0.14),rgba(99,91,255,0.16))]' : 'border-[#635BFF]/20 bg-gradient-to-r from-[#635BFF]/[0.08] via-[#8B5CF6]/[0.08] to-[#635BFF]/[0.08]'}`}
+            >
+              <div className="px-4 sm:px-6 md:px-8 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#635BFF] to-[#8B5CF6] flex items-center justify-center shrink-0">
+                    <Zap size={18} className="text-white" />
+                  </div>
+                  <div>
+                    <p className={`text-[13px] ${theme.textPrimary}`} style={{ fontWeight: 600 }}>
+                      {loadingPredictiveRun
+                        ? 'Building Predictive Schedule'
+                        : predictiveRunError
+                          ? 'Predictive Schedule Unavailable'
+                          : predictivePreviewActive
+                            ? 'AI-Generated Predictive Schedule'
+                            : 'Predictive Schedule Ready'}
+                    </p>
+                    <p className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                      {loadingPredictiveRun
+                        ? 'Backfill is generating a draft baseline for this unpublished future week.'
+                        : predictiveRunError
+                          ? predictiveRunError
+                          : predictivePreviewActive
+                            ? `Optimized for coverage, reliability, and fairness.${predictiveGeneratedLabel ? ` Generated ${predictiveGeneratedLabel}.` : ''}`
+                            : predictiveRun?.status === 'completed'
+                              ? 'Backfill reviewed this week, but did not find any predictive assignments to apply.'
+                              : 'Backfill is preparing the latest predictive schedule for review.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {predictiveRun?.metrics ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <Info size={12} className={theme.textSecondary} />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        {predictiveRun.metrics.assigned_shift_count}/{predictiveRun.metrics.shift_count} shifts assigned
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictivePreviewActive ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <div className="w-2 h-2 rounded-full bg-[#635BFF] animate-pulse" />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        Preview Mode
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         {initialSchedulerLoad ? (
           <div className="flex-1 overflow-auto">
@@ -3271,7 +3686,7 @@ function SchedulerContent({
                               </p>
                             </div>
                             <AnimatePresence>
-                              {isHovered ? (
+                              {isHovered && !schedulerInteractionLocked ? (
                                 <motion.button
                                   initial={{ opacity: 0, scale: 0.9 }}
                                   animate={{ opacity: 1, scale: 1 }}
@@ -3300,8 +3715,8 @@ function SchedulerContent({
                                 key={dayIdx}
                                 employeeId={emp.id}
                                 day={dayIdx}
-                                onDrop={handleShiftDrop}
-                                onClickEmpty={() =>
+                                onDrop={schedulerInteractionLocked ? undefined : handleShiftDrop}
+                                onClickEmpty={schedulerInteractionLocked ? undefined : () =>
                                   setCreatingAt({
                                     day: dayIdx,
                                     roleId: roleEntry.id,
@@ -3319,7 +3734,7 @@ function SchedulerContent({
                                   cellShifts.map(shift => (
                                     <DraggableShiftChip key={shift.id} shift={shift} isMulti={isMulti}
                                       dark={isDark}
-                                      draggable
+                                      draggable={!schedulerInteractionLocked}
                                       publishState={shiftPublishState(shift)}
                                       onEdit={() => openShiftEditor(shift)}
                                       onDelete={() => deleteShift(shift)}
@@ -3357,11 +3772,15 @@ function SchedulerContent({
                         <div className={`${EMP_COL} shrink-0 px-4 py-2`}>
                           <button
                             onClick={() => {
+                              if (schedulerInteractionLocked) {
+                                return;
+                              }
                               openAddEmployeeModal(roleEntry.id, roleEntry.name);
                             }}
                             className={`flex items-center gap-1.5 text-[11px] transition-colors ${theme.textSecondary} ${isDark ? 'hover:text-white' : 'hover:text-[#635BFF]'} group/add`}
                             style={{ fontWeight: 460 }}
                             type="button"
+                            disabled={schedulerInteractionLocked}
                           >
                             <div className={`p-0.5 rounded-md border border-dashed ${isDark ? 'border-white/[0.08] group-hover/add:border-[#635BFF]/40 group-hover/add:bg-white/[0.04]' : 'border-[#E5E7EB] group-hover/add:border-[#635BFF]/30 group-hover/add:bg-[#635BFF]/[0.02]'} transition-all`}>
                               <UserPlus size={11} />
@@ -3438,6 +3857,7 @@ function SchedulerContent({
                           employeePublishState={employeePublishState(emp.id)}
                           shiftPublishState={shiftPublishState}
                           isSwiped={isSwiped}
+                          schedulerLocked={schedulerInteractionLocked}
                           onSwipe={(id) => setSwipedEmployeeId(id === swipedEmployeeId ? null : id || null)}
                           onRemove={() => removeEmployee(emp.id)}
                           onEditShift={openShiftEditor}
@@ -3455,6 +3875,9 @@ function SchedulerContent({
                     })}
                     <button
                       onClick={() => {
+                        if (schedulerInteractionLocked) {
+                          return;
+                        }
                         openAddEmployeeModal(roleEntry.id, roleEntry.name);
                       }}
                       className={`w-full flex items-center justify-center gap-1.5 p-2.5 rounded-xl border border-dashed text-[11px] transition-colors ${
@@ -3464,6 +3887,7 @@ function SchedulerContent({
                       }`}
                       style={{ fontWeight: 460 }}
                       type="button"
+                      disabled={schedulerInteractionLocked}
                     >
                       <UserPlus size={12} />
                       Add employee
@@ -3856,6 +4280,7 @@ function MobileEmployeeCard({
   employeePublishState,
   shiftPublishState,
   isSwiped,
+  schedulerLocked = false,
   onSwipe,
   onRemove,
   onEditShift,
@@ -3868,6 +4293,7 @@ function MobileEmployeeCard({
   employeePublishState: EmployeePublishState;
   shiftPublishState: (shift: Shift) => ShiftPublishState;
   isSwiped: boolean;
+  schedulerLocked?: boolean;
   onSwipe: (id: string) => void;
   onRemove: () => void;
   onEditShift: (shift: Shift) => void;
@@ -3902,6 +4328,10 @@ function MobileEmployeeCard({
   };
 
   const onTouchEnd = () => {
+    if (schedulerLocked) {
+      setIsDragging(false);
+      return;
+    }
     if (touchStart === null || touchEnd === null) {
       return;
     }
@@ -3926,7 +4356,7 @@ function MobileEmployeeCard({
 
       <motion.div
         className={`flex items-center gap-3 p-2.5 rounded-xl border relative touch-pan-y ${dark ? 'border-white/[0.08] bg-[#0F2E4C]' : 'border-[#E5E7EB] bg-white'}`}
-        animate={{ x: isSwiped ? -80 : 0 }}
+        animate={{ x: schedulerLocked ? 0 : isSwiped ? -80 : 0 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
@@ -3958,6 +4388,7 @@ function MobileEmployeeCard({
                 const dur = shiftDuration(shift);
                 const publishState = shiftPublishState(shift);
                 const isHistoricalShift = shift.historicalDisplay;
+                const isPredictivePreview = Boolean(shift.predictivePreview);
                 const hasOperationalBreak = isOperationalScheduleBreak(shift);
                 const hasHistoricalOperationalArtifact = isHistoricalOperationalArtifact(shift);
                 const ShiftStateIcon =
@@ -3972,7 +4403,7 @@ function MobileEmployeeCard({
                   publishState === 'published' ? '#00B893' : publishState === 'amended' ? '#F59E0B' : null;
                 const shiftTintColor = isHistoricalShift ? '#9CA3AF' : hasOperationalBreak ? '#DC2626' : shift.color;
                 const shiftLabelColor = isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : shift.color;
-                const isInteractive = !isHistoricalShift;
+                const isInteractive = !isHistoricalShift && !isPredictivePreview && !schedulerLocked;
                 return (
                   <button
                     key={shift.id}
@@ -3981,11 +4412,11 @@ function MobileEmployeeCard({
                         onEditShift(shift);
                       }
                     }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all min-w-0 relative overflow-hidden ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF] cursor-not-allowed opacity-90' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : ''}`}
-                    style={{ background: isHistoricalShift ? '#9CA3AF1F' : hasOperationalBreak ? '#DC262610' : `${shift.color}10` }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all min-w-0 relative overflow-hidden ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF] cursor-not-allowed opacity-90' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : isPredictivePreview ? 'ring-1 ring-dashed ring-[#B0B8C1] opacity-50 cursor-not-allowed' : ''}`}
+                    style={{ background: isHistoricalShift ? '#9CA3AF1F' : hasOperationalBreak ? '#DC262610' : isPredictivePreview ? `${shift.color}08` : `${shift.color}10` }}
                     type="button"
                     disabled={!isInteractive}
-                    title={isHistoricalShift ? 'Historical shift' : undefined}
+                    title={isHistoricalShift ? 'Historical shift' : isPredictivePreview ? 'Predictive preview shift' : undefined}
                   >
                     {isHistoricalShift || hasOperationalBreak ? (
                       <div
@@ -3997,6 +4428,7 @@ function MobileEmployeeCard({
                     ) : null}
                     <DescIcon size={10} style={{ color: shiftLabelColor }} className="shrink-0" />
                     <span className={`text-[10px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 520, color: shiftLabelColor }}>{shiftLabel}</span>
+                    {isPredictivePreview ? <Zap size={8} className="shrink-0 text-[#635BFF]" /> : null}
                     <span className={`text-[9px] shrink-0 ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400, color: isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : undefined }}>{dur}h</span>
                     {hasOperationalBreak || hasHistoricalOperationalArtifact ? (
                       <Siren size={9} className="shrink-0 text-[#DC2626]" />
@@ -4013,6 +4445,7 @@ function MobileEmployeeCard({
             onClick={onCreateShift}
             className={`shrink-0 p-1.5 rounded-lg transition-colors border border-dashed ${dark ? 'border-white/[0.08] hover:border-[#635BFF]/40 hover:bg-white/[0.04]' : 'border-[#E5E7EB] hover:border-[#635BFF]/30 hover:bg-[#635BFF]/[0.02]'}`}
             type="button"
+            disabled={schedulerLocked}
           >
             <Plus size={14} className={dark ? 'text-[#C1CED8]/40' : 'text-[#8898AA]/40'} />
           </button>
@@ -4020,7 +4453,7 @@ function MobileEmployeeCard({
       </motion.div>
 
       <AnimatePresence>
-        {isSwiped ? (
+        {isSwiped && !schedulerLocked ? (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
