@@ -29,6 +29,7 @@ import {
   Phone,
   Shield,
   Smartphone,
+  Sparkles,
   Sun,
   User,
   Zap,
@@ -532,7 +533,7 @@ const businessSections = [
   {
     key: "coverage",
     label: "Coverage Engine",
-    icon: Shield,
+    icon: Sparkles,
     saveTarget: "business-coverage" as const,
     description:
       "Control automated same-day and cross-location eligibility for coverage outreach.",
@@ -1306,141 +1307,177 @@ export default function Settings({
       }
 
       return (
-        <div className="space-y-5">
-          <div
-            className={`backfill-ui-radius border p-4 ${
-              isDark
-                ? "border-[#635BFF]/20 bg-[#635BFF]/[0.08]"
-                : "border-[#635BFF]/15 bg-gradient-to-br from-[#635BFF]/[0.04] to-[#8B5CF6]/[0.02]"
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#635BFF]/10 text-[#635BFF]">
-                <Shield size={18} />
-              </div>
-              <div className="min-w-0">
-                <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 560 }}>
-                  Automated coverage policy
-                </p>
-                <p className={`mt-1 text-[12px] ${textMuted}`} style={{ fontWeight: 420 }}>
-                  These settings affect automated coverage outreach and candidate ranking only. Manual scheduler assignments stay unchanged.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className={`flex items-center justify-between gap-4 p-4 backfill-ui-radius transition-colors ${rowHover}`}>
-              <div>
-                <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
-                  Allow same-day second shifts
-                </p>
-                <p className={`mt-0.5 max-w-xl text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>
-                  Let the engine consider workers who already have one shift that day. Heavy same-day second shifts still get downranked by the backend.
-                </p>
-              </div>
-              <Toggle
-                enabled={coverageForm.sameDaySecondShiftAllowed}
-                onChange={(next) =>
-                  setCoverageForm((current) => ({
-                    ...current,
-                    sameDaySecondShiftAllowed: next,
-                  }))
-                }
-              />
-            </div>
-
-            <div className={`backfill-ui-radius border p-4 ${cardSurface}`}>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <SettingsField icon={CalendarDays} label="Same-location overlap limit (minutes)">
-                  <SettingsInput
-                    dark={isDark}
-                    min={0}
-                    onChange={(event) =>
-                      setCoverageForm((current) => ({
-                        ...current,
-                        sameLocationOverlapMinutes: Math.max(
-                          0,
-                          Number.parseInt(event.target.value || "0", 10) || 0,
-                        ),
-                      }))
-                    }
-                    step={1}
-                    type="number"
-                    value={coverageForm.sameLocationOverlapMinutes}
-                  />
-                </SettingsField>
-                <div className={`text-[11px] ${textMuted} sm:pt-7`} style={{ fontWeight: 420 }}>
-                  Workers can still be eligible for another shift at the same location until overlap exceeds this threshold.
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <div className="space-y-1">
+            <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+                    Allow same-day second shifts
+                  </p>
+                  <p className={`text-[11px] mt-0.5 max-w-md ${textMuted}`} style={{ fontWeight: 420 }}>
+                    Enable employees to work multiple shifts in the same day
+                  </p>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <div className={`backfill-ui-radius border p-4 ${cardSurface}`}>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
-                  Allow cross-location coverage
-                </p>
-                <p className={`mt-0.5 max-w-xl text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>
-                  Permit automated outreach to workers with other-location shifts, subject to zero-overlap, minimum gap, distance, and same-locality backend checks.
-                </p>
-              </div>
-              <Toggle
-                enabled={coverageForm.crossLocationShiftCoverageAllowed}
-                onChange={(next) =>
-                  setCoverageForm((current) => ({
-                    ...current,
-                    crossLocationShiftCoverageAllowed: next,
-                  }))
-                }
-              />
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <SettingsField icon={CalendarDays} label="Minimum cross-location gap (minutes)">
-                <SettingsInput
-                  dark={isDark}
-                  disabled={!coverageForm.crossLocationShiftCoverageAllowed}
-                  min={0}
-                  onChange={(event) =>
+                <Toggle
+                  enabled={coverageForm.sameDaySecondShiftAllowed}
+                  onChange={(next) =>
                     setCoverageForm((current) => ({
                       ...current,
-                      crossLocationMinGapMinutes: Math.max(
-                        0,
-                        Number.parseInt(event.target.value || "0", 10) || 0,
-                      ),
+                      sameDaySecondShiftAllowed: next,
                     }))
                   }
-                  step={1}
-                  type="number"
-                  value={coverageForm.crossLocationMinGapMinutes}
                 />
-              </SettingsField>
+              </div>
 
-              <SettingsField icon={MapPin} label="Maximum radius (miles)">
-                <SettingsInput
-                  dark={isDark}
-                  disabled={!coverageForm.crossLocationShiftCoverageAllowed}
-                  min={0}
-                  onChange={(event) =>
+              <AnimatePresence>
+                {coverageForm.sameDaySecondShiftAllowed ? (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className={`mt-4 pl-4 border-l-2 ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}
+                  >
+                    <div>
+                      <label
+                        className={`block text-[11px] uppercase tracking-[0.04em] mb-1.5 ${textMuted}`}
+                        style={{ fontWeight: 500 }}
+                      >
+                        Same-location overlap allowed (minutes)
+                      </label>
+                      <SettingsInput
+                        dark={isDark}
+                        min={0}
+                        onChange={(event) =>
+                          setCoverageForm((current) => ({
+                            ...current,
+                            sameLocationOverlapMinutes: Math.max(
+                              0,
+                              Number.parseInt(event.target.value || "0", 10) || 0,
+                            ),
+                          }))
+                        }
+                        className={isDark ? "sm:w-32" : "sm:w-32"}
+                        type="number"
+                        value={coverageForm.sameLocationOverlapMinutes}
+                      />
+                      <p className={`text-[11px] mt-1.5 ${textMuted}`} style={{ fontWeight: 420 }}>
+                        Maximum minutes of overlap between shifts at the same location
+                      </p>
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
+
+            <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+                    Allow cross-location shift coverage
+                  </p>
+                  <p className={`text-[11px] mt-0.5 max-w-md ${textMuted}`} style={{ fontWeight: 420 }}>
+                    Enable employees to work shifts at different locations on the same day
+                  </p>
+                </div>
+                <Toggle
+                  enabled={coverageForm.crossLocationShiftCoverageAllowed}
+                  onChange={(next) =>
                     setCoverageForm((current) => ({
                       ...current,
-                      crossLocationMaxRadiusMiles: Math.max(
-                        0,
-                        Number.parseInt(event.target.value || "0", 10) || 0,
-                      ),
+                      crossLocationShiftCoverageAllowed: next,
                     }))
                   }
-                  step={1}
-                  type="number"
-                  value={coverageForm.crossLocationMaxRadiusMiles}
                 />
-              </SettingsField>
+              </div>
+
+              <AnimatePresence>
+                {coverageForm.crossLocationShiftCoverageAllowed ? (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className={`mt-4 pl-4 border-l-2 ${isDark ? "border-white/[0.08]" : "border-[#E5E7EB]"}`}
+                  >
+                    <div className="space-y-3">
+                      <div>
+                        <label
+                          className={`block text-[11px] uppercase tracking-[0.04em] mb-1.5 ${textMuted}`}
+                          style={{ fontWeight: 500 }}
+                        >
+                          Minimum gap between shifts at different locations
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <SettingsInput
+                            dark={isDark}
+                            min={0}
+                            onChange={(event) =>
+                              setCoverageForm((current) => ({
+                                ...current,
+                                crossLocationMinGapMinutes: Math.max(
+                                  0,
+                                  Number.parseInt(event.target.value || "0", 10) || 0,
+                                ),
+                              }))
+                            }
+                            className="w-full sm:w-32"
+                            type="number"
+                            value={coverageForm.crossLocationMinGapMinutes}
+                          />
+                          <span className={`text-[12px] ${textMuted}`} style={{ fontWeight: 440 }}>
+                            minutes
+                          </span>
+                        </div>
+                        <p className={`text-[11px] mt-1.5 ${textMuted}`} style={{ fontWeight: 420 }}>
+                          Travel time buffer between shifts at different locations
+                        </p>
+                      </div>
+
+                      <div>
+                        <label
+                          className={`block text-[11px] uppercase tracking-[0.04em] mb-1.5 ${textMuted}`}
+                          style={{ fontWeight: 500 }}
+                        >
+                          Maximum distance for different-location second shifts
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <SettingsInput
+                            dark={isDark}
+                            min={0}
+                            onChange={(event) =>
+                              setCoverageForm((current) => ({
+                                ...current,
+                                crossLocationMaxRadiusMiles: Math.max(
+                                  0,
+                                  Number.parseInt(event.target.value || "0", 10) || 0,
+                                ),
+                              }))
+                            }
+                            className="w-full sm:w-32"
+                            type="number"
+                            value={coverageForm.crossLocationMaxRadiusMiles}
+                          />
+                          <span className={`text-[12px] ${textMuted}`} style={{ fontWeight: 440 }}>
+                            miles
+                          </span>
+                        </div>
+                        <p className={`text-[11px] mt-1.5 ${textMuted}`} style={{ fontWeight: 420 }}>
+                          Maximum distance between locations for same-day coverage
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
             </div>
           </div>
-        </div>
+        </motion.div>
       );
     }
 
