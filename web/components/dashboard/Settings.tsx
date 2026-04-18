@@ -94,6 +94,19 @@ type CompanyFormState = {
   weekStartDay: string;
 };
 
+type CoverageFormState = {
+  sameDaySecondShiftAllowed: boolean;
+  sameLocationOverlapMinutes: number;
+  crossLocationShiftCoverageAllowed: boolean;
+  crossLocationMinGapMinutes: number;
+  crossLocationMaxRadiusMiles: number;
+};
+
+type SettingsSaveTarget =
+  | "business-profile"
+  | "business-coverage"
+  | "personal";
+
 function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -120,6 +133,36 @@ function getBusinessWeekStartDay(business: BusinessProfile | null): string {
   }
   const raw = business.settings?.["week_start_day"];
   return typeof raw === "string" && raw ? raw : "monday";
+}
+
+function getBusinessCoverageSettings(
+  business: BusinessProfile | null,
+): Record<string, unknown> {
+  if (!business) {
+    return {};
+  }
+  const raw = business.settings?.["coverage"];
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+}
+
+function readCoverageBoolean(
+  settings: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = settings[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function readCoverageInt(
+  settings: Record<string, unknown>,
+  key: string,
+  fallback: number,
+): number {
+  const value = settings[key];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback;
 }
 
 function resolveAppearancePreference(
@@ -150,6 +193,37 @@ function buildCompanyForm(business: BusinessProfile): CompanyFormState {
     businessAddress: getBusinessAddress(business),
     timezone: business.timezone,
     weekStartDay: getBusinessWeekStartDay(business),
+  };
+}
+
+function buildCoverageForm(business: BusinessProfile): CoverageFormState {
+  const settings = getBusinessCoverageSettings(business);
+  return {
+    sameDaySecondShiftAllowed: readCoverageBoolean(
+      settings,
+      "same_day_second_shift_allowed",
+      true,
+    ),
+    sameLocationOverlapMinutes: readCoverageInt(
+      settings,
+      "same_location_overlap_minutes",
+      0,
+    ),
+    crossLocationShiftCoverageAllowed: readCoverageBoolean(
+      settings,
+      "cross_location_shift_coverage_allowed",
+      false,
+    ),
+    crossLocationMinGapMinutes: readCoverageInt(
+      settings,
+      "cross_location_min_gap_minutes",
+      60,
+    ),
+    crossLocationMaxRadiusMiles: readCoverageInt(
+      settings,
+      "cross_location_max_radius_miles",
+      20,
+    ),
   };
 }
 
@@ -326,6 +400,20 @@ function formsMatchCompany(
   );
 }
 
+function formsMatchCoverage(
+  left: CoverageFormState,
+  right: CoverageFormState,
+): boolean {
+  return (
+    left.sameDaySecondShiftAllowed === right.sameDaySecondShiftAllowed &&
+    left.sameLocationOverlapMinutes === right.sameLocationOverlapMinutes &&
+    left.crossLocationShiftCoverageAllowed ===
+      right.crossLocationShiftCoverageAllowed &&
+    left.crossLocationMinGapMinutes === right.crossLocationMinGapMinutes &&
+    left.crossLocationMaxRadiusMiles === right.crossLocationMaxRadiusMiles
+  );
+}
+
 function SettingsField({
   label,
   icon: _Icon,
@@ -440,7 +528,15 @@ function Toggle({
 }
 
 const businessSections = [
-  { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business" as const },
+  { key: "company", label: "Company Profile", icon: Building2, saveTarget: "business-profile" as const },
+  {
+    key: "coverage",
+    label: "Coverage Engine",
+    icon: Shield,
+    saveTarget: "business-coverage" as const,
+    description:
+      "Control automated same-day and cross-location eligibility for coverage outreach.",
+  },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null, description: "Manage the default shift names and time windows used throughout the scheduler." },
   { key: "billing", label: "Billing & Plan", icon: CreditCard, saveTarget: null },
@@ -557,6 +653,20 @@ export default function Settings({
     timezone: "America/Los_Angeles",
     weekStartDay: "monday",
   });
+  const [coverageForm, setCoverageForm] = useState<CoverageFormState>({
+    sameDaySecondShiftAllowed: true,
+    sameLocationOverlapMinutes: 0,
+    crossLocationShiftCoverageAllowed: false,
+    crossLocationMinGapMinutes: 60,
+    crossLocationMaxRadiusMiles: 20,
+  });
+  const [coverageBaseline, setCoverageBaseline] = useState<CoverageFormState>({
+    sameDaySecondShiftAllowed: true,
+    sameLocationOverlapMinutes: 0,
+    crossLocationShiftCoverageAllowed: false,
+    crossLocationMinGapMinutes: 60,
+    crossLocationMaxRadiusMiles: 20,
+  });
 
   const [personalSaving, setPersonalSaving] = useState(false);
   const [businessSaving, setBusinessSaving] = useState(false);
@@ -564,8 +674,13 @@ export default function Settings({
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionActionId, setSessionActionId] = useState<string | null>(null);
   const [sessionFeedback, setSessionFeedback] = useState<Feedback>(null);
-  const [feedback, setFeedback] = useState<Record<SettingsScope, Feedback>>({
-    business: null,
+  const [feedback, setFeedback] = useState<{
+    businessProfile: Feedback;
+    businessCoverage: Feedback;
+    personal: Feedback;
+  }>({
+    businessProfile: null,
+    businessCoverage: null,
     personal: null,
   });
   const workspaceBusinessId = workspace?.businesses[0]?.business_id ?? null;
@@ -662,14 +777,21 @@ export default function Settings({
           return;
         }
         const nextCompanyForm = buildCompanyForm(nextBusiness);
+        const nextCoverageForm = buildCoverageForm(nextBusiness);
         setBusiness(nextBusiness);
         setCompanyForm(nextCompanyForm);
         setCompanyBaseline(nextCompanyForm);
+        setCoverageForm(nextCoverageForm);
+        setCoverageBaseline(nextCoverageForm);
       } catch (_error) {
         if (!cancelled) {
           setFeedback((current) => ({
             ...current,
-            business: {
+            businessProfile: {
+              tone: "error",
+              message: "Could not load the business profile right now.",
+            },
+            businessCoverage: {
               tone: "error",
               message: "Could not load the business profile right now.",
             },
@@ -692,6 +814,8 @@ export default function Settings({
   const personalDirty = !formsMatchPersonal(personalForm, personalBaseline);
   const companyDirty =
     business !== null && !formsMatchCompany(companyForm, companyBaseline);
+  const coverageDirty =
+    business !== null && !formsMatchCoverage(coverageForm, coverageBaseline);
 
   const sections = scope === "business" ? businessSections : personalSections;
   const currentSection = sections.find((section) => section.key === activeSection);
@@ -711,28 +835,37 @@ export default function Settings({
       isValidEmail(companyForm.businessEmail)) &&
     companyDirty &&
     !businessSaving;
+  const coverageCanSave =
+    business !== null && coverageDirty && !businessSaving;
 
   const activeDirty =
-    activeSaveTarget === "business"
+    activeSaveTarget === "business-profile"
       ? companyDirty
+      : activeSaveTarget === "business-coverage"
+        ? coverageDirty
       : activeSaveTarget === "personal"
         ? personalDirty
         : false;
   const activeSaving =
-    activeSaveTarget === "business"
+    activeSaveTarget === "business-profile" ||
+    activeSaveTarget === "business-coverage"
       ? businessSaving
       : activeSaveTarget === "personal"
         ? personalSaving
         : false;
   const activeCanSave =
-    activeSaveTarget === "business"
+    activeSaveTarget === "business-profile"
       ? companyCanSave
+      : activeSaveTarget === "business-coverage"
+        ? coverageCanSave
       : activeSaveTarget === "personal"
         ? personalCanSave
         : false;
   const activeFeedback =
-    activeSaveTarget === "business"
-      ? feedback.business
+    activeSaveTarget === "business-profile"
+      ? feedback.businessProfile
+      : activeSaveTarget === "business-coverage"
+        ? feedback.businessCoverage
       : activeSaveTarget === "personal"
         ? feedback.personal
         : null;
@@ -816,12 +949,12 @@ export default function Settings({
     }
   }
 
-  async function saveBusiness() {
+  async function saveBusinessProfile() {
     if (!companyCanSave || !business) {
       return;
     }
     setBusinessSaving(true);
-    setFeedback((current) => ({ ...current, business: null }));
+    setFeedback((current) => ({ ...current, businessProfile: null }));
     try {
       const response = await updateBusinessProfile(business.id, {
         display_name: normalizeText(companyForm.companyName),
@@ -837,12 +970,15 @@ export default function Settings({
       setCompanyBaseline(nextBaseline);
       setFeedback((current) => ({
         ...current,
-        business: { tone: "success", message: "Business profile updated." },
+        businessProfile: {
+          tone: "success",
+          message: "Business profile updated.",
+        },
       }));
     } catch (error) {
       setFeedback((current) => ({
         ...current,
-        business: {
+        businessProfile: {
           tone: "error",
           message:
             error instanceof Error
@@ -855,9 +991,62 @@ export default function Settings({
     }
   }
 
+  async function saveCoveragePolicy() {
+    if (!coverageCanSave || !business) {
+      return;
+    }
+    setBusinessSaving(true);
+    setFeedback((current) => ({ ...current, businessCoverage: null }));
+    try {
+      const response = await updateBusinessProfile(business.id, {
+        display_name: business.display_name ?? business.name,
+        vertical: business.vertical ?? null,
+        primary_email: business.primary_email ?? null,
+        timezone: business.timezone,
+        company_address: getBusinessAddress(business) || null,
+        week_start_day: getBusinessWeekStartDay(business) || null,
+        same_day_second_shift_allowed: coverageForm.sameDaySecondShiftAllowed,
+        same_location_overlap_minutes: coverageForm.sameLocationOverlapMinutes,
+        cross_location_shift_coverage_allowed:
+          coverageForm.crossLocationShiftCoverageAllowed,
+        cross_location_min_gap_minutes: coverageForm.crossLocationMinGapMinutes,
+        cross_location_max_radius_miles:
+          coverageForm.crossLocationMaxRadiusMiles,
+      });
+      const nextBaseline = buildCoverageForm(response);
+      setBusiness(response);
+      setCoverageForm(nextBaseline);
+      setCoverageBaseline(nextBaseline);
+      setFeedback((current) => ({
+        ...current,
+        businessCoverage: {
+          tone: "success",
+          message: "Coverage engine policy updated.",
+        },
+      }));
+    } catch (error) {
+      setFeedback((current) => ({
+        ...current,
+        businessCoverage: {
+          tone: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not update coverage engine settings.",
+        },
+      }));
+    } finally {
+      setBusinessSaving(false);
+    }
+  }
+
   async function handleSaveActive() {
-    if (activeSaveTarget === "business") {
-      await saveBusiness();
+    if (activeSaveTarget === "business-profile") {
+      await saveBusinessProfile();
+      return;
+    }
+    if (activeSaveTarget === "business-coverage") {
+      await saveCoveragePolicy();
       return;
     }
     if (activeSaveTarget === "personal") {
@@ -866,7 +1055,9 @@ export default function Settings({
   }
 
   const activePageAction =
-    activeSaveTarget === "business" || activeSaveTarget === "personal"
+    activeSaveTarget === "business-profile" ||
+    activeSaveTarget === "business-coverage" ||
+    activeSaveTarget === "personal"
       ? activeDirty
         ? {
             disabled: !activeCanSave,
@@ -1092,6 +1283,162 @@ export default function Settings({
                 ))}
               </SettingsSelect>
             </SettingsField>
+          </div>
+        </div>
+      );
+    }
+
+    if (scope === "business" && activeSection === "coverage") {
+      if (businessLoading && !business) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Loading coverage settings…
+          </div>
+        );
+      }
+
+      if (!business) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Create a business first, then you can manage automated coverage policy here.
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-5">
+          <div
+            className={`backfill-ui-radius border p-4 ${
+              isDark
+                ? "border-[#635BFF]/20 bg-[#635BFF]/[0.08]"
+                : "border-[#635BFF]/15 bg-gradient-to-br from-[#635BFF]/[0.04] to-[#8B5CF6]/[0.02]"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#635BFF]/10 text-[#635BFF]">
+                <Shield size={18} />
+              </div>
+              <div className="min-w-0">
+                <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                  Automated coverage policy
+                </p>
+                <p className={`mt-1 text-[12px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                  These settings affect automated coverage outreach and candidate ranking only. Manual scheduler assignments stay unchanged.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className={`flex items-center justify-between gap-4 p-4 backfill-ui-radius transition-colors ${rowHover}`}>
+              <div>
+                <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+                  Allow same-day second shifts
+                </p>
+                <p className={`mt-0.5 max-w-xl text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                  Let the engine consider workers who already have one shift that day. Heavy same-day second shifts still get downranked by the backend.
+                </p>
+              </div>
+              <Toggle
+                enabled={coverageForm.sameDaySecondShiftAllowed}
+                onChange={(next) =>
+                  setCoverageForm((current) => ({
+                    ...current,
+                    sameDaySecondShiftAllowed: next,
+                  }))
+                }
+              />
+            </div>
+
+            <div className={`backfill-ui-radius border p-4 ${cardSurface}`}>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <SettingsField icon={CalendarDays} label="Same-location overlap limit (minutes)">
+                  <SettingsInput
+                    dark={isDark}
+                    min={0}
+                    onChange={(event) =>
+                      setCoverageForm((current) => ({
+                        ...current,
+                        sameLocationOverlapMinutes: Math.max(
+                          0,
+                          Number.parseInt(event.target.value || "0", 10) || 0,
+                        ),
+                      }))
+                    }
+                    step={1}
+                    type="number"
+                    value={coverageForm.sameLocationOverlapMinutes}
+                  />
+                </SettingsField>
+                <div className={`text-[11px] ${textMuted} sm:pt-7`} style={{ fontWeight: 420 }}>
+                  Workers can still be eligible for another shift at the same location until overlap exceeds this threshold.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className={`backfill-ui-radius border p-4 ${cardSurface}`}>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+                  Allow cross-location coverage
+                </p>
+                <p className={`mt-0.5 max-w-xl text-[11px] ${textMuted}`} style={{ fontWeight: 420 }}>
+                  Permit automated outreach to workers with other-location shifts, subject to zero-overlap, minimum gap, distance, and same-locality backend checks.
+                </p>
+              </div>
+              <Toggle
+                enabled={coverageForm.crossLocationShiftCoverageAllowed}
+                onChange={(next) =>
+                  setCoverageForm((current) => ({
+                    ...current,
+                    crossLocationShiftCoverageAllowed: next,
+                  }))
+                }
+              />
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <SettingsField icon={CalendarDays} label="Minimum cross-location gap (minutes)">
+                <SettingsInput
+                  dark={isDark}
+                  disabled={!coverageForm.crossLocationShiftCoverageAllowed}
+                  min={0}
+                  onChange={(event) =>
+                    setCoverageForm((current) => ({
+                      ...current,
+                      crossLocationMinGapMinutes: Math.max(
+                        0,
+                        Number.parseInt(event.target.value || "0", 10) || 0,
+                      ),
+                    }))
+                  }
+                  step={1}
+                  type="number"
+                  value={coverageForm.crossLocationMinGapMinutes}
+                />
+              </SettingsField>
+
+              <SettingsField icon={MapPin} label="Maximum radius (miles)">
+                <SettingsInput
+                  dark={isDark}
+                  disabled={!coverageForm.crossLocationShiftCoverageAllowed}
+                  min={0}
+                  onChange={(event) =>
+                    setCoverageForm((current) => ({
+                      ...current,
+                      crossLocationMaxRadiusMiles: Math.max(
+                        0,
+                        Number.parseInt(event.target.value || "0", 10) || 0,
+                      ),
+                    }))
+                  }
+                  step={1}
+                  type="number"
+                  value={coverageForm.crossLocationMaxRadiusMiles}
+                />
+              </SettingsField>
+            </div>
           </div>
         </div>
       );

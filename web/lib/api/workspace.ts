@@ -79,6 +79,11 @@ export type BusinessProfileUpdatePayload = {
   timezone: string;
   company_address?: string | null;
   week_start_day?: string | null;
+  same_day_second_shift_allowed?: boolean | null;
+  same_location_overlap_minutes?: number | null;
+  cross_location_shift_coverage_allowed?: boolean | null;
+  cross_location_min_gap_minutes?: number | null;
+  cross_location_max_radius_miles?: number | null;
 };
 
 export type ShiftDefaultKey = string;
