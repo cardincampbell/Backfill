@@ -1,4 +1,13 @@
 from app.models.ai import LlmGeneration
+from app.models.auto_scheduler import (
+    ScheduleRun,
+    ScheduleRunApply,
+    ScheduleRunAssignment,
+    ScheduleRunExplanation,
+    ScheduleRunInput,
+    ScheduleRunMetric,
+    ScheduleRunRejection,
+)
 from app.models.business import Business, Location, LocationRole, Role
 from app.models.business_classification import (
     BusinessDerivationGapSuggestion,
@@ -101,6 +110,13 @@ __all__ = [
     "ProviderCallbackLog",
     "RetellConversation",
     "Role",
+    "ScheduleRun",
+    "ScheduleRunApply",
+    "ScheduleRunAssignment",
+    "ScheduleRunExplanation",
+    "ScheduleRunInput",
+    "ScheduleRunMetric",
+    "ScheduleRunRejection",
     "SchedulerConnection",
     "SchedulerEvent",
     "SchedulerSyncJob",

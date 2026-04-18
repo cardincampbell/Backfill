@@ -224,6 +224,29 @@ class RetellConversationType(str, Enum):
     chat = "chat"
 
 
+class ScheduleRunType(str, Enum):
+    draft_generate = "draft_generate"
+    replay = "replay"
+    shadow_compare = "shadow_compare"
+    publish_candidate = "publish_candidate"
+
+
+class ScheduleRunStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class ScheduleApplyStatus(str, Enum):
+    queued = "queued"
+    applied = "applied"
+    stale_rejected = "stale_rejected"
+    failed = "failed"
+    no_op = "no_op"
+
+
 _STAFFING_TO_COMPATIBILITY_SHIFT_STATUS = {
     ShiftStaffingStatus.open: ShiftStatus.open,
     ShiftStaffingStatus.filling: ShiftStatus.filling,
