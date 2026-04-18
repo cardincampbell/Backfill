@@ -415,6 +415,77 @@ function formsMatchCoverage(
   );
 }
 
+function countPersonalChanges(
+  current: PersonalFormState,
+  baseline: PersonalFormState,
+): number {
+  let count = 0;
+  if (normalizeText(current.fullName) !== normalizeText(baseline.fullName)) {
+    count += 1;
+  }
+  if (normalizeEmail(current.email) !== normalizeEmail(baseline.email)) {
+    count += 1;
+  }
+  if (current.appearancePreference !== baseline.appearancePreference) {
+    count += 1;
+  }
+  return count;
+}
+
+function countCompanyChanges(
+  current: CompanyFormState,
+  baseline: CompanyFormState,
+): number {
+  let count = 0;
+  if (normalizeText(current.companyName) !== normalizeText(baseline.companyName)) {
+    count += 1;
+  }
+  if (normalizeText(current.businessType) !== normalizeText(baseline.businessType)) {
+    count += 1;
+  }
+  if (normalizeEmail(current.businessEmail) !== normalizeEmail(baseline.businessEmail)) {
+    count += 1;
+  }
+  if (normalizeText(current.businessAddress) !== normalizeText(baseline.businessAddress)) {
+    count += 1;
+  }
+  if (normalizeText(current.timezone) !== normalizeText(baseline.timezone)) {
+    count += 1;
+  }
+  if (normalizeText(current.weekStartDay) !== normalizeText(baseline.weekStartDay)) {
+    count += 1;
+  }
+  return count;
+}
+
+function countCoverageChanges(
+  current: CoverageFormState,
+  baseline: CoverageFormState,
+): number {
+  let count = 0;
+  if (current.sameDaySecondShiftAllowed !== baseline.sameDaySecondShiftAllowed) {
+    count += 1;
+  }
+  if (current.sameLocationOverlapMinutes !== baseline.sameLocationOverlapMinutes) {
+    count += 1;
+  }
+  if (
+    current.crossLocationShiftCoverageAllowed !==
+    baseline.crossLocationShiftCoverageAllowed
+  ) {
+    count += 1;
+  }
+  if (current.crossLocationMinGapMinutes !== baseline.crossLocationMinGapMinutes) {
+    count += 1;
+  }
+  if (
+    current.crossLocationMaxRadiusMiles !== baseline.crossLocationMaxRadiusMiles
+  ) {
+    count += 1;
+  }
+  return count;
+}
+
 function SettingsField({
   label,
   icon: _Icon,
@@ -817,6 +888,16 @@ export default function Settings({
     business !== null && !formsMatchCompany(companyForm, companyBaseline);
   const coverageDirty =
     business !== null && !formsMatchCoverage(coverageForm, coverageBaseline);
+  const personalChangeCount = countPersonalChanges(
+    personalForm,
+    personalBaseline,
+  );
+  const companyChangeCount =
+    business !== null ? countCompanyChanges(companyForm, companyBaseline) : 0;
+  const coverageChangeCount =
+    business !== null
+      ? countCoverageChanges(coverageForm, coverageBaseline)
+      : 0;
 
   const sections = scope === "business" ? businessSections : personalSections;
   const currentSection = sections.find((section) => section.key === activeSection);
@@ -870,6 +951,14 @@ export default function Settings({
       : activeSaveTarget === "personal"
         ? feedback.personal
         : null;
+  const activeChangeCount =
+    activeSaveTarget === "business-profile"
+      ? companyChangeCount
+      : activeSaveTarget === "business-coverage"
+        ? coverageChangeCount
+      : activeSaveTarget === "personal"
+        ? personalChangeCount
+        : 0;
   const currentSessionId = session?.session.id ?? null;
   const visibleSessions = useMemo(() => {
     return [...activeSessions].sort((left, right) => {
@@ -1062,7 +1151,9 @@ export default function Settings({
       ? activeDirty
         ? {
             disabled: !activeCanSave,
-            label: activeSaving ? "Saving…" : "Save Changes",
+            label: activeSaving
+              ? "Saving…"
+              : `Save ${activeChangeCount} Change${activeChangeCount === 1 ? "" : "s"}`,
             onClick: () => {
               void handleSaveActive();
             },
