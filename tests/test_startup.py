@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import main as main_module
+from app import bootstrap as bootstrap_module
 
 
 def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +40,7 @@ def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> N
         upgrade_calls.append((cfg.get_main_option("sqlalchemy.url"), revision))
 
     monkeypatch.setattr(
-        main_module,
+        bootstrap_module,
         "settings",
         SimpleNamespace(
             advisory_lock_database_url="postgresql://postgres:postgres@db.example.com:5432/backfill",
@@ -48,14 +48,14 @@ def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> N
             run_migrations_on_startup=True,
         ),
     )
-    monkeypatch.setattr(main_module.psycopg, "connect", fake_connect)
-    monkeypatch.setattr(main_module.alembic.command, "upgrade", fake_upgrade)
+    monkeypatch.setattr(bootstrap_module.psycopg, "connect", fake_connect)
+    monkeypatch.setattr(bootstrap_module.alembic.command, "upgrade", fake_upgrade)
 
-    main_module._run_migrations_with_advisory_lock()
+    bootstrap_module.run_migrations_with_advisory_lock()
 
     assert executed == [
-        ("SELECT pg_advisory_lock(%s)", (main_module.MIGRATION_ADVISORY_LOCK_KEY,)),
-        ("SELECT pg_advisory_unlock(%s)", (main_module.MIGRATION_ADVISORY_LOCK_KEY,)),
+        ("SELECT pg_advisory_lock(%s)", (bootstrap_module.MIGRATION_ADVISORY_LOCK_KEY,)),
+        ("SELECT pg_advisory_unlock(%s)", (bootstrap_module.MIGRATION_ADVISORY_LOCK_KEY,)),
     ]
     assert upgrade_calls == [
         ("postgresql+psycopg://postgres:postgres@db.example.com:5432/backfill", "head"),
@@ -63,51 +63,36 @@ def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_run_startup_migrations_if_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[str] = []
-
-    async def fake_to_thread(func):
-        calls.append("to_thread")
-        func()
-
+async def test_run_startup_migrations_if_enabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        main_module,
+        bootstrap_module,
         "settings",
         SimpleNamespace(run_migrations_on_startup=True),
     )
-    monkeypatch.setattr(main_module.asyncio, "to_thread", fake_to_thread)
-    monkeypatch.setattr(main_module, "_run_migrations_with_advisory_lock", lambda: calls.append("run"))
 
-    await main_module._run_startup_migrations_if_enabled()
-
-    assert calls == ["to_thread", "run"]
+    await bootstrap_module.run_startup_migrations_if_enabled()
 
 
 @pytest.mark.asyncio
-async def test_run_startup_migrations_if_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_startup_migrations_if_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        main_module,
+        bootstrap_module,
         "settings",
         SimpleNamespace(run_migrations_on_startup=False),
     )
 
-    async def fail_to_thread(_func):
-        raise AssertionError("to_thread should not run when startup migrations are disabled")
-
-    monkeypatch.setattr(main_module.asyncio, "to_thread", fail_to_thread)
-
-    await main_module._run_startup_migrations_if_enabled()
+    await bootstrap_module.run_startup_migrations_if_enabled()
 
 
 def test_register_llm_adapters_delegates_to_adapter_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     monkeypatch.setattr(
-        main_module.llm_adapters,
+        bootstrap_module.llm_adapters,
         "register_configured_adapters",
         lambda: calls.append("register"),
     )
 
-    main_module._register_llm_adapters()
+    bootstrap_module.register_llm_adapters()
 
     assert calls == ["register"]

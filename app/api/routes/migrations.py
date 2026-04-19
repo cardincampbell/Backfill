@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Header, HTTPException, status
 
+from app.bootstrap import run_migrations_with_advisory_lock
 from app.config import settings
 from app.schemas.common import BaseSchema
 
@@ -37,9 +38,7 @@ async def run_migrations(
 ) -> MigrationRunResponse:
     _assert_worker_key(x_backfill_worker_key)
     try:
-        from app.main import _run_migrations_with_advisory_lock
-
-        await asyncio.to_thread(_run_migrations_with_advisory_lock)
+        await asyncio.to_thread(run_migrations_with_advisory_lock)
     except Exception as exc:
         logger.exception("Migration run failed via /internal/migrations/run")
         raise HTTPException(

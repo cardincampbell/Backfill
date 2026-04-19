@@ -191,6 +191,48 @@ def test_coverage_runtime_process_route_rejects_invalid_worker_key(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_migrations_run_route_rejects_invalid_worker_key(monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.migrations.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/internal/migrations/run",
+            headers={"X-Backfill-Worker-Key": "wrong_key"},
+        )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "worker_auth_failed"}
+
+
+def test_migrations_run_route_executes_bootstrap_migration_helper(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "app.api.routes.migrations.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.migrations.run_migrations_with_advisory_lock",
+        lambda: calls.append("run"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/internal/migrations/run",
+            headers={"X-Backfill-Worker-Key": "worker_test_key"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "message": "Migrations applied successfully",
+    }
+    assert calls == ["run"]
+
+
 def test_auto_scheduler_generate_route_returns_completed_run(monkeypatch):
     captured: dict[str, object] = {}
     schedule_run = _schedule_run_read_fixture()

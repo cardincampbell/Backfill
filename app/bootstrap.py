@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
@@ -32,9 +31,12 @@ def run_migrations_with_advisory_lock() -> None:
 
 
 async def run_startup_migrations_if_enabled() -> None:
-    if not settings.run_migrations_on_startup:
-        return
-    await asyncio.to_thread(run_migrations_with_advisory_lock)
+    if settings.run_migrations_on_startup:
+        logger.warning(
+            "BACKFILL_RUN_MIGRATIONS_ON_STARTUP is enabled but ignored; "
+            "run migrations via /internal/migrations/run or a release step instead"
+        )
+    return None
 
 
 def register_llm_adapters() -> None:
