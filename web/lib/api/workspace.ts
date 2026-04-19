@@ -84,6 +84,7 @@ export type BusinessProfileUpdatePayload = {
   cross_location_shift_coverage_allowed?: boolean | null;
   cross_location_min_gap_minutes?: number | null;
   cross_location_max_radius_miles?: number | null;
+  reliability_coaching_style?: "supportive" | "direct" | "firm" | null;
 };
 
 export type ShiftDefaultKey = string;

@@ -96,6 +96,7 @@ type CompanyFormState = {
 };
 
 type CoverageFormState = {
+  reliabilityCoachingStyle: "supportive" | "direct" | "firm";
   sameDaySecondShiftAllowed: boolean;
   sameLocationOverlapMinutes: number;
   crossLocationShiftCoverageAllowed: boolean;
@@ -146,6 +147,16 @@ function getBusinessCoverageSettings(
   return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 }
 
+function getBusinessReliabilityCoachingSettings(
+  business: BusinessProfile | null,
+): Record<string, unknown> {
+  if (!business) {
+    return {};
+  }
+  const raw = business.settings?.["reliability_coaching"];
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+}
+
 function readCoverageBoolean(
   settings: Record<string, unknown>,
   key: string,
@@ -162,6 +173,17 @@ function readCoverageInt(
 ): number {
   const value = settings[key];
   return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback;
+}
+
+function readCoverageStyle(
+  settings: Record<string, unknown>,
+  key: string,
+  fallback: "supportive" | "direct" | "firm",
+): "supportive" | "direct" | "firm" {
+  const value = settings[key];
+  return value === "supportive" || value === "direct" || value === "firm"
     ? value
     : fallback;
 }
@@ -199,7 +221,13 @@ function buildCompanyForm(business: BusinessProfile): CompanyFormState {
 
 function buildCoverageForm(business: BusinessProfile): CoverageFormState {
   const settings = getBusinessCoverageSettings(business);
+  const reliabilityCoaching = getBusinessReliabilityCoachingSettings(business);
   return {
+    reliabilityCoachingStyle: readCoverageStyle(
+      reliabilityCoaching,
+      "style",
+      "supportive",
+    ),
     sameDaySecondShiftAllowed: readCoverageBoolean(
       settings,
       "same_day_second_shift_allowed",
@@ -406,6 +434,7 @@ function formsMatchCoverage(
   right: CoverageFormState,
 ): boolean {
   return (
+    left.reliabilityCoachingStyle === right.reliabilityCoachingStyle &&
     left.sameDaySecondShiftAllowed === right.sameDaySecondShiftAllowed &&
     left.sameLocationOverlapMinutes === right.sameLocationOverlapMinutes &&
     left.crossLocationShiftCoverageAllowed ===
@@ -463,6 +492,9 @@ function countCoverageChanges(
   baseline: CoverageFormState,
 ): number {
   let count = 0;
+  if (current.reliabilityCoachingStyle !== baseline.reliabilityCoachingStyle) {
+    count += 1;
+  }
   if (current.sameDaySecondShiftAllowed !== baseline.sameDaySecondShiftAllowed) {
     count += 1;
   }
@@ -607,7 +639,7 @@ const businessSections = [
     icon: Sparkles,
     saveTarget: "business-coverage" as const,
     description:
-      "Control automated same-day and cross-location eligibility for coverage outreach.",
+      "Control automated same-day, cross-location, and reliability coaching policy.",
   },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null, description: "Manage the default shift names and time windows used throughout the scheduler." },
@@ -726,6 +758,7 @@ export default function Settings({
     weekStartDay: "monday",
   });
   const [coverageForm, setCoverageForm] = useState<CoverageFormState>({
+    reliabilityCoachingStyle: "supportive",
     sameDaySecondShiftAllowed: true,
     sameLocationOverlapMinutes: 0,
     crossLocationShiftCoverageAllowed: false,
@@ -733,6 +766,7 @@ export default function Settings({
     crossLocationMaxRadiusMiles: 20,
   });
   const [coverageBaseline, setCoverageBaseline] = useState<CoverageFormState>({
+    reliabilityCoachingStyle: "supportive",
     sameDaySecondShiftAllowed: true,
     sameLocationOverlapMinutes: 0,
     crossLocationShiftCoverageAllowed: false,
@@ -1095,6 +1129,7 @@ export default function Settings({
         timezone: business.timezone,
         company_address: getBusinessAddress(business) || null,
         week_start_day: getBusinessWeekStartDay(business) || null,
+        reliability_coaching_style: coverageForm.reliabilityCoachingStyle,
         same_day_second_shift_allowed: coverageForm.sameDaySecondShiftAllowed,
         same_location_overlap_minutes: coverageForm.sameLocationOverlapMinutes,
         cross_location_shift_coverage_allowed:
@@ -1404,6 +1439,116 @@ export default function Settings({
           transition={{ duration: 0.4 }}
         >
           <div className="space-y-1">
+            <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
+              <div>
+                <p className={`text-[13px] ${textPrimary} mb-1`} style={{ fontWeight: 500 }}>
+                  Reliability Coaching
+                </p>
+                <p className={`text-[11px] mb-4 max-w-md ${textMuted}`} style={{ fontWeight: 420 }}>
+                  Choose how the Coverage Engine coaches employees when they have too many callouts
+                </p>
+
+                <div className="space-y-3">
+                  <div className="relative">
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="1"
+                      value={
+                        coverageForm.reliabilityCoachingStyle === "supportive"
+                          ? 0
+                          : coverageForm.reliabilityCoachingStyle === "direct"
+                            ? 1
+                            : 2
+                      }
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        setCoverageForm((current) => ({
+                          ...current,
+                          reliabilityCoachingStyle:
+                            next === 0
+                              ? "supportive"
+                              : next === 1
+                                ? "direct"
+                                : "firm",
+                        }));
+                      }}
+                      className="coverage-coaching-slider h-2 w-full cursor-pointer appearance-none rounded-full"
+                      style={{
+                        background:
+                          "linear-gradient(to right, #00B893 0%, #635BFF 50%, #E5484D 100%)",
+                      }}
+                    />
+                    <style>{`
+                      .coverage-coaching-slider::-webkit-slider-thumb {
+                        appearance: none;
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 50%;
+                        background: white;
+                        border: 2px solid ${
+                          coverageForm.reliabilityCoachingStyle === "supportive"
+                            ? "#00B893"
+                            : coverageForm.reliabilityCoachingStyle === "direct"
+                              ? "#635BFF"
+                              : "#E5484D"
+                        };
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        cursor: pointer;
+                      }
+                      .coverage-coaching-slider::-moz-range-thumb {
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 50%;
+                        background: white;
+                        border: 2px solid ${
+                          coverageForm.reliabilityCoachingStyle === "supportive"
+                            ? "#00B893"
+                            : coverageForm.reliabilityCoachingStyle === "direct"
+                              ? "#635BFF"
+                              : "#E5484D"
+                        };
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        cursor: pointer;
+                      }
+                    `}</style>
+                  </div>
+
+                  <div className="flex justify-between px-1">
+                    {(
+                      [
+                        { key: "supportive", label: "Supportive", color: "#00B893" },
+                        { key: "direct", label: "Direct", color: "#635BFF" },
+                        { key: "firm", label: "Firm", color: "#E5484D" },
+                      ] as const
+                    ).map((option) => {
+                      const active = coverageForm.reliabilityCoachingStyle === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          onClick={() =>
+                            setCoverageForm((current) => ({
+                              ...current,
+                              reliabilityCoachingStyle: option.key,
+                            }))
+                          }
+                          className={`text-[11px] transition-all ${active ? "" : textMuted}`}
+                          style={{
+                            color: active ? option.color : undefined,
+                            fontWeight: active ? 540 : 440,
+                          }}
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
               <div className="flex items-center justify-between">
                 <div>

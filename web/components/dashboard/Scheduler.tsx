@@ -3352,69 +3352,117 @@ function SchedulerContent({
               </button>
               {predictiveBannerVisible ? (
                 <>
-                  {!loadingPredictiveRun ? (
-                    <button
-                      onClick={dismissPredictivePreview}
-                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
-                      style={{ fontWeight: 500 }}
-                      type="button"
-                    >
-                      <span className="hidden lg:inline">Start from Scratch</span>
-                      <span className="lg:hidden">Scratch</span>
-                    </button>
-                  ) : null}
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    onClick={
-                      predictiveRunError
-                        ? retryPredictivePreview
-                        : acceptPredictiveSchedule
-                    }
-                    disabled={
-                      acceptingPredictiveRun
-                      || (loadingPredictiveRun && !predictiveRunError)
-                      || (!predictiveRunError && !canAcceptPredictiveSchedule)
-                    }
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                    style={{
-                      fontWeight: 540,
-                      background: predictiveRunError
-                        ? 'linear-gradient(135deg, #635BFF, #8B5CF6)'
-                        : 'linear-gradient(135deg, #00B893, #00A080)',
-                      boxShadow: predictiveRunError
-                        ? '0 0 20px rgba(99,91,255,0.2)'
-                        : '0 0 20px rgba(0,184,147,0.24)',
-                    }}
-                    type="button"
-                  >
-                    <Zap size={13} />
-                    {loadingPredictiveRun ? (
-                      <>
-                        <span className="hidden lg:inline">Building Predictive Schedule</span>
-                        <span className="lg:hidden">Building</span>
-                      </>
-                    ) : acceptingPredictiveRun ? (
-                      <>
-                        <span className="hidden lg:inline">Accepting Predictive Schedule</span>
-                        <span className="lg:hidden">Accepting</span>
-                      </>
-                    ) : predictiveRunError ? (
-                      <>
-                        <span className="hidden lg:inline">Retry Predictive Schedule</span>
-                        <span className="lg:hidden">Retry</span>
-                      </>
-                    ) : canAcceptPredictiveSchedule ? (
-                      <>
-                        <span className="hidden lg:inline">Accept Predictive Schedule</span>
-                        <span className="lg:hidden">Accept</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="hidden lg:inline">No Predictive Assignments</span>
-                        <span className="lg:hidden">No Assignments</span>
-                      </>
-                    )}
-                  </motion.button>
+                  {predictivePreviewActive && !predictiveRunError && !loadingPredictiveRun ? (
+                    <div className="flex items-center gap-2">
+                      <motion.button
+                        whileTap={{ scale: 0.97 }}
+                        onClick={dismissPredictivePreview}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all"
+                        style={{
+                          fontWeight: 500,
+                          color: isDark ? '#F87171' : '#E5484D',
+                          borderColor: isDark ? 'rgba(248,113,113,0.35)' : '#E5484D40',
+                          background: isDark ? 'rgba(127,29,29,0.32)' : '#FEF2F2',
+                        }}
+                        type="button"
+                      >
+                        <X size={13} />
+                        <span className="hidden lg:inline">Reject</span>
+                        <span className="lg:hidden">Reject</span>
+                      </motion.button>
+                      <motion.button
+                        whileTap={{ scale: 0.97 }}
+                        onClick={acceptPredictiveSchedule}
+                        disabled={acceptingPredictiveRun || !canAcceptPredictiveSchedule}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{
+                          fontWeight: 540,
+                          background: 'linear-gradient(135deg, #00B893, #00A080)',
+                          boxShadow: '0 0 20px rgba(0,184,147,0.24)',
+                        }}
+                        type="button"
+                      >
+                        <Check size={13} />
+                        {acceptingPredictiveRun ? (
+                          <>
+                            <span className="hidden lg:inline">Accepting</span>
+                            <span className="lg:hidden">Accepting</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="hidden lg:inline">Accept</span>
+                            <span className="lg:hidden">Accept</span>
+                          </>
+                        )}
+                      </motion.button>
+                    </div>
+                  ) : (
+                    <>
+                      {!loadingPredictiveRun ? (
+                        <button
+                          onClick={dismissPredictivePreview}
+                          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+                          style={{ fontWeight: 500 }}
+                          type="button"
+                        >
+                          <span className="hidden lg:inline">Start from Scratch</span>
+                          <span className="lg:hidden">Scratch</span>
+                        </button>
+                      ) : null}
+                      <motion.button
+                        whileTap={{ scale: 0.97 }}
+                        onClick={
+                          predictiveRunError
+                            ? retryPredictivePreview
+                            : acceptPredictiveSchedule
+                        }
+                        disabled={
+                          acceptingPredictiveRun
+                          || (loadingPredictiveRun && !predictiveRunError)
+                          || (!predictiveRunError && !canAcceptPredictiveSchedule)
+                        }
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{
+                          fontWeight: 540,
+                          background: predictiveRunError
+                            ? 'linear-gradient(135deg, #635BFF, #8B5CF6)'
+                            : 'linear-gradient(135deg, #00B893, #00A080)',
+                          boxShadow: predictiveRunError
+                            ? '0 0 20px rgba(99,91,255,0.2)'
+                            : '0 0 20px rgba(0,184,147,0.24)',
+                        }}
+                        type="button"
+                      >
+                        <Zap size={13} />
+                        {loadingPredictiveRun ? (
+                          <>
+                            <span className="hidden lg:inline">Building Predictive Schedule</span>
+                            <span className="lg:hidden">Building</span>
+                          </>
+                        ) : acceptingPredictiveRun ? (
+                          <>
+                            <span className="hidden lg:inline">Accepting Predictive Schedule</span>
+                            <span className="lg:hidden">Accepting</span>
+                          </>
+                        ) : predictiveRunError ? (
+                          <>
+                            <span className="hidden lg:inline">Retry Predictive Schedule</span>
+                            <span className="lg:hidden">Retry</span>
+                          </>
+                        ) : canAcceptPredictiveSchedule ? (
+                          <>
+                            <span className="hidden lg:inline">Accept Predictive Schedule</span>
+                            <span className="lg:hidden">Accept</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="hidden lg:inline">No Predictive Assignments</span>
+                            <span className="lg:hidden">No Assignments</span>
+                          </>
+                        )}
+                      </motion.button>
+                    </>
+                  )}
                 </>
               ) : (
                 <motion.button
