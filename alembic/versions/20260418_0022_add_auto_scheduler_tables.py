@@ -57,7 +57,7 @@ def upgrade() -> None:
         sa.Column("planning_window_end", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "run_type",
-            sa.Enum(
+            postgresql.ENUM(
                 "draft_generate",
                 "replay",
                 "shadow_compare",
@@ -70,7 +70,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "status",
-            sa.Enum(
+            postgresql.ENUM(
                 "queued",
                 "running",
                 "completed",
@@ -214,7 +214,7 @@ def upgrade() -> None:
         sa.Column("planning_window_end", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "status",
-            sa.Enum(
+            postgresql.ENUM(
                 "queued",
                 "applied",
                 "stale_rejected",

@@ -102,7 +102,7 @@ def upgrade() -> None:
         sa.Column("planning_window_end", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "status",
-            sa.Enum(
+            postgresql.ENUM(
                 "queued",
                 "running",
                 "completed",

@@ -65,7 +65,7 @@ def upgrade() -> None:
         sa.Column("employee_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "case_status",
-            sa.Enum(
+            postgresql.ENUM(
                 "open",
                 "suppressed",
                 "escalated",
@@ -78,7 +78,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "delivery_status",
-            sa.Enum(
+            postgresql.ENUM(
                 "pending",
                 "queued",
                 "in_flight",
@@ -178,7 +178,7 @@ def upgrade() -> None:
         sa.Column("outbox_event_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "channel",
-            sa.Enum(
+            postgresql.ENUM(
                 "sms",
                 "email",
                 "voice",
@@ -191,7 +191,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "status",
-            sa.Enum(
+            postgresql.ENUM(
                 "queued",
                 "in_flight",
                 "completed",
