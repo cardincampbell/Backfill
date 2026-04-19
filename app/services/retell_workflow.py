@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.business import Location
+from app.models.business import Business, Location
 from app.models.common import (
     AssignmentStatus,
     CoverageCaseStatus,
@@ -28,7 +28,7 @@ from app.models.workforce import Employee
 from app.schemas.coverage import CoverageOfferResponseCreate
 from app.schemas.scheduling import PublishedShiftAmendmentWrite, ShiftCreate
 from app.services import businesses, communication_suppressions, coverage as coverage_service
-from app.services import delivery, llm_gateway, messaging, scheduler_sync, scheduling, shift_assignments, workforce
+from app.services import delivery, llm_gateway, messaging, reliability_coaching, scheduler_sync, scheduling, shift_assignments, workforce
 from app.config import settings
 
 _CALL_OUT_PATTERNS = (
@@ -1644,6 +1644,8 @@ async def process_outbound_conversation_completion(
         return {"status": "ignored", "reason": "not_call"}
     if str(conversation.direction or "").strip().lower() != "outbound":
         return {"status": "ignored", "reason": "not_outbound"}
+    if reliability_coaching.conversation_is_reliability_coaching(conversation):
+        return await reliability_coaching.process_coaching_conversation_completion(session, conversation)
 
     processing_state = _processing_state(conversation)
     metadata = conversation.metadata_json if isinstance(conversation.metadata_json, dict) else {}
@@ -2364,7 +2366,30 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         triggered_by=source,
         reason_code=reason_code,
     )
-    return {
+    coaching_result = None
+    if effective_employee_id is not None and source in reliability_coaching.RELIABILITY_COACHING_VOICE_BEHAVIORAL_SOURCES:
+        employee = await session.get(Employee, effective_employee_id)
+        if employee is not None:
+            business = await session.get(Business, shift.business_id)
+            if business is not None:
+                coaching_result = await reliability_coaching.record_behavioral_callout_and_maybe_trigger_coaching(
+                    session,
+                    business=business,
+                    employee=employee,
+                    shift=shift,
+                    source=source,
+                    reason_code=reason_code,
+                    occurred_at=datetime.now(timezone.utc),
+                    event_payload={
+                        "triggered_by": source,
+                        "coverage_case_id": (
+                            str(vacancy.get("coverage_case_id"))
+                            if vacancy.get("coverage_case_id") is not None
+                            else None
+                        ),
+                    },
+                )
+    result = {
         "status": "vacancy_created",
         "shift_id": str(vacancy["shift_id"]),
         "coverage_case_id": (
@@ -2376,6 +2401,9 @@ async def create_vacancy(session: AsyncSession, args: dict) -> dict:
         "used_published_amendment": used_published_amendment,
         "reason_code": reason_code,
     }
+    if coaching_result is not None:
+        result["reliability_coaching"] = coaching_result
+    return result
 
 
 async def send_onboarding_link(

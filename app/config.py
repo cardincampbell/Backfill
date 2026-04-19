@@ -168,6 +168,40 @@ class Settings:
         "BACKFILL_LABOR_RULE_PROPOSAL_AUTOQUEUE",
         "false",
     ).strip().lower() in {"1", "true", "yes", "on"}
+    reliability_coaching_global_enabled: bool = os.environ.get(
+        "BACKFILL_RELIABILITY_COACHING_GLOBAL_ENABLED",
+        "true",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    reliability_coaching_model: str = os.environ.get(
+        "BACKFILL_RELIABILITY_COACHING_MODEL",
+        os.environ.get("BACKFILL_LLM_DEFAULT_MODEL", ""),
+    ).strip()
+    reliability_coaching_prompt_version: str = os.environ.get(
+        "BACKFILL_RELIABILITY_COACHING_PROMPT_VERSION",
+        "v1",
+    ).strip()
+    reliability_coaching_callout_threshold_count: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_CALLOUT_THRESHOLD_COUNT", "2")
+    )
+    reliability_coaching_window_days: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_WINDOW_DAYS", "7")
+    )
+    reliability_coaching_max_attempts: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_MAX_ATTEMPTS", "2")
+    )
+    reliability_coaching_no_answer_cooldown_hours: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_NO_ANSWER_COOLDOWN_HOURS", "24")
+    )
+    reliability_coaching_quiet_hours_start_local_hour: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_QUIET_HOURS_START_LOCAL_HOUR", "20")
+    )
+    reliability_coaching_quiet_hours_end_local_hour: int = int(
+        os.environ.get("BACKFILL_RELIABILITY_COACHING_QUIET_HOURS_END_LOCAL_HOUR", "8")
+    )
+    retell_agent_id_coaching_outbound: str = os.environ.get(
+        "RETELL_AGENT_ID_COACHING_OUTBOUND",
+        os.environ.get("RETELL_AGENT_ID_OUTBOUND", os.environ.get("RETELL_AGENT_ID", "")),
+    ).strip()
     role_derivation_model: str = os.environ.get(
         "BACKFILL_ROLE_DERIVATION_MODEL",
         os.environ.get("BACKFILL_ROLE_NORMALIZATION_MODEL", ""),

@@ -247,6 +247,31 @@ class ScheduleApplyStatus(str, Enum):
     no_op = "no_op"
 
 
+class ReliabilityCoachingCaseStatus(str, Enum):
+    open = "open"
+    suppressed = "suppressed"
+    escalated = "escalated"
+    closed = "closed"
+
+
+class ReliabilityCoachingDeliveryStatus(str, Enum):
+    pending = "pending"
+    queued = "queued"
+    in_flight = "in_flight"
+    delivered = "delivered"
+    cooldown_blocked = "cooldown_blocked"
+    exhausted = "exhausted"
+
+
+class ReliabilityCoachingAttemptStatus(str, Enum):
+    queued = "queued"
+    in_flight = "in_flight"
+    completed = "completed"
+    no_answer = "no_answer"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 _STAFFING_TO_COMPATIBILITY_SHIFT_STATUS = {
     ShiftStaffingStatus.open: ShiftStatus.open,
     ShiftStaffingStatus.filling: ShiftStatus.filling,

@@ -50,6 +50,9 @@ class BusinessProfileUpdate(BaseSchema):
     auto_scheduler_fairness_mode: Optional[
         Literal["balanced_hours"]
     ] = None
+    reliability_coaching_style: Optional[
+        Literal["supportive", "direct", "firm"]
+    ] = None
 
 
 class BusinessRead(BaseSchema):

@@ -47,6 +47,12 @@ from app.models.labor_rules import (
 )
 from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.reliability import ReliabilityEvent, ReliabilitySnapshot
+from app.models.reliability_coaching import (
+    ReliabilityCoachingAttempt,
+    ReliabilityCoachingCase,
+    ReliabilityCoachingOutcome,
+    ReliabilityCoachingTrigger,
+)
 from app.models.role_taxonomy import (
     BusinessPlaceType,
     BusinessRoleArchetype,
@@ -111,6 +117,10 @@ __all__ = [
     "ProjectionCursor",
     "ReliabilityEvent",
     "ReliabilitySnapshot",
+    "ReliabilityCoachingAttempt",
+    "ReliabilityCoachingCase",
+    "ReliabilityCoachingOutcome",
+    "ReliabilityCoachingTrigger",
     "ReplayRun",
     "ProviderCallbackLog",
     "RetellConversation",

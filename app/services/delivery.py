@@ -24,6 +24,7 @@ from app.services import (
     coverage_transitions,
     messaging,
     outreach as outreach_service,
+    reliability_coaching,
     platform_events,
     retell as retell_service,
     worker_runtime,
@@ -163,6 +164,7 @@ class ActionableOfferContext:
 _DELIVERY_MAX_ATTEMPTS = 3
 COVERAGE_OFFER_OUTBOX_TOPIC = "coverage.offer.created"
 SCHEDULE_PUBLISH_NOTIFICATION_TOPIC = "schedule.week.published_notification"
+RELIABILITY_COACHING_OUTBOX_TOPIC = reliability_coaching.RELIABILITY_COACHING_OUTBOX_TOPIC
 RETELL_OUTBOUND_METADATA_CONTRACT_VERSION = "backfill_retell_outbound_metadata_v1"
 RETELL_OUTBOUND_DYNAMIC_VARIABLES_CONTRACT_VERSION = "backfill_retell_outbound_dynamic_variables_v1"
 RETELL_OUTBOUND_CALLBACK_CONTRACT_VERSION = "backfill_retell_callback_v1"
@@ -609,6 +611,102 @@ async def _send_schedule_publish_notification(
     )
 
 
+async def _send_reliability_coaching_attempt(
+    session: AsyncSession,
+    *,
+    outbox_event: OutboxEvent,
+) -> DeliverySendResult:
+    attempt = await reliability_coaching.load_coaching_attempt_for_outbox(
+        session,
+        attempt_id=outbox_event.aggregate_id,
+    )
+    if attempt is None:
+        return DeliverySendResult(
+            success=False,
+            provider="retell",
+            error_message="reliability_coaching_attempt_not_found",
+            retryable=False,
+            result_payload={"topic": outbox_event.topic},
+        )
+    coaching_case = attempt.coaching_case
+    employee = coaching_case.employee if coaching_case is not None else None
+    if coaching_case is None or employee is None:
+        return DeliverySendResult(
+            success=False,
+            provider="retell",
+            error_message="reliability_coaching_context_missing",
+            retryable=False,
+            result_payload={"topic": outbox_event.topic},
+        )
+    if coaching_case.case_status != reliability_coaching.ReliabilityCoachingCaseStatus.open:
+        return DeliverySendResult(
+            success=False,
+            provider="retell",
+            error_message="reliability_coaching_case_not_open",
+            retryable=False,
+            result_payload={"topic": outbox_event.topic},
+        )
+    if reliability_coaching.employee_has_reliability_coaching_opt_out(employee):
+        coaching_case.delivery_status = reliability_coaching.ReliabilityCoachingDeliveryStatus.exhausted
+        coaching_case.case_status = reliability_coaching.ReliabilityCoachingCaseStatus.closed
+        coaching_case.closed_at = datetime.now(timezone.utc)
+        return DeliverySendResult(
+            success=False,
+            provider="retell",
+            error_message="employee_reliability_coaching_opted_out",
+            retryable=False,
+            result_payload={"topic": outbox_event.topic},
+        )
+    if not employee.phone_e164:
+        return DeliverySendResult(
+            success=False,
+            provider="retell",
+            error_message="missing_destination_phone",
+            retryable=False,
+            result_payload={"topic": outbox_event.topic},
+        )
+
+    metadata = reliability_coaching.build_retell_coaching_metadata(
+        coaching_case=coaching_case,
+        attempt=attempt,
+        employee=employee,
+    )
+    dynamic_variables = reliability_coaching.build_retell_coaching_dynamic_variables(
+        coaching_case=coaching_case,
+        attempt=attempt,
+        employee=employee,
+    )
+    call_id = await retell_service.create_phone_call(
+        to_number=employee.phone_e164,
+        metadata=metadata,
+        dynamic_variables=dynamic_variables,
+        agent_id=settings.retell_agent_id_coaching_outbound or None,
+        agent_kind="outbound",
+    )
+    now = datetime.now(timezone.utc)
+    attempt.status = reliability_coaching.ReliabilityCoachingAttemptStatus.in_flight
+    attempt.provider = "retell"
+    attempt.provider_conversation_id = call_id
+    attempt.sent_at = now
+    attempt.delivered_at = now
+    attempt.attempt_metadata = {
+        **(attempt.attempt_metadata or {}),
+        "call_id": call_id,
+    }
+    coaching_case.delivery_status = reliability_coaching.ReliabilityCoachingDeliveryStatus.in_flight
+    return DeliverySendResult(
+        success=True,
+        provider="retell",
+        provider_message_id=call_id,
+        sent_at=now,
+        delivered_at=now,
+        result_payload={
+            "topic": outbox_event.topic,
+            "call_id": call_id,
+        },
+    )
+
+
 async def refresh_employee_reliability(
     session: AsyncSession,
     employee_id: UUID,
@@ -726,25 +824,32 @@ async def _coverage_outbox_business_keys(
         for event in events
         if event.aggregate_id is not None and event.topic == COVERAGE_OFFER_OUTBOX_TOPIC
     ]
-    if not offer_ids:
-        for event in events:
-            if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
-                raw_business_id = event.payload.get("business_id")
-                business_by_event_id[event.id] = raw_business_id
-        return business_by_event_id
-    result = await session.execute(
-        select(CoverageOffer.id, Shift.business_id)
-        .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
-        .join(Shift, CoverageCase.shift_id == Shift.id)
-        .where(CoverageOffer.id.in_(offer_ids))
-    )
-    business_by_offer_id = {
-        offer_id: business_id
-        for offer_id, business_id in result.all()
-    }
+    business_by_offer_id: dict[object, object | None] = {}
+    if offer_ids:
+        result = await session.execute(
+            select(CoverageOffer.id, Shift.business_id)
+            .join(CoverageCase, CoverageOffer.coverage_case_id == CoverageCase.id)
+            .join(Shift, CoverageCase.shift_id == Shift.id)
+            .where(CoverageOffer.id.in_(offer_ids))
+        )
+        business_by_offer_id = {
+            offer_id: business_id
+            for offer_id, business_id in result.all()
+        }
     for event in events:
         if event.topic == COVERAGE_OFFER_OUTBOX_TOPIC:
             business_by_event_id[event.id] = business_by_offer_id.get(event.aggregate_id)
+            continue
+        if event.topic == RELIABILITY_COACHING_OUTBOX_TOPIC:
+            attempt = await reliability_coaching.load_coaching_attempt_for_outbox(
+                session,
+                attempt_id=event.aggregate_id,
+            )
+            business_by_event_id[event.id] = (
+                attempt.coaching_case.business_id
+                if attempt is not None and attempt.coaching_case is not None
+                else None
+            )
             continue
         if event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
             business_by_event_id[event.id] = event.payload.get("business_id")
@@ -798,6 +903,66 @@ async def process_outbox_event(
     now: datetime | None = None,
 ) -> dict:
     reference_time = now or datetime.now(timezone.utc)
+
+    if outbox_event.topic == RELIABILITY_COACHING_OUTBOX_TOPIC:
+        try:
+            result = await _send_reliability_coaching_attempt(
+                session,
+                outbox_event=outbox_event,
+            )
+        except Exception as exc:
+            retryable = outbox_event.attempt_count < _DELIVERY_MAX_ATTEMPTS
+            error_message = str(exc)
+            if retryable:
+                worker_runtime.mark_outbox_event_retry(
+                    outbox_event,
+                    now=reference_time,
+                    next_attempt_at=reference_time + worker_runtime.retry_delay_for_attempt(outbox_event.attempt_count),
+                    error_message=error_message,
+                    result_payload={"topic": outbox_event.topic},
+                )
+            else:
+                worker_runtime.mark_outbox_event_cancelled(
+                    outbox_event,
+                    now=reference_time,
+                    error_message=error_message,
+                    result_payload={"topic": outbox_event.topic},
+                )
+            return {
+                "processed": True,
+                "sent": False,
+                "failed": True,
+                "error_message": error_message,
+                "result_payload": {"topic": outbox_event.topic},
+            }
+
+        if result.success:
+            worker_runtime.mark_outbox_event_sent(
+                outbox_event,
+                now=reference_time,
+                result_payload=result.result_payload,
+            )
+            return {
+                "processed": True,
+                "sent": True,
+                "failed": False,
+                "error_message": None,
+                "result_payload": result.result_payload,
+            }
+
+        worker_runtime.mark_outbox_event_cancelled(
+            outbox_event,
+            now=reference_time,
+            error_message=result.error_message or "reliability_coaching_delivery_failed",
+            result_payload=result.result_payload,
+        )
+        return {
+            "processed": True,
+            "sent": False,
+            "failed": True,
+            "error_message": result.error_message or "reliability_coaching_delivery_failed",
+            "result_payload": result.result_payload,
+        }
 
     if outbox_event.topic == SCHEDULE_PUBLISH_NOTIFICATION_TOPIC:
         try:
@@ -1139,7 +1304,7 @@ async def process_outbox_batch(
         session,
         now=reference_time,
         limit=limit,
-        topic=(COVERAGE_OFFER_OUTBOX_TOPIC, SCHEDULE_PUBLISH_NOTIFICATION_TOPIC),
+        topic=(COVERAGE_OFFER_OUTBOX_TOPIC, SCHEDULE_PUBLISH_NOTIFICATION_TOPIC, RELIABILITY_COACHING_OUTBOX_TOPIC),
         business_resolver=_coverage_outbox_business_keys,
     )
 

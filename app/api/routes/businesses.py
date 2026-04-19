@@ -27,6 +27,12 @@ from app.schemas.business import (
     RoleCreateResultRead,
     RoleRead,
 )
+from app.schemas.reliability_coaching import (
+    ReliabilityCoachingCaseCloseWrite,
+    ReliabilityCoachingCaseDetailRead,
+    ReliabilityCoachingCaseRead,
+    ReliabilityCoachingCaseSuppressWrite,
+)
 from app.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
 from app.schemas.settings import (
     BusinessShiftDefaultsRead,
@@ -36,6 +42,7 @@ from app.schemas.settings import (
 )
 from app.services import audit as audit_service
 from app.services import auth as auth_service, businesses, role_normalization, settings as settings_service
+from app.services import reliability_coaching
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
@@ -133,6 +140,136 @@ async def update_business(
         await session.commit()
         await session.refresh(business)
     return business
+
+
+@router.get(
+    "/{business_id}/reliability-coaching/cases",
+    response_model=list[ReliabilityCoachingCaseRead],
+)
+async def list_reliability_coaching_cases(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    employee_id: UUID | None = None,
+    limit: int = 50,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    coaching_cases = await reliability_coaching.list_business_coaching_cases(
+        session,
+        business_id=business_id,
+        employee_id=employee_id,
+        limit=limit,
+    )
+    return [reliability_coaching.coaching_case_read(coaching_case) for coaching_case in coaching_cases]
+
+
+@router.get(
+    "/{business_id}/reliability-coaching/cases/{coaching_case_id}",
+    response_model=ReliabilityCoachingCaseDetailRead,
+)
+async def get_reliability_coaching_case(
+    business_id: UUID,
+    coaching_case_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    coaching_case = await reliability_coaching.get_business_coaching_case(
+        session,
+        business_id=business_id,
+        coaching_case_id=coaching_case_id,
+    )
+    if coaching_case is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="reliability_coaching_case_not_found")
+    return reliability_coaching.coaching_case_detail_read(coaching_case)
+
+
+@router.post(
+    "/{business_id}/reliability-coaching/cases/{coaching_case_id}/suppress",
+    response_model=ReliabilityCoachingCaseDetailRead,
+)
+async def suppress_reliability_coaching_case(
+    business_id: UUID,
+    coaching_case_id: UUID,
+    payload: ReliabilityCoachingCaseSuppressWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    try:
+        coaching_case = await reliability_coaching.suppress_coaching_case(
+            session,
+            business_id=business_id,
+            coaching_case_id=coaching_case_id,
+            actor_user_id=auth_ctx.user.id,
+            reason_code=payload.reason_code,
+            note=payload.note,
+            expires_at=payload.expires_at,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await audit_service.append(
+        session,
+        event_name="reliability_coaching.case.suppressed",
+        target_type="reliability_coaching_case",
+        target_id=coaching_case.id,
+        business_id=business_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload=payload.model_dump(mode="json"),
+    )
+    await session.commit()
+    return reliability_coaching.coaching_case_detail_read(coaching_case)
+
+
+@router.post(
+    "/{business_id}/reliability-coaching/cases/{coaching_case_id}/close",
+    response_model=ReliabilityCoachingCaseDetailRead,
+)
+async def close_reliability_coaching_case(
+    business_id: UUID,
+    coaching_case_id: UUID,
+    payload: ReliabilityCoachingCaseCloseWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    try:
+        coaching_case = await reliability_coaching.close_coaching_case(
+            session,
+            business_id=business_id,
+            coaching_case_id=coaching_case_id,
+            reason_code=payload.reason_code,
+            note=payload.note,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await audit_service.append(
+        session,
+        event_name="reliability_coaching.case.closed",
+        target_type="reliability_coaching_case",
+        target_id=coaching_case.id,
+        business_id=business_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload=payload.model_dump(mode="json"),
+    )
+    await session.commit()
+    return reliability_coaching.coaching_case_detail_read(coaching_case)
 
 
 @router.get(

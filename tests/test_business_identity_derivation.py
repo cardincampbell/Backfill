@@ -462,6 +462,7 @@ async def test_update_business_profile_marks_brand_name_as_manual():
             cross_location_max_radius_miles=20,
             auto_scheduler_labor_rule_mode="hard_block",
             auto_scheduler_fairness_mode="balanced_hours",
+            reliability_coaching_style="direct",
         ),
     )
 
@@ -476,6 +477,7 @@ async def test_update_business_profile_marks_brand_name_as_manual():
     assert business.settings["coverage"]["cross_location_max_radius_miles"] == 20
     assert business.settings["auto_scheduler"]["labor_rule_mode"] == "hard_block"
     assert business.settings["auto_scheduler"]["fairness_mode"] == "balanced_hours"
+    assert business.settings["reliability_coaching"]["style"] == "direct"
 
 
 @pytest.mark.asyncio

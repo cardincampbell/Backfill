@@ -179,6 +179,7 @@ def test_get_location_settings_returns_defaults():
             "backfill_shifts_enabled": False,
             "backfill_shifts_launch_state": "off",
             "backfill_shifts_beta_eligible": False,
+            "week_start_day": None,
         }
     finally:
         app.dependency_overrides.clear()
@@ -392,6 +393,7 @@ def test_patch_location_settings_updates_location_and_audits():
     fake_session = FakeSettingsSession()
     business_id = uuid4()
     location_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(business_id=business_id)
     location = _make_location(business_id=business_id, location_id=location_id)
     fake_session.get_map[(Location, location_id)] = location
 
