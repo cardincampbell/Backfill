@@ -13,4 +13,4 @@ COPY . /app
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "if [ \"${BACKFILL_SERVICE_MODE:-api}\" = \"worker\" ]; then python -m app.worker; else uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}; fi"]
+CMD ["sh", "-c", "if [ \"${BACKFILL_SERVICE_MODE:-api}\" = \"worker\" ]; then python -m app.worker; elif [ \"${BACKFILL_SERVICE_MODE:-api}\" = \"migrate\" ]; then python -m app.migrate; else uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}; fi"]

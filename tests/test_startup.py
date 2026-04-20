@@ -45,7 +45,6 @@ def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> N
         SimpleNamespace(
             advisory_lock_database_url="postgresql://postgres:postgres@db.example.com:5432/backfill",
             sync_database_url="postgresql+psycopg://postgres:postgres@db.example.com:5432/backfill",
-            run_migrations_on_startup=True,
         ),
     )
     monkeypatch.setattr(bootstrap_module.psycopg, "connect", fake_connect)
@@ -63,28 +62,7 @@ def test_run_migrations_with_advisory_lock(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_run_startup_migrations_if_enabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        bootstrap_module,
-        "settings",
-        SimpleNamespace(run_migrations_on_startup=True),
-    )
-
-    await bootstrap_module.run_startup_migrations_if_enabled()
-
-
-@pytest.mark.asyncio
-async def test_run_startup_migrations_if_disabled_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        bootstrap_module,
-        "settings",
-        SimpleNamespace(run_migrations_on_startup=False),
-    )
-
-    await bootstrap_module.run_startup_migrations_if_enabled()
-
-
-def test_register_llm_adapters_delegates_to_adapter_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_initialize_runtime_only_registers_llm_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     monkeypatch.setattr(
@@ -93,6 +71,6 @@ def test_register_llm_adapters_delegates_to_adapter_registry(monkeypatch: pytest
         lambda: calls.append("register"),
     )
 
-    bootstrap_module.register_llm_adapters()
+    await bootstrap_module.initialize_runtime()
 
     assert calls == ["register"]
