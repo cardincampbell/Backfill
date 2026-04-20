@@ -558,6 +558,11 @@ async def test_create_schedule_run_persists_generated_shift_forecast_provenance(
     proposed_shift = schedule_run.proposed_shifts[0]
     assert proposed_shift.source_run_id == source_run_id
     assert proposed_shift.source_point_id == source_point_id
+    stored_generated_shift = schedule_run.inputs.generated_demand_payload["proposed_shifts"][0]
+    assert stored_generated_shift["location_id"] == str(location.id)
+    assert stored_generated_shift["role_id"] == str(role.id)
+    assert stored_generated_shift["source_run_id"] == str(source_run_id)
+    assert stored_generated_shift["source_point_id"] == str(source_point_id)
 
 
 @pytest.mark.asyncio
