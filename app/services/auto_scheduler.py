@@ -697,7 +697,7 @@ async def record_schedule_run_result(
     if run_metadata:
         schedule_run.run_metadata = {
             **(schedule_run.run_metadata or {}),
-            **dict(run_metadata),
+            **_mapping(run_metadata),
         }
     if started_at is not None:
         schedule_run.started_at = started_at
@@ -717,7 +717,7 @@ async def record_schedule_run_result(
                 decision_score=Decimal(str(item.get("decision_score", "0"))),
                 decision_rank=int(item.get("decision_rank", 0)),
                 assignment_payload=_result_payload_with_demand_metadata(
-                    dict(item.get("assignment_payload") or {}),
+                    _mapping(item.get("assignment_payload")),
                     proposed_shift=proposed_shift,
                 ),
             )
@@ -739,17 +739,17 @@ async def record_schedule_run_result(
                 candidate_rank=int(item.get("candidate_rank", 0)),
                 rejection_reason_codes=list(item.get("rejection_reason_codes") or []),
                 score_payload=_result_payload_with_demand_metadata(
-                    dict(item.get("score_payload") or {}),
+                    _mapping(item.get("score_payload")),
                     proposed_shift=proposed_shift,
                 ),
-                constraint_failure_payload=dict(item.get("constraint_failure_payload") or {}),
+                constraint_failure_payload=_mapping(item.get("constraint_failure_payload")),
             )
             session.add(row)
             schedule_run.rejections.append(row)
 
     if explanation is not None:
         current = schedule_run.explanation
-        payload = dict(explanation)
+        payload = _mapping(explanation)
         if current is None:
             current = ScheduleRunExplanation(
                 schedule_run_id=schedule_run.id,
@@ -770,7 +770,7 @@ async def record_schedule_run_result(
 
     if metrics is not None:
         current_metric = schedule_run.metrics
-        payload = dict(metrics)
+        payload = _mapping(metrics)
         if current_metric is None:
             current_metric = ScheduleRunMetric(
                 schedule_run_id=schedule_run.id,
@@ -1282,7 +1282,7 @@ def _mapping_value(
     if not isinstance(payload, Mapping):
         return {}
     value = payload.get(key)
-    return dict(value) if isinstance(value, Mapping) else {}
+    return _mapping(value)
 
 
 def _scheduler_choice(value: object, *, allowed: set[str], default: str) -> str:
@@ -1314,13 +1314,16 @@ def _optional_decimal(value: object) -> Decimal | None:
 
 
 def _mapping(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, Mapping) else {}
+    if not isinstance(value, Mapping):
+        return {}
+    normalized = json.loads(json.dumps(value, default=str))
+    return dict(normalized) if isinstance(normalized, dict) else {}
 
 
 def _sequence_mapping(value: object) -> list[dict[str, object]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
-    return [dict(item) for item in value if isinstance(item, Mapping)]
+    return [_mapping(item) for item in value if isinstance(item, Mapping)]
 
 
 def _normalized_row(row: Mapping[str, object]) -> dict[str, object]:

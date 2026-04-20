@@ -514,7 +514,10 @@ async def test_record_schedule_run_result_maps_generated_assignments_to_proposed
                 "employee_id": employee_id,
                 "decision_score": "0.88",
                 "decision_rank": 1,
-                "assignment_payload": {"source": "optimizer"},
+                "assignment_payload": {
+                    "source": "optimizer",
+                    "candidate_employee_id": employee_id,
+                },
             }
         ],
     )
@@ -523,6 +526,7 @@ async def test_record_schedule_run_result_maps_generated_assignments_to_proposed
     assert schedule_run.assignments[0].shift_id is None
     assert schedule_run.assignments[0].proposed_shift_id == schedule_run.proposed_shifts[0].id
     assert schedule_run.assignments[0].assignment_payload["demand_key"] == proposed_shift.demand_key
+    assert schedule_run.assignments[0].assignment_payload["candidate_employee_id"] == str(employee_id)
 
 
 @pytest.mark.asyncio
