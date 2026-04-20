@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,7 +13,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models.common import ScheduleApplyStatus, ScheduleRunStatus, ScheduleRunType
 
 if TYPE_CHECKING:
-    from app.models.business import Business, Location
+    from app.models.business import Business, Location, Role
     from app.models.scheduling import Shift
     from app.models.workforce import Employee
 
@@ -71,6 +71,10 @@ class ScheduleRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    proposed_shifts: Mapped[List["ScheduleRunProposedShift"]] = relationship(
+        back_populates="schedule_run",
+        cascade="all, delete-orphan",
+    )
     assignments: Mapped[List["ScheduleRunAssignment"]] = relationship(
         back_populates="schedule_run",
         cascade="all, delete-orphan",
@@ -110,6 +114,18 @@ class ScheduleRunInput(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     shift_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    fixed_shift_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    generated_demand_payload: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
         server_default=text("'{}'::jsonb"),
@@ -158,6 +174,58 @@ class ScheduleRunInput(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="inputs")
 
 
+class ScheduleRunProposedShift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "schedule_run_proposed_shifts"
+    __table_args__ = (
+        Index("ix_schedule_run_proposed_shifts_schedule_run_id_starts_at", "schedule_run_id", "starts_at"),
+        UniqueConstraint("schedule_run_id", "demand_key", name="uq_schedule_run_proposed_shifts_run_demand_key"),
+        UniqueConstraint(
+            "schedule_run_id",
+            "optimizer_shift_id",
+            name="uq_schedule_run_proposed_shifts_run_optimizer_shift_id",
+        ),
+    )
+
+    schedule_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schedule_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    applied_shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("shifts.id", ondelete="SET NULL")
+    )
+    location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL")
+    )
+    role_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("roles.id", ondelete="SET NULL")
+    )
+    demand_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    optimizer_shift_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False, server_default="historical_pattern")
+    generation_version: Mapped[str] = mapped_column(String(64), nullable=False, server_default="v1")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    headcount: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    premium_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    requires_manager_approval: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    generation_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+
+    schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="proposed_shifts")
+    applied_shift: Mapped[Optional["Shift"]] = relationship()
+    location: Mapped[Optional["Location"]] = relationship()
+    role: Mapped[Optional["Role"]] = relationship()
+
+
 class ScheduleRunAssignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "schedule_run_assignments"
     __table_args__ = (
@@ -175,6 +243,9 @@ class ScheduleRunAssignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("shifts.id", ondelete="SET NULL")
     )
+    proposed_shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("schedule_run_proposed_shifts.id", ondelete="SET NULL")
+    )
     employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL")
     )
@@ -189,6 +260,7 @@ class ScheduleRunAssignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="assignments")
     shift: Mapped[Optional["Shift"]] = relationship()
+    proposed_shift: Mapped[Optional["ScheduleRunProposedShift"]] = relationship()
     employee: Mapped[Optional["Employee"]] = relationship()
 
 
@@ -208,6 +280,9 @@ class ScheduleRunRejection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("shifts.id", ondelete="SET NULL")
+    )
+    proposed_shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("schedule_run_proposed_shifts.id", ondelete="SET NULL")
     )
     employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL")
@@ -234,6 +309,7 @@ class ScheduleRunRejection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     schedule_run: Mapped["ScheduleRun"] = relationship(back_populates="rejections")
     shift: Mapped[Optional["Shift"]] = relationship()
+    proposed_shift: Mapped[Optional["ScheduleRunProposedShift"]] = relationship()
     employee: Mapped[Optional["Employee"]] = relationship()
 
 

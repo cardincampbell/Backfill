@@ -112,6 +112,8 @@ async def test_create_replay_run_persists_metrics_and_hashes(monkeypatch):
                 }
             ]
         },
+        fixed_shift_payload={"shifts": []},
+        generated_demand_payload={"proposed_shifts": [], "metadata": {}},
     )
     schedule_run.assignments = [
         ScheduleRunAssignment(

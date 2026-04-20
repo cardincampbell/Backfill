@@ -83,6 +83,8 @@ def _schedule_run_detail_fixture() -> ScheduleRun:
     schedule_run.inputs = ScheduleRunInput(
         schedule_run_id=schedule_run.id,
         shift_payload={"shifts": [{"shift_id": str(uuid4())}]},
+        fixed_shift_payload={"shifts": [{"shift_id": str(uuid4())}]},
+        generated_demand_payload={"proposed_shifts": [], "metadata": {}},
         employee_payload={"employees": [{"employee_id": str(uuid4())}]},
         availability_payload={"eligible_employee_ids_by_shift": {}},
         policy_payload={"publish_mode": "draft_only"},
@@ -95,6 +97,7 @@ def _schedule_run_detail_fixture() -> ScheduleRun:
         created_at=schedule_run.created_at,
         updated_at=schedule_run.updated_at,
     )
+    schedule_run.proposed_shifts = []
     schedule_run.assignments = [
         ScheduleRunAssignment(
             id=uuid4(),

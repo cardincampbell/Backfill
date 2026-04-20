@@ -36,6 +36,7 @@ def _schedule_run_detail_read(schedule_run) -> ScheduleRunDetailRead:
         {
             **ScheduleRunRead.model_validate(schedule_run).model_dump(),
             "inputs": schedule_run.inputs,
+            "proposed_shifts": list(schedule_run.proposed_shifts or []),
             "assignments": list(schedule_run.assignments or []),
             "rejections": list(schedule_run.rejections or []),
             "explanation": schedule_run.explanation,

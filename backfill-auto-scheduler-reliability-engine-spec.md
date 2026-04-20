@@ -8,7 +8,9 @@ This spec assumes:
 
 - Backfill is a scheduling and coverage platform, not a payroll system.
 - Labor rules primarily influence prioritization and assignment quality.
-- The first auto-scheduler release should optimize assignment for known future shifts, not generate labor demand from scratch.
+- The currently shipped foundation optimizes assignment for known future shifts.
+- The next predictive-scheduling extension must add demand generation for partially or fully empty weeks.
+- Long-term architecture must support true labor forecasting without collapsing forecast, shift shaping, and assignment into one service.
 - The system must be auditable, replayable, and safe to roll out incrementally.
 
 ## Product Goal
@@ -43,19 +45,24 @@ LLMs should not directly decide production assignments.
 
 Do not build "auto scheduler" as one monolithic service.
 
-The system should be split into two separate problems:
+The long-term system should be split into three separate problems:
 
-1. Demand generation
-- How many shifts should exist?
-- What roles, locations, start times, and durations are needed?
+1. Labor forecasting
+- How much staffing demand is likely needed by role, location, and daypart?
+- What headcount or labor-hours envelope is required?
 
-2. Assignment optimization
-- Given a set of required shifts, which employees should be assigned?
+2. Shift shaping / demand generation
+- How should demand be converted into actual proposed shifts?
+- What roles, locations, start times, durations, and headcounts should be created?
+
+3. Assignment optimization
+- Given a set of required or proposed shifts, which employees should be assigned?
 
 Release order:
 
-- Build assignment optimization first.
-- Build demand forecasting later.
+- Build assignment optimization foundation first.
+- Build pattern-based shift shaping next.
+- Build true labor forecasting later as an upstream producer for shift shaping.
 
 ## First Release Scope
 
@@ -68,7 +75,7 @@ Authoritative rollout definition:
 V1 should support:
 
 - existing future shifts as optimizer input
-- weekly draft schedule generation
+- draft assignment generation for authored future shifts
 - explicit draft apply flow from `schedule_run` to draft schedule state
 - explanation and audit persistence
 - minimal business policy controls required by the optimizer
@@ -83,7 +90,133 @@ V1 should not include:
 - full operator-facing replay/backtesting workflows
 - payroll-grade legal interpretation beyond scheduling policy
 
+The next predictive-scheduling extension after V1 should support:
+
+- mixed authored and generated weekly demand
+- fully empty unpublished weeks
+- ghost schedule generation for the full week
+- apply semantics that create draft shifts before applying assignments
+
+This extension should still be pattern-based first, not model-forecast-first.
+
 ## High-Level Architecture
+
+### 0. Demand Pipeline
+
+The long-term upstream architecture is:
+
+1. `labor_forecasting`
+- produces demand points, not shifts
+- examples:
+  - `Monday 07:00-15:00, role=server, headcount=3`
+  - `Friday 16:00-22:00, role=barista, labor_hours=18`
+
+2. `shift_shaping`
+- converts demand points into actual proposed shifts
+- may also operate without a forecast by using:
+  - historical schedule patterns
+  - location templates
+  - business defaults
+
+3. `assignment_optimization`
+- assigns employees to fixed and generated shifts
+
+Do not let forecasting create assignments directly.
+Do not let assignment optimization guess demand directly.
+Do not let one service forecast, shape, assign, and publish in a single pass.
+
+### 0.1 Fixed vs Generated Demand
+
+The system must support mixed weeks.
+
+That means:
+
+- manually authored draft shifts remain fixed demand
+- generated proposed shifts fill gaps in the planning window
+- empty weeks are just a special case of "no fixed demand"
+
+Do not branch only on:
+
+- "week empty" -> generate demand
+- "week not empty" -> optimize existing shifts
+
+Most real weeks will contain a mix of:
+
+- manually authored shifts
+- previously generated shifts
+- still-missing demand
+
+The orchestrator should merge:
+
+- fixed demand
+- generated demand
+- assignment feasibility
+
+into one scheduling run.
+
+### 0.2 Mixed-Week Netting Rule
+
+Before predictive scheduling implementation begins, the mixed-week collision rule must be explicit and deterministic.
+
+V1 rule:
+
+- generated demand is netted against existing authored demand by exact normalized demand envelope, not by loose overlap
+
+The normalized demand envelope is the unit identified by `demand_key`.
+
+For V1, `demand_key` must encode:
+
+- `business_id`
+- `location_id`
+- `role_id`
+- local service date
+- normalized local `window_start`
+- normalized local `window_end`
+
+Netting behavior:
+
+- manually authored draft shifts are normalized into authored demand envelopes
+- generated demand is reduced only by authored demand that resolves to the same `demand_key`
+- remaining generated headcount is:
+  - `max(0, target_headcount - authored_headcount_for_same_demand_key)`
+
+Partial headcount rule:
+
+- if authored demand for the same `demand_key` covers part of the target headcount, only the remaining headcount is generated
+- if authored demand for the same `demand_key` meets or exceeds the target headcount, no generated demand is created for that envelope
+
+Partial overlap rule:
+
+- authored shifts that only partially overlap a generated envelope but do not normalize to the same `demand_key` do not reduce generated demand in V1
+- those shifts remain fixed demand and are handled separately by assignment optimization
+
+This is intentionally conservative.
+
+Do not implement loose overlap-based netting in V1.
+Do not attempt envelope splitting in V1.
+
+Future extension:
+
+- a later version may add overlap-aware envelope splitting or daypart coverage reconciliation
+- that should be introduced as a versioned demand-shaping rule, not as implicit behavior drift
+
+### 0.3 Predictive Scheduling V1
+
+The first predictive weekly scheduling release should be:
+
+- pattern-based demand generation
+- forecast-compatible architecture
+- no true labor forecasting model yet
+
+Inputs for pattern-based demand generation:
+
+- previous published week
+- last 2-4 same weekdays
+- location templates / defaults
+- historical role/daypart patterns
+- business hours and operating envelopes
+
+This produces a full ghost week quickly without blocking on a dedicated forecasting stack.
 
 ### 1. Scheduling Inputs Layer
 
@@ -537,6 +670,135 @@ Each run should persist:
 - objective weights
 - policy version
 
+## Predictive Demand Extension
+
+The current optimizer foundation handles only existing authored shifts.
+
+To support predictive weekly scheduling, the backend must add first-class proposed demand and proposed shifts.
+
+### Demand source types
+
+Demand must carry explicit source identity.
+
+Allowed source types:
+
+- `manual_authored`
+- `historical_pattern`
+- `template`
+- `forecast`
+
+This is required for:
+
+- auditability
+- apply idempotency
+- later forecast substitution
+- UI ghost-schedule explanation
+
+### schedule_run_inputs extension
+
+Do not overload `shift_payload` forever.
+
+Long-term the run input contract should distinguish:
+
+- `fixed_shift_payload`
+  - authored draft shifts already present in the planning window
+- `generated_demand_payload`
+  - upstream demand units produced by historical pattern, template, or forecast logic
+- `employee_payload`
+- `availability_payload`
+- `policy_payload`
+- `labor_payload`
+- `reliability_payload`
+- `source_metadata`
+
+For incremental rollout, the current `shift_payload` may remain as a compatibility field, but architecturally it should mean:
+
+- fixed authored demand only
+
+### schedule_run_proposed_shifts
+
+Add a first-class persisted model for generated proposed shifts.
+
+Purpose:
+
+- store generated weekly demand at the shift level
+- support empty or partially authored weeks
+- give apply a deterministic target
+- give the UI a stable ghost-schedule surface
+
+Fields:
+
+- `id`
+- `schedule_run_id`
+- `location_id`
+- `role_id`
+- `starts_at`
+- `ends_at`
+- `headcount`
+- `demand_key`
+- `source_type`
+  - `historical_pattern`
+  - `template`
+  - `forecast`
+- `source_run_id` nullable
+- `source_point_id` nullable
+- `generation_strategy`
+- `generation_version`
+- `generation_payload`
+- `created_at`
+
+Rules:
+
+- `demand_key` must be stable for the planning scope
+- generated shifts must be replayable and diffable
+- the optimizer consumes proposed shifts alongside fixed authored shifts
+
+### labor_forecast_runs
+
+This is a future subsystem, but the architecture should reserve it now.
+
+Purpose:
+
+- immutable forecast run header
+
+Fields:
+
+- `id`
+- `business_id`
+- `location_id` nullable
+- `planning_window_start`
+- `planning_window_end`
+- `forecast_model_version`
+- `feature_snapshot_hash`
+- `status`
+- `forecast_metadata`
+- `created_at`
+- `completed_at`
+
+### labor_forecast_points
+
+Purpose:
+
+- normalized demand units, not shifts
+
+Fields:
+
+- `id`
+- `labor_forecast_run_id`
+- `location_id`
+- `role_id`
+- `window_start`
+- `window_end`
+- `predicted_headcount`
+- `predicted_labor_hours` nullable
+- `confidence`
+- `forecast_payload`
+
+Rules:
+
+- forecast points never assign employees directly
+- shift shaping converts forecast points into `schedule_run_proposed_shifts`
+
 ## Assignment Optimizer V1
 
 ### Initial scope
@@ -640,15 +902,49 @@ Conflict behavior:
 Draft mutation semantics:
 
 - successful apply writes proposed draft assignments for the run's chosen assignments
+- successful apply may also create draft shifts from `schedule_run_proposed_shifts`
 - assignments written by apply should carry `assigned_via = auto_scheduler`
 - draft mutation metadata should include `schedule_run_id` and `schedule_run_apply_id`
 - apply may clear and replace prior auto-scheduler draft assignments within scope, but must not mutate manually authored assignments outside the run's target scope
 - manually authored draft assignments that already existed at run generation time are treated as locked inputs and excluded from auto-scheduler replacement
 - manually authored draft assignment changes made after run generation make the run stale and require a fresh run before apply
 
+Additional rules for generated demand:
+
+- generated draft shifts created by apply must carry metadata:
+  - `created_via = auto_scheduler_demand`
+  - `schedule_run_id`
+  - `schedule_run_apply_id`
+  - `demand_key`
+  - `source_type`
+- if a generated draft shift with the same `demand_key` already exists for the same run/apply scope, apply must reuse or no-op rather than duplicate
+- manually authored draft shifts in scope are preserved as fixed demand and are never replaced by generated demand
+- mixed weeks must support:
+  - preserving authored draft shifts
+  - generating missing shifts
+  - assigning employees across both sets
+
+### Predictive Scheduling Apply Semantics
+
+For predictive weekly scheduling, apply becomes:
+
+1. validate target scope is not stale
+2. preserve locked manual draft shifts
+3. materialize `schedule_run_proposed_shifts` into draft shifts where needed
+4. apply chosen assignments to:
+  - existing authored draft shifts
+  - created generated draft shifts
+
+This must remain:
+
+- draft-only
+- idempotent
+- fail-closed on stale authoring changes
+- auditable via `schedule_run_applies`
+
 ## Demand Forecasting
 
-Demand forecasting is a separate system and should come later.
+Demand forecasting is a separate system and should come after pattern-based predictive scheduling, but the architecture should accommodate it now.
 
 Future demand forecasting inputs may include:
 
@@ -660,7 +956,9 @@ Future demand forecasting inputs may include:
 - events / local seasonality
 - labor cost targets
 
-But do not block V1 assignment optimization on this.
+Do not block pattern-based predictive scheduling on this.
+Do not let lack of forecasting delay empty-week ghost schedules.
+Do design the demand pipeline now so forecasts can become an upstream producer later.
 
 ## Replay / Backtesting Harness
 
@@ -727,7 +1025,7 @@ Authoritative sequencing:
 
 - `schedule_runs` schema and persistence
 - assignment optimizer only
-- draft schedule generation
+- draft assignment generation for authored future shifts
 - draft apply / commit contract
 - explanation payloads
 - minimal business policy controls required by the optimizer
@@ -748,15 +1046,23 @@ Authoritative sequencing:
 
 ### Phase 4
 
+- predictive weekly scheduling
+- pattern-based demand generation
+- `schedule_run_proposed_shifts`
+- mixed fixed/generated demand orchestration
+- apply semantics that create draft shifts plus assignments
+
+### Phase 5
+
 - expanded business policy controls
 - fairness policy controls
 - hard vs soft labor-rule configuration
 
-### Phase 5
+### Phase 6
 
 - LLM sidecar for policy translation and explanations
 
-### Phase 6
+### Phase 7
 
 - demand forecasting
 - forecast-to-shift generation
@@ -854,12 +1160,77 @@ Once those are fixed:
 - Codex owns A + D
 - Developer 1 owns B + C
 
+## Predictive Scheduling Extension Split
+
+The next predictive-scheduling build should also be parallelized with explicit ownership.
+
+### Workstream E: Demand Pipeline Contracts + Apply Semantics
+
+Owner: Codex / primary implementation owner
+
+Scope:
+
+- `schedule_run_proposed_shifts`
+- fixed-vs-generated demand contract
+- `schedule_run_inputs` extension for generated demand
+- demand-key identity rules
+- apply semantics for creating draft shifts from generated demand
+- idempotency and ownership metadata for generated shifts
+- future `labor_forecast_runs` / `labor_forecast_points` contract design
+
+This remains the critical architectural seam because it defines how forecasting can plug in later without breaking apply or replay.
+
+### Workstream F: Pattern-Based Demand Generation + Ghost Schedule UX
+
+Owner: Developer 1
+
+Scope:
+
+- historical-pattern demand generation logic
+- mixed-week ghost schedule generation
+- operator-facing empty-week and partial-week UI behavior
+- visual distinction between:
+  - fixed authored shifts
+  - generated proposed shifts
+- explanation surfaces for generated demand
+
+This can proceed in parallel once Workstream E locks:
+
+- `schedule_run_proposed_shifts`
+- generated demand payload shape
+- demand-key contract
+- apply semantics for generated shifts
+
+### Workstream G: Forecasting Subsystem Design + Later Backend Foundation
+
+Owner: Codex / primary implementation owner
+
+Scope:
+
+- `labor_forecast_runs`
+- `labor_forecast_points`
+- forecast-to-shift interface contract
+- feature snapshot and model-version audit contract
+- non-LLM forecasting boundaries
+
+This is intentionally upstream and should not block Workstream F's pattern-based weekly ghost scheduling release.
+
+### Predictive Extension Parallelization Rules
+
+- Codex owns the contracts that affect apply, replay, and future forecast compatibility
+- Developer 1 owns pattern-based demand generation and the ghost schedule UI layer
+- no dual ownership of generated-shift persistence
+- no dual ownership of apply semantics for generated shifts
+- no UI-driven redefinition of demand-key or source-type contracts
+
 ## Repo Touchpoints
 
 New services:
 
 - `app/services/auto_scheduler.py`
-- `app/services/schedule_optimizer.py`
+- `app/services/auto_scheduler_assignment.py`
+- `app/services/shift_shaping.py`
+- `app/services/labor_forecasting.py`
 - `app/services/reliability_engine.py`
 - `app/services/schedule_replay.py`
 - `app/services/schedule_policy.py`
@@ -868,6 +1239,7 @@ New models:
 
 - `app/models/auto_scheduler.py`
 - `app/models/reliability.py`
+- `app/models/labor_forecasting.py`
 
 Existing seams to reuse:
 
@@ -881,6 +1253,7 @@ Existing seams to reuse:
 
 - no direct LLM assignment authority
 - no monolithic "forecast + assign + publish" service
+- no forecast module that writes shifts and assignments directly
 - no live auto-publish in v1
 - all runs are persisted and replayable
 - hard vs soft rules are explicit policy
@@ -895,6 +1268,7 @@ The right first system is:
 - schedule run persistence from day one
 - reliability events and snapshots early
 - offline replay before live rollout
-- demand forecasting later
+- pattern-based predictive scheduling next
+- labor forecasting later as an upstream input to shift shaping
 
 That gives Backfill a durable scheduling engine and a defensible data moat without collapsing into an opaque AI scheduling black box.
