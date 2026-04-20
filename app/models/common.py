@@ -272,6 +272,14 @@ class ReliabilityCoachingAttemptStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class LaborForecastRunStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 _STAFFING_TO_COMPATIBILITY_SHIFT_STATUS = {
     ShiftStaffingStatus.open: ShiftStatus.open,
     ShiftStaffingStatus.filling: ShiftStatus.filling,

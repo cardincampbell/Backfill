@@ -45,6 +45,7 @@ from app.models.labor_rules import (
     LaborRuleUpdateProposal,
     LocationLaborRuleResolution,
 )
+from app.models.labor_forecasting import LaborForecastPoint, LaborForecastRun
 from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.reliability import ReliabilityEvent, ReliabilitySnapshot
 from app.models.reliability_coaching import (
@@ -101,6 +102,8 @@ __all__ = [
     "FeedProjection",
     "LlmGeneration",
     "LaborIndustryProfile",
+    "LaborForecastPoint",
+    "LaborForecastRun",
     "LaborRuleProfile",
     "LaborRuleProfileVersion",
     "LaborRuleResolutionRun",

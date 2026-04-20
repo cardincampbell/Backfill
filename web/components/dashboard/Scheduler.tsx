@@ -132,7 +132,13 @@ import {
 } from './shift-defaults';
 
 /* ─── Types ─── */
-interface Employee { id: string; name: string; avatar: string; role: string; }
+interface Employee {
+  id: string;
+  name: string;
+  avatar: string;
+  role: string;
+  kind?: 'employee' | 'open_bucket';
+}
 interface Shift {
   id: string;
   employeeId: string | null;
@@ -156,6 +162,9 @@ interface Shift {
   predictivePreview?: boolean;
   predictiveDecisionScore?: number | null;
   predictiveRunId?: string | null;
+  predictiveSourceType?: string | null;
+  predictiveGeneratedShift?: boolean;
+  predictiveDemandKey?: string | null;
 }
 
 type DayWeather = {
@@ -232,6 +241,10 @@ function isHistoricalOperationalArtifact(
 
 function employeeRowShifts(shifts: Shift[], employeeId: string) {
   return shifts.filter((shift) => shift.displayEmployeeId === employeeId);
+}
+
+function openShiftBucketId(roleId: string) {
+  return `open:${roleId}`;
 }
 
 function isHistoricalCancelledShift(
@@ -510,6 +523,7 @@ function boardWorkerToSchedulerEmployee(
       ?? employee.primary_role_name
       ?? employee.role_names[0]
       ?? 'Unassigned',
+    kind: 'employee',
   };
 }
 
@@ -746,6 +760,7 @@ function DraggableShiftChip({
   const theme = getSchedulerTheme(dark);
   const isHistoricalShift = shift.historicalDisplay;
   const isPredictivePreview = Boolean(shift.predictivePreview);
+  const isPredictiveGeneratedShift = Boolean(shift.predictiveGeneratedShift);
   const isCancelledHistory = isHistoricalCancelledShift(shift);
   const hasHistoricalOperationalArtifact = isHistoricalOperationalArtifact(shift);
   const hasOperationalBreak = isOperationalScheduleBreak(shift);
@@ -827,9 +842,9 @@ function DraggableShiftChip({
           canInteract ? (canDragChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer') : 'cursor-not-allowed'
         } ${
           isDragging ? 'opacity-40 scale-95' : canInteract ? 'hover:shadow-md' : 'opacity-90'
-        } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : isPredictivePreview ? 'ring-1 ring-dashed ring-[#B0B8C1]' : ''} ${isPredictivePreview ? 'opacity-50' : ''}`}
+        } ${isHistoricalShift ? 'ring-2 ring-[#9CA3AF]' : hasOperationalBreak ? 'ring-2 ring-[#DC2626]' : hasScheduleBreak ? 'ring-2 ring-[#E5484D]' : isPredictiveGeneratedShift ? 'ring-1 ring-dashed ring-[#635BFF]' : isPredictivePreview ? 'ring-1 ring-dashed ring-[#B0B8C1]' : ''} ${isPredictivePreview ? 'opacity-50' : ''}`}
         style={{ minHeight: 52 }}
-        title={isHistoricalShift ? 'Historical shift' : isPredictivePreview ? 'Predictive preview shift' : undefined}
+        title={isHistoricalShift ? 'Historical shift' : isPredictiveGeneratedShift ? 'Generated predictive shift' : isPredictivePreview ? 'Predictive preview shift' : undefined}
       >
         <div className="absolute inset-0 rounded-lg" style={{ background: shiftTintColor, opacity: isHistoricalShift || hasOperationalBreak ? 0.12 : isPredictivePreview ? 0.04 : 0.08 }} />
         <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: shiftTintColor, opacity: isPredictivePreview ? 0.4 : 1 }} />
@@ -849,7 +864,7 @@ function DraggableShiftChip({
               <span className={`text-[10px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 560, color: shiftLabelColor }}>
                 {shiftLabel}
               </span>
-              {isPredictivePreview ? <Zap size={9} className="shrink-0 text-[#635BFF]" /> : null}
+              {isPredictivePreview ? <Zap size={9} className={`shrink-0 ${isPredictiveGeneratedShift ? 'text-[#00B893]' : 'text-[#635BFF]'}`} /> : null}
             </div>
             <p className={`text-[9px] mt-0.5 ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : theme.textMuted}`} style={{ fontWeight: 420, color: mutedTextColor }}>
               {formatHour(shift.startHour)} – {formatHour(shift.endHour)}
@@ -865,6 +880,11 @@ function DraggableShiftChip({
               ) : null}
               {ShiftStateIcon && shiftStateColor ? (
                 <ShiftStateIcon size={8} className="shrink-0" style={{ color: shiftStateColor }} />
+              ) : null}
+              {isPredictiveGeneratedShift ? (
+                <span className="rounded-full bg-[#00B893]/10 px-1 py-[1px] text-[8px] uppercase tracking-[0.04em] text-[#00B893]">
+                  Generated
+                </span>
               ) : null}
             </div>
           </div>
@@ -1471,16 +1491,14 @@ function SchedulerContent({
   const weekPublishState = publishSummary?.state ?? 'draft';
   const isWeekPublished = weekPublishState === 'published';
   const isWeekAmended = weekPublishState === 'amended';
-  const hasDraftShifts = useMemo(
-    () => shifts.some((shift) => shift.lifecycleStatus === 'draft'),
-    [shifts],
-  );
-  const hasAssignedDraftShifts = useMemo(
+  const hasAutoSchedulerDraftAssignments = useMemo(
     () =>
-      shifts.some(
-        (shift) => shift.lifecycleStatus === 'draft' && Boolean(shift.employeeId),
+      (board?.shifts ?? []).some(
+        (shift) =>
+          shift.lifecycle_status === 'draft'
+          && shift.current_assignment?.assigned_via === 'auto_scheduler',
       ),
-    [shifts],
+    [board?.shifts],
   );
   const predictiveScopeFingerprint = useMemo(
     () =>
@@ -1510,8 +1528,7 @@ function SchedulerContent({
     board
       && weekPublishState === 'draft'
       && isFuturePreviewWeek
-      && hasDraftShifts
-      && !hasAssignedDraftShifts
+      && !hasAutoSchedulerDraftAssignments
       && !dismissedPredictiveWeeks.has(board.week_start_date),
   );
 
@@ -1583,11 +1600,37 @@ function SchedulerContent({
     );
   }, [predictiveRun]);
 
+  const predictiveAssignmentsByProposedShiftId = useMemo(() => {
+    if (!predictiveRun || predictiveRun.status !== 'completed') {
+      return new Map<string, PredictiveScheduleRun['assignments'][number]>();
+    }
+    return new Map(
+      predictiveRun.assignments
+        .filter(
+          (assignment): assignment is PredictiveScheduleRun['assignments'][number] & {
+            proposed_shift_id: string;
+          } => Boolean(assignment.proposed_shift_id),
+        )
+        .map((assignment) => [assignment.proposed_shift_id, assignment]),
+    );
+  }, [predictiveRun]);
+
+  const predictiveGeneratedShiftCount = predictiveRun?.proposed_shifts?.length ?? 0;
+  const predictiveGeneratedAssignmentsCount = predictiveAssignmentsByProposedShiftId.size;
+  const predictiveGeneratedUnassignedCount = Math.max(
+    0,
+    predictiveGeneratedShiftCount - predictiveGeneratedAssignmentsCount,
+  );
+
   const predictivePreviewActive = Boolean(
     predictivePreviewEligible
       && predictiveRun
       && predictiveRun.status === 'completed'
-      && predictiveAssignmentsByShiftId.size > 0,
+      && (
+        predictiveAssignmentsByShiftId.size > 0
+        || predictiveAssignmentsByProposedShiftId.size > 0
+        || predictiveGeneratedShiftCount > 0
+      ),
   );
   const predictiveBannerVisible = Boolean(
     predictivePreviewEligible
@@ -1600,13 +1643,21 @@ function SchedulerContent({
   );
 
   const schedulerSourceShifts = useMemo(() => {
-    if (!predictivePreviewActive) {
+    if (!predictivePreviewActive || !board) {
       return shifts;
     }
     const employeeNamesById = new Map(
       businessEmployees.map((employee) => [employee.id, employee.full_name]),
     );
-    return shifts.map((shift) => {
+    const roleNamesById = new Map<string, string>();
+    (board?.roles ?? []).forEach((role) => {
+      roleNamesById.set(role.role_id, role.role_name);
+    });
+    shifts.forEach((shift) => {
+      roleNamesById.set(shift.roleId, shift.role);
+    });
+
+    const authoredShifts = shifts.map((shift) => {
       const predictiveAssignment = predictiveAssignmentsByShiftId.get(shift.id);
       if (!predictiveAssignment?.employee_id) {
         return shift;
@@ -1622,9 +1673,75 @@ function SchedulerContent({
         predictivePreview: true,
         predictiveDecisionScore: predictiveAssignment.decision_score,
         predictiveRunId: predictiveRun?.id ?? null,
+        predictiveSourceType: 'manual_authored',
+        predictiveGeneratedShift: false,
+        predictiveDemandKey:
+          typeof predictiveAssignment.assignment_payload?.demand_key === 'string'
+            ? predictiveAssignment.assignment_payload.demand_key
+            : null,
       } satisfies Shift;
     });
-  }, [businessEmployees, predictiveAssignmentsByShiftId, predictivePreviewActive, predictiveRun?.id, shifts]);
+    const generatedShifts: Shift[] = [];
+    (predictiveRun?.proposed_shifts ?? []).forEach((proposedShift) => {
+        const startsAt = getZonedParts(proposedShift.starts_at, proposedShift.timezone);
+        const endsAt = getZonedParts(proposedShift.ends_at, proposedShift.timezone);
+        const day = dayDifference(board?.week_start_date ?? '', startsAt.dateKey);
+        if (day < 0 || day > 6) {
+          return;
+        }
+        const startHour = startsAt.hour + startsAt.minute / 60;
+        const crossesIntoNextDay = dayDifference(startsAt.dateKey, endsAt.dateKey) > 0;
+        const endHourBase = endsAt.hour + endsAt.minute / 60;
+        const endHour = crossesIntoNextDay && endHourBase <= startHour ? endHourBase + 24 : endHourBase;
+        const preset = inferShiftPreset(startHour, endHour, shiftDefaults);
+        const predictiveAssignment = predictiveAssignmentsByProposedShiftId.get(proposedShift.id);
+        const employeeId = predictiveAssignment?.employee_id ?? null;
+        const roleName = roleNamesById.get(proposedShift.role_id ?? '') ?? 'Generated shift';
+        generatedShifts.push({
+          id: `predictive:${proposedShift.id}`,
+          employeeId,
+          displayEmployeeId: employeeId ?? openShiftBucketId(proposedShift.role_id ?? roleName),
+          displayEmployeeName: employeeId
+            ? (employeeNamesById.get(employeeId) ?? 'Assigned employee')
+            : 'Open shifts',
+          currentAssignmentId: null,
+          lifecycleStatus: 'draft',
+          staffingStatus: employeeId ? 'covered' : 'open',
+          amendedFromPublished: false,
+          amendmentReasonCode: null,
+          scheduleBreak: false,
+          historicalDisplay: false,
+          roleId: proposedShift.role_id ?? '',
+          day,
+          startHour,
+          endHour,
+          role: roleName,
+          color: roleColor(roleName),
+          presetKey: preset.presetKey,
+          presetLabel: preset.presetLabel,
+          predictivePreview: true,
+          predictiveDecisionScore: predictiveAssignment?.decision_score ?? null,
+          predictiveRunId: predictiveRun?.id ?? null,
+          predictiveSourceType: proposedShift.source_type,
+          predictiveGeneratedShift: true,
+          predictiveDemandKey: proposedShift.demand_key,
+        } satisfies Shift);
+      });
+
+    return [...authoredShifts, ...generatedShifts];
+  }, [
+    board,
+    board?.roles,
+    board?.week_start_date,
+    businessEmployees,
+    predictiveAssignmentsByProposedShiftId,
+    predictiveAssignmentsByShiftId,
+    predictivePreviewActive,
+    predictiveRun?.id,
+    predictiveRun?.proposed_shifts,
+    shiftDefaults,
+    shifts,
+  ]);
 
   const schedulerEmployeeIds = useMemo(() => {
     const next = new Set<string>();
@@ -1691,10 +1808,16 @@ function SchedulerContent({
           name: fallbackName,
           avatar: buildAvatarDataUri(fallbackName),
           role: assignedRole,
+          kind: employeeId.startsWith('open:') ? 'open_bucket' : 'employee',
         } satisfies Employee;
       })
       .filter((employee): employee is Employee => employee !== null)
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .sort((left, right) => {
+        if ((left.kind ?? 'employee') !== (right.kind ?? 'employee')) {
+          return left.kind === 'open_bucket' ? 1 : -1;
+        }
+        return left.name.localeCompare(right.name);
+      });
   }, [board?.shifts, boardWorkersById, businessEmployees, schedulerEmployeeIds, schedulerSourceShifts]);
 
   const activeEmployees = schedulerEmployees;
@@ -1751,6 +1874,8 @@ function SchedulerContent({
         color:
           shift.historicalDisplay
             ? shift.color
+            : shift.predictiveGeneratedShift
+              ? roleColorById.get(shift.roleId) ?? shift.color
             : shift.employeeId
               ? roleColorById.get(shift.roleId) ?? shift.color
               : OPEN_SHIFT_COLOR,
@@ -1782,10 +1907,27 @@ function SchedulerContent({
     () => formatPredictiveGeneratedDate(predictiveRun?.created_at),
     [predictiveRun?.created_at],
   );
+  const predictiveFixedShiftCount = useMemo(() => {
+    const raw = predictiveRun?.inputs?.fixed_shift_payload;
+    if (!raw || !('shifts' in raw) || !Array.isArray(raw.shifts)) {
+      return 0;
+    }
+    return raw.shifts.length;
+  }, [predictiveRun?.inputs?.fixed_shift_payload]);
+  const predictiveGeneratedMetadata = useMemo(() => {
+    const raw = predictiveRun?.inputs?.generated_demand_payload;
+    if (!raw || typeof raw !== 'object' || raw === null || !('metadata' in raw)) {
+      return null;
+    }
+    return (raw.metadata ?? null) as Record<string, unknown> | null;
+  }, [predictiveRun?.inputs?.generated_demand_payload]);
   const canAcceptPredictiveSchedule = Boolean(
     predictiveRun
       && predictiveRun.status === 'completed'
-      && predictiveAssignmentsByShiftId.size > 0,
+      && (
+        predictiveAssignmentsByShiftId.size > 0
+        || predictiveGeneratedShiftCount > 0
+      ),
   );
   const schedulerInteractionLocked = Boolean(
     predictivePreviewActive || loadingPredictiveRun,
@@ -1988,6 +2130,11 @@ function SchedulerContent({
         );
 
         if (applyResult.status === 'applied' || applyResult.status === 'no_op') {
+          setDismissedPredictiveWeeks((current) => {
+            const next = new Set(current);
+            next.add(board.week_start_date);
+            return next;
+          });
           await refreshSchedulerData({ force: true });
           setPredictiveRun(null);
           setPredictiveRunError(null);
@@ -2044,7 +2191,13 @@ function SchedulerContent({
   ]);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
-    displayShifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
+    displayShifts
+      .filter((shift) => (
+        predictivePreviewActive
+          ? shift.displayEmployeeId === empId
+          : shift.employeeId === empId
+      ))
+      .reduce((sum, shift) => sum + shiftDuration(shift), 0), [displayShifts, predictivePreviewActive]);
 
   const getDayTotalHours = useCallback((day: number) =>
     displayShifts.filter(s => s.day === day).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
@@ -3524,7 +3677,7 @@ function SchedulerContent({
                         : predictiveRunError
                           ? predictiveRunError
                           : predictivePreviewActive
-                            ? `Optimized for coverage, reliability, and fairness.${predictiveGeneratedLabel ? ` Generated ${predictiveGeneratedLabel}.` : ''}`
+                            ? `Optimized for coverage, reliability, and fairness.${predictiveGeneratedLabel ? ` Generated ${predictiveGeneratedLabel}.` : ''}${predictiveGeneratedShiftCount > 0 ? ` Added ${predictiveGeneratedShiftCount} generated shift${predictiveGeneratedShiftCount === 1 ? '' : 's'}.` : ''}${predictiveFixedShiftCount > 0 ? ` Preserved ${predictiveFixedShiftCount} authored draft shift${predictiveFixedShiftCount === 1 ? '' : 's'}.` : ''}`
                             : predictiveRun?.status === 'completed'
                               ? 'Backfill reviewed this week, but did not find any predictive assignments to apply.'
                               : 'Backfill is preparing the latest predictive schedule for review.'}
@@ -3537,6 +3690,38 @@ function SchedulerContent({
                       <Info size={12} className={theme.textSecondary} />
                       <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
                         {predictiveRun.metrics.assigned_shift_count}/{predictiveRun.metrics.shift_count} shifts assigned
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveGeneratedShiftCount > 0 ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <Zap size={12} className="text-[#635BFF]" />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        {predictiveGeneratedShiftCount} generated
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveGeneratedUnassignedCount > 0 ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <AlertTriangle size={12} className="text-[#F59E0B]" />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        {predictiveGeneratedUnassignedCount} open after optimize
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveFixedShiftCount > 0 ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <CalendarDays size={12} className={theme.textSecondary} />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        {predictiveFixedShiftCount} preserved
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveGeneratedMetadata?.historical_week_count ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <ClipboardCopy size={12} className={theme.textSecondary} />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        Patterned from {String(predictiveGeneratedMetadata.historical_week_count)} prior week{String(predictiveGeneratedMetadata.historical_week_count) === '1' ? '' : 's'}
                       </span>
                     </div>
                   ) : null}
@@ -4476,7 +4661,7 @@ function MobileEmployeeCard({
                     ) : null}
                     <DescIcon size={10} style={{ color: shiftLabelColor }} className="shrink-0" />
                     <span className={`text-[10px] truncate ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : ''}`} style={{ fontWeight: 520, color: shiftLabelColor }}>{shiftLabel}</span>
-                    {isPredictivePreview ? <Zap size={8} className="shrink-0 text-[#635BFF]" /> : null}
+                    {isPredictivePreview ? <Zap size={8} className={`shrink-0 ${shift.predictiveGeneratedShift ? 'text-[#00B893]' : 'text-[#635BFF]'}`} /> : null}
                     <span className={`text-[9px] shrink-0 ${isHistoricalShift || hasOperationalBreak ? 'line-through opacity-60' : dark ? 'text-[#C1CED8]' : 'text-[#8898AA]'}`} style={{ fontWeight: 400, color: isHistoricalShift ? '#6B7280' : hasOperationalBreak ? '#DC2626' : undefined }}>{dur}h</span>
                     {hasOperationalBreak || hasHistoricalOperationalArtifact ? (
                       <Siren size={9} className="shrink-0 text-[#DC2626]" />

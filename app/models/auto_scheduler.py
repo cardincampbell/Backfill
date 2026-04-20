@@ -193,6 +193,12 @@ class ScheduleRunProposedShift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     applied_shift_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("shifts.id", ondelete="SET NULL")
     )
+    source_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("labor_forecast_runs.id", ondelete="SET NULL")
+    )
+    source_point_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("labor_forecast_points.id", ondelete="SET NULL")
+    )
     location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("locations.id", ondelete="SET NULL")
     )

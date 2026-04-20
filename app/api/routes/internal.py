@@ -12,6 +12,7 @@ from app.schemas.auto_scheduler import (
     ScheduleRunGenerateRequest,
     ScheduleRunRead,
 )
+from app.schemas.labor_forecasting import LaborForecastRunDetailRead, LaborForecastRunRead
 from app.schemas.internal import (
     CallbackReplayRequest,
     CallbackReplayResponse,
@@ -34,6 +35,7 @@ from app.services import (
     delivery,
     feed_projections,
     invariants,
+    labor_forecasting,
     provider_callbacks,
     recovery,
     runtime_orchestration,
@@ -149,6 +151,42 @@ async def apply_auto_scheduler_run(
         schedule_run_id,
     )
     return ScheduleRunApplyRead.model_validate(apply_record)
+
+
+@router.get("/labor-forecasts/runs", response_model=list[LaborForecastRunRead])
+async def list_labor_forecast_runs(
+    session: SessionDep,
+    business_id: UUID,
+    x_backfill_worker_key: str | None = Header(default=None),
+    location_id: UUID | None = None,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    runs = await labor_forecasting.list_labor_forecast_runs(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        status=status,
+        limit=limit,
+    )
+    return [LaborForecastRunRead.model_validate(item) for item in runs]
+
+
+@router.get("/labor-forecasts/runs/{labor_forecast_run_id}", response_model=LaborForecastRunDetailRead)
+async def get_labor_forecast_run(
+    labor_forecast_run_id: UUID,
+    session: SessionDep,
+    x_backfill_worker_key: str | None = Header(default=None),
+):
+    _assert_worker_key(x_backfill_worker_key)
+    forecast_run = await labor_forecasting.load_labor_forecast_run(
+        session,
+        labor_forecast_run_id,
+    )
+    if forecast_run is None:
+        raise HTTPException(status_code=404, detail="labor_forecast_run_not_found")
+    return LaborForecastRunDetailRead.model_validate(forecast_run)
 
 
 @router.get("/coverage/invariants", response_model=InvariantScanResponse)

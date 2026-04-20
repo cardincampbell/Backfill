@@ -391,6 +391,8 @@ export type PredictiveScheduleRun = {
   updated_at: string;
   inputs?: {
     shift_payload: Record<string, unknown>;
+    fixed_shift_payload: Record<string, unknown>;
+    generated_demand_payload: Record<string, unknown>;
     employee_payload: Record<string, unknown>;
     availability_payload: Record<string, unknown>;
     policy_payload: Record<string, unknown>;
@@ -404,6 +406,7 @@ export type PredictiveScheduleRun = {
   assignments: Array<{
     id: string;
     shift_id?: string | null;
+    proposed_shift_id?: string | null;
     employee_id?: string | null;
     decision_score: number;
     decision_rank: number;
@@ -414,6 +417,7 @@ export type PredictiveScheduleRun = {
   rejections: Array<{
     id: string;
     shift_id?: string | null;
+    proposed_shift_id?: string | null;
     employee_id?: string | null;
     candidate_rank: number;
     rejection_reason_codes: unknown[];
@@ -429,6 +433,26 @@ export type PredictiveScheduleRun = {
     coverage_payload: Record<string, unknown>;
     unassigned_shift_payload: Record<string, unknown>;
   } | null;
+  proposed_shifts: Array<{
+    id: string;
+    schedule_run_id: string;
+    applied_shift_id?: string | null;
+    location_id?: string | null;
+    role_id?: string | null;
+    demand_key: string;
+    optimizer_shift_id: string;
+    source_type: string;
+    generation_version: string;
+    timezone: string;
+    starts_at: string;
+    ends_at: string;
+    headcount: number;
+    premium_cents: number;
+    requires_manager_approval: boolean;
+    generation_payload: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }>;
   metrics?: {
     shift_count: number;
     assigned_shift_count: number;

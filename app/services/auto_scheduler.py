@@ -41,7 +41,7 @@ from app.schemas.auto_scheduler import (
     SchedulePolicyPayload,
     ScheduleRunInputContract,
 )
-from app.services import auto_scheduler_optimizer, shift_assignments
+from app.services import auto_scheduler_optimizer, shift_assignments, shift_shaping
 from app.services.schedule_weeks import effective_week_start_day
 
 _DEFAULT_SAME_DAY_SECOND_SHIFT_ALLOWED = True
@@ -364,10 +364,23 @@ async def create_and_execute_schedule_run_for_scope(
         planning_window_start=planning_window_start,
         planning_window_end=planning_window_end,
     )
+    generated_demand = (
+        await shift_shaping.generate_pattern_based_demand(
+            session,
+            business=business,
+            location=location,
+            planning_window_start=planning_window_start,
+            planning_window_end=planning_window_end,
+            current_shifts=shifts,
+        )
+        if location is not None
+        else GeneratedDemandPayload()
+    )
     employees = await _load_scope_employees(
         session,
         business_id=business_id,
         shifts=shifts,
+        generated_demand_payload=generated_demand,
     )
     reliability_payload = await _build_scope_reliability_payload(
         session,
@@ -392,6 +405,7 @@ async def create_and_execute_schedule_run_for_scope(
         location_id=location_id,
         location_settings=location.settings if location is not None and isinstance(location.settings, Mapping) else {},
         labor_payload=labor_payload,
+        generated_demand_payload=generated_demand,
         source_metadata={
             "source": "auto_scheduler_scope_loader_v1",
             "generated_at": generated_at.isoformat(),
@@ -408,6 +422,7 @@ async def create_and_execute_schedule_run_for_scope(
         input_snapshot_hash=input_snapshot_hash,
         run_metadata={
             "scope_shift_count": len(shifts),
+            "generated_shift_count": len(generated_demand.proposed_shifts),
             "scope_employee_count": len(employees),
             "source": "auto_scheduler_scope_loader_v1",
         },
@@ -427,6 +442,12 @@ async def current_scope_snapshot_hash(
     planning_window_start: datetime,
     planning_window_end: datetime,
 ) -> str:
+    business = await _load_scope_business(session, business_id)
+    if business is None:
+        raise LookupError("business_not_found")
+    location = await _load_scope_location(session, location_id) if location_id is not None else None
+    if location_id is not None and location is None:
+        raise LookupError("location_not_found")
     shifts = await _load_scope_shifts(
         session,
         business_id=business_id,
@@ -434,10 +455,23 @@ async def current_scope_snapshot_hash(
         planning_window_start=planning_window_start,
         planning_window_end=planning_window_end,
     )
+    generated_demand = (
+        await shift_shaping.generate_pattern_based_demand(
+            session,
+            business=business,
+            location=location,
+            planning_window_start=planning_window_start,
+            planning_window_end=planning_window_end,
+            current_shifts=shifts,
+        )
+        if location is not None
+        else GeneratedDemandPayload()
+    )
     employees = await _load_scope_employees(
         session,
         business_id=business_id,
         shifts=shifts,
+        generated_demand_payload=generated_demand,
     )
     return build_authoring_snapshot_hash(
         shifts=_shift_rows_for_optimizer(shifts=shifts, location_id=location_id),
@@ -977,6 +1011,8 @@ async def _materialize_schedule_run_proposed_shifts(
                 "demand_key": proposed_shift.demand_key,
                 "source_type": proposed_shift.source_type,
                 "generation_version": proposed_shift.generation_version,
+                "source_run_id": str(proposed_shift.source_run_id) if proposed_shift.source_run_id else None,
+                "source_point_id": str(proposed_shift.source_point_id) if proposed_shift.source_point_id else None,
                 **dict(proposed_shift.generation_payload or {}),
             },
         )
@@ -1184,6 +1220,8 @@ def _proposed_shift_models_for_run(
         models.append(
             ScheduleRunProposedShift(
                 schedule_run_id=schedule_run.id,
+                source_run_id=proposed_shift.source_run_id,
+                source_point_id=proposed_shift.source_point_id,
                 location_id=proposed_shift.location_id,
                 role_id=proposed_shift.role_id,
                 demand_key=proposed_shift.demand_key,
@@ -1228,6 +1266,8 @@ def _result_payload_with_demand_metadata(
         **payload,
         "demand_key": proposed_shift.demand_key,
         "source_type": proposed_shift.source_type,
+        "source_run_id": str(proposed_shift.source_run_id) if proposed_shift.source_run_id else None,
+        "source_point_id": str(proposed_shift.source_point_id) if proposed_shift.source_point_id else None,
         "proposed_shift_id": str(proposed_shift.id),
         "optimizer_shift_id": proposed_shift.optimizer_shift_id,
     }
@@ -1631,12 +1671,31 @@ async def _load_scope_employees(
     *,
     business_id: UUID,
     shifts: Sequence[Shift],
+    generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None = None,
 ) -> list[Employee]:
-    if not shifts:
+    generated_demand = _normalized_generated_demand_payload(
+        generated_demand_payload,
+        location_id=None,
+    )
+    if not shifts and not generated_demand.proposed_shifts:
         return []
 
-    role_ids = sorted({shift.role_id for shift in shifts if shift.role_id is not None}, key=str)
-    location_ids = sorted({shift.location_id for shift in shifts if shift.location_id is not None}, key=str)
+    role_ids = sorted(
+        {
+            *(shift.role_id for shift in shifts if shift.role_id is not None),
+            *(proposed_shift.role_id for proposed_shift in generated_demand.proposed_shifts),
+        },
+        key=str,
+    )
+    location_ids = sorted(
+        {
+            *(shift.location_id for shift in shifts if shift.location_id is not None),
+            *(proposed_shift.location_id for proposed_shift in generated_demand.proposed_shifts),
+        },
+        key=str,
+    )
+    if not role_ids or not location_ids:
+        return []
     stmt = (
         select(Employee)
         .join(Employee.employee_roles)

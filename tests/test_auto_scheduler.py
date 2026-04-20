@@ -32,6 +32,7 @@ from app.schemas.auto_scheduler import (
     ScheduleRunInputContract,
 )
 from app.services import auto_scheduler
+from app.services import shift_shaping
 
 
 class FakeAutoSchedulerSession:
@@ -102,13 +103,15 @@ def _run_inputs() -> ScheduleRunInputContract:
     )
 
 
-def _generated_demand_payload(*, location_id, role_id) -> GeneratedDemandPayload:
+def _generated_demand_payload(*, location_id, role_id, source_run_id=None, source_point_id=None) -> GeneratedDemandPayload:
     return GeneratedDemandPayload(
         proposed_shifts=[
             ProposedShiftPayload(
                 demand_key=f"{location_id}:{role_id}:2026-04-22T16:00:00+00:00",
                 source_type="historical_pattern",
                 generation_version="v1",
+                source_run_id=source_run_id,
+                source_point_id=source_point_id,
                 location_id=location_id,
                 role_id=role_id,
                 timezone="America/Los_Angeles",
@@ -523,6 +526,41 @@ async def test_record_schedule_run_result_maps_generated_assignments_to_proposed
 
 
 @pytest.mark.asyncio
+async def test_create_schedule_run_persists_generated_shift_forecast_provenance():
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    source_run_id = uuid4()
+    source_point_id = uuid4()
+    demand_payload = _generated_demand_payload(
+        location_id=location.id,
+        role_id=role.id,
+        source_run_id=source_run_id,
+        source_point_id=source_point_id,
+    )
+
+    schedule_run = await auto_scheduler.create_schedule_run(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        inputs=_run_inputs().model_copy(
+            update={
+                "generated_demand_payload": demand_payload,
+                "shift_payload": {"shifts": []},
+            }
+        ),
+        input_snapshot_hash="sha256:authoring",
+    )
+
+    proposed_shift = schedule_run.proposed_shifts[0]
+    assert proposed_shift.source_run_id == source_run_id
+    assert proposed_shift.source_point_id == source_point_id
+
+
+@pytest.mark.asyncio
 async def test_schedule_run_input_contract_round_trips_persisted_inputs():
     session = FakeAutoSchedulerSession()
     schedule_run = await auto_scheduler.create_schedule_run(
@@ -731,6 +769,11 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     monkeypatch.setattr(auto_scheduler, "_build_scope_labor_payload", fake_build_labor_payload)
     monkeypatch.setattr(auto_scheduler, "create_schedule_run", fake_create_schedule_run)
     monkeypatch.setattr(auto_scheduler, "execute_schedule_run", fake_execute_schedule_run)
+    monkeypatch.setattr(
+        shift_shaping,
+        "generate_pattern_based_demand",
+        AsyncMock(return_value=GeneratedDemandPayload()),
+    )
 
     result = await auto_scheduler.create_and_execute_schedule_run_for_scope(
         FakeAutoSchedulerSession(),
