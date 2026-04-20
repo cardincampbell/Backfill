@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column("source_point_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
     op.create_foreign_key(
-        "fk_schedule_run_proposed_shifts_source_run_id_labor_forecast_runs",
+        "fk_srps_source_run",
         "schedule_run_proposed_shifts",
         "labor_forecast_runs",
         ["source_run_id"],
@@ -35,7 +35,7 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
     op.create_foreign_key(
-        "fk_schedule_run_proposed_shifts_source_point_id_labor_forecast_points",
+        "fk_srps_source_point",
         "schedule_run_proposed_shifts",
         "labor_forecast_points",
         ["source_point_id"],
@@ -46,12 +46,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint(
-        "fk_schedule_run_proposed_shifts_source_point_id_labor_forecast_points",
+        "fk_srps_source_point",
         "schedule_run_proposed_shifts",
         type_="foreignkey",
     )
     op.drop_constraint(
-        "fk_schedule_run_proposed_shifts_source_run_id_labor_forecast_runs",
+        "fk_srps_source_run",
         "schedule_run_proposed_shifts",
         type_="foreignkey",
     )
