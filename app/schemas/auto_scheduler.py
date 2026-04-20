@@ -58,8 +58,30 @@ class SchedulePolicyPayload(BaseSchema):
     metadata: dict = Field(default_factory=dict)
 
 
+class ProposedShiftPayload(BaseSchema):
+    demand_key: str = Field(min_length=1, max_length=255)
+    source_type: Literal["historical_pattern", "template", "forecast"] = "historical_pattern"
+    generation_version: str = "v1"
+    location_id: UUID
+    role_id: UUID
+    timezone: str = Field(min_length=1, max_length=64)
+    starts_at: datetime
+    ends_at: datetime
+    headcount: int = Field(default=1, ge=1)
+    premium_cents: int = Field(default=0, ge=0)
+    requires_manager_approval: bool = False
+    generation_payload: dict = Field(default_factory=dict)
+
+
+class GeneratedDemandPayload(BaseSchema):
+    proposed_shifts: list[ProposedShiftPayload] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+
 class ScheduleRunInputContract(BaseSchema):
     shift_payload: dict = Field(default_factory=dict)
+    fixed_shift_payload: dict = Field(default_factory=dict)
+    generated_demand_payload: GeneratedDemandPayload = Field(default_factory=GeneratedDemandPayload)
     employee_payload: dict = Field(default_factory=dict)
     availability_payload: dict = Field(default_factory=dict)
     policy_payload: SchedulePolicyPayload
@@ -102,6 +124,8 @@ class ScheduleRunRead(BaseSchema):
 
 class ScheduleRunInputRead(BaseSchema):
     shift_payload: dict
+    fixed_shift_payload: dict
+    generated_demand_payload: dict
     employee_payload: dict
     availability_payload: dict
     policy_payload: dict
@@ -116,6 +140,7 @@ class ScheduleRunInputRead(BaseSchema):
 class ScheduleRunAssignmentRead(BaseSchema):
     id: UUID
     shift_id: Optional[UUID] = None
+    proposed_shift_id: Optional[UUID] = None
     employee_id: Optional[UUID] = None
     decision_score: float
     decision_rank: int
@@ -127,6 +152,7 @@ class ScheduleRunAssignmentRead(BaseSchema):
 class ScheduleRunRejectionRead(BaseSchema):
     id: UUID
     shift_id: Optional[UUID] = None
+    proposed_shift_id: Optional[UUID] = None
     employee_id: Optional[UUID] = None
     candidate_rank: int
     rejection_reason_codes: list = Field(default_factory=list)
@@ -155,8 +181,30 @@ class ScheduleRunMetricRead(BaseSchema):
     objective_value: Optional[float] = None
 
 
+class ScheduleRunProposedShiftRead(BaseSchema):
+    id: UUID
+    schedule_run_id: UUID
+    applied_shift_id: Optional[UUID] = None
+    location_id: Optional[UUID] = None
+    role_id: Optional[UUID] = None
+    demand_key: str
+    optimizer_shift_id: str
+    source_type: str
+    generation_version: str
+    timezone: str
+    starts_at: datetime
+    ends_at: datetime
+    headcount: int
+    premium_cents: int
+    requires_manager_approval: bool
+    generation_payload: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
 class ScheduleRunDetailRead(ScheduleRunRead):
     inputs: Optional[ScheduleRunInputRead] = None
+    proposed_shifts: list["ScheduleRunProposedShiftRead"] = Field(default_factory=list)
     assignments: list[ScheduleRunAssignmentRead] = Field(default_factory=list)
     rejections: list[ScheduleRunRejectionRead] = Field(default_factory=list)
     explanation: Optional[ScheduleRunExplanationRead] = None

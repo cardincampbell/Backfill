@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, time, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
+from uuid import UUID as UUIDType
 
 import pytest
 
@@ -21,6 +23,8 @@ from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.models.workforce import EmployeeAvailabilityException, EmployeeAvailabilityRule
 from app.schemas.auto_scheduler import (
+    GeneratedDemandPayload,
+    ProposedShiftPayload,
     ReliabilityComponentPayload,
     ReliabilityEmployeeSnapshotPayload,
     ReliabilitySnapshotPayload,
@@ -66,6 +70,7 @@ def _run_inputs() -> ScheduleRunInputContract:
     employee_id = uuid4()
     return ScheduleRunInputContract(
         shift_payload={"shift_ids": [str(uuid4())]},
+        fixed_shift_payload={"shift_ids": []},
         employee_payload={"employee_ids": [str(employee_id)]},
         availability_payload={"employee_ids": [str(employee_id)]},
         policy_payload=SchedulePolicyPayload(),
@@ -94,6 +99,28 @@ def _run_inputs() -> ScheduleRunInputContract:
         reliability_snapshot_hash="sha256:reliability",
         reliability_snapshot_version="v1",
         source_metadata={"authoring_snapshot_hash": "sha256:authoring"},
+    )
+
+
+def _generated_demand_payload(*, location_id, role_id) -> GeneratedDemandPayload:
+    return GeneratedDemandPayload(
+        proposed_shifts=[
+            ProposedShiftPayload(
+                demand_key=f"{location_id}:{role_id}:2026-04-22T16:00:00+00:00",
+                source_type="historical_pattern",
+                generation_version="v1",
+                location_id=location_id,
+                role_id=role_id,
+                timezone="America/Los_Angeles",
+                starts_at=datetime(2026, 4, 22, 16, 0, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 4, 22, 22, 0, tzinfo=timezone.utc),
+                headcount=1,
+                premium_cents=0,
+                requires_manager_approval=False,
+                generation_payload={"source_week_count": 2},
+            )
+        ],
+        metadata={"source": "historical_pattern_v1"},
     )
 
 
@@ -345,6 +372,9 @@ async def test_create_schedule_run_persists_input_contract():
     assert schedule_run.inputs is not None
     assert schedule_run.inputs.reliability_snapshot_hash == "sha256:reliability"
     assert schedule_run.inputs.policy_payload["publish_mode"] == "draft_only"
+    assert schedule_run.inputs.fixed_shift_payload == {"shift_ids": []}
+    assert schedule_run.inputs.generated_demand_payload == {"proposed_shifts": [], "metadata": {}}
+    assert schedule_run.proposed_shifts == []
 
 
 @pytest.mark.asyncio
@@ -389,6 +419,110 @@ async def test_record_schedule_run_result_replaces_artifacts():
 
 
 @pytest.mark.asyncio
+async def test_create_schedule_run_persists_generated_demand_contract():
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    inputs = _run_inputs().model_copy(
+        update={
+            "generated_demand_payload": _generated_demand_payload(location_id=location.id, role_id=role.id),
+            "shift_payload": {
+                "shifts": [
+                    {
+                        "shift_id": auto_scheduler._optimizer_shift_id_for_demand_key(
+                            f"{location.id}:{role.id}:2026-04-22T16:00:00+00:00"
+                        ),
+                        "location_id": str(location.id),
+                        "role_id": str(role.id),
+                        "starts_at": "2026-04-22T16:00:00+00:00",
+                        "ends_at": "2026-04-22T22:00:00+00:00",
+                        "timezone": "America/Los_Angeles",
+                        "headcount": 1,
+                    }
+                ]
+            },
+        }
+    )
+
+    schedule_run = await auto_scheduler.create_schedule_run(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        inputs=inputs,
+        input_snapshot_hash="sha256:authoring",
+    )
+
+    assert len(schedule_run.proposed_shifts) == 1
+    proposed_shift = schedule_run.proposed_shifts[0]
+    assert proposed_shift.demand_key == f"{location.id}:{role.id}:2026-04-22T16:00:00+00:00"
+    assert proposed_shift.source_type == "historical_pattern"
+    assert proposed_shift.optimizer_shift_id == auto_scheduler._optimizer_shift_id_for_demand_key(
+        proposed_shift.demand_key
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_schedule_run_result_maps_generated_assignments_to_proposed_shifts():
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee_id = uuid4()
+    demand_payload = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    proposed_shift = demand_payload.proposed_shifts[0]
+    optimizer_shift_id = auto_scheduler._optimizer_shift_id_for_demand_key(proposed_shift.demand_key)
+    schedule_run = await auto_scheduler.create_schedule_run(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        inputs=_run_inputs().model_copy(
+            update={
+                "generated_demand_payload": demand_payload,
+                "shift_payload": {
+                    "shifts": [
+                        {
+                            "shift_id": optimizer_shift_id,
+                            "location_id": str(location.id),
+                            "role_id": str(role.id),
+                            "starts_at": "2026-04-22T16:00:00+00:00",
+                            "ends_at": "2026-04-22T22:00:00+00:00",
+                            "timezone": "America/Los_Angeles",
+                            "headcount": 1,
+                        }
+                    ]
+                },
+            }
+        ),
+        input_snapshot_hash="sha256:authoring",
+    )
+
+    await auto_scheduler.record_schedule_run_result(
+        session,
+        schedule_run,
+        status=ScheduleRunStatus.completed,
+        assignments=[
+            {
+                "shift_id": UUIDType(optimizer_shift_id),
+                "employee_id": employee_id,
+                "decision_score": "0.88",
+                "decision_rank": 1,
+                "assignment_payload": {"source": "optimizer"},
+            }
+        ],
+    )
+
+    assert len(schedule_run.assignments) == 1
+    assert schedule_run.assignments[0].shift_id is None
+    assert schedule_run.assignments[0].proposed_shift_id == schedule_run.proposed_shifts[0].id
+    assert schedule_run.assignments[0].assignment_payload["demand_key"] == proposed_shift.demand_key
+
+
+@pytest.mark.asyncio
 async def test_schedule_run_input_contract_round_trips_persisted_inputs():
     session = FakeAutoSchedulerSession()
     schedule_run = await auto_scheduler.create_schedule_run(
@@ -405,6 +539,8 @@ async def test_schedule_run_input_contract_round_trips_persisted_inputs():
 
     assert contract.reliability_snapshot_hash == "sha256:reliability"
     assert contract.policy_payload.publish_mode == "draft_only"
+    assert contract.fixed_shift_payload == {"shift_ids": []}
+    assert contract.generated_demand_payload.proposed_shifts == []
     assert contract.source_metadata["authoring_snapshot_hash"] == "sha256:authoring"
 
 
@@ -611,6 +747,8 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     assert inputs.policy_payload.publish_mode == "draft_only"
     assert inputs.reliability_snapshot_hash == "sha256:reliability"
     assert inputs.shift_payload["shifts"][0]["shift_id"] == str(open_shift.id)
+    assert inputs.fixed_shift_payload["shifts"][0]["shift_id"] == str(open_shift.id)
+    assert inputs.generated_demand_payload.proposed_shifts == []
     assert inputs.employee_payload["employees"][0]["employee_id"] == str(employee.id)
     assert inputs.labor_payload["employees"][str(employee.id)]["status"] == "clear"
     assert inputs.labor_payload["employees_by_shift"][str(open_shift.id)][str(employee.id)]["status"] == "clear"
@@ -755,6 +893,8 @@ def test_build_schedule_run_inputs_from_loaded_scope_respects_locked_manual_draf
     assert inputs.policy_payload.labor_rule_mode == "hard_block"
     assert inputs.source_metadata["authoring_snapshot_hash"] == input_hash
     assert len(inputs.shift_payload["shifts"]) == 1
+    assert len(inputs.fixed_shift_payload["shifts"]) == 1
+    assert inputs.generated_demand_payload.proposed_shifts == []
     assert inputs.shift_payload["shifts"][0]["shift_id"] == str(open_shift.id)
     assert str(locked_shift.id) not in {
         row["shift_id"] for row in inputs.shift_payload["shifts"]
@@ -768,6 +908,43 @@ def test_build_schedule_run_inputs_from_loaded_scope_respects_locked_manual_draf
     assert eligible_by_shift == [str(eligible_employee.id)]
     employee_row = next(row for row in inputs.employee_payload["employees"] if row["employee_id"] == str(eligible_employee.id))
     assert employee_row["assigned_hours"] == 12.0
+
+
+def test_build_schedule_run_inputs_from_loaded_scope_merges_generated_demand():
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee = _make_employee(business_id=business.id, role=role, location=location)
+    employee.availability_rules = []
+    employee.assignments = []
+    open_shift = _make_shift(business_id=business.id, location_id=location.id, role_id=role.id)
+    open_shift.assignments = []
+
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+
+    inputs, _ = auto_scheduler.build_schedule_run_inputs_from_loaded_scope(
+        business_id=business.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        reliability_payload=_reliability_payload_for(employee.id),
+        shifts=[open_shift],
+        employees=[employee],
+        business_settings={},
+        location_id=location.id,
+        location_settings=location.settings,
+        labor_payload={"employees": {}},
+        generated_demand_payload=generated_demand,
+    )
+
+    assert len(inputs.fixed_shift_payload["shifts"]) == 1
+    assert len(inputs.generated_demand_payload.proposed_shifts) == 1
+    assert len(inputs.shift_payload["shifts"]) == 2
+    generated_shift_row = next(
+        row for row in inputs.shift_payload["shifts"] if row["shift_id"] != str(open_shift.id)
+    )
+    assert generated_shift_row["demand_key"] == generated_demand.proposed_shifts[0].demand_key
+    assert inputs.source_metadata["fixed_shift_count"] == 1
+    assert inputs.source_metadata["generated_shift_count"] == 1
 
 
 def test_evaluate_schedule_run_apply_rejects_stale_snapshot():
@@ -803,8 +980,26 @@ def test_evaluate_schedule_run_apply_returns_no_op_for_existing_successful_apply
     assert result.existing_apply_id == apply_id
 
 
+def test_evaluate_schedule_run_apply_returns_no_op_for_post_apply_snapshot():
+    result = auto_scheduler.evaluate_schedule_run_apply(
+        schedule_run_status=ScheduleRunStatus.completed,
+        target_snapshot_hash="sha256:unchanged",
+        current_snapshot_hash="sha256:post_apply",
+        existing_successful_apply=SimpleNamespace(
+            id=uuid4(),
+            status=ScheduleApplyStatus.applied.value,
+            target_snapshot_hash="sha256:unchanged",
+            current_snapshot_hash="sha256:pre_apply",
+            apply_metadata={"post_apply_snapshot_hash": "sha256:post_apply"},
+        ),
+    )
+
+    assert result.can_apply is False
+    assert result.status == ScheduleApplyStatus.no_op
+
+
 @pytest.mark.asyncio
-async def test_apply_schedule_run_to_draft_creates_proposed_assignment():
+async def test_apply_schedule_run_to_draft_creates_proposed_assignment(monkeypatch):
     session = FakeAutoSchedulerSession()
     business = _make_business()
     location = _make_location(business_id=business.id)
@@ -820,6 +1015,11 @@ async def test_apply_schedule_run_to_draft_creates_proposed_assignment():
     session.get_map[(Role, role.id)] = role
     session.get_map[(Employee, employee.id)] = employee
     session.get_map[(Shift, shift.id)] = shift
+    monkeypatch.setattr(
+        auto_scheduler,
+        "current_scope_snapshot_hash",
+        AsyncMock(return_value="sha256:post_apply"),
+    )
 
     schedule_run = await auto_scheduler.create_schedule_run(
         session,
@@ -862,10 +1062,11 @@ async def test_apply_schedule_run_to_draft_creates_proposed_assignment():
     assert assignment.assigned_via == "auto_scheduler"
     assert assignment.assignment_metadata["schedule_run_id"] == str(schedule_run.id)
     assert assignment.assignment_metadata["schedule_run_apply_id"] == str(apply_record.id)
+    assert apply_record.apply_metadata["post_apply_snapshot_hash"] == "sha256:post_apply"
 
 
 @pytest.mark.asyncio
-async def test_apply_schedule_run_to_draft_preserves_manual_assignment_for_same_employee():
+async def test_apply_schedule_run_to_draft_preserves_manual_assignment_for_same_employee(monkeypatch):
     session = FakeAutoSchedulerSession()
     business = _make_business()
     location = _make_location(business_id=business.id)
@@ -889,6 +1090,11 @@ async def test_apply_schedule_run_to_draft_preserves_manual_assignment_for_same_
 
     session.get_map[(Employee, employee.id)] = employee
     session.get_map[(Shift, shift.id)] = shift
+    monkeypatch.setattr(
+        auto_scheduler,
+        "current_scope_snapshot_hash",
+        AsyncMock(return_value="sha256:post_apply"),
+    )
 
     schedule_run = await auto_scheduler.create_schedule_run(
         session,
@@ -927,7 +1133,7 @@ async def test_apply_schedule_run_to_draft_preserves_manual_assignment_for_same_
 
 
 @pytest.mark.asyncio
-async def test_apply_schedule_run_to_draft_blocks_manual_assignment_replacement():
+async def test_apply_schedule_run_to_draft_blocks_manual_assignment_replacement(monkeypatch):
     session = FakeAutoSchedulerSession()
     business = _make_business()
     location = _make_location(business_id=business.id)
@@ -953,6 +1159,11 @@ async def test_apply_schedule_run_to_draft_blocks_manual_assignment_replacement(
     session.get_map[(Employee, manual_employee.id)] = manual_employee
     session.get_map[(Employee, target_employee.id)] = target_employee
     session.get_map[(Shift, shift.id)] = shift
+    monkeypatch.setattr(
+        auto_scheduler,
+        "current_scope_snapshot_hash",
+        AsyncMock(return_value="sha256:post_apply"),
+    )
 
     schedule_run = await auto_scheduler.create_schedule_run(
         session,
@@ -985,3 +1196,79 @@ async def test_apply_schedule_run_to_draft_blocks_manual_assignment_replacement(
             schedule_run.id,
             current_snapshot_hash="sha256:authoring",
         )
+
+
+@pytest.mark.asyncio
+async def test_apply_schedule_run_to_draft_materializes_generated_shift(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee = _make_employee(business_id=business.id, role=role, location=location)
+    session.get_map[(Employee, employee.id)] = employee
+    monkeypatch.setattr(
+        auto_scheduler,
+        "current_scope_snapshot_hash",
+        AsyncMock(return_value="sha256:post_apply"),
+    )
+
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    optimizer_shift_id = auto_scheduler._optimizer_shift_id_for_demand_key(
+        generated_demand.proposed_shifts[0].demand_key
+    )
+    schedule_run = await auto_scheduler.create_schedule_run(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        inputs=_run_inputs().model_copy(
+            update={
+                "generated_demand_payload": generated_demand,
+                "shift_payload": {
+                    "shifts": [
+                        {
+                            "shift_id": optimizer_shift_id,
+                            "location_id": str(location.id),
+                            "role_id": str(role.id),
+                            "starts_at": "2026-04-22T16:00:00+00:00",
+                            "ends_at": "2026-04-22T22:00:00+00:00",
+                            "timezone": "America/Los_Angeles",
+                            "headcount": 1,
+                        }
+                    ]
+                },
+            }
+        ),
+        input_snapshot_hash="sha256:authoring",
+    )
+    proposed_shift = schedule_run.proposed_shifts[0]
+    schedule_run.assignments = [
+        ScheduleRunAssignment(
+            id=uuid4(),
+            schedule_run_id=schedule_run.id,
+            proposed_shift_id=proposed_shift.id,
+            employee_id=employee.id,
+            decision_score=Decimal("0.91"),
+            decision_rank=1,
+            assignment_payload={"demand_key": proposed_shift.demand_key},
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    ]
+    schedule_run.status = ScheduleRunStatus.completed
+    session.get_map[(type(schedule_run), schedule_run.id)] = schedule_run
+
+    apply_record = await auto_scheduler.apply_schedule_run_to_draft(
+        session,
+        schedule_run.id,
+        current_snapshot_hash="sha256:authoring",
+    )
+
+    assert apply_record.status == ScheduleApplyStatus.applied
+    assert proposed_shift.applied_shift_id is not None
+    created_shift = session.get_map[(Shift, proposed_shift.applied_shift_id)]
+    assert created_shift.source_system == "auto_scheduler_demand"
+    assert created_shift.shift_metadata["demand_key"] == proposed_shift.demand_key
+    assert len(created_shift.assignments) == 1
+    assert created_shift.assignments[0].employee_id == employee.id

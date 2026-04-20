@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from app.models.auto_scheduler import (
     ScheduleRunExplanation,
     ScheduleRunInput,
     ScheduleRunMetric,
+    ScheduleRunProposedShift,
     ScheduleRunRejection,
 )
 from app.models.business import Business, Location
@@ -34,7 +35,12 @@ from app.models.common import (
 )
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
-from app.schemas.auto_scheduler import SchedulePolicyPayload, ScheduleRunInputContract
+from app.schemas.auto_scheduler import (
+    GeneratedDemandPayload,
+    ProposedShiftPayload,
+    SchedulePolicyPayload,
+    ScheduleRunInputContract,
+)
 from app.services import auto_scheduler_optimizer, shift_assignments
 from app.services.schedule_weeks import effective_week_start_day
 
@@ -50,6 +56,7 @@ _COUNTED_ASSIGNMENT_STATUSES = {
     AssignmentStatus.accepted,
     AssignmentStatus.completed,
 }
+_AUTO_SCHEDULER_DEMAND_SOURCE_SYSTEM = "auto_scheduler_demand"
 
 
 @dataclass(frozen=True)
@@ -196,6 +203,7 @@ def build_schedule_run_inputs_from_loaded_scope(
     location_id: UUID | None = None,
     location_settings: Mapping[str, object] | None = None,
     labor_payload: Mapping[str, object] | None = None,
+    generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None = None,
     source_metadata: Mapping[str, object] | None = None,
 ) -> tuple[ScheduleRunInputContract, str]:
     location_scope = [
@@ -203,7 +211,16 @@ def build_schedule_run_inputs_from_loaded_scope(
         for shift in shifts
         if shift.location_id is not None and (location_id is None or shift.location_id == location_id)
     ]
-    shift_rows = _shift_rows_for_optimizer(shifts=shifts, location_id=location_id)
+    fixed_shift_rows = _shift_rows_for_optimizer(shifts=shifts, location_id=location_id)
+    generated_demand = _normalized_generated_demand_payload(
+        generated_demand_payload,
+        location_id=location_id,
+    )
+    generated_shift_rows = _generated_shift_rows_for_optimizer(generated_demand)
+    shift_rows = sorted(
+        [*fixed_shift_rows, *generated_shift_rows],
+        key=lambda row: (str(row.get("starts_at") or ""), str(row.get("shift_id") or "")),
+    )
     draft_assignment_rows = _draft_assignment_rows(shifts=shifts, location_id=location_id)
     employee_role_rows = _employee_role_eligibility_rows(employees)
     employee_location_rows = _employee_location_eligibility_rows(employees)
@@ -235,6 +252,8 @@ def build_schedule_run_inputs_from_loaded_scope(
     )
     inputs = ScheduleRunInputContract(
         shift_payload={"shifts": shift_rows},
+        fixed_shift_payload={"shifts": fixed_shift_rows},
+        generated_demand_payload=generated_demand,
         employee_payload={"employees": employee_rows},
         availability_payload={"eligible_employee_ids_by_shift": eligible_employee_ids_by_shift},
         policy_payload=policy_payload,
@@ -246,6 +265,8 @@ def build_schedule_run_inputs_from_loaded_scope(
         source_metadata={
             "authoring_snapshot_hash": input_snapshot_hash,
             "shift_count": len(shift_rows),
+            "fixed_shift_count": len(fixed_shift_rows),
+            "generated_shift_count": len(generated_shift_rows),
             "employee_count": len(employee_rows),
             **dict(source_metadata or {}),
         },
@@ -291,6 +312,8 @@ async def create_schedule_run(
     schedule_run_input = ScheduleRunInput(
         schedule_run_id=schedule_run.id,
         shift_payload=inputs.shift_payload,
+        fixed_shift_payload=inputs.fixed_shift_payload,
+        generated_demand_payload=inputs.generated_demand_payload.model_dump(),
         employee_payload=inputs.employee_payload,
         availability_payload=inputs.availability_payload,
         policy_payload=inputs.policy_payload.model_dump(),
@@ -303,6 +326,12 @@ async def create_schedule_run(
     )
     session.add(schedule_run_input)
     schedule_run.inputs = schedule_run_input
+    schedule_run.proposed_shifts[:] = _proposed_shift_models_for_run(
+        schedule_run,
+        inputs.generated_demand_payload,
+    )
+    for proposed_shift in schedule_run.proposed_shifts:
+        session.add(proposed_shift)
     await session.flush()
     return schedule_run
 
@@ -456,6 +485,8 @@ def schedule_run_input_contract(schedule_run: ScheduleRun) -> ScheduleRunInputCo
     return ScheduleRunInputContract.model_validate(
         {
             "shift_payload": run_inputs.shift_payload or {},
+            "fixed_shift_payload": run_inputs.fixed_shift_payload or {},
+            "generated_demand_payload": run_inputs.generated_demand_payload or {},
             "employee_payload": run_inputs.employee_payload or {},
             "availability_payload": run_inputs.availability_payload or {},
             "policy_payload": run_inputs.policy_payload or {},
@@ -538,6 +569,7 @@ async def load_schedule_run(
         populate_existing=True,
         options=(
             selectinload(ScheduleRun.inputs),
+            selectinload(ScheduleRun.proposed_shifts),
             selectinload(ScheduleRun.assignments),
             selectinload(ScheduleRun.rejections),
             selectinload(ScheduleRun.explanation),
@@ -622,6 +654,10 @@ async def record_schedule_run_result(
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
 ) -> ScheduleRun:
+    proposed_shifts_by_optimizer_id = {
+        proposed_shift.optimizer_shift_id: proposed_shift
+        for proposed_shift in (schedule_run.proposed_shifts or [])
+    }
     if run_metadata:
         schedule_run.run_metadata = {
             **(schedule_run.run_metadata or {}),
@@ -633,13 +669,21 @@ async def record_schedule_run_result(
     if assignments is not None:
         schedule_run.assignments[:] = []
         for item in assignments:
+            proposed_shift = _proposed_shift_for_result_item(
+                proposed_shifts_by_optimizer_id,
+                item,
+            )
             row = ScheduleRunAssignment(
                 schedule_run_id=schedule_run.id,
-                shift_id=item.get("shift_id"),
+                shift_id=None if proposed_shift is not None else item.get("shift_id"),
+                proposed_shift_id=proposed_shift.id if proposed_shift is not None else item.get("proposed_shift_id"),
                 employee_id=item.get("employee_id"),
                 decision_score=Decimal(str(item.get("decision_score", "0"))),
                 decision_rank=int(item.get("decision_rank", 0)),
-                assignment_payload=dict(item.get("assignment_payload") or {}),
+                assignment_payload=_result_payload_with_demand_metadata(
+                    dict(item.get("assignment_payload") or {}),
+                    proposed_shift=proposed_shift,
+                ),
             )
             session.add(row)
             schedule_run.assignments.append(row)
@@ -647,13 +691,21 @@ async def record_schedule_run_result(
     if rejections is not None:
         schedule_run.rejections[:] = []
         for item in rejections:
+            proposed_shift = _proposed_shift_for_result_item(
+                proposed_shifts_by_optimizer_id,
+                item,
+            )
             row = ScheduleRunRejection(
                 schedule_run_id=schedule_run.id,
-                shift_id=item.get("shift_id"),
+                shift_id=None if proposed_shift is not None else item.get("shift_id"),
+                proposed_shift_id=proposed_shift.id if proposed_shift is not None else item.get("proposed_shift_id"),
                 employee_id=item.get("employee_id"),
                 candidate_rank=int(item.get("candidate_rank", 0)),
                 rejection_reason_codes=list(item.get("rejection_reason_codes") or []),
-                score_payload=dict(item.get("score_payload") or {}),
+                score_payload=_result_payload_with_demand_metadata(
+                    dict(item.get("score_payload") or {}),
+                    proposed_shift=proposed_shift,
+                ),
                 constraint_failure_payload=dict(item.get("constraint_failure_payload") or {}),
             )
             session.add(row)
@@ -739,7 +791,7 @@ async def apply_schedule_run_to_draft(
     if precheck.status == ScheduleApplyStatus.no_op and existing_successful_apply is not None:
         return existing_successful_apply
 
-    if not schedule_run.assignments:
+    if not schedule_run.assignments and not schedule_run.proposed_shifts:
         apply_record = ScheduleRunApply(
             schedule_run_id=schedule_run.id,
             business_id=schedule_run.business_id,
@@ -775,6 +827,11 @@ async def apply_schedule_run_to_draft(
         await session.flush()
         return apply_record
 
+    materialized_shifts = await _materialize_schedule_run_proposed_shifts(
+        session,
+        schedule_run=schedule_run,
+        apply_record=apply_record,
+    )
     applied_assignment_count = 0
     reused_assignment_count = 0
     replaced_assignment_count = 0
@@ -787,6 +844,7 @@ async def apply_schedule_run_to_draft(
             schedule_run=schedule_run,
             apply_record=apply_record,
             run_assignment=run_assignment,
+            materialized_shifts_by_proposed_id=materialized_shifts,
         )
         if outcome == "created":
             applied_assignment_count += 1
@@ -795,13 +853,22 @@ async def apply_schedule_run_to_draft(
         elif outcome == "replaced":
             replaced_assignment_count += 1
 
+    post_apply_snapshot_hash = await current_scope_snapshot_hash(
+        session,
+        business_id=schedule_run.business_id,
+        location_id=schedule_run.location_id,
+        planning_window_start=schedule_run.planning_window_start,
+        planning_window_end=schedule_run.planning_window_end,
+    )
     apply_record.status = ScheduleApplyStatus.applied
     apply_record.applied_at = datetime.now(timezone.utc)
     apply_record.apply_metadata = {
         **(apply_record.apply_metadata or {}),
+        "materialized_shift_count": len(materialized_shifts),
         "applied_assignment_count": applied_assignment_count,
         "reused_assignment_count": reused_assignment_count,
         "replaced_assignment_count": replaced_assignment_count,
+        "post_apply_snapshot_hash": post_apply_snapshot_hash,
     }
     await session.flush()
     return apply_record
@@ -817,11 +884,17 @@ def evaluate_schedule_run_apply(
     if existing_successful_apply is not None:
         existing_target = str(getattr(existing_successful_apply, "target_snapshot_hash", "") or "")
         existing_current = str(getattr(existing_successful_apply, "current_snapshot_hash", "") or "")
+        existing_post_apply_hash = str(
+            (
+                getattr(existing_successful_apply, "apply_metadata", {}) or {}
+            ).get("post_apply_snapshot_hash")
+            or ""
+        )
         existing_status = getattr(existing_successful_apply, "status", None)
         if (
             str(existing_status) == ScheduleApplyStatus.applied.value
             and existing_target == target_snapshot_hash
-            and existing_current == current_snapshot_hash
+            and current_snapshot_hash in {existing_current, existing_post_apply_hash}
         ):
             return ScheduleRunApplyPrecheckResult(
                 status=ScheduleApplyStatus.no_op,
@@ -857,21 +930,86 @@ def evaluate_schedule_run_apply(
     )
 
 
+async def _materialize_schedule_run_proposed_shifts(
+    session: AsyncSession,
+    *,
+    schedule_run: ScheduleRun,
+    apply_record: ScheduleRunApply,
+) -> dict[UUID, Shift]:
+    materialized: dict[UUID, Shift] = {}
+    for proposed_shift in sorted(
+        schedule_run.proposed_shifts or [],
+        key=lambda item: (item.starts_at, item.demand_key),
+    ):
+        if proposed_shift.applied_shift_id is not None:
+            existing_shift = await _load_shift_for_apply(
+                session,
+                schedule_run.business_id,
+                proposed_shift.applied_shift_id,
+            )
+            if existing_shift is not None:
+                materialized[proposed_shift.id] = existing_shift
+                continue
+
+        if proposed_shift.location_id is None or proposed_shift.role_id is None:
+            raise ValueError("proposed_shift_missing_links")
+
+        created_shift = Shift(
+            business_id=schedule_run.business_id,
+            location_id=proposed_shift.location_id,
+            role_id=proposed_shift.role_id,
+            source_system=_AUTO_SCHEDULER_DEMAND_SOURCE_SYSTEM,
+            source_shift_id=f"{schedule_run.id}:{proposed_shift.demand_key}",
+            timezone=proposed_shift.timezone,
+            starts_at=proposed_shift.starts_at,
+            ends_at=proposed_shift.ends_at,
+            lifecycle_status=ShiftLifecycleStatus.draft,
+            staffing_status=ShiftStaffingStatus.open,
+            seats_requested=proposed_shift.headcount,
+            seats_filled=0,
+            requires_manager_approval=proposed_shift.requires_manager_approval,
+            premium_cents=proposed_shift.premium_cents,
+            shift_metadata={
+                "created_via": "auto_scheduler_demand",
+                "schedule_run_id": str(schedule_run.id),
+                "schedule_run_apply_id": str(apply_record.id),
+                "schedule_run_proposed_shift_id": str(proposed_shift.id),
+                "demand_key": proposed_shift.demand_key,
+                "source_type": proposed_shift.source_type,
+                "generation_version": proposed_shift.generation_version,
+                **dict(proposed_shift.generation_payload or {}),
+            },
+        )
+        session.add(created_shift)
+        await session.flush()
+        proposed_shift.applied_shift_id = created_shift.id
+        materialized[proposed_shift.id] = created_shift
+    return materialized
+
+
 async def _apply_schedule_run_assignment(
     session: AsyncSession,
     *,
     schedule_run: ScheduleRun,
     apply_record: ScheduleRunApply,
     run_assignment: ScheduleRunAssignment,
+    materialized_shifts_by_proposed_id: Mapping[UUID, Shift],
 ) -> str:
-    if run_assignment.shift_id is None or run_assignment.employee_id is None:
+    if run_assignment.employee_id is None:
         raise ValueError("schedule_run_assignment_missing_links")
 
-    shift = await _load_shift_for_apply(session, schedule_run.business_id, run_assignment.shift_id)
-    if shift is None:
-        raise LookupError("schedule_run_shift_not_found")
-    if shift.lifecycle_status != ShiftLifecycleStatus.draft:
-        raise ValueError("schedule_run_apply_requires_draft_shift")
+    if run_assignment.proposed_shift_id is not None:
+        shift = materialized_shifts_by_proposed_id.get(run_assignment.proposed_shift_id)
+        if shift is None:
+            raise LookupError("schedule_run_proposed_shift_not_materialized")
+    else:
+        if run_assignment.shift_id is None:
+            raise ValueError("schedule_run_assignment_missing_links")
+        shift = await _load_shift_for_apply(session, schedule_run.business_id, run_assignment.shift_id)
+        if shift is None:
+            raise LookupError("schedule_run_shift_not_found")
+        if shift.lifecycle_status != ShiftLifecycleStatus.draft:
+            raise ValueError("schedule_run_apply_requires_draft_shift")
 
     employee = await _load_employee_for_apply(session, schedule_run.business_id, run_assignment.employee_id)
     if employee is None:
@@ -1012,6 +1150,89 @@ def _existing_successful_apply(schedule_run: ScheduleRun) -> ScheduleRunApply | 
     return max(successful, key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc))
 
 
+def _normalized_generated_demand_payload(
+    generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None,
+    *,
+    location_id: UUID | None,
+) -> GeneratedDemandPayload:
+    if isinstance(generated_demand_payload, GeneratedDemandPayload):
+        payload = generated_demand_payload
+    elif generated_demand_payload is None:
+        payload = GeneratedDemandPayload()
+    else:
+        payload = GeneratedDemandPayload.model_validate(generated_demand_payload)
+
+    if location_id is None:
+        return payload
+
+    return GeneratedDemandPayload(
+        proposed_shifts=[
+            proposed_shift
+            for proposed_shift in payload.proposed_shifts
+            if proposed_shift.location_id == location_id
+        ],
+        metadata=dict(payload.metadata or {}),
+    )
+
+
+def _proposed_shift_models_for_run(
+    schedule_run: ScheduleRun,
+    generated_demand_payload: GeneratedDemandPayload,
+) -> list[ScheduleRunProposedShift]:
+    models: list[ScheduleRunProposedShift] = []
+    for proposed_shift in generated_demand_payload.proposed_shifts:
+        models.append(
+            ScheduleRunProposedShift(
+                schedule_run_id=schedule_run.id,
+                location_id=proposed_shift.location_id,
+                role_id=proposed_shift.role_id,
+                demand_key=proposed_shift.demand_key,
+                optimizer_shift_id=_optimizer_shift_id_for_demand_key(proposed_shift.demand_key),
+                source_type=proposed_shift.source_type,
+                generation_version=proposed_shift.generation_version,
+                timezone=proposed_shift.timezone,
+                starts_at=proposed_shift.starts_at,
+                ends_at=proposed_shift.ends_at,
+                headcount=proposed_shift.headcount,
+                premium_cents=proposed_shift.premium_cents,
+                requires_manager_approval=proposed_shift.requires_manager_approval,
+                generation_payload=dict(proposed_shift.generation_payload or {}),
+            )
+        )
+    return models
+
+
+def _proposed_shift_for_result_item(
+    proposed_shifts_by_optimizer_id: Mapping[str, ScheduleRunProposedShift],
+    item: Mapping[str, object],
+) -> ScheduleRunProposedShift | None:
+    proposed_shift_id = item.get("proposed_shift_id")
+    if proposed_shift_id is not None:
+        for proposed_shift in proposed_shifts_by_optimizer_id.values():
+            if str(proposed_shift.id) == str(proposed_shift_id):
+                return proposed_shift
+    shift_id = item.get("shift_id")
+    if shift_id is None:
+        return None
+    return proposed_shifts_by_optimizer_id.get(str(shift_id))
+
+
+def _result_payload_with_demand_metadata(
+    payload: dict[str, object],
+    *,
+    proposed_shift: ScheduleRunProposedShift | None,
+) -> dict[str, object]:
+    if proposed_shift is None:
+        return payload
+    return {
+        **payload,
+        "demand_key": proposed_shift.demand_key,
+        "source_type": proposed_shift.source_type,
+        "proposed_shift_id": str(proposed_shift.id),
+        "optimizer_shift_id": proposed_shift.optimizer_shift_id,
+    }
+
+
 def _mapping_value(
     payload: Mapping[str, object] | None,
     key: str,
@@ -1083,6 +1304,10 @@ def _sortable_value(value: object) -> tuple[int, str]:
     return (0, str(value))
 
 
+def _optimizer_shift_id_for_demand_key(demand_key: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"auto_scheduler_demand:{demand_key}"))
+
+
 def _shift_rows_for_optimizer(
     *,
     shifts: Sequence[Shift],
@@ -1108,6 +1333,30 @@ def _shift_rows_for_optimizer(
                 "headcount": int(shift.seats_requested or 1),
                 "premium_cents": int(shift.premium_cents or 0),
                 "requires_manager_approval": bool(shift.requires_manager_approval),
+            }
+        )
+    rows.sort(key=lambda row: (row["starts_at"], row["shift_id"]))
+    return rows
+
+
+def _generated_shift_rows_for_optimizer(
+    generated_demand_payload: GeneratedDemandPayload,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for proposed_shift in generated_demand_payload.proposed_shifts:
+        rows.append(
+            {
+                "shift_id": _optimizer_shift_id_for_demand_key(proposed_shift.demand_key),
+                "location_id": str(proposed_shift.location_id),
+                "role_id": str(proposed_shift.role_id),
+                "starts_at": proposed_shift.starts_at.isoformat(),
+                "ends_at": proposed_shift.ends_at.isoformat(),
+                "timezone": proposed_shift.timezone,
+                "headcount": proposed_shift.headcount,
+                "premium_cents": proposed_shift.premium_cents,
+                "requires_manager_approval": proposed_shift.requires_manager_approval,
+                "demand_key": proposed_shift.demand_key,
+                "source_type": proposed_shift.source_type,
             }
         )
     rows.sort(key=lambda row: (row["starts_at"], row["shift_id"]))
