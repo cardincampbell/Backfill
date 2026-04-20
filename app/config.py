@@ -253,10 +253,6 @@ class Settings:
         "BACKFILL_PUBLIC_LINK_SIGNING_SECRET",
         os.environ.get("BACKFILL_WORKER_API_KEY", "backfill-dev-public-link-secret"),
     )
-    run_migrations_on_startup: bool = os.environ.get(
-        "BACKFILL_RUN_MIGRATIONS_ON_STARTUP",
-        "",
-    ).strip().lower() in {"1", "true", "yes", "on"}
     backfill_allowed_origins: list[str] = field(default_factory=_default_allowed_origins)
     sql_echo: bool = os.environ.get(
         "BACKFILL_SQL_ECHO",

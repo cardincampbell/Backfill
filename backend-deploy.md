@@ -13,6 +13,7 @@ Do not point Retell at `https://usebackfill.com/webhooks/retell` unless the back
 - Frontend: `https://usebackfill.com`
 - Backend API: `https://api.usebackfill.com`
 - Backend worker: separate private service from the same image with `BACKFILL_SERVICE_MODE=worker`
+- Backend migrator: release-stage job or dedicated service from the same image with `BACKFILL_SERVICE_MODE=migrate`
 - Retell webhook: `https://api.usebackfill.com/webhooks/retell`
 - Optional split-mode Twilio SMS webhook: `https://api.usebackfill.com/webhooks/twilio/sms`
 
@@ -72,6 +73,12 @@ Worker mode (`BACKFILL_SERVICE_MODE=worker`) runs the durable background loop di
 - runs runtime projection freshness checks
 - runs the coverage runtime tick
 
+Migrator mode (`BACKFILL_SERVICE_MODE=migrate`) runs Alembic once with the production advisory lock and exits:
+
+- intended for deploy/release automation
+- should run before API and worker promotion
+- should not be used as a long-running service
+
 Recommended worker env:
 
 ```env
@@ -83,6 +90,10 @@ BACKFILL_WORKER_ERROR_BACKOFF_SECONDS=15
 
 Recommended Railway shape:
 
+- `Backfill Migrator` release job
+  - same repo / same Docker image
+  - `BACKFILL_SERVICE_MODE=migrate`
+  - runs once per deploy before app traffic is shifted
 - `Backfill API` service
   - public networking enabled
   - `BACKFILL_SERVICE_MODE=api`
@@ -92,6 +103,19 @@ Recommended Railway shape:
   - `BACKFILL_SERVICE_MODE=worker`
 
 Do not rely on schedule publish notifications, feed projections, or other outbox-driven workflows unless the worker service is running.
+
+## Migration policy
+
+Do not run schema migrations from API or worker startup.
+
+The correct release sequence is:
+
+1. build the new revision
+2. run the migrator entrypoint once against production
+3. if it succeeds, deploy/promote API and worker
+4. if it fails, stop the rollout and leave the current app revision in place
+
+Keep `/api/internal/migrations/run` as a break-glass path only, not the normal deploy mechanism.
 
 ## DNS
 

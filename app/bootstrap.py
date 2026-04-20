@@ -30,19 +30,9 @@ def run_migrations_with_advisory_lock() -> None:
     logger.info("Migrations applied successfully")
 
 
-async def run_startup_migrations_if_enabled() -> None:
-    if settings.run_migrations_on_startup:
-        logger.warning(
-            "BACKFILL_RUN_MIGRATIONS_ON_STARTUP is enabled but ignored; "
-            "run migrations via /internal/migrations/run or a release step instead"
-        )
-    return None
-
-
 def register_llm_adapters() -> None:
     llm_adapters.register_configured_adapters()
 
 
 async def initialize_runtime() -> None:
-    await run_startup_migrations_if_enabled()
     register_llm_adapters()
