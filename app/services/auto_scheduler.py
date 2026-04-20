@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.auto_scheduler import (
     ScheduleRun,
@@ -326,11 +327,12 @@ async def create_schedule_run(
     )
     session.add(schedule_run_input)
     schedule_run.inputs = schedule_run_input
-    schedule_run.proposed_shifts[:] = _proposed_shift_models_for_run(
+    proposed_shifts = _proposed_shift_models_for_run(
         schedule_run,
         inputs.generated_demand_payload,
     )
-    for proposed_shift in schedule_run.proposed_shifts:
+    set_committed_value(schedule_run, "proposed_shifts", list(proposed_shifts))
+    for proposed_shift in proposed_shifts:
         session.add(proposed_shift)
     await session.flush()
     return schedule_run
