@@ -22,7 +22,11 @@ from app.services.schedule_weeks import schedule_week_window
 
 
 class DummySchedulingSession:
+    def __init__(self):
+        self.commit_count = 0
+
     async def commit(self):
+        self.commit_count += 1
         return None
 
     async def rollback(self):
@@ -169,7 +173,12 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         fake_get_schedule_run_detail,
     )
 
-    app.dependency_overrides[get_db_session] = _override_db
+    db_session = DummySchedulingSession()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db
     app.dependency_overrides[get_auth_context] = override_auth
     try:
         client = TestClient(app)
@@ -182,6 +191,75 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         assert payload["status"] == "completed"
         assert payload["assignments"][0]["decision_rank"] == 1
         assert created["count"] == 0
+        assert db_session.commit_count == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ensure_predictive_schedule_route_commits_new_run(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    week_start_date = date(2026, 4, 27)
+    auth_ctx = _make_auth_context(business_id=business_id, location_id=location_id)
+    schedule_run = _schedule_run_detail_fixture(
+        business_id=business_id,
+        location_id=location_id,
+        week_start_date=week_start_date,
+    )
+    db_session = DummySchedulingSession()
+
+    async def override_auth():
+        return auth_ctx
+
+    async def override_db():
+        yield db_session
+
+    async def fake_get_location(_session, _business_id, _location_id):
+        return type("LocationStub", (), {"timezone": "America/Los_Angeles"})()
+
+    async def fake_current_scope_snapshot_hash(_session, **_kwargs):
+        return "sha256:authoring"
+
+    async def fake_latest_schedule_run_for_scope(_session, **_kwargs):
+        return None
+
+    async def fake_create_and_execute_schedule_run_for_scope(*_args, **_kwargs):
+        return schedule_run
+
+    async def fake_get_schedule_run_detail(_session, schedule_run_id):
+        assert schedule_run_id == schedule_run.id
+        return schedule_run
+
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.businesses_service.get_location",
+        fake_get_location,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.current_scope_snapshot_hash",
+        fake_current_scope_snapshot_hash,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.latest_schedule_run_for_scope",
+        fake_latest_schedule_run_for_scope,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.create_and_execute_schedule_run_for_scope",
+        fake_create_and_execute_schedule_run_for_scope,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.get_schedule_run_detail",
+        fake_get_schedule_run_detail,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/schedule-weeks/{week_start_date.isoformat()}/predictive-schedule"
+        )
+        assert response.status_code == 200
+        assert db_session.commit_count == 1
     finally:
         app.dependency_overrides.clear()
 
@@ -241,7 +319,12 @@ def test_apply_predictive_schedule_route_returns_apply_record(monkeypatch):
         fake_apply_schedule_run_from_live_scope,
     )
 
-    app.dependency_overrides[get_db_session] = _override_db
+    db_session = DummySchedulingSession()
+
+    async def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db
     app.dependency_overrides[get_auth_context] = override_auth
     try:
         client = TestClient(app)
@@ -252,5 +335,6 @@ def test_apply_predictive_schedule_route_returns_apply_record(monkeypatch):
         payload = response.json()
         assert payload["status"] == "applied"
         assert payload["schedule_run_id"] == str(schedule_run.id)
+        assert db_session.commit_count == 1
     finally:
         app.dependency_overrides.clear()
