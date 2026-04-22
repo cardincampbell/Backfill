@@ -256,6 +256,7 @@ async def test_reconcile_running_coverage_cases_marks_filled_and_cancels_active_
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime.delivery, "mark_offer_attempt_outcome", fake_mark_offer_attempt_outcome)
     monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
+    monkeypatch.setattr(coverage_runtime.forecast_history, "sync_callout_history_fact_for_case", fake_mark_offer_attempt_outcome)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 
@@ -312,8 +313,12 @@ async def test_reconcile_running_coverage_cases_exhausts_when_no_active_offers(m
         appended_events.append(event_type)
         return None
 
+    async def fake_sync_callout(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
+    monkeypatch.setattr(coverage_runtime.forecast_history, "sync_callout_history_fact_for_case", fake_sync_callout)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 
@@ -381,6 +386,7 @@ async def test_reconcile_running_coverage_cases_marks_cancelled_when_shift_not_a
     monkeypatch.setattr(coverage_runtime.worker_runtime, "claim_running_coverage_cases", fake_claim)
     monkeypatch.setattr(coverage_runtime.delivery, "mark_offer_attempt_outcome", fake_mark_offer_attempt_outcome)
     monkeypatch.setattr(coverage_runtime.platform_events, "append", fake_platform_event_append)
+    monkeypatch.setattr(coverage_runtime.forecast_history, "sync_callout_history_fact_for_case", fake_mark_offer_attempt_outcome)
 
     result = await coverage_runtime.reconcile_running_coverage_cases(session, limit=5)
 

@@ -19,7 +19,7 @@ from app.models.common import (
 from app.models.coverage import CoverageCase, CoverageOffer
 from app.models.scheduling import Shift
 from app.schemas.coverage import CoverageExecutionDispatchRequest
-from app.services import coverage, coverage_transitions, delivery, outreach as outreach_service, platform_events, worker_runtime
+from app.services import coverage, coverage_transitions, delivery, forecast_history, outreach as outreach_service, platform_events, worker_runtime
 
 _EVENT_COVERAGE_CAMPAIGN_FILLED = "coverage.campaign.filled"
 _EVENT_COVERAGE_CASE_FILLED = "coverage.case.filled"
@@ -117,6 +117,19 @@ async def _append_campaign_event(
         location_id=coverage_case.location_id,
         payload=payload or {},
         metadata={"channel": "worker_runtime", **(metadata or {})},
+    )
+
+
+async def _sync_callout_history_fact(
+    session: AsyncSession,
+    *,
+    coverage_case: CoverageCase,
+    shift: Shift,
+) -> None:
+    await forecast_history.sync_callout_history_fact_for_case(
+        session,
+        coverage_case=coverage_case,
+        shift=shift,
     )
 
 
@@ -444,6 +457,7 @@ async def reconcile_running_coverage_cases(
                     reason="shift_already_filled",
                 )
                 coverage_transitions.mark_case_filled(coverage_case, occurred_at=reference_time)
+                await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
                 coverage_case.case_metadata = {
                     **(coverage_case.case_metadata or {}),
                     "runtime_reconcile_reason": "shift_already_filled",
@@ -478,6 +492,7 @@ async def reconcile_running_coverage_cases(
                     reason="shift_not_actionable",
                 )
                 coverage_transitions.mark_case_cancelled(coverage_case, occurred_at=reference_time)
+                await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
                 coverage_case.case_metadata = {
                     **(coverage_case.case_metadata or {}),
                     "runtime_reconcile_reason": "shift_not_actionable",
@@ -503,6 +518,7 @@ async def reconcile_running_coverage_cases(
             active_offers = await _active_case_offers(session, coverage_case_id=coverage_case.id)
             if not active_offers:
                 coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
+                await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
                 coverage_case.case_metadata = {
                     **(coverage_case.case_metadata or {}),
                     "runtime_reconcile_reason": "no_active_offers",
@@ -529,6 +545,9 @@ async def reconcile_running_coverage_cases(
                 await session.rollback()
             refreshed_case = await session.get(CoverageCase, coverage_case.id) or coverage_case
             coverage_transitions.mark_case_failed(refreshed_case, occurred_at=reference_time)
+            refreshed_shift = await session.get(Shift, refreshed_case.shift_id)
+            if refreshed_shift is not None:
+                await _sync_callout_history_fact(session, coverage_case=refreshed_case, shift=refreshed_shift)
             refreshed_case.case_metadata = _runtime_error_metadata(
                 refreshed_case,
                 now=reference_time,

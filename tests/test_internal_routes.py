@@ -20,6 +20,8 @@ from app.models.auto_scheduler import (
 )
 from app.models.common import ScheduleApplyStatus, ScheduleRunStatus, ScheduleRunType
 from app.models.integrations import ProviderCallbackLog
+from app.models.labor_forecasting import LaborForecastPoint, LaborForecastRun
+from app.schemas.forecast_backtesting import ForecastBacktestRead
 
 
 class DummyInternalSession:
@@ -172,6 +174,99 @@ def _schedule_run_detail_fixture() -> ScheduleRun:
         )
     ]
     return schedule_run
+
+
+def _labor_forecast_run_fixture() -> LaborForecastRun:
+    now = datetime.now(timezone.utc)
+    forecast_run = LaborForecastRun(
+        id=uuid4(),
+        business_id=uuid4(),
+        location_id=uuid4(),
+        planning_window_start=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 5, 4, 7, 0, tzinfo=timezone.utc),
+        forecast_model_version="pattern_v1",
+        feature_snapshot_hash="sha256:features",
+        status="completed",
+        forecast_metadata={"source_type": "historical_pattern"},
+        started_at=now,
+        completed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    forecast_run.points = [
+        LaborForecastPoint(
+            id=uuid4(),
+            labor_forecast_run_id=forecast_run.id,
+            location_id=forecast_run.location_id,
+            role_id=uuid4(),
+            window_start=datetime(2026, 4, 28, 16, 0, tzinfo=timezone.utc),
+            window_end=datetime(2026, 4, 28, 22, 0, tzinfo=timezone.utc),
+            predicted_headcount=2,
+            predicted_labor_hours=12,
+            confidence=0.84,
+            forecast_payload={"source_week_count": 4},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    return forecast_run
+
+
+def _forecast_backtest_fixture(forecast_run: LaborForecastRun) -> ForecastBacktestRead:
+    bucket = forecast_run.points[0]
+    return ForecastBacktestRead.model_validate(
+        {
+            "labor_forecast_run_id": forecast_run.id,
+            "business_id": forecast_run.business_id,
+            "location_id": forecast_run.location_id,
+            "planning_window_start": forecast_run.planning_window_start,
+            "planning_window_end": forecast_run.planning_window_end,
+            "as_of": forecast_run.completed_at,
+            "actuals_finalization_policy_version": "bucket_plus_48h_v1",
+            "summary": {
+                "finalized_bucket_count": 1,
+                "pending_bucket_count": 0,
+                "finalized_bucket_rate": 1.0,
+                "headcount_mae": 0.25,
+                "headcount_bias": -0.25,
+                "labor_hours_mae": 0.25,
+                "labor_hours_bias": -0.25,
+                "mean_confidence": 0.84,
+                "confidence_calibration": [
+                    {
+                        "label": "high",
+                        "bucket_count": 1,
+                        "mean_confidence": 0.84,
+                        "within_half_headcount_rate": 1.0,
+                        "within_one_headcount_rate": 1.0,
+                        "headcount_mae": 0.25,
+                    }
+                ],
+            },
+            "buckets": [
+                {
+                    "labor_forecast_point_id": bucket.id,
+                    "location_id": bucket.location_id,
+                    "role_id": bucket.role_id,
+                    "bucket_start": bucket.window_start,
+                    "bucket_end": bucket.window_end,
+                    "predicted_headcount": 2.0,
+                    "predicted_labor_hours": 12.0,
+                    "confidence": 0.84,
+                    "actual_headcount": 1.75,
+                    "actual_labor_hours": 11.75,
+                    "headcount_error": -0.25,
+                    "labor_hours_error": -0.25,
+                    "actuals_completeness_status": "finalized",
+                    "actuals_finalized_at": bucket.window_end,
+                    "actuals_finalization_policy_version": "bucket_plus_48h_v1",
+                    "pending_reasons": [],
+                    "forecast_payload": {"source_week_count": 4},
+                    "actuals_payload": {"attendance_fact_count": 2},
+                }
+            ],
+        }
+    )
 
 
 def test_coverage_runtime_process_route_rejects_invalid_worker_key(monkeypatch):
@@ -401,6 +496,116 @@ def test_auto_scheduler_detail_route_returns_run_detail(monkeypatch):
         assert payload["metrics"]["candidate_considered_count"] == 2
         assert payload["applies"][0]["status"] == "applied"
         assert payload["replay_run_ids"] == [str(schedule_run.replay_runs[0].id)]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_labor_forecast_list_route_returns_runs(monkeypatch):
+    forecast_run = _labor_forecast_run_fixture()
+    captured: dict[str, object] = {}
+
+    async def fake_list(_session, *, business_id, location_id=None, status=None, limit=25):
+        captured["business_id"] = business_id
+        captured["location_id"] = location_id
+        captured["status"] = status
+        captured["limit"] = limit
+        return [forecast_run]
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.labor_forecasting.list_labor_forecast_runs",
+        fake_list,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/internal/labor-forecasts/runs?business_id={forecast_run.business_id}&location_id={forecast_run.location_id}&status=completed&limit=10",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["id"] == str(forecast_run.id)
+        assert payload[0]["forecast_model_version"] == "pattern_v1"
+        assert captured["business_id"] == forecast_run.business_id
+        assert captured["location_id"] == forecast_run.location_id
+        assert captured["status"] == "completed"
+        assert captured["limit"] == 10
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_labor_forecast_detail_route_returns_run_detail(monkeypatch):
+    forecast_run = _labor_forecast_run_fixture()
+
+    async def fake_load(_session, labor_forecast_run_id):
+        assert labor_forecast_run_id == forecast_run.id
+        return forecast_run
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.labor_forecasting.load_labor_forecast_run",
+        fake_load,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/internal/labor-forecasts/runs/{forecast_run.id}",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"] == str(forecast_run.id)
+        assert payload["status"] == "completed"
+        assert payload["points"][0]["predicted_headcount"] == 2.0
+        assert payload["points"][0]["forecast_payload"]["source_week_count"] == 4
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_labor_forecast_backtest_route_returns_backtest(monkeypatch):
+    forecast_run = _labor_forecast_run_fixture()
+    backtest = _forecast_backtest_fixture(forecast_run)
+    captured: dict[str, object] = {}
+
+    async def fake_backtest(_session, *, labor_forecast_run_id, as_of):
+        captured["labor_forecast_run_id"] = labor_forecast_run_id
+        captured["as_of"] = as_of
+        return backtest
+
+    monkeypatch.setattr(
+        "app.api.routes.internal.settings",
+        SimpleNamespace(worker_api_key="worker_test_key"),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.internal.forecast_backtesting.build_forecast_backtest",
+        fake_backtest,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/internal/labor-forecasts/runs/{forecast_run.id}/backtest?as_of=2026-05-01T07:00:00Z",
+                headers={"X-Backfill-Worker-Key": "worker_test_key"},
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["labor_forecast_run_id"] == str(forecast_run.id)
+        assert payload["summary"]["finalized_bucket_count"] == 1
+        assert payload["buckets"][0]["actuals_completeness_status"] == "finalized"
+        assert captured["labor_forecast_run_id"] == forecast_run.id
+        assert captured["as_of"] == datetime(2026, 5, 1, 7, 0, tzinfo=timezone.utc)
     finally:
         app.dependency_overrides.clear()
 

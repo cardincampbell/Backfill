@@ -125,6 +125,7 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         week_start_date=week_start_date,
     )
     created = {"count": 0}
+    captured: dict[str, object] = {}
 
     async def override_auth():
         return auth_ctx
@@ -135,6 +136,7 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         return type("LocationStub", (), {"timezone": "America/Los_Angeles"})()
 
     async def fake_current_scope_snapshot_hash(_session, **_kwargs):
+        captured["hash_kwargs"] = _kwargs
         return "sha256:authoring"
 
     async def fake_latest_schedule_run_for_scope(_session, **_kwargs):
@@ -181,6 +183,7 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         assert payload["id"] == str(schedule_run.id)
         assert payload["status"] == "completed"
         assert payload["assignments"][0]["decision_rank"] == 1
+        assert captured["hash_kwargs"]["generated_demand_payload"] == {"proposed_shifts": [], "metadata": {}}
         assert created["count"] == 0
     finally:
         app.dependency_overrides.clear()

@@ -3467,7 +3467,7 @@ function SchedulerContent({
                         : predictiveRunError
                           ? 'Predictive Schedule Unavailable'
                           : predictivePreviewActive
-                            ? 'AI-Generated Predictive Schedule'
+                            ? 'AI Predictive Schedule'
                             : 'Predictive Schedule Ready'}
                     </p>
                     <p className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
@@ -3476,7 +3476,7 @@ function SchedulerContent({
                         : predictiveRunError
                           ? predictiveRunError
                           : predictivePreviewActive
-                            ? `Optimized for coverage, reliability, and fairness.${predictiveGeneratedLabel ? ` Generated ${predictiveGeneratedLabel}.` : ''}`
+                            ? `Optimized for coverage, reliability, and fairness.${predictiveGeneratedLabel ? ` Prepared ${predictiveGeneratedLabel}.` : ''}`
                             : predictiveRun?.status === 'completed'
                               ? 'Backfill reviewed this week, but did not find any predictive assignments to apply.'
                               : 'Backfill is preparing the latest predictive schedule for review.'}
@@ -3705,7 +3705,11 @@ function SchedulerContent({
 
                           {/* Day cells */}
                           {DAYS.map((_day, dayIdx) => {
-                            const cellShifts = getShiftsForCell(emp.id, dayIdx);
+                            const cellShifts = getShiftsForCell(emp.id, dayIdx).map((shift) =>
+                              shift.predictivePreview
+                                ? { ...shift, color: roleAccent }
+                                : shift,
+                            );
                             const isMulti = cellShifts.length > 1;
                             const isDragCopyTarget =
                               dragCopyPreview?.employeeId === emp.id &&
@@ -3843,7 +3847,11 @@ function SchedulerContent({
 
                   <div className="space-y-1.5">
                     {roleEmps.map(emp => {
-                      const cellShifts = getShiftsForCell(emp.id, mobileDay);
+                      const cellShifts = getShiftsForCell(emp.id, mobileDay).map((shift) =>
+                        shift.predictivePreview
+                          ? { ...shift, color: roleAccent }
+                          : shift,
+                      );
                       const empWeekHours = getEmployeeWeekHours(emp.id);
                       const isSwiped = swipedEmployeeId === emp.id;
 

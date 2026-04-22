@@ -128,8 +128,21 @@ def test_get_location_forecast_normalizes_open_meteo(monkeypatch):
         assert _location_id == location_id
         return location
 
+    captured: dict[str, object] = {}
+
+    async def fake_record_weather_forecast_snapshot(_session, forecast, *, source_payload=None, forecast_generated_at=None):
+        captured["forecast"] = forecast
+        captured["source_payload"] = source_payload
+        captured["forecast_generated_at"] = forecast_generated_at
+        return []
+
     monkeypatch.setattr(weather_service.businesses, "get_location", fake_get_location)
     monkeypatch.setattr(weather_service.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        weather_service.feature_snapshot_builder,
+        "record_weather_forecast_snapshot",
+        fake_record_weather_forecast_snapshot,
+    )
 
     forecast = asyncio.run(
         weather_service.get_location_forecast(
@@ -157,6 +170,9 @@ def test_get_location_forecast_normalizes_open_meteo(monkeypatch):
     ]
     assert FakeAsyncClient.last_request is not None
     assert FakeAsyncClient.last_request["params"]["timezone"] == "America/Los_Angeles"
+    assert captured["forecast"] == forecast
+    assert isinstance(captured["source_payload"], dict)
+    assert "hourly" in captured["source_payload"]
 
 
 def test_get_location_forecast_requires_coordinates(monkeypatch):
@@ -195,6 +211,54 @@ def test_get_location_forecast_requires_coordinates(monkeypatch):
         assert str(exc) == "location_coordinates_required"
     else:
         raise AssertionError("Expected location_coordinates_required")
+
+
+def test_get_location_forecast_ignores_snapshot_persistence_failures(monkeypatch, caplog):
+    session = FakeWeatherSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        latitude=Decimal("34.050000"),
+        longitude=Decimal("-118.250000"),
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+    )
+
+    async def fake_get_location(_session, _business_id, _location_id):
+        return location
+
+    async def fake_record_weather_forecast_snapshot(*_args, **_kwargs):
+        raise RuntimeError("snapshot_persistence_failed")
+
+    monkeypatch.setattr(weather_service.businesses, "get_location", fake_get_location)
+    monkeypatch.setattr(weather_service.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        weather_service.feature_snapshot_builder,
+        "record_weather_forecast_snapshot",
+        fake_record_weather_forecast_snapshot,
+    )
+
+    with caplog.at_level("WARNING"):
+        forecast = asyncio.run(
+            weather_service.get_location_forecast(
+                session,
+                business_id=business_id,
+                location_id=location_id,
+                starts_at=datetime(2026, 4, 14, 16, 0, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 4, 14, 19, 0, tzinfo=timezone.utc),
+            )
+        )
+
+    assert forecast.provider == "open_meteo"
+    assert "Failed to persist weather forecast snapshot" in caplog.text
 
 
 def test_weather_route_returns_forecast(monkeypatch):

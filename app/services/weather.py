@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import logging
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -16,7 +17,7 @@ from app.schemas.weather import (
     LocationWeatherForecastSummaryRead,
     WeatherSeverityFlag,
 )
-from app.services import businesses
+from app.services import businesses, feature_snapshot_builder
 
 _OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _OPEN_METEO_HOURLY_FIELDS = (
@@ -27,6 +28,7 @@ _OPEN_METEO_HOURLY_FIELDS = (
     "weather_code",
 )
 _SUPPORTED_PROVIDERS = {"open_meteo"}
+logger = logging.getLogger(__name__)
 
 _WEATHER_CODE_LABELS: dict[int, str] = {
     0: "Clear",
@@ -330,7 +332,7 @@ async def get_location_forecast(
             )
         except httpx.HTTPError as exc:
             raise RuntimeError("weather_provider_request_failed") from exc
-        return _normalize_open_meteo_forecast(
+        forecast = _normalize_open_meteo_forecast(
             business_id=business_id,
             location_id=location_id,
             latitude=latitude,
@@ -340,5 +342,37 @@ async def get_location_forecast(
             window=window,
             fetched_at=fetched_at,
         )
+        await _persist_weather_forecast_snapshot_best_effort(
+            session,
+            forecast,
+            source_payload=payload,
+        )
+        return forecast
 
     raise RuntimeError("unsupported_weather_provider")
+
+
+async def _persist_weather_forecast_snapshot_best_effort(
+    session,
+    forecast: LocationWeatherForecastRead,
+    *,
+    source_payload: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await feature_snapshot_builder.record_weather_forecast_snapshot(
+            session,
+            forecast,
+            source_payload=source_payload,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to persist weather forecast snapshot",
+            extra={
+                "business_id": str(forecast.business_id),
+                "location_id": str(forecast.location_id),
+                "provider": forecast.provider,
+                "range_start": forecast.range_start.isoformat(),
+                "range_end": forecast.range_end.isoformat(),
+            },
+            exc_info=True,
+        )

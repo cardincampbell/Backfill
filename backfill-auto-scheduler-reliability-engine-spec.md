@@ -1215,6 +1215,10 @@ Scope:
 
 This is intentionally upstream and should not block Workstream F's pattern-based weekly ghost scheduling release.
 
+Concrete follow-on plan:
+
+- [backfill-labor-forecasting-implementation-plan.md](/Users/carcam07/Backfill/backfill-labor-forecasting-implementation-plan.md)
+
 ### Predictive Extension Parallelization Rules
 
 - Codex owns the contracts that affect apply, replay, and future forecast compatibility

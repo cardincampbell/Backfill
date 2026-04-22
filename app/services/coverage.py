@@ -57,6 +57,7 @@ from app.schemas.coverage import (
 from app.services import (
     coverage_transitions,
     delivery as delivery_service,
+    forecast_history,
     outreach as outreach_service,
     platform_events,
     runtime_projections,
@@ -101,6 +102,19 @@ def _policy_explanation_metadata(*, generated_at: datetime) -> dict[str, str]:
         "snapshot_generated_at": generated_at.isoformat(),
         "inputs_version": _COVERAGE_POLICY_INPUTS_VERSION,
     }
+
+
+async def _sync_callout_history_fact(
+    session: AsyncSession,
+    *,
+    coverage_case: CoverageCase,
+    shift: Shift,
+) -> None:
+    await forecast_history.sync_callout_history_fact_for_case(
+        session,
+        coverage_case=coverage_case,
+        shift=shift,
+    )
 
 
 @dataclass(frozen=True)
@@ -928,6 +942,7 @@ async def activate_standby_queue(
             standby_queue=standby_queue,
             standby_last_activated_at=reference_time.isoformat(),
         )
+        await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
         await session.flush()
     return created
 
@@ -1029,15 +1044,18 @@ async def advance_case_after_terminal_offer(
     )
     if standby_offers:
         coverage_transitions.mark_case_running(coverage_case)
+        await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
         return standby_offers, None
 
     if offer.coverage_case_run_id is None:
         coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
+        await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
         return [], str(coverage_case.id)
 
     run = await session.get(CoverageCaseRun, offer.coverage_case_run_id)
     if run is None:
         coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
+        await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
         return [], str(coverage_case.id)
 
     next_offers = await _dispatch_next_offer_batch(
@@ -1050,9 +1068,11 @@ async def advance_case_after_terminal_offer(
     )
     if next_offers:
         coverage_transitions.mark_case_running(coverage_case)
+        await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
         return next_offers, None
 
     coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=reference_time)
+    await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
     return [], str(coverage_case.id)
 
 
@@ -1219,6 +1239,8 @@ async def create_campaign(
         case_metadata=payload.campaign_metadata,
     )
     session.add(case)
+    await session.flush()
+    await _sync_callout_history_fact(session, coverage_case=case, shift=shift)
     await session.commit()
     await session.refresh(case)
     return case
@@ -1374,6 +1396,7 @@ async def execute_next_campaign_phase(
 
     case, _shift = await _load_campaign_shift(session, business_id, campaign_id)
     coverage_transitions.mark_case_exhausted(case, occurred_at=datetime.now(timezone.utc))
+    await _sync_callout_history_fact(session, coverage_case=case, shift=_shift)
     await session.commit()
     await session.refresh(case)
     return CoverageCampaignDispatchResult(
@@ -1907,6 +1930,7 @@ async def execute_phase_1_run(
         coverage_transitions.mark_case_running(case)
     else:
         coverage_transitions.mark_case_exhausted(case, occurred_at=run.finished_at or started_at)
+    await _sync_callout_history_fact(session, coverage_case=case, shift=shift)
 
     await session.commit()
     await session.refresh(case)
@@ -2040,6 +2064,7 @@ async def execute_phase_2_run(
         coverage_transitions.mark_case_running(case)
     else:
         coverage_transitions.mark_case_exhausted(case, occurred_at=run.finished_at or started_at)
+    await _sync_callout_history_fact(session, coverage_case=case, shift=shift)
 
     await session.commit()
     await session.refresh(case)
@@ -2180,6 +2205,7 @@ async def respond_to_offer(
         if shift.seats_filled >= shift.seats_requested:
             shift.status = ShiftStatus.covered
             coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
+            await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
             standby_queue = _standby_queue_for_case(coverage_case)
             standby_position = next(
                 (
@@ -2237,6 +2263,7 @@ async def respond_to_offer(
                         assignment=assignment,
                     )
                 coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
+                await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
                 _update_case_metadata(
                     coverage_case,
                     confirmed_offer_id=str(offer.id),
@@ -2308,6 +2335,12 @@ async def respond_to_offer(
                     },
                 )
                 session.add(assignment)
+                await session.flush()
+                await forecast_history.sync_attendance_history_fact_for_assignment(
+                    session,
+                    shift=shift,
+                    assignment=assignment,
+                )
                 assignment_status = AssignmentStatus.accepted.value
 
                 if _is_standby_activation_offer(offer):
@@ -2323,6 +2356,7 @@ async def respond_to_offer(
                 if shift.seats_filled >= shift.seats_requested:
                     shift.status = ShiftStatus.covered
                     coverage_transitions.mark_case_filled(coverage_case, occurred_at=responded_at)
+                    await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
                     _update_case_metadata(
                         coverage_case,
                         confirmed_offer_id=str(offer.id),
@@ -2331,6 +2365,7 @@ async def respond_to_offer(
                 else:
                     shift.status = ShiftStatus.filling
                     coverage_transitions.mark_case_running(coverage_case)
+                    await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
 
             sibling_result = await session.execute(
                 select(CoverageOffer).where(
@@ -2392,6 +2427,7 @@ async def respond_to_offer(
             }
         elif exhausted_case_id is not None:
             coverage_transitions.mark_case_exhausted(coverage_case, occurred_at=responded_at)
+            await _sync_callout_history_fact(session, coverage_case=coverage_case, shift=shift)
 
     if action == "accepted":
         contact_attempt = await delivery_service.mark_offer_attempt_outcome(

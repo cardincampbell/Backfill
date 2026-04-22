@@ -36,6 +36,10 @@ def _is_vacancy_event(provider: SchedulerProvider, payload: dict[str, Any]) -> b
     return False
 
 
+def _is_attendance_event(provider: SchedulerProvider, payload: dict[str, Any]) -> bool:
+    return scheduler_sync.is_attendance_event_payload(provider, payload)
+
+
 def _signature_header(provider: SchedulerProvider, request: Request) -> str:
     if provider == SchedulerProvider.seven_shifts:
         return request.headers.get("X-7shifts-Signature", "") or request.headers.get("X-SevenShifts-Signature", "")
@@ -79,6 +83,17 @@ async def _handle_webhook(
     if _is_vacancy_event(provider, body):
         try:
             return await scheduler_sync.handle_vacancy_event(
+                session,
+                provider=provider,
+                payload=body,
+                connection_id=connection.id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    if _is_attendance_event(provider, body):
+        try:
+            return await scheduler_sync.handle_attendance_event(
                 session,
                 provider=provider,
                 payload=body,

@@ -41,7 +41,9 @@ from app.schemas.integrations import (
 )
 from app.services import coverage as coverage_service, coverage_runtime
 from app.services import businesses
+from app.services import forecast_history
 from app.services import scheduling as scheduling_service
+from app.services import shift_assignments as shift_assignment_service
 from app.services import worker_runtime
 from app.services.scheduler_adapters import (
     ExternalEmployeeRecord,
@@ -732,29 +734,31 @@ async def sync_connection_schedule(
         active_assignments = await _active_scheduler_assignments(session, shift.id)
         assignments_by_employee = {assignment.employee_id: assignment for assignment in active_assignments if assignment.employee_id}
         desired_ids = list(dict.fromkeys(mapped_employee_ids))
+        affected_assignments: list[ShiftAssignment] = []
 
         sequence_no = 1
         for employee_id in desired_ids:
             assignment = assignments_by_employee.pop(employee_id, None)
             if assignment is None:
-                session.add(
-                    ShiftAssignment(
-                        shift_id=shift.id,
-                        employee_id=employee_id,
-                        assigned_via="scheduler_sync",
-                        status=AssignmentStatus.assigned,
-                        sequence_no=sequence_no,
-                        assignment_metadata={"source": "scheduler_sync"},
-                    )
+                assignment = ShiftAssignment(
+                    shift_id=shift.id,
+                    employee_id=employee_id,
+                    assigned_via="scheduler_sync",
+                    status=AssignmentStatus.assigned,
+                    sequence_no=sequence_no,
+                    assignment_metadata={"source": "scheduler_sync"},
                 )
+                session.add(assignment)
             else:
                 assignment.status = AssignmentStatus.assigned
                 assignment.sequence_no = sequence_no
+            affected_assignments.append(assignment)
             sequence_no += 1
 
         for assignment in assignments_by_employee.values():
             assignment.status = AssignmentStatus.cancelled
             assignment.cancelled_at = datetime.now(timezone.utc)
+            affected_assignments.append(assignment)
 
         shift.seats_filled = len(desired_ids)
         shift.lifecycle_status = _normalized_shift_lifecycle_status(record.status)
@@ -764,6 +768,17 @@ async def sync_connection_schedule(
             shift.seats_requested,
         )
         await session.flush()
+        await _sync_scheduler_assignment_history_facts(
+            session,
+            shift=shift,
+            assignments=affected_assignments,
+            source_system=_provider_display_value(connection.provider),
+            source_payload={
+                "sync_origin": "scheduler_sync",
+                "provider_location_ref": connection.provider_location_ref,
+                "shift_external_ref": record.external_ref,
+            },
+        )
         if is_created and shift.lifecycle_status == ShiftLifecycleStatus.cancelled:
             skipped += 1
 
@@ -888,8 +903,441 @@ async def _resolve_shift_from_event(
     )
 
 
+def _event_type_value(payload: dict[str, Any]) -> str:
+    return str(payload.get("type") or payload.get("event") or payload.get("topic") or payload.get("resource") or "").strip()
+
+
+def _event_status_value(payload: dict[str, Any]) -> str:
+    value = _first_present(
+        payload,
+        [
+            ("status",),
+            ("state",),
+            ("data", "status"),
+            ("data", "state"),
+            ("punch", "status"),
+            ("timesheet", "status"),
+            ("resource", "status"),
+        ],
+    )
+    return str(value or "").strip().lower()
+
+
+def _coerce_event_datetime(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        numeric_value = float(value)
+        if numeric_value > 1_000_000_000_000:
+            numeric_value = numeric_value / 1000.0
+        return datetime.fromtimestamp(numeric_value, tz=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _attendance_shift_ref_from_event(payload: dict[str, Any]) -> str | None:
+    raw_id = _first_present(
+        payload,
+        [
+            ("shift_id",),
+            ("roster_id",),
+            ("shift", "id"),
+            ("shift", "shift_id"),
+            ("data", "shift_id"),
+            ("data", "roster_id"),
+            ("data", "shift", "id"),
+            ("data", "roster", "id"),
+            ("punch", "shift_id"),
+            ("punch", "roster_id"),
+            ("timesheet", "shift_id"),
+            ("timesheet", "roster_id"),
+            ("resource", "id"),
+        ],
+    )
+    return str(raw_id).strip() if raw_id not in (None, "") else None
+
+
+def _attendance_employee_ref_from_event(payload: dict[str, Any]) -> str | None:
+    raw_id = _first_present(
+        payload,
+        [
+            ("worker_id",),
+            ("employee_id",),
+            ("user_id",),
+            ("employee", "id"),
+            ("user", "id"),
+            ("data", "worker_id"),
+            ("data", "employee_id"),
+            ("data", "user_id"),
+            ("data", "employee", "id"),
+            ("data", "user", "id"),
+            ("punch", "employee_id"),
+            ("punch", "user_id"),
+            ("timesheet", "employee_id"),
+            ("timesheet", "user_id"),
+        ],
+    )
+    return str(raw_id).strip() if raw_id not in (None, "") else None
+
+
+def _attendance_check_in_at_from_event(payload: dict[str, Any]) -> datetime | None:
+    return _coerce_event_datetime(
+        _first_present(
+            payload,
+            [
+                ("checked_in_at",),
+                ("check_in_at",),
+                ("clock_in_at",),
+                ("clock_in",),
+                ("in_time",),
+                ("data", "checked_in_at"),
+                ("data", "check_in_at"),
+                ("data", "clock_in_at"),
+                ("data", "clock_in"),
+                ("data", "in_time"),
+                ("punch", "checked_in_at"),
+                ("punch", "clock_in_at"),
+                ("timesheet", "start"),
+                ("timesheet", "start_time"),
+            ],
+        )
+    )
+
+
+def _attendance_check_out_at_from_event(payload: dict[str, Any]) -> datetime | None:
+    return _coerce_event_datetime(
+        _first_present(
+            payload,
+            [
+                ("checked_out_at",),
+                ("check_out_at",),
+                ("clock_out_at",),
+                ("clock_out",),
+                ("out_time",),
+                ("data", "checked_out_at"),
+                ("data", "check_out_at"),
+                ("data", "clock_out_at"),
+                ("data", "clock_out"),
+                ("data", "out_time"),
+                ("punch", "checked_out_at"),
+                ("punch", "clock_out_at"),
+                ("timesheet", "end"),
+                ("timesheet", "end_time"),
+            ],
+        )
+    )
+
+
+def _attendance_occurred_at_from_event(payload: dict[str, Any]) -> datetime | None:
+    return _coerce_event_datetime(
+        _first_present(
+            payload,
+            [
+                ("occurred_at",),
+                ("timestamp",),
+                ("event_time",),
+                ("created_at",),
+                ("updated_at",),
+                ("data", "occurred_at"),
+                ("data", "timestamp"),
+                ("data", "event_time"),
+                ("data", "created_at"),
+                ("data", "updated_at"),
+                ("punch", "occurred_at"),
+                ("timesheet", "updated_at"),
+            ],
+        )
+    )
+
+
+def _attendance_state_from_event(payload: dict[str, Any]) -> str | None:
+    event_type = _event_type_value(payload).lower()
+    status_value = _event_status_value(payload)
+    check_in_at = _attendance_check_in_at_from_event(payload)
+    check_out_at = _attendance_check_out_at_from_event(payload)
+
+    if any(token in event_type for token in ("no_show", "noshow", "missed_shift", "missed")) or status_value in {
+        "no_show",
+        "noshow",
+        "missed",
+    }:
+        return "no_show"
+    if check_out_at is not None:
+        return "check_out"
+    if check_in_at is not None:
+        return "check_in"
+    if any(token in event_type for token in ("punch.out", "clock_out", "checked_out", "timesheet.completed")) or status_value in {
+        "clocked_out",
+        "checked_out",
+        "completed",
+    }:
+        return "check_out"
+    if any(token in event_type for token in ("punch.in", "clock_in", "checked_in", "timesheet.started")) or status_value in {
+        "clocked_in",
+        "checked_in",
+        "in_progress",
+        "working",
+    }:
+        return "check_in"
+    return None
+
+
+def is_attendance_event_payload(provider: SchedulerProvider, payload: dict[str, Any]) -> bool:
+    event_type = _event_type_value(payload).lower()
+    if provider in {SchedulerProvider.seven_shifts, SchedulerProvider.when_i_work} and event_type.startswith("punch."):
+        return True
+    if provider == SchedulerProvider.deputy and "timesheet" in event_type:
+        return True
+    return (
+        _attendance_state_from_event(payload) is not None
+        and _attendance_shift_ref_from_event(payload) is not None
+        and _attendance_employee_ref_from_event(payload) is not None
+    )
+
+
+def _next_assignment_sequence_no(assignments: list[ShiftAssignment]) -> int:
+    return max((int(assignment.sequence_no or 0) for assignment in assignments), default=0) + 1
+
+
+async def _refresh_shift_state_from_assignments(
+    session: AsyncSession,
+    *,
+    shift: Shift,
+    assignments: list[ShiftAssignment],
+    event_state: str | None,
+) -> None:
+    current_assignment = shift_assignment_service.current_assignment(assignments)
+    shift.seats_filled = 1 if current_assignment is not None else 0
+    if current_assignment is not None:
+        shift.staffing_status = ShiftStaffingStatus.covered
+        if current_assignment.checked_out_at is not None or current_assignment.status == AssignmentStatus.completed:
+            shift.lifecycle_status = ShiftLifecycleStatus.completed
+        elif current_assignment.checked_in_at is not None:
+            shift.lifecycle_status = ShiftLifecycleStatus.in_progress
+        elif shift.lifecycle_status in {ShiftLifecycleStatus.in_progress, ShiftLifecycleStatus.completed}:
+            shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+        return
+
+    active_case_count = int(
+        await session.scalar(
+            select(func.count(CoverageCase.id)).where(
+                CoverageCase.shift_id == shift.id,
+                CoverageCase.status.in_([CoverageCaseStatus.queued, CoverageCaseStatus.running]),
+            )
+        )
+        or 0
+    )
+    shift.staffing_status = ShiftStaffingStatus.filling if active_case_count > 0 else ShiftStaffingStatus.open
+    if event_state == "no_show" and shift.lifecycle_status in {ShiftLifecycleStatus.in_progress, ShiftLifecycleStatus.completed}:
+        shift.lifecycle_status = ShiftLifecycleStatus.scheduled
+
+
+def _apply_attendance_event_to_assignment(
+    assignment: ShiftAssignment,
+    *,
+    event_state: str,
+    occurred_at: datetime,
+    check_in_at: datetime | None,
+    check_out_at: datetime | None,
+    source_system: str,
+    payload: dict[str, Any],
+) -> None:
+    metadata = dict(assignment.assignment_metadata or {})
+    metadata.update(
+        {
+            "source": metadata.get("source") or "scheduler_sync",
+            "external_attendance_source_system": source_system,
+            "external_attendance_event_type": _event_type_value(payload) or None,
+            "external_attendance_raw_status": _event_status_value(payload) or None,
+            "external_attendance_recorded_at": occurred_at.isoformat(),
+        }
+    )
+
+    if event_state == "no_show":
+        assignment.status = AssignmentStatus.no_show
+        assignment.cancelled_at = occurred_at
+        assignment.checked_in_at = None
+        assignment.checked_out_at = None
+        assignment.assignment_metadata = metadata
+        return
+
+    if event_state == "check_in":
+        resolved_check_in_at = check_in_at or occurred_at
+        if assignment.checked_in_at is None or resolved_check_in_at < assignment.checked_in_at:
+            assignment.checked_in_at = resolved_check_in_at
+        if assignment.accepted_at is None:
+            assignment.accepted_at = assignment.checked_in_at
+        if assignment.status not in {AssignmentStatus.completed, AssignmentStatus.accepted}:
+            assignment.status = AssignmentStatus.accepted
+        assignment.assignment_metadata = metadata
+        return
+
+    resolved_check_out_at = check_out_at or occurred_at
+    if check_in_at is not None and assignment.checked_in_at is None:
+        assignment.checked_in_at = check_in_at
+    if assignment.accepted_at is None:
+        assignment.accepted_at = assignment.checked_in_at or resolved_check_out_at
+    if assignment.checked_out_at is None or resolved_check_out_at > assignment.checked_out_at:
+        assignment.checked_out_at = resolved_check_out_at
+    assignment.status = AssignmentStatus.completed
+    assignment.assignment_metadata = metadata
+
+
+async def reconcile_attendance_event(
+    session: AsyncSession,
+    connection: SchedulerConnection,
+    payload: dict[str, Any],
+) -> dict[str, int]:
+    shift_ref = _attendance_shift_ref_from_event(payload)
+    employee_ref = _attendance_employee_ref_from_event(payload)
+    event_state = _attendance_state_from_event(payload)
+    if not shift_ref or not employee_ref or event_state is None:
+        return {"created": 0, "updated": 0, "skipped": 1}
+
+    shift = await session.scalar(
+        select(Shift).where(
+            Shift.source_system == _provider_display_value(connection.provider),
+            Shift.source_shift_id == shift_ref,
+        )
+    )
+    if shift is None:
+        return {"created": 0, "updated": 0, "skipped": 1}
+
+    employee = await session.scalar(
+        select(Employee).where(
+            Employee.business_id == connection.business_id,
+            Employee.external_ref == employee_ref,
+        )
+    )
+    if employee is None:
+        return {"created": 0, "updated": 0, "skipped": 1}
+
+    assignment_result = await session.execute(
+        select(ShiftAssignment)
+        .where(ShiftAssignment.shift_id == shift.id)
+        .order_by(ShiftAssignment.sequence_no.asc(), ShiftAssignment.created_at.asc())
+    )
+    assignments = list(assignment_result.scalars().all())
+    matching_assignments = [assignment for assignment in assignments if assignment.employee_id == employee.id]
+    assignment = shift_assignment_service.latest_assignment(matching_assignments)
+    created = 0
+    updated = 0
+    if assignment is None:
+        assignment = ShiftAssignment(
+            shift_id=shift.id,
+            employee_id=employee.id,
+            assigned_via="scheduler_sync",
+            status=AssignmentStatus.assigned,
+            sequence_no=_next_assignment_sequence_no(assignments),
+            assignment_metadata={"source": "scheduler_sync"},
+        )
+        session.add(assignment)
+        assignments.append(assignment)
+        created = 1
+    else:
+        updated = 1
+
+    occurred_at = _attendance_occurred_at_from_event(payload) or datetime.now(timezone.utc)
+    check_in_at = _attendance_check_in_at_from_event(payload)
+    check_out_at = _attendance_check_out_at_from_event(payload)
+    source_system = _history_source_system_for_shift(shift, fallback=_provider_display_value(connection.provider))
+
+    _apply_attendance_event_to_assignment(
+        assignment,
+        event_state=event_state,
+        occurred_at=occurred_at,
+        check_in_at=check_in_at,
+        check_out_at=check_out_at,
+        source_system=source_system,
+        payload=payload,
+    )
+    await _refresh_shift_state_from_assignments(
+        session,
+        shift=shift,
+        assignments=assignments,
+        event_state=event_state,
+    )
+    await session.flush()
+    await forecast_history.sync_attendance_history_fact_for_assignment(
+        session,
+        shift=shift,
+        assignment=assignment,
+        source_system=source_system,
+        source_payload={
+            "sync_origin": "scheduler_webhook",
+            "provider_event_type": _event_type_value(payload) or None,
+            "provider_event_status": _event_status_value(payload) or None,
+            "provider_event_id": _first_present(payload, [("id",), ("event_id",), ("data", "event_id")]),
+            "shift_external_ref": shift_ref,
+            "employee_external_ref": employee_ref,
+        },
+    )
+    return {"created": created, "updated": updated, "skipped": 0}
+
+
 def default_dispatch_channel() -> str:
     return coverage_runtime.default_dispatch_channel()
+
+
+def _history_source_system_for_shift(
+    shift: Shift,
+    *,
+    fallback: str | None = None,
+) -> str:
+    source_system = str(shift.source_system or "").strip()
+    if source_system:
+        return source_system
+    fallback_value = str(fallback or "").strip()
+    if fallback_value:
+        return fallback_value
+    return SchedulerProvider.backfill_native.value
+
+
+async def _sync_scheduler_assignment_history_facts(
+    session: AsyncSession,
+    *,
+    shift: Shift,
+    assignments: list[ShiftAssignment],
+    source_system: str,
+    source_payload: dict[str, Any],
+) -> None:
+    for assignment in assignments:
+        if assignment.employee_id is None:
+            continue
+        await forecast_history.sync_attendance_history_fact_for_assignment(
+            session,
+            shift=shift,
+            assignment=assignment,
+            source_system=source_system,
+            source_payload=source_payload,
+        )
+
+
+async def _sync_scheduler_callout_history_fact(
+    session: AsyncSession,
+    *,
+    shift: Shift,
+    coverage_case: CoverageCase,
+    source_system: str,
+    source_payload: dict[str, Any],
+) -> None:
+    await forecast_history.sync_callout_history_fact_for_case(
+        session,
+        coverage_case=coverage_case,
+        shift=shift,
+        source_system=source_system,
+        source_payload=source_payload,
+    )
 
 
 async def create_vacancy_for_shift(
@@ -904,6 +1352,7 @@ async def create_vacancy_for_shift(
     shift = await session.get(Shift, shift_id, with_for_update=True)
     if shift is None:
         raise LookupError("shift_not_found")
+    source_system = _history_source_system_for_shift(shift)
 
     result = await session.execute(
         select(ShiftAssignment).where(
@@ -913,12 +1362,14 @@ async def create_vacancy_for_shift(
     )
     active_assignments = list(result.scalars().all())
     now = datetime.now(timezone.utc)
+    cancelled_assignments: list[ShiftAssignment] = []
     excluded_employee_ids: set[UUID] = set()
     for assignment in active_assignments:
         if employee_id is not None and assignment.employee_id != employee_id:
             continue
         assignment.status = AssignmentStatus.cancelled
         assignment.cancelled_at = now
+        cancelled_assignments.append(assignment)
         if assignment.employee_id is not None:
             excluded_employee_ids.add(assignment.employee_id)
 
@@ -952,11 +1403,36 @@ async def create_vacancy_for_shift(
         shift.lifecycle_status = ShiftLifecycleStatus.scheduled
         shift.staffing_status = ShiftStaffingStatus.covered
         await session.flush()
+        await _sync_scheduler_assignment_history_facts(
+            session,
+            shift=shift,
+            assignments=cancelled_assignments,
+            source_system=source_system,
+            source_payload={
+                "sync_origin": "scheduler_sync",
+                "vacancy_reason_code": reason_code,
+                "triggered_by": triggered_by,
+                "shift_external_ref": shift.source_shift_id,
+            },
+        )
         return {"shift_id": shift.id, "coverage_case_id": None, "offers": []}
 
     shift.lifecycle_status = ShiftLifecycleStatus.scheduled
     shift.staffing_status = (
         ShiftStaffingStatus.filling if shift.seats_filled > 0 else ShiftStaffingStatus.open
+    )
+    await session.flush()
+    await _sync_scheduler_assignment_history_facts(
+        session,
+        shift=shift,
+        assignments=cancelled_assignments,
+        source_system=source_system,
+        source_payload={
+            "sync_origin": "scheduler_sync",
+            "vacancy_reason_code": reason_code,
+            "triggered_by": triggered_by,
+            "shift_external_ref": shift.source_shift_id,
+        },
     )
 
     coverage_case = await session.scalar(
@@ -1013,6 +1489,18 @@ async def create_vacancy_for_shift(
         active_offers = list(active_offer_result.scalars().all())
         if active_offers:
             await session.flush()
+            await _sync_scheduler_callout_history_fact(
+                session,
+                shift=shift,
+                coverage_case=coverage_case,
+                source_system=source_system,
+                source_payload={
+                    "sync_origin": "scheduler_sync",
+                    "vacancy_reason_code": reason_code,
+                    "triggered_by": triggered_by,
+                    "shift_external_ref": shift.source_shift_id,
+                },
+            )
             return {
                 "shift_id": shift.id,
                 "coverage_case_id": coverage_case.id,
@@ -1042,6 +1530,18 @@ async def create_vacancy_for_shift(
                 run_metadata={"triggered_by": triggered_by},
             )
     await session.flush()
+    await _sync_scheduler_callout_history_fact(
+        session,
+        shift=shift,
+        coverage_case=coverage_case,
+        source_system=source_system,
+        source_payload={
+            "sync_origin": "scheduler_sync",
+            "vacancy_reason_code": reason_code,
+            "triggered_by": triggered_by,
+            "shift_external_ref": shift.source_shift_id,
+        },
+    )
     return {
         "shift_id": shift.id,
         "coverage_case_id": coverage_case.id,
@@ -1110,6 +1610,42 @@ async def handle_vacancy_event(
     }
 
 
+async def handle_attendance_event(
+    session: AsyncSession,
+    *,
+    provider: SchedulerProvider,
+    payload: dict,
+    connection_id: UUID | None = None,
+) -> dict:
+    connection = await resolve_connection(
+        session,
+        provider=provider,
+        connection_id=connection_id,
+        payload=payload,
+    )
+    if connection is None:
+        raise LookupError("scheduler_connection_not_found")
+    event_type = _event_type_value(payload) or None
+    scope_ref = _attendance_shift_ref_from_event(payload) or _attendance_employee_ref_from_event(payload)
+    event, job = await enqueue_event_reconcile(
+        session,
+        connection=connection,
+        payload=payload,
+        event_type=event_type,
+        event_scope="attendance",
+        scope_ref=scope_ref,
+        source_event_id=_source_event_id(provider, payload),
+    )
+    await session.commit()
+    processed = await process_sync_job(session, job.id)
+    return {
+        "connection_id": str(connection.id),
+        "event_id": str(event.id),
+        "job_id": str(job.id),
+        "processed": processed,
+    }
+
+
 async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
     job = await session.get(SchedulerSyncJob, job_id)
     if job is None:
@@ -1129,6 +1665,7 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
     created = 0
     updated = 0
     skipped = 0
+    scheduler_event = await session.get(SchedulerEvent, job.scheduler_event_id) if job.scheduler_event_id else None
     try:
         if job.job_type in {"connect_bootstrap", "repair_reconcile"}:
             roster_counts = await sync_connection_roster(session, connection)
@@ -1139,15 +1676,34 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
         if job.job_type in {"connect_bootstrap", "daily_reconcile", "rolling_reconcile", "event_reconcile", "repair_reconcile"}:
             start_value = job.window_start or _window_for_job(job.job_type)[0]
             end_value = job.window_end or _window_for_job(job.job_type)[1]
-            schedule_counts = await sync_connection_schedule(
-                session,
-                connection,
-                window_start=start_value,
-                window_end=end_value,
-            )
-            created += schedule_counts["created"]
-            updated += schedule_counts["updated"]
-            skipped += schedule_counts["skipped"]
+            if scheduler_event is not None and scheduler_event.event_scope == "attendance":
+                schedule_counts = await sync_connection_schedule(
+                    session,
+                    connection,
+                    window_start=start_value,
+                    window_end=end_value,
+                )
+                created += schedule_counts["created"]
+                updated += schedule_counts["updated"]
+                skipped += schedule_counts["skipped"]
+                attendance_counts = await reconcile_attendance_event(
+                    session,
+                    connection,
+                    scheduler_event.payload or {},
+                )
+                created += attendance_counts["created"]
+                updated += attendance_counts["updated"]
+                skipped += attendance_counts["skipped"]
+            else:
+                schedule_counts = await sync_connection_schedule(
+                    session,
+                    connection,
+                    window_start=start_value,
+                    window_end=end_value,
+                )
+                created += schedule_counts["created"]
+                updated += schedule_counts["updated"]
+                skipped += schedule_counts["skipped"]
 
         if job.job_type == "writeback":
             if not job.scope_ref:
@@ -1180,12 +1736,10 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
             connection.last_sync_error = None
 
         worker_runtime.mark_scheduler_job_completed(job, completed_at=completed_at)
-        if job.scheduler_event_id:
-            event = await session.get(SchedulerEvent, job.scheduler_event_id)
-            if event is not None:
-                event.status = SchedulerSyncEventStatus.processed
-                event.processed_at = completed_at
-                event.error = None
+        if scheduler_event is not None:
+            scheduler_event.status = SchedulerSyncEventStatus.processed
+            scheduler_event.processed_at = completed_at
+            scheduler_event.error = None
         session.add(
             SchedulerSyncRun(
                 sync_job_id=job.id,
@@ -1223,12 +1777,10 @@ async def process_sync_job(session: AsyncSession, job_id: UUID) -> dict:
                 error_message=str(exc),
             )
         await _mark_connection_failure(session, connection, error=str(exc))
-        if job.scheduler_event_id:
-            event = await session.get(SchedulerEvent, job.scheduler_event_id)
-            if event is not None:
-                event.status = SchedulerSyncEventStatus.failed if final_failure else SchedulerSyncEventStatus.retrying
-                event.processed_at = completed_at if final_failure else None
-                event.error = str(exc)
+        if scheduler_event is not None:
+            scheduler_event.status = SchedulerSyncEventStatus.failed if final_failure else SchedulerSyncEventStatus.retrying
+            scheduler_event.processed_at = completed_at if final_failure else None
+            scheduler_event.error = str(exc)
         session.add(
             SchedulerSyncRun(
                 sync_job_id=job.id,

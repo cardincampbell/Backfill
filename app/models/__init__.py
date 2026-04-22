@@ -25,6 +25,14 @@ from app.models.coverage import (
     CoverageOfferResponse,
     OutboxEvent,
 )
+from app.models.demand_features import (
+    AttendanceHistoryFact,
+    CalloutHistoryFact,
+    DemandFeatureSnapshot,
+    DemandFeatureSnapshotPoint,
+    PosSalesFact,
+    WeatherForecastSnapshot,
+)
 from app.models.events import PlatformEvent
 from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.models.identity import ManagerInvite, Membership, OTPChallenge, Session, User
@@ -45,6 +53,7 @@ from app.models.labor_rules import (
     LaborRuleUpdateProposal,
     LocationLaborRuleResolution,
 )
+from app.models.labor_forecasting import LaborForecastPoint, LaborForecastRun
 from app.models.projections import FeedProjection, ProjectionCursor
 from app.models.reliability import ReliabilityEvent, ReliabilitySnapshot
 from app.models.reliability_coaching import (
@@ -84,6 +93,7 @@ __all__ = [
     "BusinessVerticalRoleArchetype",
     "BusinessVerticalTypeMapping",
     "BillingLedgerEntry",
+    "CalloutHistoryFact",
     "CommunicationSuppression",
     "CoverageCandidate",
     "CoverageCase",
@@ -92,6 +102,9 @@ __all__ = [
     "CoverageOffer",
     "CoverageOfferResponse",
     "CostLedgerEntry",
+    "DemandFeatureSnapshot",
+    "DemandFeatureSnapshotPoint",
+    "AttendanceHistoryFact",
     "Employee",
     "EmployeeAvailabilityException",
     "EmployeeAvailabilityRule",
@@ -101,6 +114,8 @@ __all__ = [
     "FeedProjection",
     "LlmGeneration",
     "LaborIndustryProfile",
+    "LaborForecastPoint",
+    "LaborForecastRun",
     "LaborRuleProfile",
     "LaborRuleProfileVersion",
     "LaborRuleResolutionRun",
@@ -114,6 +129,7 @@ __all__ = [
     "OTPChallenge",
     "OutboxEvent",
     "PlatformEvent",
+    "PosSalesFact",
     "ProjectionCursor",
     "ReliabilityEvent",
     "ReliabilitySnapshot",
@@ -140,6 +156,7 @@ __all__ = [
     "Shift",
     "ShiftAssignment",
     "User",
+    "WeatherForecastSnapshot",
     "WebhookDelivery",
     "WebhookSubscription",
 ]

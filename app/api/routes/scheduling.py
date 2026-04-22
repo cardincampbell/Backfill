@@ -256,13 +256,6 @@ async def ensure_predictive_schedule_week(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location_not_found")
 
     window = schedule_week_window(location.timezone, week_start_date)
-    current_snapshot_hash = await auto_scheduler.current_scope_snapshot_hash(
-        session,
-        business_id=business_id,
-        location_id=location_id,
-        planning_window_start=window.starts_at,
-        planning_window_end=window.ends_at,
-    )
     schedule_run = await auto_scheduler.latest_schedule_run_for_scope(
         session,
         business_id=business_id,
@@ -270,6 +263,21 @@ async def ensure_predictive_schedule_week(
         planning_window_start=window.starts_at,
         planning_window_end=window.ends_at,
     )
+
+    current_snapshot_hash = None
+    if schedule_run is not None:
+        try:
+            generated_demand_payload = auto_scheduler.schedule_run_input_contract(schedule_run).generated_demand_payload
+        except ValueError:
+            generated_demand_payload = {"proposed_shifts": [], "metadata": {}}
+        current_snapshot_hash = await auto_scheduler.current_scope_snapshot_hash(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+            planning_window_start=window.starts_at,
+            planning_window_end=window.ends_at,
+            generated_demand_payload=generated_demand_payload,
+        )
 
     if (
         schedule_run is None

@@ -31,6 +31,7 @@ from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.coverage import (
     CoverageCandidatePreview,
+    CoverageCampaignCreate,
     CoverageOfferResponseCreate,
     Phase1ExecutionRequest,
 )
@@ -860,7 +861,7 @@ async def test_collect_phase_1_candidates_include_policy_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_respond_to_offer_accepts_and_assigns_shift():
+async def test_respond_to_offer_accepts_and_assigns_shift(monkeypatch):
     business_id = uuid4()
     location_id = uuid4()
     role_id = uuid4()
@@ -920,6 +921,21 @@ async def test_respond_to_offer_accepts_and_assigns_shift():
 
     session = FakeCoverageSession(shift=shift, case=case, offer=offer)
     session.execute_queue = [[sibling]]
+    synced_assignment_ids: list[str] = []
+    synced_case_ids: list[str] = []
+
+    async def fake_sync_attendance(_session, *, shift, assignment, **_kwargs):
+        synced_assignment_ids.append(str(assignment.id))
+        assert shift.id == shift_id
+        return None
+
+    async def fake_sync_callout(_session, *, coverage_case, shift: Shift, **_kwargs):
+        synced_case_ids.append(str(coverage_case.id))
+        assert shift.id == shift_id
+        return None
+
+    monkeypatch.setattr(coverage.forecast_history, "sync_attendance_history_fact_for_assignment", fake_sync_attendance)
+    monkeypatch.setattr(coverage.forecast_history, "sync_callout_history_fact_for_case", fake_sync_callout)
 
     result = await coverage.respond_to_offer(
         session,
@@ -943,6 +959,65 @@ async def test_respond_to_offer_accepts_and_assigns_shift():
     assert result.assignment_status == AssignmentStatus.accepted
     assert result.outreach_attempt.coverage_offer_id == offer.id
     assert result.outreach_attempt.status == "accepted"
+    assert synced_assignment_ids == [str(assignments[0].id)]
+    assert synced_case_ids == [str(case.id)]
+
+
+@pytest.mark.asyncio
+async def test_create_campaign_syncs_callout_history(monkeypatch):
+    business_id = uuid4()
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        ends_at=datetime.now(timezone.utc) + timedelta(hours=14),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    placeholder_case = CoverageCase(
+        id=uuid4(),
+        shift_id=shift.id,
+        location_id=shift.location_id,
+        role_id=shift.role_id,
+        status=CoverageCaseStatus.queued,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session = FakeCoverageSession(shift=shift, case=placeholder_case)
+    expected_shift_id = shift.id
+    synced_case_ids: list[str] = []
+
+    async def fake_sync_callout(_session, *, coverage_case, shift: Shift, **_kwargs):
+        synced_case_ids.append(str(coverage_case.id))
+        assert shift.id == expected_shift_id
+        return None
+
+    monkeypatch.setattr(coverage.forecast_history, "sync_callout_history_fact_for_case", fake_sync_callout)
+
+    result = await coverage.create_campaign(
+        session,
+        business_id,
+        CoverageCampaignCreate(
+            shift_id=shift.id,
+            phase_target="phase_1",
+            reason_code="callout",
+            campaign_metadata={"source": "test"},
+        ),
+    )
+
+    assert result.shift_id == shift.id
+    assert result.location_id == shift.location_id
+    assert result.role_id == shift.role_id
+    assert result.status == CoverageCaseStatus.queued
+    assert synced_case_ids == [str(result.id)]
 
 
 @pytest.mark.asyncio
@@ -1033,6 +1108,7 @@ async def test_respond_to_offer_accepts_active_callout_via_published_reassignmen
     republish_calls: list[dict] = []
     writeback_shift_ids: list[object] = []
     published_events: list[dict] = []
+    synced_case_ids: list[str] = []
 
     async def fake_apply_published_shift_amendment(
         _session,
@@ -1131,10 +1207,20 @@ async def test_respond_to_offer_accepts_active_callout_via_published_reassignmen
         published_events.append(kwargs)
         return None
 
+    async def fake_sync_callout(_session, *, coverage_case, shift: Shift, **_kwargs):
+        synced_case_ids.append(str(coverage_case.id))
+        assert shift.id == shift_id
+        return None
+
+    async def fake_sync_attendance(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr("app.services.scheduling.apply_published_shift_amendment", fake_apply_published_shift_amendment)
     monkeypatch.setattr("app.services.scheduling.publish_schedule_week", fake_publish_schedule_week)
     monkeypatch.setattr("app.services.scheduler_sync.enqueue_writeback", fake_enqueue_writeback)
     monkeypatch.setattr("app.services.platform_events.append", fake_platform_event_append)
+    monkeypatch.setattr(coverage.forecast_history, "sync_callout_history_fact_for_case", fake_sync_callout)
+    monkeypatch.setattr(coverage.forecast_history, "sync_attendance_history_fact_for_assignment", fake_sync_attendance)
 
     result = await coverage.respond_to_offer(
         session,
@@ -1166,6 +1252,7 @@ async def test_respond_to_offer_accepts_active_callout_via_published_reassignmen
     )
     assert result.assignment_id == reassigned_assignment.id
     assert result.assignment_status == AssignmentStatus.assigned
+    assert synced_case_ids == [str(case.id)]
 
 
 @pytest.mark.asyncio

@@ -62,6 +62,8 @@ class ProposedShiftPayload(BaseSchema):
     demand_key: str = Field(min_length=1, max_length=255)
     source_type: Literal["historical_pattern", "template", "forecast"] = "historical_pattern"
     generation_version: str = "v1"
+    source_run_id: Optional[UUID] = None
+    source_point_id: Optional[UUID] = None
     location_id: UUID
     role_id: UUID
     timezone: str = Field(min_length=1, max_length=64)
@@ -185,6 +187,8 @@ class ScheduleRunProposedShiftRead(BaseSchema):
     id: UUID
     schedule_run_id: UUID
     applied_shift_id: Optional[UUID] = None
+    source_run_id: Optional[UUID] = None
+    source_point_id: Optional[UUID] = None
     location_id: Optional[UUID] = None
     role_id: Optional[UUID] = None
     demand_key: str

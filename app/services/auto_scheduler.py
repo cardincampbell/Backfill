@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -27,6 +27,7 @@ from app.models.business import Business, Location
 from app.models.common import (
     AssignmentStatus,
     EmployeeStatus,
+    LaborForecastRunStatus,
     ScheduleApplyStatus,
     ScheduleRunStatus,
     ScheduleRunType,
@@ -41,7 +42,15 @@ from app.schemas.auto_scheduler import (
     SchedulePolicyPayload,
     ScheduleRunInputContract,
 )
-from app.services import auto_scheduler_optimizer, shift_assignments
+from app.services import (
+    auto_scheduler_optimizer,
+    feature_snapshot_builder,
+    forecast_engine,
+    forecast_history,
+    labor_forecasting,
+    pos_sales,
+    shift_assignments,
+)
 from app.services.schedule_weeks import effective_week_start_day
 
 _DEFAULT_SAME_DAY_SECOND_SHIFT_ALLOWED = True
@@ -50,6 +59,7 @@ _DEFAULT_LABOR_RULE_MODE = "soft_penalty"
 _DEFAULT_FAIRNESS_MODE = "balanced_hours"
 _DEFAULT_MAX_SOLVER_RUNTIME_SECONDS = 30
 _USABLE_LOCATION_ACCESS_LEVELS = {"approved", "trusted"}
+_POS_SALES_LOOKBACK_DAYS = 28
 _COUNTED_ASSIGNMENT_STATUSES = {
     AssignmentStatus.proposed,
     AssignmentStatus.assigned,
@@ -57,6 +67,7 @@ _COUNTED_ASSIGNMENT_STATUSES = {
     AssignmentStatus.completed,
 }
 _AUTO_SCHEDULER_DEMAND_SOURCE_SYSTEM = "auto_scheduler_demand"
+_HISTORY_FACT_LOOKBACK_DAYS = 56
 
 
 @dataclass(frozen=True)
@@ -344,6 +355,7 @@ async def create_and_execute_schedule_run_for_scope(
     planning_window_start: datetime,
     planning_window_end: datetime,
     source_metadata: Mapping[str, object] | None = None,
+    generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None = None,
     optimizer: Callable[[ScheduleRunInputContract], Mapping[str, object]] | None = None,
 ) -> ScheduleRun:
     business = await _load_scope_business(session, business_id)
@@ -392,11 +404,20 @@ async def create_and_execute_schedule_run_for_scope(
         location_id=location_id,
         location_settings=location.settings if location is not None and isinstance(location.settings, Mapping) else {},
         labor_payload=labor_payload,
+        generated_demand_payload=generated_demand_payload,
         source_metadata={
             "source": "auto_scheduler_scope_loader_v1",
             "generated_at": generated_at.isoformat(),
             **dict(source_metadata or {}),
         },
+    )
+    inputs, artifact_metadata = await _attach_forecast_artifacts_to_inputs(
+        session,
+        business_id=business_id,
+        location=location,
+        planning_window_start=planning_window_start,
+        planning_window_end=planning_window_end,
+        inputs=inputs,
     )
     schedule_run = await create_schedule_run(
         session,
@@ -410,6 +431,7 @@ async def create_and_execute_schedule_run_for_scope(
             "scope_shift_count": len(shifts),
             "scope_employee_count": len(employees),
             "source": "auto_scheduler_scope_loader_v1",
+            **artifact_metadata,
         },
     )
     return await execute_schedule_run(
@@ -426,6 +448,7 @@ async def current_scope_snapshot_hash(
     location_id: UUID | None,
     planning_window_start: datetime,
     planning_window_end: datetime,
+    generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None = None,
 ) -> str:
     shifts = await _load_scope_shifts(
         session,
@@ -439,8 +462,15 @@ async def current_scope_snapshot_hash(
         business_id=business_id,
         shifts=shifts,
     )
+    generated_demand = _normalized_generated_demand_payload(
+        generated_demand_payload,
+        location_id=location_id,
+    )
     return build_authoring_snapshot_hash(
-        shifts=_shift_rows_for_optimizer(shifts=shifts, location_id=location_id),
+        shifts=[
+            *_shift_rows_for_optimizer(shifts=shifts, location_id=location_id),
+            *_generated_shift_rows_for_optimizer(generated_demand),
+        ],
         draft_assignments=_draft_assignment_rows(shifts=shifts, location_id=location_id),
         employee_role_eligibility=_employee_role_eligibility_rows(employees),
         employee_location_eligibility=_employee_location_eligibility_rows(employees),
@@ -462,6 +492,10 @@ async def apply_schedule_run_from_live_scope(
     schedule_run = await load_schedule_run(session, schedule_run_id)
     if schedule_run is None:
         raise LookupError("schedule_run_not_found")
+    try:
+        generated_demand_payload = schedule_run_input_contract(schedule_run).generated_demand_payload
+    except ValueError:
+        generated_demand_payload = None
 
     current_snapshot_hash = await current_scope_snapshot_hash(
         session,
@@ -469,6 +503,7 @@ async def apply_schedule_run_from_live_scope(
         location_id=schedule_run.location_id,
         planning_window_start=schedule_run.planning_window_start,
         planning_window_end=schedule_run.planning_window_end,
+        generated_demand_payload=generated_demand_payload,
     )
     return await apply_schedule_run_to_draft(
         session,
@@ -977,6 +1012,8 @@ async def _materialize_schedule_run_proposed_shifts(
                 "demand_key": proposed_shift.demand_key,
                 "source_type": proposed_shift.source_type,
                 "generation_version": proposed_shift.generation_version,
+                "source_run_id": str(proposed_shift.source_run_id) if proposed_shift.source_run_id else None,
+                "source_point_id": str(proposed_shift.source_point_id) if proposed_shift.source_point_id else None,
                 **dict(proposed_shift.generation_payload or {}),
             },
         )
@@ -1175,6 +1212,749 @@ def _normalized_generated_demand_payload(
     )
 
 
+async def _attach_forecast_artifacts_to_inputs(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location: Location | None,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    inputs: ScheduleRunInputContract,
+) -> tuple[ScheduleRunInputContract, dict[str, object]]:
+    source_metadata = dict(inputs.source_metadata or {})
+    run_metadata: dict[str, object] = {}
+
+    try:
+        snapshot = await _create_demand_feature_snapshot_for_inputs(
+            session,
+            business_id=business_id,
+            location=location,
+            planning_window_start=planning_window_start,
+            planning_window_end=planning_window_end,
+            inputs=inputs,
+        )
+        source_metadata.update(
+            {
+                "demand_feature_snapshot_id": str(snapshot.id),
+                "demand_feature_snapshot_hash": snapshot.snapshot_hash,
+                "demand_feature_snapshot_status": "attached",
+            }
+        )
+        run_metadata.update(
+            {
+                "demand_feature_snapshot_id": str(snapshot.id),
+                "demand_feature_snapshot_hash": snapshot.snapshot_hash,
+            }
+        )
+    except Exception as exc:
+        source_metadata.update(
+            {
+                "demand_feature_snapshot_status": "degraded",
+                "demand_feature_snapshot_error_type": exc.__class__.__name__,
+                "demand_feature_snapshot_error_message": str(exc),
+                "labor_forecast_run_status": "skipped",
+            }
+        )
+        run_metadata.update(
+            {
+                "forecast_artifact_status": "degraded",
+                "demand_feature_snapshot_error_type": exc.__class__.__name__,
+                "demand_feature_snapshot_error_message": str(exc),
+                "labor_forecast_run_status": "skipped",
+            }
+        )
+        return inputs.model_copy(update={"source_metadata": source_metadata}), run_metadata
+
+    try:
+        if inputs.generated_demand_payload.proposed_shifts:
+            forecast_mode = "generated_demand_scaffold"
+            forecast_run = await _create_labor_forecast_run_for_generated_demand(
+                session,
+                business_id=business_id,
+                location=location,
+                planning_window_start=planning_window_start,
+                planning_window_end=planning_window_end,
+                generated_demand_payload=inputs.generated_demand_payload,
+                demand_feature_snapshot_id=snapshot.id,
+                feature_snapshot_hash=snapshot.snapshot_hash,
+            )
+            generated_demand = _generated_demand_with_forecast_provenance(
+                inputs.generated_demand_payload,
+                forecast_run=forecast_run,
+            )
+        else:
+            forecast_mode = "baseline_forecast"
+            forecast_run = await _create_labor_forecast_run_for_snapshot(
+                session,
+                business_id=business_id,
+                location=location,
+                planning_window_start=planning_window_start,
+                planning_window_end=planning_window_end,
+                demand_feature_snapshot=snapshot,
+            )
+            generated_demand = _generated_demand_from_labor_forecast_run(
+                snapshot=snapshot,
+                forecast_run=forecast_run,
+            )
+        source_metadata.update(
+            {
+                "labor_forecast_run_id": str(forecast_run.id),
+                "labor_forecast_run_status": "attached",
+                "labor_forecast_point_count": len(getattr(forecast_run, "points", []) or []),
+                "labor_forecast_source_type": forecast_mode,
+                "generated_shift_count": len(generated_demand.proposed_shifts),
+            }
+        )
+        run_metadata.update(
+            {
+                "labor_forecast_run_id": str(forecast_run.id),
+                "labor_forecast_point_count": len(getattr(forecast_run, "points", []) or []),
+                "labor_forecast_source_type": forecast_mode,
+                "generated_shift_count": len(generated_demand.proposed_shifts),
+            }
+        )
+        if forecast_mode == "baseline_forecast":
+            source_metadata.update(
+                {
+                    "forecast_shaping_policy_version": forecast_engine.FORECAST_SHAPING_POLICY_VERSION,
+                    "forecast_materialization_rule_version": forecast_engine.FORECAST_MATERIALIZATION_RULE_VERSION,
+                }
+            )
+            run_metadata.update(
+                {
+                    "forecast_shaping_policy_version": forecast_engine.FORECAST_SHAPING_POLICY_VERSION,
+                    "forecast_materialization_rule_version": forecast_engine.FORECAST_MATERIALIZATION_RULE_VERSION,
+                }
+            )
+        return (
+            inputs.model_copy(
+                update={
+                    "generated_demand_payload": generated_demand,
+                    "source_metadata": source_metadata,
+                }
+            ),
+            run_metadata,
+        )
+    except Exception as exc:
+        source_metadata.update(
+            {
+                "labor_forecast_run_status": "degraded",
+                "labor_forecast_error_type": exc.__class__.__name__,
+                "labor_forecast_error_message": str(exc),
+            }
+        )
+        run_metadata.update(
+            {
+                "labor_forecast_run_status": "degraded",
+                "labor_forecast_error_type": exc.__class__.__name__,
+                "labor_forecast_error_message": str(exc),
+            }
+        )
+        return inputs.model_copy(update={"source_metadata": source_metadata}), run_metadata
+
+
+async def _create_demand_feature_snapshot_for_inputs(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location: Location | None,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    inputs: ScheduleRunInputContract,
+):
+    timezone_name = location.timezone if location is not None else "UTC"
+    location_id = location.id if location is not None else None
+    weather_rows = await feature_snapshot_builder.list_weather_forecast_snapshots(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        bucket_start=planning_window_start,
+        bucket_end=planning_window_end,
+    )
+    sales_rows = await pos_sales.list_pos_sales_facts(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        bucket_start=planning_window_start - timedelta(days=_POS_SALES_LOOKBACK_DAYS),
+        bucket_end=planning_window_start,
+        limit=5000,
+    )
+    attendance_rows = await forecast_history.list_attendance_history_facts(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        starts_at=planning_window_start - timedelta(days=_HISTORY_FACT_LOOKBACK_DAYS),
+        ends_at=planning_window_start,
+        limit=5000,
+    )
+    callout_rows = await forecast_history.list_callout_history_facts(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        occurred_at_start=planning_window_start - timedelta(days=_HISTORY_FACT_LOOKBACK_DAYS),
+        occurred_at_end=planning_window_start,
+        limit=5000,
+    )
+    weather_bucket_features = feature_snapshot_builder.build_weather_snapshot_bucket_lookup(weather_rows)
+    sales_bucket_features = pos_sales.summarize_pos_sales_by_local_bucket(
+        sales_rows,
+        timezone_name=timezone_name,
+        bucket_minutes=60,
+    )
+    attendance_bucket_features = forecast_history.summarize_attendance_by_local_bucket(
+        attendance_rows,
+        timezone_name=timezone_name,
+        bucket_minutes=60,
+        lookback_days=_HISTORY_FACT_LOOKBACK_DAYS,
+    )
+    callout_bucket_features = forecast_history.summarize_callout_history_by_local_bucket(
+        callout_rows,
+        timezone_name=timezone_name,
+        bucket_minutes=60,
+        lookback_days=_HISTORY_FACT_LOOKBACK_DAYS,
+    )
+    contract = feature_snapshot_builder.build_demand_feature_snapshot_contract(
+        planning_window_start=planning_window_start,
+        planning_window_end=planning_window_end,
+        timezone_name=timezone_name,
+        bucket_minutes=60,
+        source_summary=_demand_feature_snapshot_source_summary(
+            inputs,
+            weather_snapshot_count=len(weather_rows),
+            weather_bucket_count=len(weather_bucket_features),
+            pos_sales_fact_count=len(sales_rows),
+            pos_sales_bucket_signature_count=len(sales_bucket_features),
+            attendance_fact_count=len(attendance_rows),
+            attendance_bucket_signature_count=len(attendance_bucket_features),
+            callout_fact_count=len(callout_rows),
+            callout_bucket_signature_count=len(callout_bucket_features),
+        ),
+        points=_demand_feature_snapshot_points_for_inputs(
+            inputs,
+            planning_window_start=planning_window_start,
+            planning_window_end=planning_window_end,
+            default_timezone=timezone_name,
+            bucket_minutes=60,
+            weather_bucket_features=weather_bucket_features,
+            sales_bucket_features=sales_bucket_features,
+            attendance_bucket_features=attendance_bucket_features,
+            callout_bucket_features=callout_bucket_features,
+        ),
+    )
+    return await feature_snapshot_builder.create_demand_feature_snapshot(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        contract=contract,
+    )
+
+
+async def _create_labor_forecast_run_for_snapshot(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location: Location | None,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    demand_feature_snapshot,
+):
+    point_payloads = forecast_engine.build_baseline_labor_forecast_points(demand_feature_snapshot)
+    contract = labor_forecasting.build_labor_forecast_contract(
+        planning_window_start=planning_window_start,
+        planning_window_end=planning_window_end,
+        demand_feature_snapshot_id=demand_feature_snapshot.id,
+        feature_snapshot_hash=demand_feature_snapshot.snapshot_hash,
+        points=point_payloads,
+        forecast_model_version=forecast_engine.BASELINE_FORECAST_MODEL_VERSION,
+        forecast_metadata={
+            "source_type": "baseline_forecast_engine",
+            "point_count": len(point_payloads),
+            "snapshot_point_count": len(getattr(demand_feature_snapshot, "points", []) or []),
+        },
+    )
+    forecast_run = await labor_forecasting.create_labor_forecast_run(
+        session,
+        business_id=business_id,
+        location_id=location.id if location is not None else None,
+        contract=contract,
+    )
+    return await labor_forecasting.record_labor_forecast_result(
+        session,
+        forecast_run,
+        status=LaborForecastRunStatus.completed,
+        points=contract.points,
+        forecast_metadata=contract.forecast_metadata,
+        completed_at=datetime.now(timezone.utc),
+    )
+
+
+async def _create_labor_forecast_run_for_generated_demand(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    location: Location | None,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    generated_demand_payload: GeneratedDemandPayload,
+    demand_feature_snapshot_id: UUID,
+    feature_snapshot_hash: str,
+):
+    point_payloads = _labor_forecast_points_from_generated_demand(generated_demand_payload)
+    contract = labor_forecasting.build_labor_forecast_contract(
+        planning_window_start=planning_window_start,
+        planning_window_end=planning_window_end,
+        demand_feature_snapshot_id=demand_feature_snapshot_id,
+        feature_snapshot_hash=feature_snapshot_hash,
+        points=point_payloads,
+        forecast_model_version="generated_demand_scaffold_v1",
+        forecast_metadata={
+            "source_type": "generated_demand_scaffold",
+            "point_count": len(point_payloads),
+            "generated_shift_count": len(generated_demand_payload.proposed_shifts),
+        },
+    )
+    forecast_run = await labor_forecasting.create_labor_forecast_run(
+        session,
+        business_id=business_id,
+        location_id=location.id if location is not None else None,
+        contract=contract,
+    )
+    return await labor_forecasting.record_labor_forecast_result(
+        session,
+        forecast_run,
+        status=LaborForecastRunStatus.completed,
+        points=contract.points,
+        forecast_metadata=contract.forecast_metadata,
+        completed_at=datetime.now(timezone.utc),
+    )
+
+
+def _generated_demand_from_labor_forecast_run(
+    *,
+    snapshot,
+    forecast_run,
+) -> GeneratedDemandPayload:
+    return forecast_engine.build_generated_demand_from_forecast_run(
+        forecast_run,
+        timezone_name=getattr(snapshot, "timezone_name", "UTC"),
+    )
+
+
+def _demand_feature_snapshot_source_summary(
+    inputs: ScheduleRunInputContract,
+    *,
+    weather_snapshot_count: int = 0,
+    weather_bucket_count: int = 0,
+    pos_sales_fact_count: int = 0,
+    pos_sales_bucket_signature_count: int = 0,
+    attendance_fact_count: int = 0,
+    attendance_bucket_signature_count: int = 0,
+    callout_fact_count: int = 0,
+    callout_bucket_signature_count: int = 0,
+) -> dict[str, object]:
+    source_metadata = dict(inputs.source_metadata or {})
+    return {
+        "source": source_metadata.get("source", "auto_scheduler_scope_loader_v1"),
+        "fixed_shift_count": int(source_metadata.get("fixed_shift_count", 0)),
+        "generated_shift_count": int(source_metadata.get("generated_shift_count", 0)),
+        "employee_count": int(source_metadata.get("employee_count", 0)),
+        "reliability_snapshot_hash": inputs.reliability_snapshot_hash,
+        "labor_employee_count": len(_mapping(inputs.labor_payload).get("employees", {}) or {}),
+        "weather_snapshot_count": weather_snapshot_count,
+        "weather_bucket_count": weather_bucket_count,
+        "pos_sales_fact_count": pos_sales_fact_count,
+        "pos_sales_bucket_signature_count": pos_sales_bucket_signature_count,
+        "attendance_fact_count": attendance_fact_count,
+        "attendance_bucket_signature_count": attendance_bucket_signature_count,
+        "callout_fact_count": callout_fact_count,
+        "callout_bucket_signature_count": callout_bucket_signature_count,
+    }
+
+
+def _demand_feature_snapshot_points_for_inputs(
+    inputs: ScheduleRunInputContract,
+    *,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    default_timezone: str,
+    bucket_minutes: int,
+    weather_bucket_features: Mapping[tuple[str | None, datetime, datetime], Mapping[str, object]] | None = None,
+    sales_bucket_features: Mapping[tuple[str | None, int, int, int], Mapping[str, object]] | None = None,
+    attendance_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]] | None = None,
+    callout_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    buckets: dict[
+        tuple[str | None, str | None, datetime, datetime],
+        dict[str, object],
+    ] = {}
+    fixed_shifts = _sequence_mapping(_mapping(inputs.fixed_shift_payload).get("shifts"))
+    generated_shifts = list(inputs.generated_demand_payload.proposed_shifts)
+
+    for shift_row in fixed_shifts:
+        _accumulate_feature_bucket(
+            buckets,
+            location_id=str(shift_row.get("location_id")) if shift_row.get("location_id") else None,
+            role_id=str(shift_row.get("role_id")) if shift_row.get("role_id") else None,
+            starts_at=datetime.fromisoformat(str(shift_row["starts_at"])),
+            ends_at=datetime.fromisoformat(str(shift_row["ends_at"])),
+            timezone_name=str(shift_row.get("timezone") or default_timezone),
+            bucket_minutes=bucket_minutes,
+            headcount=int(shift_row.get("headcount") or 1),
+            fixed_shift_id=str(shift_row.get("shift_id") or ""),
+            premium_cents=int(shift_row.get("premium_cents") or 0),
+            requires_manager_approval=bool(shift_row.get("requires_manager_approval")),
+        )
+
+    for proposed_shift in generated_shifts:
+        _accumulate_feature_bucket(
+            buckets,
+            location_id=str(proposed_shift.location_id),
+            role_id=str(proposed_shift.role_id),
+            starts_at=proposed_shift.starts_at,
+            ends_at=proposed_shift.ends_at,
+            timezone_name=proposed_shift.timezone or default_timezone,
+            bucket_minutes=bucket_minutes,
+            headcount=int(proposed_shift.headcount or 1),
+            demand_key=proposed_shift.demand_key,
+            source_type=proposed_shift.source_type,
+            premium_cents=int(proposed_shift.premium_cents or 0),
+            requires_manager_approval=bool(proposed_shift.requires_manager_approval),
+        )
+
+    _apply_weather_features_to_buckets(
+        buckets,
+        weather_bucket_features=weather_bucket_features or {},
+    )
+    _apply_sales_features_to_buckets(
+        buckets,
+        sales_bucket_features=sales_bucket_features or {},
+    )
+    _apply_attendance_features_to_buckets(
+        buckets,
+        attendance_bucket_features=attendance_bucket_features or {},
+    )
+    _apply_callout_features_to_buckets(
+        buckets,
+        callout_bucket_features=callout_bucket_features or {},
+    )
+    _seed_historical_signature_feature_buckets(
+        buckets,
+        planning_window_start=planning_window_start,
+        planning_window_end=planning_window_end,
+        timezone_name=default_timezone,
+        bucket_minutes=bucket_minutes,
+        attendance_bucket_features=attendance_bucket_features or {},
+        callout_bucket_features=callout_bucket_features or {},
+    )
+    _apply_weather_features_to_buckets(
+        buckets,
+        weather_bucket_features=weather_bucket_features or {},
+    )
+    _apply_sales_features_to_buckets(
+        buckets,
+        sales_bucket_features=sales_bucket_features or {},
+    )
+    _apply_attendance_features_to_buckets(
+        buckets,
+        attendance_bucket_features=attendance_bucket_features or {},
+    )
+    _apply_callout_features_to_buckets(
+        buckets,
+        callout_bucket_features=callout_bucket_features or {},
+    )
+
+    points: list[dict[str, object]] = []
+    for (_, _, bucket_start, bucket_end), payload in sorted(
+        buckets.items(),
+        key=lambda item: (item[0][2], item[0][0] or "", item[0][1] or ""),
+    ):
+        points.append(
+            {
+                "location_id": UUID(payload["location_id"]) if payload["location_id"] is not None else None,
+                "role_id": UUID(payload["role_id"]) if payload["role_id"] is not None else None,
+                "bucket_start": bucket_start,
+                "bucket_end": bucket_end,
+                "feature_payload": payload,
+                "feature_vector_version": "v1",
+            }
+        )
+    return points
+
+
+def _apply_weather_features_to_buckets(
+    buckets: Mapping[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    weather_bucket_features: Mapping[tuple[str | None, datetime, datetime], Mapping[str, object]],
+) -> None:
+    for (location_id, _role_id, bucket_start, bucket_end), payload in buckets.items():
+        weather = weather_bucket_features.get((location_id, bucket_start, bucket_end))
+        if weather is None:
+            continue
+        payload.update(dict(weather))
+
+
+def _apply_sales_features_to_buckets(
+    buckets: Mapping[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    sales_bucket_features: Mapping[tuple[str | None, int, int, int], Mapping[str, object]],
+) -> None:
+    for (_location_id, _role_id, _bucket_start, _bucket_end), payload in buckets.items():
+        key = (
+            payload.get("location_id"),
+            int(payload.get("bucket_local_day_of_week") or 0),
+            int(payload.get("bucket_local_hour") or 0),
+            int(payload.get("bucket_duration_minutes") or 0),
+        )
+        sales_features = sales_bucket_features.get(key)
+        if sales_features is None:
+            continue
+        payload.update(dict(sales_features))
+
+
+def _apply_attendance_features_to_buckets(
+    buckets: Mapping[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    attendance_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]],
+) -> None:
+    for (_location_id, _role_id, _bucket_start, _bucket_end), payload in buckets.items():
+        key = (
+            payload.get("location_id"),
+            payload.get("role_id"),
+            int(payload.get("bucket_local_day_of_week") or 0),
+            int(payload.get("bucket_local_hour") or 0),
+            int(payload.get("bucket_duration_minutes") or 0),
+        )
+        attendance_features = attendance_bucket_features.get(key)
+        if attendance_features is None:
+            continue
+        payload.update(dict(attendance_features))
+
+
+def _apply_callout_features_to_buckets(
+    buckets: Mapping[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    callout_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]],
+) -> None:
+    for (_location_id, _role_id, _bucket_start, _bucket_end), payload in buckets.items():
+        key = (
+            payload.get("location_id"),
+            payload.get("role_id"),
+            int(payload.get("bucket_local_day_of_week") or 0),
+            int(payload.get("bucket_local_hour") or 0),
+            int(payload.get("bucket_duration_minutes") or 0),
+        )
+        callout_features = callout_bucket_features.get(key)
+        if callout_features is None:
+            continue
+        payload.update(dict(callout_features))
+
+
+def _seed_historical_signature_feature_buckets(
+    buckets: dict[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    planning_window_start: datetime,
+    planning_window_end: datetime,
+    timezone_name: str,
+    bucket_minutes: int,
+    attendance_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]],
+    callout_bucket_features: Mapping[tuple[str | None, str | None, int, int, int], Mapping[str, object]],
+) -> None:
+    signature_keys = {
+        key
+        for key in (*attendance_bucket_features.keys(), *callout_bucket_features.keys())
+        if key[4] == bucket_minutes
+    }
+    if not signature_keys:
+        return
+
+    local_zone = ZoneInfo(timezone_name)
+    bucket_cursor = planning_window_start.astimezone(local_zone).replace(
+        minute=(planning_window_start.astimezone(local_zone).minute // bucket_minutes) * bucket_minutes,
+        second=0,
+        microsecond=0,
+    )
+    local_window_end = planning_window_end.astimezone(local_zone)
+
+    while bucket_cursor < local_window_end:
+        next_bucket = bucket_cursor + timedelta(minutes=bucket_minutes)
+        if next_bucket > planning_window_start.astimezone(local_zone):
+            for location_id, role_id, weekday, hour, duration_minutes in signature_keys:
+                if weekday != bucket_cursor.weekday() or hour != bucket_cursor.hour or duration_minutes != bucket_minutes:
+                    continue
+                _ensure_feature_bucket(
+                    buckets,
+                    location_id=location_id,
+                    role_id=role_id,
+                    bucket_start=bucket_cursor.astimezone(timezone.utc),
+                    bucket_end=next_bucket.astimezone(timezone.utc),
+                    timezone_name=timezone_name,
+                    local_bucket_start=bucket_cursor,
+                    bucket_minutes=bucket_minutes,
+                )
+        bucket_cursor = next_bucket
+
+
+def _ensure_feature_bucket(
+    buckets: dict[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    location_id: str | None,
+    role_id: str | None,
+    bucket_start: datetime,
+    bucket_end: datetime,
+    timezone_name: str,
+    local_bucket_start: datetime,
+    bucket_minutes: int,
+) -> dict[str, object]:
+    key = (location_id, role_id, bucket_start, bucket_end)
+    existing = buckets.get(key)
+    if existing is None:
+        existing = {
+            "location_id": location_id,
+            "role_id": role_id,
+            "timezone_name": timezone_name,
+            "bucket_local_day_of_week": local_bucket_start.weekday(),
+            "bucket_local_hour": local_bucket_start.hour,
+            "bucket_duration_minutes": bucket_minutes,
+            "fixed_shift_count": 0,
+            "fixed_headcount": 0,
+            "generated_shift_count": 0,
+            "generated_headcount": 0,
+            "total_headcount": 0,
+            "overlap_minutes_total": 0,
+            "premium_cents_max": 0,
+            "requires_manager_approval_count": 0,
+            "fixed_shift_ids": [],
+            "generated_demand_keys": [],
+            "generated_source_types": [],
+        }
+        buckets[key] = existing
+    return existing
+
+
+def _accumulate_feature_bucket(
+    buckets: dict[tuple[str | None, str | None, datetime, datetime], dict[str, object]],
+    *,
+    location_id: str | None,
+    role_id: str | None,
+    starts_at: datetime,
+    ends_at: datetime,
+    timezone_name: str,
+    bucket_minutes: int,
+    headcount: int,
+    premium_cents: int,
+    requires_manager_approval: bool,
+    fixed_shift_id: str | None = None,
+    demand_key: str | None = None,
+    source_type: str | None = None,
+) -> None:
+    local_zone = ZoneInfo(timezone_name)
+    local_start = starts_at.astimezone(local_zone)
+    local_end = ends_at.astimezone(local_zone)
+    bucket_cursor = local_start.replace(
+        minute=(local_start.minute // bucket_minutes) * bucket_minutes,
+        second=0,
+        microsecond=0,
+    )
+
+    while bucket_cursor < local_end:
+        next_bucket = bucket_cursor + timedelta(minutes=bucket_minutes)
+        overlap_start = max(local_start, bucket_cursor)
+        overlap_end = min(local_end, next_bucket)
+        if overlap_end > overlap_start:
+            bucket_start = bucket_cursor.astimezone(timezone.utc)
+            bucket_end = next_bucket.astimezone(timezone.utc)
+            existing = _ensure_feature_bucket(
+                buckets,
+                location_id=location_id,
+                role_id=role_id,
+                bucket_start=bucket_start,
+                bucket_end=bucket_end,
+                timezone_name=timezone_name,
+                local_bucket_start=bucket_cursor,
+                bucket_minutes=bucket_minutes,
+            )
+
+            overlap_minutes = int((overlap_end - overlap_start).total_seconds() // 60)
+            existing["total_headcount"] += headcount
+            existing["overlap_minutes_total"] += overlap_minutes
+            existing["premium_cents_max"] = max(int(existing["premium_cents_max"]), premium_cents)
+            if requires_manager_approval:
+                existing["requires_manager_approval_count"] += 1
+            if fixed_shift_id:
+                existing["fixed_shift_count"] += 1
+                existing["fixed_headcount"] += headcount
+                if fixed_shift_id not in existing["fixed_shift_ids"]:
+                    existing["fixed_shift_ids"].append(fixed_shift_id)
+            if demand_key:
+                existing["generated_shift_count"] += 1
+                existing["generated_headcount"] += headcount
+                if demand_key not in existing["generated_demand_keys"]:
+                    existing["generated_demand_keys"].append(demand_key)
+                normalized_source_type = source_type or "historical_pattern"
+                if normalized_source_type not in existing["generated_source_types"]:
+                    existing["generated_source_types"].append(normalized_source_type)
+        bucket_cursor = next_bucket
+
+
+def _labor_forecast_points_from_generated_demand(
+    generated_demand_payload: GeneratedDemandPayload,
+) -> list[dict[str, object]]:
+    points: list[dict[str, object]] = []
+    for proposed_shift in generated_demand_payload.proposed_shifts:
+        duration_hours = max(
+            (proposed_shift.ends_at - proposed_shift.starts_at).total_seconds() / 3600,
+            0.0,
+        )
+        points.append(
+            {
+                "location_id": proposed_shift.location_id,
+                "role_id": proposed_shift.role_id,
+                "window_start": proposed_shift.starts_at,
+                "window_end": proposed_shift.ends_at,
+                "predicted_headcount": float(proposed_shift.headcount),
+                "predicted_labor_hours": float(proposed_shift.headcount) * duration_hours,
+                "confidence": 1.0,
+                "forecast_payload": {
+                    "demand_key": proposed_shift.demand_key,
+                    "source_type": proposed_shift.source_type,
+                    "generation_version": proposed_shift.generation_version,
+                    "premium_cents": proposed_shift.premium_cents,
+                    "requires_manager_approval": proposed_shift.requires_manager_approval,
+                },
+            }
+        )
+    return points
+
+
+def _generated_demand_with_forecast_provenance(
+    generated_demand_payload: GeneratedDemandPayload,
+    *,
+    forecast_run,
+) -> GeneratedDemandPayload:
+    point_by_demand_key = {
+        str((point.forecast_payload or {}).get("demand_key")): point.id
+        for point in (getattr(forecast_run, "points", []) or [])
+        if (point.forecast_payload or {}).get("demand_key") is not None
+    }
+    proposed_shifts = [
+        proposed_shift.model_copy(
+            update={
+                "source_run_id": forecast_run.id,
+                "source_point_id": point_by_demand_key.get(proposed_shift.demand_key),
+            }
+        )
+        for proposed_shift in generated_demand_payload.proposed_shifts
+    ]
+    return GeneratedDemandPayload(
+        proposed_shifts=proposed_shifts,
+        metadata={
+            **dict(generated_demand_payload.metadata or {}),
+            "labor_forecast_run_id": str(forecast_run.id),
+            "labor_forecast_point_count": len(getattr(forecast_run, "points", []) or []),
+        },
+    )
+
+
 def _proposed_shift_models_for_run(
     schedule_run: ScheduleRun,
     generated_demand_payload: GeneratedDemandPayload,
@@ -1184,6 +1964,8 @@ def _proposed_shift_models_for_run(
         models.append(
             ScheduleRunProposedShift(
                 schedule_run_id=schedule_run.id,
+                source_run_id=proposed_shift.source_run_id,
+                source_point_id=proposed_shift.source_point_id,
                 location_id=proposed_shift.location_id,
                 role_id=proposed_shift.role_id,
                 demand_key=proposed_shift.demand_key,
@@ -1228,6 +2010,8 @@ def _result_payload_with_demand_metadata(
         **payload,
         "demand_key": proposed_shift.demand_key,
         "source_type": proposed_shift.source_type,
+        "source_run_id": str(proposed_shift.source_run_id) if proposed_shift.source_run_id else None,
+        "source_point_id": str(proposed_shift.source_point_id) if proposed_shift.source_point_id else None,
         "proposed_shift_id": str(proposed_shift.id),
         "optimizer_shift_id": proposed_shift.optimizer_shift_id,
     }

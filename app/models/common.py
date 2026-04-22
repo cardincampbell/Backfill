@@ -272,6 +272,28 @@ class ReliabilityCoachingAttemptStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class LaborForecastRunStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class DemandFeatureSnapshotStatus(str, Enum):
+    building = "building"
+    completed = "completed"
+    failed = "failed"
+
+
+class BucketAlignmentMode(str, Enum):
+    local_operating_time = "local_operating_time"
+
+
+class DstHandlingMode(str, Enum):
+    skip_missing_repeat_distinct = "skip_missing_repeat_distinct"
+
+
 _STAFFING_TO_COMPATIBILITY_SHIFT_STATUS = {
     ShiftStaffingStatus.open: ShiftStatus.open,
     ShiftStaffingStatus.filling: ShiftStatus.filling,

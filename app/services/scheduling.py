@@ -41,6 +41,7 @@ from app.services import (
     communication_suppressions,
     delivery,
     employee_schedule_links as employee_schedule_link_service,
+    forecast_history,
     shift_assignments,
     worker_runtime,
     workforce,
@@ -117,6 +118,22 @@ class PublishedShiftAmendmentResult:
     cancelled_offers: list[CoverageOffer]
     week_start_date: date
     week_end_date: date
+
+
+async def _sync_assignment_history_facts(
+    session: AsyncSession,
+    *,
+    shift: Shift,
+    assignments: list[ShiftAssignment | None],
+) -> None:
+    for assignment in assignments:
+        if assignment is None:
+            continue
+        await forecast_history.sync_attendance_history_fact_for_assignment(
+            session,
+            shift=shift,
+            assignment=assignment,
+        )
 
 
 def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
@@ -1083,6 +1100,11 @@ async def apply_published_shift_amendment(
             new_employee_id=None,
         )
         await session.flush()
+        await _sync_assignment_history_facts(
+            session,
+            shift=shift,
+            assignments=[current],
+        )
         return PublishedShiftAmendmentResult(
             shift=shift,
             action=payload.action,
@@ -1137,6 +1159,11 @@ async def apply_published_shift_amendment(
             new_employee_id=None,
         )
         await session.flush()
+        await _sync_assignment_history_facts(
+            session,
+            shift=shift,
+            assignments=[current],
+        )
         return PublishedShiftAmendmentResult(
             shift=shift,
             action=payload.action,
@@ -1233,6 +1260,11 @@ async def apply_published_shift_amendment(
         new_employee_id=employee.id,
     )
     await session.flush()
+    await _sync_assignment_history_facts(
+        session,
+        shift=shift,
+        assignments=[current, assignment],
+    )
     return PublishedShiftAmendmentResult(
         shift=shift,
         action=payload.action,
@@ -1301,6 +1333,11 @@ async def set_shift_assignment(
         if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
             shift.lifecycle_status = ShiftLifecycleStatus.draft
         await session.flush()
+        await _sync_assignment_history_facts(
+            session,
+            shift=shift,
+            assignments=[current],
+        )
         return ShiftAssignmentMutationResult(
             shift=shift,
             action="unassigned",
@@ -1364,6 +1401,11 @@ async def set_shift_assignment(
     if shift.lifecycle_status == ShiftLifecycleStatus.scheduled:
         shift.lifecycle_status = ShiftLifecycleStatus.draft
     await session.flush()
+    await _sync_assignment_history_facts(
+        session,
+        shift=shift,
+        assignments=[current, assignment],
+    )
     return ShiftAssignmentMutationResult(
         shift=shift,
         action="assigned" if current is None else "reassigned",

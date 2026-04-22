@@ -102,13 +102,15 @@ def _run_inputs() -> ScheduleRunInputContract:
     )
 
 
-def _generated_demand_payload(*, location_id, role_id) -> GeneratedDemandPayload:
+def _generated_demand_payload(*, location_id, role_id, source_run_id=None, source_point_id=None) -> GeneratedDemandPayload:
     return GeneratedDemandPayload(
         proposed_shifts=[
             ProposedShiftPayload(
                 demand_key=f"{location_id}:{role_id}:2026-04-22T16:00:00+00:00",
                 source_type="historical_pattern",
                 generation_version="v1",
+                source_run_id=source_run_id,
+                source_point_id=source_point_id,
                 location_id=location_id,
                 role_id=role_id,
                 timezone="America/Los_Angeles",
@@ -145,6 +147,99 @@ def _reliability_payload_for(employee_id) -> ReliabilitySnapshotPayload:
         ],
         metadata={},
     )
+
+
+def test_demand_feature_snapshot_points_for_inputs_enrich_weather_sales_and_history():
+    location_id = uuid4()
+    role_id = uuid4()
+    inputs = _run_inputs().model_copy(
+        update={
+            "generated_demand_payload": _generated_demand_payload(location_id=location_id, role_id=role_id),
+            "fixed_shift_payload": {"shifts": []},
+        }
+    )
+
+    points = auto_scheduler._demand_feature_snapshot_points_for_inputs(
+        inputs,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        default_timezone="America/Los_Angeles",
+        bucket_minutes=60,
+        weather_bucket_features={
+            (
+                str(location_id),
+                datetime(2026, 4, 22, 16, 0, tzinfo=timezone.utc),
+                datetime(2026, 4, 22, 17, 0, tzinfo=timezone.utc),
+            ): {
+                "weather_severity_flag": "monitor",
+                "weather_precipitation_probability": 65,
+            }
+        },
+        sales_bucket_features={
+            (str(location_id), 2, 9, 60): {
+                "pos_sales_sample_count_28d": 4,
+                "pos_gross_sales_cents_mean_28d": 42000,
+                "pos_order_count_mean_28d": 18.5,
+            }
+        },
+        attendance_bucket_features={
+            (str(location_id), str(role_id), 2, 9, 60): {
+                "attendance_sample_count_56d": 6,
+                "attendance_completed_rate_56d": 0.8333,
+                "attendance_no_show_rate_56d": 0.1667,
+            }
+        },
+        callout_bucket_features={
+            (str(location_id), str(role_id), 2, 9, 60): {
+                "callout_sample_count_56d": 3,
+                "callout_filled_rate_56d": 0.6667,
+            }
+        },
+    )
+
+    first_payload = points[0]["feature_payload"]
+    assert first_payload["weather_severity_flag"] == "monitor"
+    assert first_payload["weather_precipitation_probability"] == 65
+    assert first_payload["pos_sales_sample_count_28d"] == 4
+    assert first_payload["pos_gross_sales_cents_mean_28d"] == 42000
+    assert first_payload["pos_order_count_mean_28d"] == 18.5
+    assert first_payload["attendance_sample_count_56d"] == 6
+    assert first_payload["attendance_completed_rate_56d"] == 0.8333
+    assert first_payload["attendance_no_show_rate_56d"] == 0.1667
+    assert first_payload["callout_sample_count_56d"] == 3
+    assert first_payload["callout_filled_rate_56d"] == 0.6667
+
+
+def test_demand_feature_snapshot_points_for_inputs_seeds_historical_signature_buckets():
+    location_id = uuid4()
+    role_id = uuid4()
+    inputs = _run_inputs().model_copy(
+        update={
+            "generated_demand_payload": GeneratedDemandPayload(),
+            "fixed_shift_payload": {"shifts": []},
+        }
+    )
+
+    points = auto_scheduler._demand_feature_snapshot_points_for_inputs(
+        inputs,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        default_timezone="America/Los_Angeles",
+        bucket_minutes=60,
+        attendance_bucket_features={
+            (str(location_id), str(role_id), 2, 9, 60): {
+                "attendance_sample_count_56d": 8,
+                "attendance_completed_rate_56d": 1.0,
+            }
+        },
+    )
+
+    assert len(points) == 1
+    assert points[0]["location_id"] == location_id
+    assert points[0]["role_id"] == role_id
+    assert points[0]["bucket_start"] == datetime(2026, 4, 22, 16, 0, tzinfo=timezone.utc)
+    assert points[0]["feature_payload"]["attendance_sample_count_56d"] == 8
+    assert points[0]["feature_payload"]["total_headcount"] == 0
 
 
 def _make_business() -> Business:
@@ -523,6 +618,41 @@ async def test_record_schedule_run_result_maps_generated_assignments_to_proposed
 
 
 @pytest.mark.asyncio
+async def test_create_schedule_run_persists_generated_shift_forecast_provenance():
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    source_run_id = uuid4()
+    source_point_id = uuid4()
+    demand_payload = _generated_demand_payload(
+        location_id=location.id,
+        role_id=role.id,
+        source_run_id=source_run_id,
+        source_point_id=source_point_id,
+    )
+
+    schedule_run = await auto_scheduler.create_schedule_run(
+        session,
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        inputs=_run_inputs().model_copy(
+            update={
+                "generated_demand_payload": demand_payload,
+                "shift_payload": {"shifts": []},
+            }
+        ),
+        input_snapshot_hash="sha256:authoring",
+    )
+
+    proposed_shift = schedule_run.proposed_shifts[0]
+    assert proposed_shift.source_run_id == source_run_id
+    assert proposed_shift.source_point_id == source_point_id
+
+
+@pytest.mark.asyncio
 async def test_schedule_run_input_contract_round_trips_persisted_inputs():
     session = FakeAutoSchedulerSession()
     schedule_run = await auto_scheduler.create_schedule_run(
@@ -652,6 +782,8 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
 
     reliability_payload = _reliability_payload_for(employee.id)
     captured: dict[str, object] = {}
+    snapshot_id = uuid4()
+    forecast_run_id = uuid4()
 
     async def fake_load_business(_session, business_id):
         assert business_id == business.id
@@ -723,6 +855,52 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
         captured["execute"] = {"schedule_run_id": schedule_run_id, "optimizer": optimizer}
         return SimpleNamespace(id=schedule_run_id, status=ScheduleRunStatus.completed)
 
+    async def fake_create_demand_feature_snapshot_for_inputs(
+        _session,
+        *,
+        business_id,
+        location,
+        planning_window_start,
+        planning_window_end,
+        inputs,
+    ):
+        captured["snapshot"] = {
+            "business_id": business_id,
+            "location_id": location.id if location is not None else None,
+            "planning_window_start": planning_window_start,
+            "planning_window_end": planning_window_end,
+            "input_shift_count": len(inputs.shift_payload["shifts"]),
+        }
+        return SimpleNamespace(
+            id=snapshot_id,
+            snapshot_hash="sha256:demand_features",
+            snapshot_status="completed",
+        )
+
+    async def fake_create_labor_forecast_run_for_snapshot(
+        _session,
+        *,
+        business_id,
+        location,
+        planning_window_start,
+        planning_window_end,
+        demand_feature_snapshot,
+    ):
+        captured["forecast"] = {
+            "business_id": business_id,
+            "location_id": location.id if location is not None else None,
+            "planning_window_start": planning_window_start,
+            "planning_window_end": planning_window_end,
+            "demand_feature_snapshot_id": demand_feature_snapshot.id,
+            "feature_snapshot_hash": demand_feature_snapshot.snapshot_hash,
+        }
+        return SimpleNamespace(
+            id=forecast_run_id,
+            feature_snapshot_hash=demand_feature_snapshot.snapshot_hash,
+            forecast_model_version="baseline_bucketed_v1",
+            points=[],
+        )
+
     monkeypatch.setattr(auto_scheduler, "_load_scope_business", fake_load_business)
     monkeypatch.setattr(auto_scheduler, "_load_scope_location", fake_load_location)
     monkeypatch.setattr(auto_scheduler, "_load_scope_shifts", fake_load_shifts)
@@ -731,6 +909,16 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     monkeypatch.setattr(auto_scheduler, "_build_scope_labor_payload", fake_build_labor_payload)
     monkeypatch.setattr(auto_scheduler, "create_schedule_run", fake_create_schedule_run)
     monkeypatch.setattr(auto_scheduler, "execute_schedule_run", fake_execute_schedule_run)
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_create_demand_feature_snapshot_for_inputs",
+        fake_create_demand_feature_snapshot_for_inputs,
+    )
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_create_labor_forecast_run_for_snapshot",
+        fake_create_labor_forecast_run_for_snapshot,
+    )
 
     result = await auto_scheduler.create_and_execute_schedule_run_for_scope(
         FakeAutoSchedulerSession(),
@@ -753,8 +941,123 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     assert inputs.labor_payload["employees"][str(employee.id)]["status"] == "clear"
     assert inputs.labor_payload["employees_by_shift"][str(open_shift.id)][str(employee.id)]["status"] == "clear"
     assert inputs.source_metadata["source_request_id"] == "req_123"
+    assert inputs.source_metadata["demand_feature_snapshot_id"] == str(snapshot_id)
+    assert inputs.source_metadata["demand_feature_snapshot_hash"] == "sha256:demand_features"
+    assert inputs.source_metadata["labor_forecast_run_id"] == str(forecast_run_id)
+    assert inputs.source_metadata["labor_forecast_source_type"] == "baseline_forecast"
     assert captured["create"]["run_metadata"]["scope_shift_count"] == 1
     assert captured["create"]["run_metadata"]["scope_employee_count"] == 1
+    assert captured["create"]["run_metadata"]["demand_feature_snapshot_id"] == str(snapshot_id)
+    assert captured["create"]["run_metadata"]["labor_forecast_run_id"] == str(forecast_run_id)
+    assert captured["create"]["run_metadata"]["labor_forecast_source_type"] == "baseline_forecast"
+    assert captured["forecast"]["demand_feature_snapshot_id"] == snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_create_and_execute_schedule_run_for_scope_threads_forecast_provenance(monkeypatch):
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee = _make_employee(business_id=business.id, role=role, location=location)
+    employee.availability_rules = []
+    employee.assignments = []
+    open_shift = _make_shift(business_id=business.id, location_id=location.id, role_id=role.id)
+    open_shift.assignments = []
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    forecast_point_id = uuid4()
+    captured: dict[str, object] = {}
+
+    async def fake_load_business(_session, business_id):
+        assert business_id == business.id
+        return business
+
+    async def fake_load_location(_session, location_id):
+        assert location_id == location.id
+        return location
+
+    async def fake_load_shifts(_session, **_kwargs):
+        return [open_shift]
+
+    async def fake_load_employees(_session, **_kwargs):
+        return [employee]
+
+    async def fake_build_reliability(_session, **_kwargs):
+        return _reliability_payload_for(employee.id)
+
+    async def fake_build_labor_payload(_session, *, shifts, employees, reference_time):
+        return {
+            "employees": {str(employee.id): {"status": "clear", "projected_ot_hours": 0.0}},
+            "employees_by_shift": {},
+        }
+
+    async def fake_create_schedule_run(
+        _session,
+        *,
+        inputs,
+        run_metadata,
+        **_kwargs,
+    ):
+        captured["create"] = {
+            "inputs": inputs,
+            "run_metadata": run_metadata,
+        }
+        return SimpleNamespace(id=uuid4())
+
+    async def fake_execute_schedule_run(_session, schedule_run_id, *, optimizer=None):
+        return SimpleNamespace(id=schedule_run_id, status=ScheduleRunStatus.completed)
+
+    async def fake_create_demand_feature_snapshot_for_inputs(*_args, **_kwargs):
+        return SimpleNamespace(
+            id=uuid4(),
+            snapshot_hash="sha256:demand_features",
+            snapshot_status="completed",
+        )
+
+    async def fake_create_labor_forecast_run_for_generated_demand(*_args, generated_demand_payload, **_kwargs):
+        captured["forecast_generated_demand"] = generated_demand_payload
+        return SimpleNamespace(
+            id=uuid4(),
+            feature_snapshot_hash="sha256:demand_features",
+            points=[
+                SimpleNamespace(
+                    id=forecast_point_id,
+                    forecast_payload={"demand_key": generated_demand.proposed_shifts[0].demand_key},
+                )
+            ],
+        )
+
+    monkeypatch.setattr(auto_scheduler, "_load_scope_business", fake_load_business)
+    monkeypatch.setattr(auto_scheduler, "_load_scope_location", fake_load_location)
+    monkeypatch.setattr(auto_scheduler, "_load_scope_shifts", fake_load_shifts)
+    monkeypatch.setattr(auto_scheduler, "_load_scope_employees", fake_load_employees)
+    monkeypatch.setattr(auto_scheduler, "_build_scope_reliability_payload", fake_build_reliability)
+    monkeypatch.setattr(auto_scheduler, "_build_scope_labor_payload", fake_build_labor_payload)
+    monkeypatch.setattr(auto_scheduler, "create_schedule_run", fake_create_schedule_run)
+    monkeypatch.setattr(auto_scheduler, "execute_schedule_run", fake_execute_schedule_run)
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_create_demand_feature_snapshot_for_inputs",
+        fake_create_demand_feature_snapshot_for_inputs,
+    )
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_create_labor_forecast_run_for_generated_demand",
+        fake_create_labor_forecast_run_for_generated_demand,
+    )
+
+    await auto_scheduler.create_and_execute_schedule_run_for_scope(
+        FakeAutoSchedulerSession(),
+        business_id=business.id,
+        location_id=location.id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+        generated_demand_payload=generated_demand,
+    )
+
+    proposed_shift = captured["create"]["inputs"].generated_demand_payload.proposed_shifts[0]
+    assert proposed_shift.source_run_id is not None
+    assert proposed_shift.source_point_id == forecast_point_id
+    assert captured["create"]["inputs"].source_metadata["labor_forecast_point_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -787,6 +1090,13 @@ async def test_apply_schedule_run_from_live_scope_uses_current_scope_hash(monkey
     monkeypatch.setattr(auto_scheduler, "load_schedule_run", fake_load_schedule_run)
     monkeypatch.setattr(auto_scheduler, "current_scope_snapshot_hash", fake_current_hash)
     monkeypatch.setattr(auto_scheduler, "apply_schedule_run_to_draft", fake_apply_to_draft)
+    monkeypatch.setattr(
+        auto_scheduler,
+        "schedule_run_input_contract",
+        lambda _schedule_run: SimpleNamespace(
+            generated_demand_payload={"proposed_shifts": [{"demand_key": "generated:1"}], "metadata": {}},
+        ),
+    )
 
     result = await auto_scheduler.apply_schedule_run_from_live_scope(
         FakeAutoSchedulerSession(),
@@ -796,6 +1106,10 @@ async def test_apply_schedule_run_from_live_scope_uses_current_scope_hash(monkey
     assert result is apply_record
     assert captured["hash_kwargs"]["business_id"] == schedule_run.business_id
     assert captured["hash_kwargs"]["location_id"] == schedule_run.location_id
+    assert captured["hash_kwargs"]["generated_demand_payload"] == {
+        "proposed_shifts": [{"demand_key": "generated:1"}],
+        "metadata": {},
+    }
     assert captured["apply"]["current_snapshot_hash"] == "sha256:current"
 
 
