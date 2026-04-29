@@ -17,8 +17,18 @@ branch_labels = None
 depends_on = None
 
 
-shift_segment_type_enum = sa.Enum("work", name="shift_segment_type")
-shift_break_type_enum = sa.Enum("meal", "rest", "other", name="shift_break_type")
+shift_segment_type_enum = postgresql.ENUM(
+    "work",
+    name="shift_segment_type",
+    create_type=False,
+)
+shift_break_type_enum = postgresql.ENUM(
+    "meal",
+    "rest",
+    "other",
+    name="shift_break_type",
+    create_type=False,
+)
 
 
 def upgrade() -> None:
