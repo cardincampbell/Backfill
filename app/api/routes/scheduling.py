@@ -388,6 +388,7 @@ async def ensure_predictive_schedule_week(
                 "week_start_date": week_start_date.isoformat(),
             },
         )
+        await session.commit()
 
     detail = await auto_scheduler.get_schedule_run_detail(session, schedule_run.id)
     if detail is None:
@@ -435,6 +436,7 @@ async def apply_predictive_schedule_week(
         session,
         schedule_run_id,
     )
+    await session.commit()
     return ScheduleRunApplyRead.model_validate(apply_record)
 
 
