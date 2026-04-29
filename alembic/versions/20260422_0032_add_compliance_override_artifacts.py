@@ -17,16 +17,18 @@ branch_labels = None
 depends_on = None
 
 
-artifact_type_enum = sa.Enum(
+artifact_type_enum = postgresql.ENUM(
     "written_consent",
     "manager_override",
     name="compliance_override_artifact_type",
+    create_type=False,
 )
-artifact_status_enum = sa.Enum(
+artifact_status_enum = postgresql.ENUM(
     "approved",
     "revoked",
     "expired",
     name="compliance_override_artifact_status",
+    create_type=False,
 )
 
 
