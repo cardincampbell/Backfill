@@ -2533,3 +2533,170 @@ def test_board_window_uses_location_timezone_boundaries():
     assert window.week_end == date(2026, 4, 12)
     assert window.starts_at == datetime(2026, 4, 6, 7, 0, tzinfo=timezone.utc)
     assert window.ends_at == datetime(2026, 4, 13, 6, 59, 59, 999999, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_location_board_surfaces_current_assignment_compliance_metadata():
+    session = FakeWorkspaceBoardSession()
+    now = datetime(2026, 4, 14, 16, 0, tzinfo=timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+    override_artifact_id = uuid4()
+
+    business = Business(
+        id=business_id,
+        name="Whole Foods Market LLC",
+        display_name="Whole Foods Market",
+        slug="whole-foods-market",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown Los Angeles",
+        slug="downtown-los-angeles",
+        address_line_1="788 S Grand Ave",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90017",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="cashier",
+        name="Cashier",
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        is_active=True,
+        min_headcount=1,
+        max_headcount=2,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            role=role,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=employee_id,
+        employee=employee,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={
+            "employee_name": "Jamie Rivera",
+            "compliance_evaluation": {
+                "status": "warning",
+                "profile_code": "ca_meal_rest_v1",
+                "warning_rule_codes": ["paid_rest_break_quota"],
+                "blocking_rule_codes": [],
+                "premium_rule_codes": ["paid_rest_break_quota"],
+                "premium_total_cents": 2100,
+                "unresolved_premium_rule_codes": [],
+                "override_applied": True,
+                "override_artifact_id": str(override_artifact_id),
+            },
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        role=role,
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 14, 21, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.lifecycle_status = "draft"
+    shift.staffing_status = "open"
+    shift.assignments = [assignment]
+    shift.coverage_cases = []
+
+    session.get_map[(Business, business_id)] = business
+    session.get_map[(Location, location_id)] = location
+    session.execute_queue = [[location_role], [role], [employee], [shift], [], []]
+
+    board = await workspace_board.get_location_board(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        week_start=date(2026, 4, 13),
+    )
+
+    assert len(board.shifts) == 1
+    current_assignment = board.shifts[0].current_assignment
+    assert current_assignment is not None
+    assert current_assignment.compliance_status == "warning"
+    assert current_assignment.compliance_profile_code == "ca_meal_rest_v1"
+    assert current_assignment.compliance_warning_rule_codes == ["paid_rest_break_quota"]
+    assert current_assignment.compliance_premium_rule_codes == ["paid_rest_break_quota"]
+    assert current_assignment.compliance_premium_total_cents == 2100
+    assert current_assignment.compliance_override_applied is True
+    assert current_assignment.compliance_override_artifact_id == str(override_artifact_id)

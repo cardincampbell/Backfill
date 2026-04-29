@@ -1,8 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { FileDown, X } from "lucide-react";
+
+import {
+  getLocationCompliancePayrollExport,
+  getLocationComplianceWeek,
+  type LocationCompliancePayrollExport,
+  type LocationComplianceWeek,
+} from "@/lib/api/finance";
 
 export interface ExportModalEmployee {
   id: string;
@@ -16,11 +23,24 @@ export interface ExportModalShift {
   day: number;
   startHour: number;
   endHour: number;
+  roleName?: string;
+  complianceStatus?: string | null;
+  complianceProfileCode?: string | null;
+  complianceBlockingRuleCodes?: string[];
+  complianceWarningRuleCodes?: string[];
+  compliancePremiumRuleCodes?: string[];
+  compliancePremiumTotalCents?: number;
+  complianceUnresolvedPremiumRuleCodes?: string[];
+  complianceOverrideApplied?: boolean;
+  complianceOverrideArtifactId?: string | null;
 }
 
 interface Props {
+  businessId: string;
+  locationId: string;
   businessName: string;
   weekLabel: string;
+  weekStartDateKey: string;
   locationName: string;
   weekStart: Date;
   employees: ExportModalEmployee[];
@@ -37,8 +57,11 @@ const FORMATS = [
 ];
 
 export function ExportScheduleModal({
+  businessId,
+  locationId,
   businessName,
   weekLabel,
+  weekStartDateKey,
   locationName,
   weekStart,
   employees,
@@ -53,10 +76,48 @@ export function ExportScheduleModal({
   const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
   const [selectedFormat, setSelectedFormat] = useState<'csv' | 'pdf' | 'excel'>('csv');
   const [exporting, setExporting] = useState(false);
+  const [weekCompliance, setWeekCompliance] = useState<LocationComplianceWeek | null>(null);
+  const [payrollExport, setPayrollExport] = useState<LocationCompliancePayrollExport | null>(null);
+  const [loadingWeekCompliance, setLoadingWeekCompliance] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingWeekCompliance(true);
+    void (async () => {
+      const [snapshot, payrollSnapshot] = await Promise.all([
+        getLocationComplianceWeek(
+          businessId,
+          locationId,
+          weekStartDateKey,
+        ),
+        getLocationCompliancePayrollExport(
+          businessId,
+          locationId,
+          weekStartDateKey,
+        ),
+      ]);
+      if (!cancelled) {
+        setWeekCompliance(snapshot);
+        setPayrollExport(payrollSnapshot);
+        setLoadingWeekCompliance(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId, locationId, weekStartDateKey]);
 
   const handleExport = async () => {
     setExporting(true);
-    const opts = { businessName, locationName, weekLabel, weekStart, employees, shifts };
+    const opts = {
+      businessName,
+      locationName,
+      weekLabel,
+      weekStart,
+      employees,
+      shifts,
+      compliancePayrollExport: payrollExport,
+    };
     try {
       const { exportCSV, exportExcel, exportPDF } = await import('@/lib/export-schedule');
       if (selectedFormat === 'csv') exportCSV(opts);
@@ -118,6 +179,88 @@ export function ExportScheduleModal({
               </button>
             ))}
           </div>
+          <p className={`mt-3 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+            Compliance premiums, unresolved calculations, and recorded artifacts are included automatically when this week has them.
+          </p>
+          {loadingWeekCompliance ? (
+            <div className={`mt-3 rounded-xl border px-3.5 py-3 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-[#E5E7EB] bg-[#F7F8FA]/70'}`}>
+              <p className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+                Compliance Report
+              </p>
+              <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                Loading premium and artifact totals for this week…
+              </p>
+            </div>
+          ) : weekCompliance ? (
+            <div className={`mt-3 rounded-xl border px-3.5 py-3 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-[#E5E7EB] bg-[#F7F8FA]/70'}`}>
+              <div className="flex items-center justify-between gap-3">
+                <p className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+                  Compliance Report
+                </p>
+                <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                  {weekCompliance.assigned_shift_count} assigned shift{weekCompliance.assigned_shift_count === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="mt-2 grid grid-cols-4 gap-2">
+                <div>
+                  <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Premiums</p>
+                  <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                    ${(weekCompliance.premium_total_cents / 100).toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Unresolved</p>
+                  <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                    {weekCompliance.unresolved_premium_assignment_count}
+                  </p>
+                </div>
+                <div>
+                  <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Artifacts</p>
+                  <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                    {payrollExport?.artifact_record_row_count ?? weekCompliance.override_artifacts.length}
+                  </p>
+                </div>
+                <div>
+                  <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Manual Review</p>
+                  <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                    {payrollExport?.manual_review_row_count ?? weekCompliance.unresolved_premium_assignment_count}
+                  </p>
+                </div>
+              </div>
+              {payrollExport ? (
+                <>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div>
+                      <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Ready Rows</p>
+                      <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                        {payrollExport.ready_adjustment_row_count ?? payrollExport.premium_payment_row_count}
+                      </p>
+                    </div>
+                    <div>
+                      <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Missing IDs</p>
+                      <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                        {payrollExport.missing_employee_identifier_row_count ?? 0}
+                      </p>
+                    </div>
+                    <div>
+                      <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>Info Rows</p>
+                      <p className={`text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                        {payrollExport.artifact_record_row_count}
+                      </p>
+                    </div>
+                  </div>
+                  <p className={`mt-2 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                    Export includes {payrollExport.premium_payment_row_count} premium payment row{payrollExport.premium_payment_row_count === 1 ? '' : 's'} and {payrollExport.manual_review_row_count} manual review row{payrollExport.manual_review_row_count === 1 ? '' : 's'}.
+                  </p>
+                  {(payrollExport.manual_review_row_count > 0 || (payrollExport.missing_employee_identifier_row_count ?? 0) > 0) ? (
+                    <p className={`mt-1 text-[10px] ${dark ? 'text-[#FDE68A]' : 'text-[#9A3412]'}`} style={{ fontWeight: 500 }}>
+                      Some payroll consequence rows still require manual handling before direct payroll import.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className={`px-6 py-4 border-t flex gap-2.5 ${borderClass}`}>

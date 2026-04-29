@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.common import AssignmentStatus, CoverageAttemptStatus, CoverageCaseStatus, EmployeeStatus
 from app.models.coverage import CoverageCase, CoverageContactAttempt
+from app.models.business import Business
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
-from app.services import delivery, labor_rules
+from app.services import compliance_engine, compliance_overrides, delivery, labor_rules, settings as settings_service, workforce
 
 SCORE_SNAPSHOT_STALE_AFTER = timedelta(minutes=15)
 RECENT_BURDEN_WINDOW = timedelta(days=7)
@@ -243,6 +244,11 @@ def build_runtime_projection_metadata(
         "unresolved": 0,
         "elevated_or_higher": 0,
     }
+    compliance_counts = {
+        "resolved": 0,
+        "blocked": 0,
+        "warning": 0,
+    }
     policy_version = None
     snapshot_generated_at = None
     inputs_version = None
@@ -251,6 +257,14 @@ def build_runtime_projection_metadata(
         policy_version = policy_version or scoring_factors.get("policy_version")
         snapshot_generated_at = snapshot_generated_at or scoring_factors.get("snapshot_generated_at")
         inputs_version = inputs_version or scoring_factors.get("inputs_version")
+        compliance = scoring_factors.get("compliance")
+        if isinstance(compliance, dict):
+            compliance_counts["resolved"] += 1
+            compliance_status = str(compliance.get("status") or "").lower()
+            if compliance_status == "block":
+                compliance_counts["blocked"] += 1
+            elif compliance_status == "warning":
+                compliance_counts["warning"] += 1
         projection = scoring_factors.get("overtime_projection")
         if not isinstance(projection, dict):
             continue
@@ -283,6 +297,10 @@ def build_runtime_projection_metadata(
             "source": "labor_rule_engine",
             "mode": labor_rules.labor_rules_mode(),
             **overtime_projection_counts,
+        },
+        "compliance": {
+            "source": compliance_engine.COMPLIANCE_ENGINE_VERSION,
+            **compliance_counts,
         },
         "policy": {
             "policy_version": policy_version,
@@ -478,6 +496,26 @@ async def build_outreach_guardrail_snapshots(
         if resolved_profile is not None
         else {}
     )
+    active_override_artifacts = await compliance_overrides.active_artifacts_for_shift_employees(
+        session,
+        shift_id=shift.id,
+        employee_ids=[employee.id for employee in employees_list],
+        reference_time=reference_time,
+    )
+    business = getattr(getattr(shift, "location", None), "business", None)
+    session_get = getattr(session, "get", None)
+    if (
+        business is None
+        and getattr(shift, "location", None) is not None
+        and callable(session_get)
+    ):
+        business = await session_get(Business, shift.location.business_id)
+    business_settings, location_settings = await settings_service.resolved_compliance_settings_inputs(
+        session,
+        business=business,
+        location=getattr(shift, "location", None),
+        as_of=reference_time,
+    )
     snapshots: dict[UUID, dict[str, object]] = {}
     for employee in employees_list:
         attempts = attempts_by_employee.get(employee.id, [])
@@ -506,12 +544,44 @@ async def build_outreach_guardrail_snapshots(
             counted_intervals=employee_hours_snapshot.counted_intervals if employee_hours_snapshot is not None else (),
             reference_time=reference_time,
         )
+        work_permit_context = workforce.resolve_employee_work_permit_context(
+            employee,
+            shift_starts_at=shift.starts_at,
+            timezone_name=shift.timezone,
+        )
+        compliance = compliance_engine.evaluate_shift_assignment_compliance(
+            resolved_profile,
+            candidate_shift=shift,
+            counted_intervals=employee_hours_snapshot.counted_intervals if employee_hours_snapshot is not None else (),
+            reference_time=reference_time,
+            overtime_projection=overtime_projection,
+            employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+            employee_date_of_birth=getattr(employee, "date_of_birth", None),
+            employee_minor_school_status=getattr(employee, "minor_school_status", None),
+            employee_work_permit_number=work_permit_context.get("permit_number"),
+            employee_work_permit_effective_start_on=work_permit_context.get("effective_start_on"),
+            employee_work_permit_expires_on=work_permit_context.get("expires_on"),
+            employee_work_permit_max_daily_minutes=work_permit_context.get("max_daily_minutes"),
+            employee_work_permit_max_weekly_minutes=work_permit_context.get("max_weekly_minutes"),
+            employee_work_permit_earliest_start_local_time=work_permit_context.get("earliest_start_local_time"),
+            employee_work_permit_latest_end_local_time=work_permit_context.get("latest_end_local_time"),
+            employee_work_permit_rule_profile=work_permit_context.get("rule_profile"),
+            business_settings=business_settings,
+            location_settings=location_settings,
+        )
+        override_artifact = compliance_overrides.matching_override_artifact(
+            compliance,
+            active_override_artifacts.get(employee.id, []),
+            reference_time=reference_time,
+        )
+        compliance = compliance_overrides.apply_override_artifact(compliance, override_artifact)
         overtime_multiplier = labor_rules.overtime_multiplier_for_projection(
             overtime_projection,
             apply_to_ranking=labor_rules.labor_rules_primary_enabled(),
         )
+        compliance_multiplier = compliance_engine.coverage_multiplier_for_evaluation(compliance)
         overall = round(
-            float(cooldown["multiplier"]) * float(burden["multiplier"]) * overtime_multiplier,
+            float(cooldown["multiplier"]) * float(burden["multiplier"]) * overtime_multiplier * compliance_multiplier,
             3,
         )
 
@@ -520,8 +590,9 @@ async def build_outreach_guardrail_snapshots(
             "recent_burden": burden,
             "overtime_risk": labor_rules.legacy_overtime_risk_snapshot(overtime_projection),
             "overtime_projection": overtime_projection,
+            "compliance": compliance,
             "overall_multiplier": overall,
-            "hard_excluded": float(cooldown["multiplier"]) == 0.0,
+            "hard_excluded": float(cooldown["multiplier"]) == 0.0 or compliance_multiplier == 0.0,
         }
 
     return snapshots

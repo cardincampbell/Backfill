@@ -288,6 +288,7 @@ async def _load_projected_rows(
     projection_name: str,
     location_id: UUID | None,
     entity_type: str | None,
+    entity_id: UUID | None,
     event_type: str | None,
     limit: int,
 ) -> list[FeedProjection]:
@@ -308,6 +309,8 @@ async def _load_projected_rows(
         stmt = stmt.where(FeedProjection.location_id == location_id)
     if entity_type is not None:
         stmt = stmt.where(FeedProjection.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(FeedProjection.entity_id == entity_id)
     if event_type is not None:
         stmt = stmt.where(FeedProjection.event_type == event_type)
     result = await session.execute(stmt)
@@ -321,6 +324,7 @@ async def _load_raw_tail_events(
     projection_name: str,
     location_id: UUID | None,
     entity_type: str | None,
+    entity_id: UUID | None,
     event_type: str | None,
     limit: int,
 ) -> list[PlatformEvent]:
@@ -350,6 +354,8 @@ async def _load_raw_tail_events(
         stmt = stmt.where(PlatformEvent.location_id == location_id)
     if entity_type is not None:
         stmt = stmt.where(PlatformEvent.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(PlatformEvent.entity_id == entity_id)
     if event_type is not None:
         stmt = stmt.where(PlatformEvent.event_type == event_type)
     result = await session.execute(stmt)
@@ -393,6 +399,7 @@ async def list_feed_events(
     business_id: UUID,
     location_id: UUID | None = None,
     entity_type: str | None = None,
+    entity_id: UUID | None = None,
     event_type: str | None = None,
     limit: int = 50,
     projection_name: str = DEFAULT_FEED_PROJECTION_NAME,
@@ -403,6 +410,7 @@ async def list_feed_events(
         projection_name=projection_name,
         location_id=location_id,
         entity_type=entity_type,
+        entity_id=entity_id,
         event_type=event_type,
         limit=limit,
     )
@@ -412,6 +420,7 @@ async def list_feed_events(
             business_id=business_id,
             location_id=location_id,
             entity_type=entity_type,
+            entity_id=entity_id,
             event_type=event_type,
             limit=limit,
         )
@@ -423,6 +432,7 @@ async def list_feed_events(
         projection_name=projection_name,
         location_id=location_id,
         entity_type=entity_type,
+        entity_id=entity_id,
         event_type=event_type,
         limit=limit,
     )

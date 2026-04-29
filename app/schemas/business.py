@@ -8,6 +8,10 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
+from app.schemas.settings import (
+    CompliancePayrollExportSettingsUpdate,
+    CompliancePolicySettingsUpdate,
+)
 
 
 class BusinessCreate(BaseSchema):
@@ -27,6 +31,8 @@ class BusinessProfileUpdate(BaseSchema):
     vertical: Optional[str] = None
     primary_email: Optional[str] = None
     timezone: str
+    expected_compliance_policy_hash: str | None = None
+    compliance_effective_at: datetime | None = None
     company_address: Optional[str] = None
     week_start_day: Optional[
         Literal[
@@ -53,6 +59,8 @@ class BusinessProfileUpdate(BaseSchema):
     reliability_coaching_style: Optional[
         Literal["supportive", "direct", "firm"]
     ] = None
+    compliance: CompliancePolicySettingsUpdate | None = None
+    compliance_payroll_export: CompliancePayrollExportSettingsUpdate | None = None
 
 
 class BusinessRead(BaseSchema):

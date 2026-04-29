@@ -1,13 +1,91 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import Field
 
 from app.models.common import EmployeeStatus
 from app.schemas.common import BaseSchema
+
+WeekdayName = Literal[
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+]
+
+
+class EmployeeWorkPermitRuleProfile(BaseSchema):
+    template_code: Optional[str] = None
+    jurisdiction_code: Optional[str] = None
+    source_url: Optional[str] = None
+    allowed_weekdays: list[WeekdayName] = Field(default_factory=list)
+    daily_max_minutes: Optional[int] = Field(default=None, ge=0)
+    daily_max_minutes_in_session: Optional[int] = Field(default=None, ge=0)
+    daily_max_minutes_summer_break: Optional[int] = Field(default=None, ge=0)
+    daily_max_minutes_school_day: Optional[int] = Field(default=None, ge=0)
+    daily_max_minutes_non_school_day: Optional[int] = Field(default=None, ge=0)
+    daily_max_minutes_preceding_non_school_day: Optional[int] = Field(default=None, ge=0)
+    weekly_max_minutes: Optional[int] = Field(default=None, ge=0)
+    weekly_max_minutes_in_session: Optional[int] = Field(default=None, ge=0)
+    weekly_max_minutes_summer_break: Optional[int] = Field(default=None, ge=0)
+    weekly_max_minutes_school_week: Optional[int] = Field(default=None, ge=0)
+    weekly_max_minutes_non_school_week: Optional[int] = Field(default=None, ge=0)
+    earliest_start_local_time: Optional[time] = None
+    earliest_start_local_time_school_day: Optional[time] = None
+    earliest_start_local_time_non_school_day: Optional[time] = None
+    latest_end_local_time: Optional[time] = None
+    latest_end_local_time_in_session: Optional[time] = None
+    latest_end_local_time_summer_break: Optional[time] = None
+    latest_end_local_time_school_day: Optional[time] = None
+    latest_end_local_time_non_school_day: Optional[time] = None
+    latest_end_local_time_preceding_non_school_day: Optional[time] = None
+
+
+class EmployeeWorkPermitCreate(BaseSchema):
+    permit_number: str
+    issuing_authority: Optional[str] = None
+    issued_on: Optional[date] = None
+    effective_start_date: Optional[date] = None
+    effective_end_date: Optional[date] = None
+    max_daily_minutes: Optional[int] = Field(default=None, ge=0)
+    max_weekly_minutes: Optional[int] = Field(default=None, ge=0)
+    earliest_start_local_time: Optional[time] = None
+    latest_end_local_time: Optional[time] = None
+    rule_profile: Optional[EmployeeWorkPermitRuleProfile] = None
+    permit_metadata: dict = Field(default_factory=dict)
+
+
+class EmployeeWorkPermitRead(BaseSchema):
+    id: UUID
+    employee_id: UUID
+    permit_number: str
+    issuing_authority: Optional[str] = None
+    issued_on: Optional[date] = None
+    effective_start_date: Optional[date] = None
+    effective_end_date: Optional[date] = None
+    max_daily_minutes: Optional[int] = None
+    max_weekly_minutes: Optional[int] = None
+    earliest_start_local_time: Optional[time] = None
+    latest_end_local_time: Optional[time] = None
+    rule_profile: Optional[EmployeeWorkPermitRuleProfile] = None
+    permit_metadata: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class EmployeeWorkPermitTemplateRead(BaseSchema):
+    code: str
+    label: str
+    description: Optional[str] = None
+    jurisdiction_code: Optional[str] = None
+    source_url: Optional[str] = None
+    rule_profile: EmployeeWorkPermitRuleProfile
 
 
 class EmployeeCreate(BaseSchema):
@@ -18,6 +96,17 @@ class EmployeeCreate(BaseSchema):
     external_ref: Optional[str] = None
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
+    base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    date_of_birth: Optional[date] = None
+    minor_school_status: Optional[str] = None
+    work_permit_number: Optional[str] = None
+    work_permit_effective_start_on: Optional[date] = None
+    work_permit_expires_on: Optional[date] = None
+    work_permit_max_daily_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_max_weekly_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_earliest_start_local_time: Optional[time] = None
+    work_permit_latest_end_local_time: Optional[time] = None
+    work_permits: list[EmployeeWorkPermitCreate] = Field(default_factory=list)
     primary_location_id: Optional[UUID] = None
     hire_date: Optional[date] = None
     notes: Optional[str] = None
@@ -55,6 +144,16 @@ class EmployeeRead(BaseSchema):
     preferred_name: Optional[str]
     phone_e164: Optional[str]
     email: Optional[str]
+    base_hourly_rate_cents: Optional[int] = None
+    date_of_birth: Optional[date] = None
+    minor_school_status: Optional[str] = None
+    work_permit_number: Optional[str] = None
+    work_permit_effective_start_on: Optional[date] = None
+    work_permit_expires_on: Optional[date] = None
+    work_permit_max_daily_minutes: Optional[int] = None
+    work_permit_max_weekly_minutes: Optional[int] = None
+    work_permit_earliest_start_local_time: Optional[time] = None
+    work_permit_latest_end_local_time: Optional[time] = None
     reliability_score: Optional[float] = 0.7
     status: str
     employment_type: Optional[str]
@@ -83,6 +182,17 @@ class EmployeeEnrollAtLocationCreate(BaseSchema):
     external_ref: Optional[str] = None
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
+    base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    date_of_birth: Optional[date] = None
+    minor_school_status: Optional[str] = None
+    work_permit_number: Optional[str] = None
+    work_permit_effective_start_on: Optional[date] = None
+    work_permit_expires_on: Optional[date] = None
+    work_permit_max_daily_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_max_weekly_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_earliest_start_local_time: Optional[time] = None
+    work_permit_latest_end_local_time: Optional[time] = None
+    work_permits: list[EmployeeWorkPermitCreate] = Field(default_factory=list)
     hire_date: Optional[date] = None
     notes: Optional[str] = None
     employee_metadata: dict = Field(default_factory=dict)
@@ -182,6 +292,17 @@ class EmployeeUpdate(BaseSchema):
     external_ref: Optional[str] = None
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
+    base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    date_of_birth: Optional[date] = None
+    minor_school_status: Optional[str] = None
+    work_permit_number: Optional[str] = None
+    work_permit_effective_start_on: Optional[date] = None
+    work_permit_expires_on: Optional[date] = None
+    work_permit_max_daily_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_max_weekly_minutes: Optional[int] = Field(default=None, ge=0)
+    work_permit_earliest_start_local_time: Optional[time] = None
+    work_permit_latest_end_local_time: Optional[time] = None
+    work_permits: Optional[list[EmployeeWorkPermitCreate]] = None
     status: Optional[EmployeeStatus] = None
     hire_date: Optional[date] = None
     termination_date: Optional[date] = None
@@ -195,6 +316,7 @@ class EmployeeUpdate(BaseSchema):
 class EmployeeProfileRead(EmployeeRead):
     roles: list[EmployeeRoleRead] = Field(default_factory=list)
     locations: list[EmployeeLocationRead] = Field(default_factory=list)
+    work_permits: list[EmployeeWorkPermitRead] = Field(default_factory=list)
 
 
 class EmployeeDeleteReadinessRead(BaseSchema):

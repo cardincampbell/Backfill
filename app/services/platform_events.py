@@ -18,6 +18,7 @@ PLATFORM_EVENT_PAYLOAD_KEY = "_platform_event"
 
 
 class PlatformEventType:
+    COMPLIANCE_DECISION_RECORDED = "compliance.decision.recorded"
     SCHEDULE_WEEK_PUBLISHED = "schedule.week.published"
     SCHEDULE_WEEK_AMENDED = "schedule.week.amended"
     SCHEDULE_SHIFT_PUBLISHED = "schedule.shift.published"
@@ -173,6 +174,7 @@ async def list_events(
     business_id: UUID,
     location_id: UUID | None = None,
     entity_type: str | None = None,
+    entity_id: UUID | None = None,
     event_type: str | None = None,
     limit: int = 50,
 ) -> list[PlatformEvent]:
@@ -186,6 +188,8 @@ async def list_events(
         stmt = stmt.where(PlatformEvent.location_id == location_id)
     if entity_type is not None:
         stmt = stmt.where(PlatformEvent.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(PlatformEvent.entity_id == entity_id)
     if event_type is not None:
         stmt = stmt.where(PlatformEvent.event_type == event_type)
     result = await session.execute(stmt)

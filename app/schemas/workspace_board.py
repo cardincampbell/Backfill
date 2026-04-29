@@ -39,6 +39,15 @@ class WorkspaceBoardShiftAssignmentRead(BaseSchema):
     status: str
     assigned_via: str
     accepted_at: Optional[datetime] = None
+    compliance_status: Optional[str] = None
+    compliance_profile_code: Optional[str] = None
+    compliance_blocking_rule_codes: list[str] = Field(default_factory=list)
+    compliance_warning_rule_codes: list[str] = Field(default_factory=list)
+    compliance_premium_rule_codes: list[str] = Field(default_factory=list)
+    compliance_premium_total_cents: int = 0
+    compliance_unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
+    compliance_override_applied: bool = False
+    compliance_override_artifact_id: Optional[str] = None
 
 
 class WorkspaceBoardShiftRead(BaseSchema):

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
-from app.models.auto_scheduler import ScheduleRun, ScheduleRunApply, ScheduleRunAssignment
+from app.models.auto_scheduler import ScheduleRun, ScheduleRunApply, ScheduleRunAssignment, ScheduleRunInput
 from app.models.common import (
     MembershipRole,
     MembershipStatus,
@@ -184,6 +184,124 @@ def test_ensure_predictive_schedule_route_returns_latest_matching_run(monkeypatc
         assert payload["status"] == "completed"
         assert payload["assignments"][0]["decision_rank"] == 1
         assert captured["hash_kwargs"]["generated_demand_payload"] == {"proposed_shifts": [], "metadata": {}}
+        assert created["count"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ensure_predictive_schedule_route_returns_compliance_summary(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    week_start_date = date(2026, 4, 20)
+    auth_ctx = _make_auth_context(business_id=business_id, location_id=location_id)
+    schedule_run = _schedule_run_detail_fixture(
+        business_id=business_id,
+        location_id=location_id,
+        week_start_date=week_start_date,
+    )
+    assignment = schedule_run.assignments[0]
+    schedule_run.inputs = ScheduleRunInput(
+        schedule_run_id=schedule_run.id,
+        shift_payload={"shifts": []},
+        fixed_shift_payload={"shifts": []},
+        generated_demand_payload={"proposed_shifts": [], "metadata": {}},
+        employee_payload={"employees": []},
+        availability_payload={},
+        policy_payload={"publish_mode": "draft_only"},
+        labor_payload={},
+        compliance_payload={
+            "employees_by_shift": {
+                str(assignment.shift_id): {
+                    str(assignment.employee_id): {
+                        "status": "warning",
+                        "warning_rule_codes": ["meal_break_first_window"],
+                        "premium_total_cents": 0,
+                        "unresolved_premium_rule_codes": ["meal_break_first_window"],
+                        "override_applied": False,
+                        "override_artifact_id": None,
+                        "rule_results": [
+                            {
+                                "rule_code": "meal_break_first_window",
+                                "status": "warning",
+                                "artifact_type_allowed": "meal_waiver",
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+        reliability_payload={"employees": []},
+        reliability_snapshot_generated_at=schedule_run.created_at,
+        reliability_snapshot_hash="sha256:reliability",
+        reliability_snapshot_version="v1",
+        source_metadata={"authoring_snapshot_hash": "sha256:authoring"},
+        created_at=schedule_run.created_at,
+        updated_at=schedule_run.updated_at,
+    )
+    schedule_run.applies = []
+    created = {"count": 0}
+
+    async def override_auth():
+        return auth_ctx
+
+    async def fake_get_location(_session, _business_id, _location_id):
+        return type("LocationStub", (), {"timezone": "America/Los_Angeles"})()
+
+    async def fake_current_scope_snapshot_hash(_session, **_kwargs):
+        return "sha256:authoring"
+
+    async def fake_latest_schedule_run_for_scope(_session, **_kwargs):
+        return schedule_run
+
+    async def fake_create_and_execute_schedule_run_for_scope(*_args, **_kwargs):
+        created["count"] += 1
+        return schedule_run
+
+    async def fake_get_schedule_run_detail(_session, schedule_run_id):
+        assert schedule_run_id == schedule_run.id
+        return schedule_run
+
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.businesses_service.get_location",
+        fake_get_location,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.current_scope_snapshot_hash",
+        fake_current_scope_snapshot_hash,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.latest_schedule_run_for_scope",
+        fake_latest_schedule_run_for_scope,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.create_and_execute_schedule_run_for_scope",
+        fake_create_and_execute_schedule_run_for_scope,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.scheduling.auto_scheduler.get_schedule_run_detail",
+        fake_get_schedule_run_detail,
+    )
+
+    app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    try:
+        client = TestClient(app)
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/schedule-weeks/{week_start_date.isoformat()}/predictive-schedule"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["compliance_summary"]["selected_assignment_count"] == 1
+        assert payload["compliance_summary"]["warning_assignment_count"] == 1
+        assert payload["compliance_summary"]["override_eligible_warning_count"] == 1
+        assert payload["compliance_summary"]["override_eligible_artifact_types"] == ["meal_waiver"]
+        assert payload["compliance_summary"]["unresolved_premium_rule_codes"] == ["meal_break_first_window"]
+        assert len(payload["compliance_review_items"]) == 1
+        assert payload["compliance_review_items"][0]["shift_id"] == str(assignment.shift_id)
+        assert payload["compliance_review_items"][0]["employee_id"] == str(assignment.employee_id)
+        assert payload["compliance_review_items"][0]["override_eligible_artifact_types"] == ["meal_waiver"]
+        assert payload["compliance_review_items"][0]["issues"][0]["rule_code"] == "meal_break_first_window"
+        assert payload["compliance_review_items"][0]["issues"][0]["artifact_type_allowed"] == "meal_waiver"
         assert created["count"] == 0
     finally:
         app.dependency_overrides.clear()

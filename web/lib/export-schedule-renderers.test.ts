@@ -25,6 +25,26 @@ const opts: ExportOptions = {
   ],
 };
 
+const complianceOpts: ExportOptions = {
+  ...opts,
+  shifts: [
+    {
+      employeeId: 'e1',
+      day: 0,
+      startHour: 9,
+      endHour: 17,
+      roleName: 'Barista',
+      complianceStatus: 'warning',
+      compliancePremiumTotalCents: 2100,
+      complianceWarningRuleCodes: ['paid_rest_break_quota'],
+      complianceBlockingRuleCodes: [],
+      complianceUnresolvedPremiumRuleCodes: [],
+      complianceOverrideApplied: true,
+      complianceOverrideArtifactId: 'artifact_123',
+    },
+  ],
+};
+
 // ─── PDF renderer mocks ───────────────────────────────────────────────────────
 
 const {
@@ -192,6 +212,25 @@ describe('exportPDF — rendering contract', () => {
     const [filename] = jsPDFInstance.save.mock.calls[0] as [string];
     expect(filename).toMatch(/\.pdf$/);
   });
+
+  it('adds a second PDF table for compliance rows when present', async () => {
+    const { exportPDF } = await import('./export-schedule');
+    await exportPDF(complianceOpts);
+
+    expect(mockAutoTable).toHaveBeenCalledTimes(2);
+    const [, complianceTableOpts] = mockAutoTable.mock.calls[1] as [unknown, { head: string[][] }];
+    expect(complianceTableOpts.head[0]).toEqual([
+      'Employee',
+      'Role',
+      'Shift',
+      'Status',
+      'Premium',
+      'Unresolved Premium',
+      'Artifact Applied',
+      'Warning Rules',
+      'Blocking Rules',
+    ]);
+  });
 });
 
 // ─── Excel tests ──────────────────────────────────────────────────────────────
@@ -269,5 +308,14 @@ describe('exportExcel — rendering contract', () => {
     await exportExcel(opts);
 
     expect(titleCell.value).toBe("Coley's Coffee · Downtown");
+  });
+
+  it('adds a Compliance worksheet when compliance rows are present', async () => {
+    const { exportExcel } = await import('./export-schedule');
+    await exportExcel(complianceOpts);
+
+    expect(mockWorkbookInstance.addWorksheet).toHaveBeenCalledWith('Compliance', {
+      views: [{ state: 'frozen', ySplit: 3 }],
+    });
   });
 });

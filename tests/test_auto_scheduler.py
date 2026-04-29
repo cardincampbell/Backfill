@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,13 +13,18 @@ from app.models.auto_scheduler import ScheduleRunAssignment
 from app.models.business import Business, Location, Role
 from app.models.common import (
     AssignmentStatus,
+    ComplianceOverrideArtifactStatus,
+    ComplianceOverrideArtifactType,
     EmployeeStatus,
     ScheduleApplyStatus,
     ScheduleRunStatus,
+    ShiftBreakType,
     ShiftLifecycleStatus,
+    ShiftSegmentType,
     ShiftStaffingStatus,
 )
-from app.models.scheduling import Shift, ShiftAssignment
+from app.models.compliance import ComplianceOverrideArtifact
+from app.models.scheduling import Shift, ShiftAssignment, ShiftBreak, ShiftSegment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.models.workforce import EmployeeAvailabilityException, EmployeeAvailabilityRule
 from app.schemas.auto_scheduler import (
@@ -31,7 +36,7 @@ from app.schemas.auto_scheduler import (
     SchedulePolicyPayload,
     ScheduleRunInputContract,
 )
-from app.services import auto_scheduler
+from app.services import auto_scheduler, labor_rules
 
 
 class FakeAutoSchedulerSession:
@@ -47,6 +52,21 @@ class FakeAutoSchedulerSession:
             obj.created_at = now
         if hasattr(obj, "updated_at") and getattr(obj, "updated_at", None) is None:
             obj.updated_at = now
+        if isinstance(obj, Shift):
+            for segment in obj.segments or []:
+                if getattr(segment, "id", None) is None:
+                    segment.id = uuid4()
+                if getattr(segment, "created_at", None) is None:
+                    segment.created_at = now
+                if getattr(segment, "updated_at", None) is None:
+                    segment.updated_at = now
+                for shift_break in segment.breaks or []:
+                    if getattr(shift_break, "id", None) is None:
+                        shift_break.id = uuid4()
+                    if getattr(shift_break, "created_at", None) is None:
+                        shift_break.created_at = now
+                    if getattr(shift_break, "updated_at", None) is None:
+                        shift_break.updated_at = now
         self.added.append(obj)
         self.get_map[(type(obj), obj.id)] = obj
 
@@ -123,6 +143,36 @@ def _generated_demand_payload(*, location_id, role_id, source_run_id=None, sourc
             )
         ],
         metadata={"source": "historical_pattern_v1"},
+    )
+
+
+def _california_break_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="ca_restaurant_core",
+        jurisdiction_code="US-CA",
+        display_name="California Restaurant Core",
+        overtime_mode="daily_8_plus_weekly_plus_7th_day",
+        daily_ot_threshold_hours=8.0,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=12.0,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code=None,
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ca_v1",
+            "rest_break_ruleset": "ca_v1",
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:ca_break_rules",
+        payload_json={},
     )
 
 
@@ -416,6 +466,97 @@ def test_build_authoring_snapshot_hash_is_stable_across_input_order():
     assert hash_one == hash_two
 
 
+@pytest.mark.asyncio
+async def test_current_scope_snapshot_hash_changes_when_compliance_override_artifacts_change(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=datetime(2026, 4, 20, 16, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 20, 22, 0, tzinfo=timezone.utc),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_load_scope_shifts(*_args, **_kwargs):
+        return [shift]
+
+    async def fake_load_scope_employees(*_args, **_kwargs):
+        return []
+
+    async def fake_load_scope_compliance_override_artifacts(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(auto_scheduler, "_load_scope_shifts", fake_load_scope_shifts)
+    monkeypatch.setattr(auto_scheduler, "_load_scope_employees", fake_load_scope_employees)
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_load_scope_compliance_override_artifacts",
+        fake_load_scope_compliance_override_artifacts,
+    )
+
+    hash_without_artifact = await auto_scheduler.current_scope_snapshot_hash(
+        None,
+        business_id=business_id,
+        location_id=location_id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+    )
+
+    artifact = ComplianceOverrideArtifact(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        shift_id=shift.id,
+        employee_id=uuid4(),
+        rule_code="meal_break_first_window",
+        artifact_type=ComplianceOverrideArtifactType.meal_waiver,
+        status=ComplianceOverrideArtifactStatus.approved,
+        engine_version="deterministic_compliance_engine_v1",
+        profile_payload_hash="sha256:profile",
+        approved_at=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc),
+        revoked_at=None,
+        reason_codes=["waiver_possible_but_not_modelled"],
+        artifact_payload={},
+        created_at=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+    )
+
+    async def fake_load_scope_compliance_override_artifacts_with_value(*_args, **_kwargs):
+        return [artifact]
+
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_load_scope_compliance_override_artifacts",
+        fake_load_scope_compliance_override_artifacts_with_value,
+    )
+
+    hash_with_artifact = await auto_scheduler.current_scope_snapshot_hash(
+        None,
+        business_id=business_id,
+        location_id=location_id,
+        planning_window_start=datetime(2026, 4, 20, 7, 0, tzinfo=timezone.utc),
+        planning_window_end=datetime(2026, 4, 27, 7, 0, tzinfo=timezone.utc),
+    )
+
+    assert hash_without_artifact != hash_with_artifact
+
+
 def test_resolve_schedule_policy_payload_reads_business_defaults():
     payload = auto_scheduler.resolve_schedule_policy_payload(
         business_settings={
@@ -438,6 +579,7 @@ def test_resolve_schedule_policy_payload_reads_business_defaults():
     assert payload.same_day_second_shift_allowed is False
     assert payload.cross_location_shift_coverage_allowed is True
     assert payload.labor_rule_mode == "hard_block"
+    assert payload.compliance_rule_mode == "hard_block"
     assert payload.fairness_mode == "balanced_hours"
     assert payload.max_solver_runtime_seconds == 45
     assert payload.hard_constraints["manual_drafts_locked"] is True
@@ -828,6 +970,42 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
             },
         }
 
+    async def fake_build_compliance_payload(
+        _session,
+        *,
+        business_id=None,
+        shifts,
+        employees,
+        reference_time,
+        business_settings,
+        generated_demand_payload=None,
+        generated_locations=None,
+    ):
+        captured["compliance"] = {
+            "shift_ids": [shift.id for shift in shifts],
+            "employee_ids": [employee.id for employee in employees],
+            "reference_time": reference_time,
+            "business_settings": business_settings,
+        }
+        return {
+            "employees": {
+                str(employee.id): {
+                    "status": "clear",
+                    "blocking_rule_codes": [],
+                    "warning_rule_codes": [],
+                }
+            },
+            "employees_by_shift": {
+                str(open_shift.id): {
+                    str(employee.id): {
+                        "status": "clear",
+                        "blocking_rule_codes": [],
+                        "warning_rule_codes": [],
+                    }
+                }
+            },
+        }
+
     async def fake_create_schedule_run(
         _session,
         *,
@@ -907,6 +1085,7 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     monkeypatch.setattr(auto_scheduler, "_load_scope_employees", fake_load_employees)
     monkeypatch.setattr(auto_scheduler, "_build_scope_reliability_payload", fake_build_reliability)
     monkeypatch.setattr(auto_scheduler, "_build_scope_labor_payload", fake_build_labor_payload)
+    monkeypatch.setattr(auto_scheduler, "_build_scope_compliance_payload", fake_build_compliance_payload)
     monkeypatch.setattr(auto_scheduler, "create_schedule_run", fake_create_schedule_run)
     monkeypatch.setattr(auto_scheduler, "execute_schedule_run", fake_execute_schedule_run)
     monkeypatch.setattr(
@@ -940,6 +1119,8 @@ async def test_create_and_execute_schedule_run_for_scope_builds_inputs_and_execu
     assert inputs.employee_payload["employees"][0]["employee_id"] == str(employee.id)
     assert inputs.labor_payload["employees"][str(employee.id)]["status"] == "clear"
     assert inputs.labor_payload["employees_by_shift"][str(open_shift.id)][str(employee.id)]["status"] == "clear"
+    assert inputs.compliance_payload["employees"][str(employee.id)]["status"] == "clear"
+    assert inputs.compliance_payload["employees_by_shift"][str(open_shift.id)][str(employee.id)]["status"] == "clear"
     assert inputs.source_metadata["source_request_id"] == "req_123"
     assert inputs.source_metadata["demand_feature_snapshot_id"] == str(snapshot_id)
     assert inputs.source_metadata["demand_feature_snapshot_hash"] == "sha256:demand_features"
@@ -990,6 +1171,22 @@ async def test_create_and_execute_schedule_run_for_scope_threads_forecast_proven
             "employees_by_shift": {},
         }
 
+    async def fake_build_compliance_payload(
+        _session,
+        *,
+        business_id=None,
+        shifts,
+        employees,
+        reference_time,
+        business_settings,
+        generated_demand_payload=None,
+        generated_locations=None,
+    ):
+        return {
+            "employees": {str(employee.id): {"status": "clear", "blocking_rule_codes": [], "warning_rule_codes": []}},
+            "employees_by_shift": {},
+        }
+
     async def fake_create_schedule_run(
         _session,
         *,
@@ -1005,6 +1202,20 @@ async def test_create_and_execute_schedule_run_for_scope_threads_forecast_proven
 
     async def fake_execute_schedule_run(_session, schedule_run_id, *, optimizer=None):
         return SimpleNamespace(id=schedule_run_id, status=ScheduleRunStatus.completed)
+
+    async def fake_attach_generated_demand_break_plans_to_inputs(
+        _session,
+        *,
+        business_id,
+        inputs,
+        reference_time,
+        business_settings,
+        generated_locations,
+    ):
+        return inputs, {
+            "compliance_break_plan_status": "skipped",
+            "compliance_break_planned_shift_count": 0,
+        }
 
     async def fake_create_demand_feature_snapshot_for_inputs(*_args, **_kwargs):
         return SimpleNamespace(
@@ -1032,8 +1243,14 @@ async def test_create_and_execute_schedule_run_for_scope_threads_forecast_proven
     monkeypatch.setattr(auto_scheduler, "_load_scope_employees", fake_load_employees)
     monkeypatch.setattr(auto_scheduler, "_build_scope_reliability_payload", fake_build_reliability)
     monkeypatch.setattr(auto_scheduler, "_build_scope_labor_payload", fake_build_labor_payload)
+    monkeypatch.setattr(auto_scheduler, "_build_scope_compliance_payload", fake_build_compliance_payload)
     monkeypatch.setattr(auto_scheduler, "create_schedule_run", fake_create_schedule_run)
     monkeypatch.setattr(auto_scheduler, "execute_schedule_run", fake_execute_schedule_run)
+    monkeypatch.setattr(
+        auto_scheduler,
+        "_attach_generated_demand_break_plans_to_inputs",
+        fake_attach_generated_demand_break_plans_to_inputs,
+    )
     monkeypatch.setattr(
         auto_scheduler,
         "_create_demand_feature_snapshot_for_inputs",
@@ -1202,9 +1419,11 @@ def test_build_schedule_run_inputs_from_loaded_scope_respects_locked_manual_draf
         location_id=location.id,
         location_settings=location.settings,
         labor_payload={"employees": {}},
+        compliance_payload={"employees": {}},
     )
 
     assert inputs.policy_payload.labor_rule_mode == "hard_block"
+    assert inputs.policy_payload.compliance_rule_mode == "hard_block"
     assert inputs.source_metadata["authoring_snapshot_hash"] == input_hash
     assert len(inputs.shift_payload["shifts"]) == 1
     assert len(inputs.fixed_shift_payload["shifts"]) == 1
@@ -1527,6 +1746,26 @@ async def test_apply_schedule_run_to_draft_materializes_generated_shift(monkeypa
     )
 
     generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].generation_payload["planned_segments"] = [
+        {
+            "sequence_no": 1,
+            "segment_type": ShiftSegmentType.work.value,
+            "starts_at": generated_demand.proposed_shifts[0].starts_at.isoformat(),
+            "ends_at": generated_demand.proposed_shifts[0].ends_at.isoformat(),
+            "segment_metadata": {"planned_by": "test"},
+            "breaks": [
+                {
+                    "sequence_no": 1,
+                    "break_type": ShiftBreakType.meal.value,
+                    "is_paid": False,
+                    "starts_at": datetime(2026, 4, 22, 20, 0, tzinfo=timezone.utc).isoformat(),
+                    "ends_at": datetime(2026, 4, 22, 20, 30, tzinfo=timezone.utc).isoformat(),
+                    "notes": "planned_first_meal_break",
+                    "break_metadata": {"planned_by": "test"},
+                }
+            ],
+        }
+    ]
     optimizer_shift_id = auto_scheduler._optimizer_shift_id_for_demand_key(
         generated_demand.proposed_shifts[0].demand_key
     )
@@ -1584,5 +1823,223 @@ async def test_apply_schedule_run_to_draft_materializes_generated_shift(monkeypa
     created_shift = session.get_map[(Shift, proposed_shift.applied_shift_id)]
     assert created_shift.source_system == "auto_scheduler_demand"
     assert created_shift.shift_metadata["demand_key"] == proposed_shift.demand_key
+    assert len(created_shift.segments) == 1
+    assert created_shift.segments[0].breaks[0].break_type == ShiftBreakType.meal
     assert len(created_shift.assignments) == 1
     assert created_shift.assignments[0].employee_id == employee.id
+
+
+@pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_segments(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        assert location.id == location.id
+        return _california_break_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert generation_payload["compliance_break_plan_status"] == "planned"
+    assert generation_payload["compliance_break_plan_version"] == "deterministic_break_plan_v1"
+    assert len(generation_payload["planned_segments"]) == 1
+    assert len(generation_payload["planned_segments"][0]["breaks"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_build_scope_compliance_payload_includes_generated_shift_rows(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee = _make_employee(business_id=business.id, role=role, location=location)
+    employee.assignments = []
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _california_break_profile()
+
+    async def fake_build_hours_snapshots(_session, *, employees, shift, profile, now=None):
+        return {employee.id: SimpleNamespace(counted_intervals=()) for employee in employees}
+
+    def fake_evaluate_overtime_projection(profile, *, candidate_shift, counted_intervals, reference_time):
+        return {
+            "status": "clear",
+            "projected_regular_hours": 0.0,
+            "projected_ot_hours": 0.0,
+            "projected_dt_hours": 0.0,
+            "projected_cost_multiplier": 1.0,
+            "reason_codes": ["no_overtime_triggered"],
+        }
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+    monkeypatch.setattr(labor_rules, "build_hours_snapshots", fake_build_hours_snapshots)
+    monkeypatch.setattr(labor_rules, "evaluate_overtime_projection", fake_evaluate_overtime_projection)
+
+    planned_inputs, _metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+    payload = await auto_scheduler._build_scope_compliance_payload(
+        session,
+        business_id=business.id,
+        shifts=[],
+        employees=[employee],
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_demand_payload=planned_inputs.generated_demand_payload,
+        generated_locations={location.id: location},
+    )
+
+    generated_shift_id = auto_scheduler._optimizer_shift_id_for_demand_key(
+        planned_inputs.generated_demand_payload.proposed_shifts[0].demand_key
+    )
+    evaluation = payload["employees_by_shift"][generated_shift_id][str(employee.id)]
+    assert evaluation["status"] == "clear"
+    assert evaluation["blocking_rule_codes"] == []
+
+
+@pytest.mark.asyncio
+async def test_build_scope_compliance_payload_applies_override_artifacts_for_persisted_shifts(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    role = _make_role(business_id=business.id)
+    employee = _make_employee(business_id=business.id, role=role, location=location)
+    employee.assignments = []
+    shift = _make_shift(business_id=business.id, location_id=location.id, role_id=role.id)
+    shift.location = location
+    now = datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc)
+    artifact = ComplianceOverrideArtifact(
+        id=uuid4(),
+        business_id=business.id,
+        location_id=location.id,
+        shift_id=shift.id,
+        employee_id=employee.id,
+        rule_code="clopening_restricted",
+        artifact_type=ComplianceOverrideArtifactType.written_consent,
+        status=ComplianceOverrideArtifactStatus.approved,
+        engine_version=auto_scheduler.compliance_engine.COMPLIANCE_ENGINE_VERSION,
+        approved_at=now,
+        expires_at=now + timedelta(hours=8),
+        reason_codes=["minimum_rest_window_violation"],
+        artifact_payload={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return SimpleNamespace(code="ca_restaurant_core")
+
+    async def fake_build_hours_snapshots(_session, *, employees, shift, profile, now=None):
+        return {employee.id: SimpleNamespace(counted_intervals=()) for employee in employees}
+
+    def fake_evaluate_overtime_projection(profile, *, candidate_shift, counted_intervals, reference_time):
+        return {
+            "status": "clear",
+            "projected_regular_hours": 0.0,
+            "projected_ot_hours": 0.0,
+            "projected_dt_hours": 0.0,
+            "projected_cost_multiplier": 1.0,
+            "reason_codes": ["no_overtime_triggered"],
+        }
+
+    def fake_evaluate_shift_assignment_compliance(
+        profile,
+        *,
+        candidate_shift,
+        counted_intervals,
+        reference_time,
+        overtime_projection=None,
+        employee_base_hourly_rate_cents=None,
+        employee_date_of_birth=None,
+        employee_minor_school_status=None,
+        employee_work_permit_number=None,
+        employee_work_permit_effective_start_on=None,
+        employee_work_permit_expires_on=None,
+        employee_work_permit_max_daily_minutes=None,
+        employee_work_permit_max_weekly_minutes=None,
+        employee_work_permit_earliest_start_local_time=None,
+        employee_work_permit_latest_end_local_time=None,
+        employee_work_permit_rule_profile=None,
+        business_settings=None,
+        location_settings=None,
+    ):
+        return {
+            "status": "block",
+            "blocking_rule_codes": ["clopening_restricted"],
+            "warning_rule_codes": [],
+            "premium_rule_codes": ["clopening_restricted"],
+            "would_block": True,
+            "requires_override": True,
+            "rule_results": [
+                {
+                    "rule_code": "clopening_restricted",
+                    "status": "block",
+                    "reason_codes": ["minimum_rest_window_violation"],
+                    "premium_required": True,
+                    "would_block": True,
+                    "written_consent_allowed": True,
+                }
+            ],
+        }
+
+    async def fake_active_artifacts_for_shift_employees(
+        _session,
+        *,
+        shift_id,
+        employee_ids,
+        reference_time=None,
+    ):
+        assert shift_id == shift.id
+        assert employee_ids == [employee.id]
+        return {employee.id: [artifact]}
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+    monkeypatch.setattr(labor_rules, "build_hours_snapshots", fake_build_hours_snapshots)
+    monkeypatch.setattr(labor_rules, "evaluate_overtime_projection", fake_evaluate_overtime_projection)
+    monkeypatch.setattr(
+        auto_scheduler.compliance_engine,
+        "evaluate_shift_assignment_compliance",
+        fake_evaluate_shift_assignment_compliance,
+    )
+    monkeypatch.setattr(
+        auto_scheduler.compliance_overrides,
+        "active_artifacts_for_shift_employees",
+        fake_active_artifacts_for_shift_employees,
+    )
+
+    payload = await auto_scheduler._build_scope_compliance_payload(
+        session,
+        business_id=business.id,
+        shifts=[shift],
+        employees=[employee],
+        reference_time=now,
+        business_settings={},
+    )
+
+    evaluation = payload["employees_by_shift"][str(shift.id)][str(employee.id)]
+    assert evaluation["status"] == "warning"
+    assert evaluation["blocking_rule_codes"] == []
+    assert evaluation["warning_rule_codes"] == ["clopening_restricted"]
+    assert evaluation["override_applied"] is True
+    assert evaluation["override_artifact_id"] == str(artifact.id)
+    assert payload["employees"][str(employee.id)]["override_applied"] is True

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from uuid import uuid4
 
 import pytest
@@ -13,7 +13,7 @@ from app.models.business import Business, Location, Role
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
-from app.models.workforce import Employee, EmployeeAvailabilityRule, EmployeeLocation, EmployeeRole
+from app.models.workforce import Employee, EmployeeAvailabilityRule, EmployeeLocation, EmployeeRole, EmployeeWorkPermit
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleReplace,
     EmployeeAvailabilityRuleRead,
@@ -25,6 +25,9 @@ from app.schemas.workforce import (
     EmployeeProfileRead,
     EmployeeRead,
     EmployeeRoleRead,
+    EmployeeWorkPermitTemplateRead,
+    EmployeeWorkPermitRuleProfile,
+    EmployeeWorkPermitRead,
     SelfEmployeeAvailabilityRead,
 )
 from app.services.auth import AuthContext
@@ -162,6 +165,123 @@ async def test_create_employee_seeds_all_days_availability(monkeypatch):
     assert all(rule.timezone == "America/Chicago" for rule in rules)
     assert all(rule.availability_type == "available" for rule in rules)
     assert all(rule.availability_metadata["preset"] == "all_days" for rule in rules)
+
+
+@pytest.mark.asyncio
+async def test_create_employee_persists_base_hourly_rate(monkeypatch):
+    business_id = uuid4()
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    session = DummyEmployeeCreateSession(location=None)
+
+    async def fake_require_business(_session, incoming_business_id):
+        assert incoming_business_id == business_id
+        return business
+
+    async def fake_find_duplicate_employee(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.workforce._require_business", fake_require_business)
+    monkeypatch.setattr("app.services.workforce._find_duplicate_employee", fake_find_duplicate_employee)
+
+    employee = await workforce.create_employee(
+        session,
+        business_id,
+        workforce.EmployeeCreate(
+            full_name="Jamie Rivera",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            base_hourly_rate_cents=2150,
+            employee_metadata={"source": "team_ui"},
+        ),
+    )
+
+    assert employee.base_hourly_rate_cents == 2150
+
+
+@pytest.mark.asyncio
+async def test_create_employee_persists_minor_compliance_fields(monkeypatch):
+    business_id = uuid4()
+    business = Business(
+        id=business_id,
+        name="Casa Vega LLC",
+        display_name="Casa Vega",
+        slug="casa-vega",
+        timezone="America/Los_Angeles",
+        settings={},
+        place_metadata={},
+    )
+    session = DummyEmployeeCreateSession(location=None)
+
+    async def fake_require_business(_session, incoming_business_id):
+        assert incoming_business_id == business_id
+        return business
+
+    async def fake_find_duplicate_employee(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.services.workforce._require_business", fake_require_business)
+    monkeypatch.setattr("app.services.workforce._find_duplicate_employee", fake_find_duplicate_employee)
+
+    employee = await workforce.create_employee(
+        session,
+        business_id,
+        workforce.EmployeeCreate(
+            full_name="Jamie Rivera",
+            phone_e164="+15555550123",
+            email="jamie@example.com",
+            date_of_birth=date(2010, 5, 1),
+            minor_school_status="in_session",
+            work_permits=[
+                workforce.EmployeeWorkPermitCreate(
+                    permit_number="WP-12345",
+                    effective_start_date=date(2026, 1, 1),
+                    effective_end_date=date(2026, 8, 31),
+                    max_daily_minutes=240,
+                    max_weekly_minutes=1200,
+                    earliest_start_local_time=time(7, 0),
+                    latest_end_local_time=time(19, 0),
+                    rule_profile=EmployeeWorkPermitRuleProfile(
+                        allowed_weekdays=["monday", "tuesday", "wednesday", "thursday", "friday"],
+                        daily_max_minutes_school_day=180,
+                        daily_max_minutes_non_school_day=300,
+                        latest_end_local_time_school_day=time(18, 0),
+                        latest_end_local_time_non_school_day=time(20, 0),
+                    ),
+                    permit_metadata={"source": "team_ui"},
+                )
+            ],
+            employee_metadata={"source": "team_ui"},
+        ),
+    )
+
+    assert employee.date_of_birth == date(2010, 5, 1)
+    assert employee.minor_school_status == "in_session"
+    assert employee.work_permit_number == "WP-12345"
+    assert employee.work_permit_effective_start_on == date(2026, 1, 1)
+    assert employee.work_permit_expires_on == date(2026, 8, 31)
+    assert employee.work_permit_max_daily_minutes == 240
+    assert employee.work_permit_max_weekly_minutes == 1200
+    assert employee.work_permit_earliest_start_local_time == time(7, 0)
+    assert employee.work_permit_latest_end_local_time == time(19, 0)
+    assert len(employee.work_permits) == 1
+    assert employee.work_permits[0].permit_number == "WP-12345"
+    assert employee.work_permits[0].rule_profile is not None
+    assert employee.work_permits[0].rule_profile["daily_max_minutes_school_day"] == 180
+    assert employee.employee_metadata["work_permit_rule_profile"]["allowed_weekdays"] == [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+    ]
 
 
 def test_enroll_employee_route_records_audit(monkeypatch):
@@ -381,6 +501,55 @@ def test_get_employee_delete_readiness_route_returns_readiness(monkeypatch):
         payload = response.json()
         assert payload["can_delete"] is False
         assert "scheduled shifts" in payload["reason"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_list_work_permit_templates_route_returns_catalog(monkeypatch):
+    fake_session = DummyWorkforceSession()
+    business_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id)
+
+    def fake_list_templates():
+        return [
+            EmployeeWorkPermitTemplateRead(
+                code="ca_16_17_school_required_v1",
+                label="California ages 16-17 while school required",
+                description="4 hours on schooldays, 8 hours on non-schooldays.",
+                jurisdiction_code="US-CA",
+                source_url="https://www.dir.ca.gov/dlse/MinorsSummaryCharts.pdf",
+                rule_profile=EmployeeWorkPermitRuleProfile(
+                    template_code="ca_16_17_school_required_v1",
+                    daily_max_minutes_school_day=240,
+                    daily_max_minutes_preceding_non_school_day=480,
+                    latest_end_local_time_preceding_non_school_day=time(0, 30),
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.workforce.workforce.list_work_permit_templates",
+        fake_list_templates,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/employees/work-permit-templates",
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["code"] == "ca_16_17_school_required_v1"
+        assert payload[0]["rule_profile"]["daily_max_minutes_school_day"] == 240
+        assert payload[0]["rule_profile"]["latest_end_local_time_preceding_non_school_day"] == "00:30:00"
     finally:
         app.dependency_overrides.clear()
 
@@ -803,6 +972,7 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
         preferred_name="Jamie",
         phone_e164="+15555550123",
         email="jamie@example.com",
+        base_hourly_rate_cents=1800,
         status="active",
         employee_metadata={},
         created_at=now,
@@ -877,6 +1047,7 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
         business_id,
         employee_id,
         workforce.EmployeeUpdate(
+            base_hourly_rate_cents=2250,
             notification_preferences=workforce.EmployeeNotificationPreferencesUpdate(
                 schedule_publish_sms_enabled=True,
                 sms_opt_out_reason="manager_enabled_after_consent",
@@ -888,12 +1059,328 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
 
     assert updated.role_ids == [role_id]
     assert updated.location_ids == [location_id]
+    assert updated.base_hourly_rate_cents == 2250
     payload = EmployeeProfileRead.model_validate(updated)
     assert payload.roles[0].role_name == "Server"
     assert payload.locations[0].location_name == "Pasadena"
     assert payload.notification_preferences.schedule_publish_email_enabled is True
     assert payload.notification_preferences.schedule_publish_sms_enabled is True
     assert payload.notification_preferences.sms_opt_out_reason == "manager_enabled_after_consent"
+
+
+@pytest.mark.asyncio
+async def test_update_employee_persists_minor_compliance_fields(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    employee_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Pasadena",
+        display_name="Pasadena",
+        slug="pasadena",
+        timezone="America/Los_Angeles",
+        country_code="US",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jamie Rivera",
+        preferred_name="Jamie",
+        phone_e164="+15555550123",
+        email="jamie@example.com",
+        status="active",
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    existing_work_permit = EmployeeWorkPermit(
+        id=uuid4(),
+        employee_id=employee_id,
+        permit_number="WP-OLD",
+        effective_start_date=date(2025, 1, 1),
+        effective_end_date=date(2025, 12, 31),
+        permit_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee_location = EmployeeLocation(
+        id=uuid4(),
+        employee_id=employee_id,
+        location_id=location_id,
+        is_primary=True,
+        access_level="approved",
+        can_cover_last_minute=True,
+        can_blast=True,
+        location_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    set_committed_value(employee_location, "location", location)
+
+    async def fake_require_employee(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return employee
+
+    async def fake_get_employee(_session, incoming_business_id, incoming_employee_id):
+        assert incoming_business_id == business_id
+        assert incoming_employee_id == employee_id
+        return employee
+
+    async def fake_list_roles(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return []
+
+    async def fake_list_locations(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        return [employee_location]
+
+    class DummyUpdateSession:
+        def __init__(self):
+            self.added: list[object] = []
+            self.deleted: list[object] = []
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        async def delete(self, obj):
+            self.deleted.append(obj)
+
+        async def flush(self):
+            return None
+
+    session = DummyUpdateSession()
+
+    async def fake_list_work_permits(_session, incoming_employee_id):
+        assert incoming_employee_id == employee_id
+        replacement_permits = [
+            obj for obj in session.added if isinstance(obj, EmployeeWorkPermit)
+        ]
+        return replacement_permits or [existing_work_permit]
+
+    monkeypatch.setattr("app.services.workforce._require_employee", fake_require_employee)
+    monkeypatch.setattr("app.services.workforce.get_employee", fake_get_employee)
+    monkeypatch.setattr("app.services.workforce._list_employee_roles", fake_list_roles)
+    monkeypatch.setattr("app.services.workforce._list_employee_locations", fake_list_locations)
+    monkeypatch.setattr("app.services.workforce._list_employee_work_permits", fake_list_work_permits)
+
+    updated = await workforce.update_employee(
+        session,
+        business_id,
+        employee_id,
+        workforce.EmployeeUpdate(
+            date_of_birth=date(2010, 5, 1),
+            minor_school_status="summer_break",
+                work_permits=[
+                    workforce.EmployeeWorkPermitCreate(
+                        permit_number="WP-12345",
+                        effective_start_date=date(2026, 1, 1),
+                        effective_end_date=date(2026, 8, 31),
+                        max_daily_minutes=240,
+                        max_weekly_minutes=1200,
+                        earliest_start_local_time=time(7, 0),
+                        latest_end_local_time=time(19, 0),
+                        rule_profile=EmployeeWorkPermitRuleProfile(
+                            allowed_weekdays=["monday", "tuesday", "wednesday", "thursday", "friday"],
+                            daily_max_minutes_school_day=180,
+                            daily_max_minutes_non_school_day=300,
+                        ),
+                        permit_metadata={"source": "team_ui"},
+                    )
+                ],
+        ),
+    )
+
+    assert updated.date_of_birth == date(2010, 5, 1)
+    assert updated.minor_school_status == "summer_break"
+    assert updated.work_permit_number == "WP-12345"
+    assert updated.work_permit_effective_start_on == date(2026, 1, 1)
+    assert updated.work_permit_expires_on == date(2026, 8, 31)
+    assert updated.work_permit_max_daily_minutes == 240
+    assert updated.work_permit_max_weekly_minutes == 1200
+    assert updated.work_permit_earliest_start_local_time == time(7, 0)
+    assert updated.work_permit_latest_end_local_time == time(19, 0)
+    assert any(isinstance(obj, EmployeeWorkPermit) and obj.permit_number == "WP-12345" for obj in session.added)
+    assert session.deleted == [existing_work_permit]
+    payload = EmployeeProfileRead.model_validate(updated)
+    assert payload.work_permits[0].permit_number == "WP-12345"
+    assert payload.work_permits[0].max_daily_minutes == 240
+    assert payload.work_permits[0].rule_profile is not None
+    assert payload.work_permits[0].rule_profile.daily_max_minutes_school_day == 180
+    assert updated.employee_metadata["work_permit_rule_profile"]["daily_max_minutes_non_school_day"] == 300
+
+
+def test_resolve_employee_work_permit_context_prefers_active_permit_for_shift_date():
+    employee = Employee(
+        id=uuid4(),
+        business_id=uuid4(),
+        full_name="Jamie Rivera",
+        status="active",
+        employee_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    current_permit = EmployeeWorkPermit(
+        id=uuid4(),
+        employee_id=employee.id,
+        permit_number="WP-CURRENT",
+        effective_start_date=date(2026, 4, 1),
+        effective_end_date=date(2026, 4, 30),
+        max_daily_minutes=180,
+        latest_end_local_time=time(19, 0),
+        permit_metadata={
+            "rule_profile": {
+                "allowed_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "daily_max_minutes_school_day": 180,
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    future_permit = EmployeeWorkPermit(
+        id=uuid4(),
+        employee_id=employee.id,
+        permit_number="WP-FUTURE",
+        effective_start_date=date(2026, 5, 1),
+        effective_end_date=date(2026, 8, 31),
+        max_daily_minutes=300,
+        latest_end_local_time=time(21, 0),
+        permit_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    set_committed_value(employee, "work_permits", [current_permit, future_permit])
+
+    context = workforce.resolve_employee_work_permit_context(
+        employee,
+        shift_starts_at=datetime(2026, 4, 18, 18, 0, tzinfo=timezone.utc),
+        timezone_name="America/Los_Angeles",
+    )
+
+    assert context["permit_number"] == "WP-CURRENT"
+    assert context["is_active"] is True
+    assert context["max_daily_minutes"] == 180
+    assert context["latest_end_local_time"] == time(19, 0)
+    assert context["rule_profile"] == {
+        "allowed_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+        "daily_max_minutes_school_day": 180,
+    }
+
+
+def test_resolve_employee_work_permit_context_uses_snapshot_rule_profile_when_permits_unloaded():
+    employee = Employee(
+        id=uuid4(),
+        business_id=uuid4(),
+        full_name="Jamie Rivera",
+        status="active",
+        work_permit_number="WP-SNAPSHOT",
+        work_permit_effective_start_on=date(2026, 4, 1),
+        work_permit_expires_on=date(2026, 8, 31),
+        work_permit_max_daily_minutes=240,
+        employee_metadata={
+            "work_permit_rule_profile": {
+                "allowed_weekdays": ["monday", "wednesday"],
+                "daily_max_minutes_school_day": 180,
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    context = workforce.resolve_employee_work_permit_context(
+        employee,
+        shift_starts_at=datetime(2026, 4, 15, 18, 0, tzinfo=timezone.utc),
+        timezone_name="America/Los_Angeles",
+    )
+
+    assert context["source"] == "employee_snapshot"
+    assert context["rule_profile"] == {
+        "allowed_weekdays": ["monday", "wednesday"],
+        "daily_max_minutes_school_day": 180,
+    }
+
+
+def test_resolve_employee_work_permit_context_expands_template_rule_profile():
+    employee = Employee(
+        id=uuid4(),
+        business_id=uuid4(),
+        full_name="Jamie Rivera",
+        status="active",
+        employee_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    permit = EmployeeWorkPermit(
+        id=uuid4(),
+        employee_id=employee.id,
+        permit_number="WP-TEMPLATE",
+        effective_start_date=date(2026, 4, 1),
+        effective_end_date=date(2026, 8, 31),
+        permit_metadata={
+            "rule_profile": {
+                "template_code": "ca_16_17_school_required_v1",
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    set_committed_value(employee, "work_permits", [permit])
+
+    context = workforce.resolve_employee_work_permit_context(
+        employee,
+        shift_starts_at=datetime(2026, 4, 17, 18, 0, tzinfo=timezone.utc),
+        timezone_name="America/Los_Angeles",
+    )
+
+    assert context["rule_profile"] is not None
+    assert context["rule_profile"]["template_code"] == "ca_16_17_school_required_v1"
+    assert context["rule_profile"]["daily_max_minutes_school_day"] == 240
+    assert context["rule_profile"]["daily_max_minutes_preceding_non_school_day"] == 480
+    assert context["rule_profile"]["latest_end_local_time_preceding_non_school_day"] == "00:30:00"
+
+
+def test_resolve_employee_work_permit_context_prefers_explicit_rule_profile_over_template_defaults():
+    employee = Employee(
+        id=uuid4(),
+        business_id=uuid4(),
+        full_name="Jamie Rivera",
+        status="active",
+        employee_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    permit = EmployeeWorkPermit(
+        id=uuid4(),
+        employee_id=employee.id,
+        permit_number="WP-TEMPLATE-OVERRIDE",
+        effective_start_date=date(2026, 4, 1),
+        effective_end_date=date(2026, 8, 31),
+        permit_metadata={
+            "rule_profile": {
+                "template_code": "ca_14_15_school_enrolled_v1",
+                "daily_max_minutes_school_day": 150,
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    set_committed_value(employee, "work_permits", [permit])
+
+    context = workforce.resolve_employee_work_permit_context(
+        employee,
+        shift_starts_at=datetime(2026, 4, 16, 18, 0, tzinfo=timezone.utc),
+        timezone_name="America/Los_Angeles",
+    )
+
+    assert context["rule_profile"] is not None
+    assert context["rule_profile"]["template_code"] == "ca_14_15_school_enrolled_v1"
+    assert context["rule_profile"]["daily_max_minutes_school_day"] == 150
+    assert context["rule_profile"]["latest_end_local_time_summer_break"] == "21:00:00"
 
 
 @pytest.mark.asyncio
@@ -1306,6 +1793,37 @@ def test_parse_employee_import_file_skips_rows_missing_required_fields():
     ]
 
 
+def test_parse_employee_import_file_parses_hourly_pay_rate_to_cents():
+    employees, errors = parse_employee_import_file(
+        "employees.csv",
+        (
+            b"first_name,last_name,email_address,phone_number,pay_rate\n"
+            b"Jamie,Rivera,jamie@example.com,+15555550123,18.75\n"
+        ),
+    )
+
+    assert errors == []
+    assert len(employees) == 1
+    assert employees[0].base_hourly_rate_cents == 1875
+
+
+def test_parse_employee_import_file_parses_minor_compliance_fields():
+    employees, errors = parse_employee_import_file(
+        "employees.csv",
+        (
+            b"first_name,last_name,email_address,phone_number,date_of_birth,minor_school_status,work_permit_number,work_permit_expires_on\n"
+            b"Jamie,Rivera,jamie@example.com,+15555550123,2010-05-01,in_session,WP-12345,2026-08-31\n"
+        ),
+    )
+
+    assert errors == []
+    assert len(employees) == 1
+    assert employees[0].date_of_birth == date(2010, 5, 1)
+    assert employees[0].minor_school_status == "in_session"
+    assert employees[0].work_permit_number == "WP-12345"
+    assert employees[0].work_permit_expires_on == date(2026, 8, 31)
+
+
 def test_parse_employee_import_file_csv_does_not_require_openpyxl(monkeypatch):
     import builtins
 
@@ -1341,8 +1859,10 @@ def test_build_employee_import_template_returns_simple_csv_without_openpyxl(monk
 
     content = build_employee_import_template()
 
-    assert content.startswith(b"first_name,last_name,phone_number,email_address")
-    assert b"Taylor,Smith,+15555550123,taylor@example.com" in content
+    assert content.startswith(
+        b"first_name,last_name,phone_number,email_address,date_of_birth,minor_school_status,work_permit_number,work_permit_expires_on"
+    )
+    assert b"Taylor,Smith,+15555550123,taylor@example.com,1998-04-12,unknown,," in content
 
 
 def test_patch_employee_route_records_audit(monkeypatch):

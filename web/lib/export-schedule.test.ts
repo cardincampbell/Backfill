@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  buildCompliancePayrollRows,
+  buildComplianceRows,
   fmtHour,
   dayCell,
   safeFilename,
@@ -32,6 +34,71 @@ const baseOpts: ExportOptions = {
   weekStart: new Date(2025, 3, 14), // Mon Apr 14 2025
   employees,
   shifts,
+};
+
+const complianceOpts: ExportOptions = {
+  ...baseOpts,
+  shifts: [
+    {
+      employeeId: 'e1',
+      day: 0,
+      startHour: 9,
+      endHour: 17,
+      roleName: 'Barista',
+      complianceStatus: 'warning',
+      compliancePremiumTotalCents: 2100,
+      complianceWarningRuleCodes: ['paid_rest_break_quota'],
+      complianceBlockingRuleCodes: [],
+      complianceUnresolvedPremiumRuleCodes: [],
+      complianceOverrideApplied: true,
+      complianceOverrideArtifactId: 'artifact_123',
+    },
+  ],
+};
+
+const payrollComplianceOpts: ExportOptions = {
+  ...complianceOpts,
+  compliancePayrollExport: {
+    location_id: 'loc_1',
+    week_start_date: '2025-04-14',
+    week_end_date: '2025-04-20',
+    row_count: 1,
+    premium_payment_row_count: 1,
+    ready_adjustment_row_count: 1,
+    manual_review_row_count: 1,
+    missing_employee_identifier_row_count: 0,
+    artifact_record_row_count: 1,
+    total_premium_cents: 2100,
+    rows: [
+      {
+        shift_id: 'shift_1',
+        employee_id: 'e1',
+        employee_name: 'Alice Smith',
+        role_name: 'Barista',
+        starts_at: '2025-04-14T16:00:00Z',
+        ends_at: '2025-04-14T23:00:00Z',
+        compliance_status: 'warning',
+        profile_code: 'ca_restaurant_v1',
+        premium_cents: 2100,
+        premium_rule_codes: ['paid_rest_break_quota'],
+        unresolved_premium_rule_codes: ['split_shift_premium'],
+        premium_payment_required: true,
+        manual_review_required: true,
+        override_applied: true,
+        override_artifact_id: 'artifact_123',
+        override_artifact_type: 'meal_waiver',
+        override_artifact_note: 'Signed waiver on file',
+        payroll_row_kind: 'premium_payment',
+        payroll_status: 'ready',
+        employee_identifier: 'EMP-42',
+        employee_identifier_type: 'employee_number',
+        earning_code: 'RESTPREM',
+        earning_label: 'Rest Break Premium',
+        source_rule_code: 'paid_rest_break_quota',
+        source_reason_codes: ['rest_break_quota_missing'],
+      },
+    ],
+  },
 };
 
 // ─── fmtHour ────────────────────────────────────────────────────────────────
@@ -178,6 +245,78 @@ describe('buildRows', () => {
   });
 });
 
+describe('buildComplianceRows', () => {
+  it('returns no rows when shifts do not carry compliance data', () => {
+    const { rows } = buildComplianceRows(baseOpts);
+    expect(rows).toEqual([]);
+  });
+
+  it('builds one row per shift with compliance consequences', () => {
+    const { header, rows } = buildComplianceRows(complianceOpts);
+    expect(header).toEqual([
+      'Employee',
+      'Role',
+      'Shift',
+      'Status',
+      'Premium',
+      'Unresolved Premium',
+      'Artifact Applied',
+      'Warning Rules',
+      'Blocking Rules',
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0][0]).toBe('Alice Smith');
+    expect(rows[0][1]).toBe('Barista');
+    expect(rows[0][2]).toContain('Monday');
+    expect(rows[0][3]).toBe('warning');
+    expect(rows[0][4]).toBe('$21.00');
+    expect(rows[0][6]).toBe('Yes');
+    expect(rows[0][7]).toBe('paid_rest_break_quota');
+  });
+});
+
+describe('buildCompliancePayrollRows', () => {
+  it('returns no rows when no payroll export is attached', () => {
+    const { rows } = buildCompliancePayrollRows(baseOpts);
+    expect(rows).toEqual([]);
+  });
+
+  it('builds one row per payroll consequence', () => {
+    const { header, rows } = buildCompliancePayrollRows(payrollComplianceOpts);
+    expect(header).toEqual([
+      'Row Kind',
+      'Export Status',
+      'Employee',
+      'Employee Identifier Type',
+      'Employee Identifier',
+      'Role',
+      'Shift',
+      'Status',
+      'Earning Code',
+      'Earning Label',
+      'Source Rule',
+      'Premium',
+      'Premium Rules',
+      'Unresolved Premium',
+      'Payment Required',
+      'Manual Review',
+      'Artifact Type',
+      'Artifact Note',
+      'Source Reasons',
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0][0]).toBe('premium_payment');
+    expect(rows[0][2]).toBe('Alice Smith');
+    expect(rows[0][4]).toBe('EMP-42');
+    expect(rows[0][8]).toBe('RESTPREM');
+    expect(rows[0][11]).toBe('$21.00');
+    expect(rows[0][14]).toBe('Yes');
+    expect(rows[0][15]).toBe('Yes');
+    expect(rows[0][16]).toBe('meal_waiver');
+    expect(rows[0][17]).toBe('Signed waiver on file');
+  });
+});
+
 // ─── exportCSV ───────────────────────────────────────────────────────────────
 
 describe('exportCSV', () => {
@@ -273,5 +412,24 @@ describe('exportCSV', () => {
     exportCSV(baseOpts);
     const text = await (capturedBlob as Blob).text();
     expect(text).toContain('\r\n');
+  });
+
+  it('appends a compliance summary section when compliance rows are present', async () => {
+    exportCSV(complianceOpts);
+    const text = await (capturedBlob as Blob).text();
+    expect(text).toContain('"Compliance Summary"');
+    expect(text).toContain('"Employee","Role","Shift","Status","Premium","Unresolved Premium","Artifact Applied","Warning Rules","Blocking Rules"');
+    expect(text).toContain('"Alice Smith","Barista"');
+    expect(text).toContain('"$21.00"');
+  });
+
+  it('appends a compliance payroll consequence section when payroll export rows are present', async () => {
+    exportCSV(payrollComplianceOpts);
+    const text = await (capturedBlob as Blob).text();
+    expect(text).toContain('"Compliance Payroll Consequences"');
+    expect(text).toContain('"Payment Required"');
+    expect(text).toContain('"Manual Review"');
+    expect(text).toContain('"meal_waiver"');
+    expect(text).toContain('"Signed waiver on file"');
   });
 });

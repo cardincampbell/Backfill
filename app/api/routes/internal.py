@@ -136,6 +136,8 @@ async def get_auto_scheduler_run(
             "rejections": list(schedule_run.rejections or []),
             "explanation": schedule_run.explanation,
             "metrics": schedule_run.metrics,
+            "compliance_summary": auto_scheduler.schedule_run_compliance_summary(schedule_run),
+            "compliance_review_items": auto_scheduler.schedule_run_compliance_review_items(schedule_run),
             "applies": list(schedule_run.applies or []),
             "replay_run_ids": [replay_run.id for replay_run in (schedule_run.replay_runs or [])],
         }

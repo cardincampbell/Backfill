@@ -22,6 +22,16 @@ export type EmployeeSummary = {
   preferred_name?: string | null;
   phone_e164?: string | null;
   email?: string | null;
+  base_hourly_rate_cents?: number | null;
+  date_of_birth?: string | null;
+  minor_school_status?: string | null;
+  work_permit_number?: string | null;
+  work_permit_effective_start_on?: string | null;
+  work_permit_expires_on?: string | null;
+  work_permit_max_daily_minutes?: number | null;
+  work_permit_max_weekly_minutes?: number | null;
+  work_permit_earliest_start_local_time?: string | null;
+  work_permit_latest_end_local_time?: string | null;
   reliability_score?: number | null;
   status: string;
   employment_type?: string | null;
@@ -45,6 +55,42 @@ export type EmployeeNotificationPreferences = {
   sms_opted_out_at?: string | null;
   email_opt_out_reason?: string | null;
   sms_opt_out_reason?: string | null;
+};
+
+export type EmployeeWorkPermitWeekday =
+  | "sunday"
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday";
+
+export type EmployeeWorkPermitRuleProfile = {
+  template_code?: string | null;
+  jurisdiction_code?: string | null;
+  source_url?: string | null;
+  allowed_weekdays?: EmployeeWorkPermitWeekday[];
+  daily_max_minutes?: number | null;
+  daily_max_minutes_in_session?: number | null;
+  daily_max_minutes_summer_break?: number | null;
+  daily_max_minutes_school_day?: number | null;
+  daily_max_minutes_non_school_day?: number | null;
+  daily_max_minutes_preceding_non_school_day?: number | null;
+  weekly_max_minutes?: number | null;
+  weekly_max_minutes_in_session?: number | null;
+  weekly_max_minutes_summer_break?: number | null;
+  weekly_max_minutes_school_week?: number | null;
+  weekly_max_minutes_non_school_week?: number | null;
+  earliest_start_local_time?: string | null;
+  earliest_start_local_time_school_day?: string | null;
+  earliest_start_local_time_non_school_day?: string | null;
+  latest_end_local_time?: string | null;
+  latest_end_local_time_in_session?: string | null;
+  latest_end_local_time_summer_break?: string | null;
+  latest_end_local_time_school_day?: string | null;
+  latest_end_local_time_non_school_day?: string | null;
+  latest_end_local_time_preceding_non_school_day?: string | null;
 };
 
 export type EmployeeRoleAssignment = {
@@ -81,6 +127,34 @@ export type EmployeeLocationAssignment = {
 export type EmployeeProfile = EmployeeSummary & {
   roles: EmployeeRoleAssignment[];
   locations: EmployeeLocationAssignment[];
+  work_permits: EmployeeWorkPermit[];
+};
+
+export type EmployeeWorkPermit = {
+  id: string;
+  employee_id: string;
+  permit_number: string;
+  issuing_authority?: string | null;
+  issued_on?: string | null;
+  effective_start_date?: string | null;
+  effective_end_date?: string | null;
+  max_daily_minutes?: number | null;
+  max_weekly_minutes?: number | null;
+  earliest_start_local_time?: string | null;
+  latest_end_local_time?: string | null;
+  rule_profile?: EmployeeWorkPermitRuleProfile | null;
+  permit_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EmployeeWorkPermitTemplate = {
+  code: string;
+  label: string;
+  description?: string | null;
+  jurisdiction_code?: string | null;
+  source_url?: string | null;
+  rule_profile: EmployeeWorkPermitRuleProfile;
 };
 
 export type EmployeeDeleteReadiness = {
@@ -150,6 +224,17 @@ export type EmployeeUpdatePayload = {
   email?: string | null;
   external_ref?: string | null;
   employee_number?: string | null;
+  base_hourly_rate_cents?: number | null;
+  date_of_birth?: string | null;
+  minor_school_status?: string | null;
+  work_permit_number?: string | null;
+  work_permit_effective_start_on?: string | null;
+  work_permit_expires_on?: string | null;
+  work_permit_max_daily_minutes?: number | null;
+  work_permit_max_weekly_minutes?: number | null;
+  work_permit_earliest_start_local_time?: string | null;
+  work_permit_latest_end_local_time?: string | null;
+  work_permits?: EmployeeWorkPermitPayload[];
   employment_type?: string | null;
   status?: string | null;
   hire_date?: string | null;
@@ -168,11 +253,36 @@ export type EmployeeCreatePayload = {
   email?: string | null;
   external_ref?: string | null;
   employee_number?: string | null;
+  base_hourly_rate_cents?: number | null;
+  date_of_birth?: string | null;
+  minor_school_status?: string | null;
+  work_permit_number?: string | null;
+  work_permit_effective_start_on?: string | null;
+  work_permit_expires_on?: string | null;
+  work_permit_max_daily_minutes?: number | null;
+  work_permit_max_weekly_minutes?: number | null;
+  work_permit_earliest_start_local_time?: string | null;
+  work_permit_latest_end_local_time?: string | null;
+  work_permits?: EmployeeWorkPermitPayload[];
   employment_type?: string | null;
   primary_location_id?: string | null;
   hire_date?: string | null;
   notes?: string | null;
   employee_metadata?: Record<string, unknown>;
+};
+
+export type EmployeeWorkPermitPayload = {
+  permit_number: string;
+  issuing_authority?: string | null;
+  issued_on?: string | null;
+  effective_start_date?: string | null;
+  effective_end_date?: string | null;
+  max_daily_minutes?: number | null;
+  max_weekly_minutes?: number | null;
+  earliest_start_local_time?: string | null;
+  latest_end_local_time?: string | null;
+  rule_profile?: EmployeeWorkPermitRuleProfile | null;
+  permit_metadata?: Record<string, unknown>;
 };
 
 export type EmployeeImportError = {
@@ -225,6 +335,18 @@ export async function getEmployeeProfile(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as EmployeeProfile;
+}
+
+export async function listWorkPermitTemplates(
+  businessId: string,
+): Promise<EmployeeWorkPermitTemplate[]> {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/employees/work-permit-templates`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as EmployeeWorkPermitTemplate[];
 }
 
 export async function updateEmployee(

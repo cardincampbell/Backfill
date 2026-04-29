@@ -19,6 +19,7 @@ from app.models.common import (
 )
 from app.models.business import Business, Location, LocationRole
 from app.models.coverage import (
+    AuditLog,
     CoverageCase,
     CoverageCandidate,
     CoverageCaseRun,
@@ -918,8 +919,16 @@ async def test_respond_to_offer_accepts_and_assigns_shift(monkeypatch):
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Casey Cook",
+        phone_e164="+15555550100",
+        status=EmployeeStatus.active,
+    )
 
     session = FakeCoverageSession(shift=shift, case=case, offer=offer)
+    session.get_map[(Employee, employee.id)] = employee
     session.execute_queue = [[sibling]]
     synced_assignment_ids: list[str] = []
     synced_case_ids: list[str] = []
@@ -934,8 +943,20 @@ async def test_respond_to_offer_accepts_and_assigns_shift(monkeypatch):
         assert shift.id == shift_id
         return None
 
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "clear",
+            "blocking_rule_codes": [],
+            "warning_rule_codes": [],
+            "premium_rule_codes": [],
+            "would_block": False,
+            "override_applied": False,
+        }
+        return evaluation, evaluation, None
+
     monkeypatch.setattr(coverage.forecast_history, "sync_attendance_history_fact_for_assignment", fake_sync_attendance)
     monkeypatch.setattr(coverage.forecast_history, "sync_callout_history_fact_for_case", fake_sync_callout)
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
 
     result = await coverage.respond_to_offer(
         session,
@@ -961,6 +982,104 @@ async def test_respond_to_offer_accepts_and_assigns_shift(monkeypatch):
     assert result.outreach_attempt.status == "accepted"
     assert synced_assignment_ids == [str(assignments[0].id)]
     assert synced_case_ids == [str(case.id)]
+    decision_logs = [
+        entry
+        for entry in session.added
+        if isinstance(entry, AuditLog) and entry.event_name == "compliance.decision.recorded"
+    ]
+    assert len(decision_logs) == 1
+    assert decision_logs[0].payload["decision_outcome"] == "accepted"
+    assert decision_logs[0].payload["coverage_case_id"] == str(case.id)
+
+
+@pytest.mark.asyncio
+async def test_respond_to_offer_logs_blocked_compliance_decision(monkeypatch):
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    case_id = uuid4()
+    offer_id = uuid4()
+    employee_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        timezone="America/Los_Angeles",
+        starts_at=datetime.now(timezone.utc) + timedelta(hours=6),
+        ends_at=datetime.now(timezone.utc) + timedelta(hours=14),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    case = CoverageCase(
+        id=case_id,
+        shift_id=shift_id,
+        location_id=location_id,
+        role_id=role_id,
+        status=CoverageCaseStatus.running,
+        phase_target="phase_1",
+        priority=100,
+        requires_manager_approval=False,
+        case_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    offer = CoverageOffer(
+        id=offer_id,
+        coverage_case_id=case_id,
+        employee_id=employee_id,
+        channel="sms",
+        status=OfferStatus.pending,
+        idempotency_key="offer-main",
+        offer_metadata={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Blocked Blake",
+        phone_e164="+15555550102",
+        status=EmployeeStatus.active,
+    )
+
+    session = FakeCoverageSession(shift=shift, case=case, offer=offer)
+    session.get_map[(Employee, employee.id)] = employee
+    session.execute_queue = [[]]
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "block",
+            "blocking_rule_codes": ["clopening_restricted"],
+            "warning_rule_codes": [],
+            "premium_rule_codes": [],
+            "would_block": True,
+            "override_applied": False,
+            "rule_results": [],
+        }
+        return evaluation, evaluation, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
+    with pytest.raises(ValueError, match="shift_assignment_compliance_blocked"):
+        await coverage.respond_to_offer(
+            session,
+            business_id,
+            offer_id,
+            CoverageOfferResponseCreate(response="accepted", response_channel="web"),
+        )
+
+    decision_logs = [
+        entry
+        for entry in session.added
+        if isinstance(entry, AuditLog) and entry.event_name == "compliance.decision.recorded"
+    ]
+    assert len(decision_logs) == 1
+    assert decision_logs[0].payload["decision_outcome"] == "blocked"
+    assert decision_logs[0].payload["blocking_rule_codes"] == ["clopening_restricted"]
 
 
 @pytest.mark.asyncio
@@ -1532,7 +1651,7 @@ async def test_activate_standby_queue_creates_reactivation_offer():
 
 
 @pytest.mark.asyncio
-async def test_respond_to_offer_promotes_standby_activation_assignment():
+async def test_respond_to_offer_promotes_standby_activation_assignment(monkeypatch):
     business_id = uuid4()
     location_id = uuid4()
     role_id = uuid4()
@@ -1592,9 +1711,30 @@ async def test_respond_to_offer_promotes_standby_activation_assignment():
         created_at=reference_time,
         updated_at=reference_time,
     )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Jones",
+        phone_e164="+15555550101",
+        status=EmployeeStatus.active,
+    )
 
     session = FakeCoverageSession(shift=shift, case=case, offer=offer)
+    session.get_map[(Employee, employee.id)] = employee
     session.execute_queue = [[]]
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "clear",
+            "blocking_rule_codes": [],
+            "warning_rule_codes": [],
+            "premium_rule_codes": [],
+            "would_block": False,
+            "override_applied": False,
+        }
+        return evaluation, evaluation, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
 
     result = await coverage.respond_to_offer(
         session,

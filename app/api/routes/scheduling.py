@@ -4,15 +4,22 @@ from datetime import date, datetime
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
 
 from app.api.deps import AuthDep, SessionDep
 from app.models.common import AuditActorType, MembershipRole
 from app.models.scheduling import ShiftAssignment
 from app.schemas.auto_scheduler import ScheduleRunApplyRead, ScheduleRunDetailRead, ScheduleRunRead
+from app.schemas.compliance import (
+    ShiftComplianceDecisionRead,
+    ShiftComplianceOverrideCreate,
+    ShiftComplianceOverrideRead,
+)
 from app.schemas.scheduling import (
     PublishedShiftAmendmentRead,
     PublishedShiftAmendmentWrite,
+    ScheduleWeekFuturePolicyReviewResponseRead,
     ScheduleWeekPublishRead,
     ScheduleWeekPublishWrite,
     ShiftAssignmentMutationResponse,
@@ -23,7 +30,15 @@ from app.schemas.scheduling import (
     ShiftUpdate,
 )
 from app.services import audit as audit_service
-from app.services import auth as auth_service, auto_scheduler, businesses as businesses_service, outreach as outreach_service, platform_events, scheduling
+from app.services import (
+    auth as auth_service,
+    auto_scheduler,
+    businesses as businesses_service,
+    compliance_decisions,
+    outreach as outreach_service,
+    platform_events,
+    scheduling,
+)
 from app.services.schedule_weeks import schedule_week_window
 
 router = APIRouter(prefix="/businesses/{business_id}", tags=["scheduling"])
@@ -41,6 +56,8 @@ def _schedule_run_detail_read(schedule_run) -> ScheduleRunDetailRead:
             "rejections": list(schedule_run.rejections or []),
             "explanation": schedule_run.explanation,
             "metrics": schedule_run.metrics,
+            "compliance_summary": auto_scheduler.schedule_run_compliance_summary(schedule_run),
+            "compliance_review_items": auto_scheduler.schedule_run_compliance_review_items(schedule_run),
             "applies": list(schedule_run.applies or []),
             "replay_run_ids": [replay_run.id for replay_run in (schedule_run.replay_runs or [])],
         }
@@ -119,6 +136,31 @@ async def create_shift(
     return shift
 
 
+@router.get(
+    "/shifts/{shift_id}/compliance-decisions",
+    response_model=list[ShiftComplianceDecisionRead],
+)
+async def list_shift_compliance_decisions(
+    business_id: UUID,
+    shift_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    limit: int = Query(default=25, ge=1, le=100),
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        shift = await scheduling.get_shift(session, business_id, shift_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return await compliance_decisions.list_shift_compliance_decisions(
+        session,
+        business_id=business_id,
+        shift_id=shift.id,
+        limit=limit,
+    )
+
+
 @router.post(
     "/locations/{location_id}/schedule-weeks/{week_start_date}/publish",
     response_model=ScheduleWeekPublishRead,
@@ -161,6 +203,28 @@ async def publish_schedule_week(
                     "already_scheduled_shift_count": exc.already_scheduled_shift_count,
                 },
             },
+        ) from exc
+    except scheduling.ScheduleWeekPublishComplianceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=jsonable_encoder(
+                {
+                    "code": "publish_compliance_blocked",
+                    "summary": exc.summary,
+                    "review_items": exc.review_items,
+                }
+            ),
+        ) from exc
+    except scheduling.ScheduleWeekPublishFuturePolicyConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=jsonable_encoder(
+                {
+                    "code": "publish_future_policy_conflict",
+                    "summary": exc.summary,
+                    "policy_reviews": exc.policy_reviews,
+                }
+            ),
         ) from exc
 
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
@@ -230,6 +294,35 @@ async def publish_schedule_week(
 
     await session.commit()
     return response
+
+
+@router.get(
+    "/locations/{location_id}/schedule-weeks/{week_start_date}/future-policy-review",
+    response_model=ScheduleWeekFuturePolicyReviewResponseRead,
+)
+async def get_schedule_week_future_policy_review(
+    business_id: UUID,
+    location_id: UUID,
+    week_start_date: date,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    try:
+        return await scheduling.get_schedule_week_future_policy_review(
+            session,
+            business_id=business_id,
+            location_id=location_id,
+            week_start_date=week_start_date,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post(
@@ -384,6 +477,17 @@ async def amend_published_shift(
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except scheduling.PublishedShiftAmendmentComplianceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=jsonable_encoder(
+                {
+                    "code": exc.code,
+                    "summary": exc.summary,
+                    "review_items": exc.review_items,
+                }
+            ),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
@@ -560,6 +664,63 @@ async def amend_published_shift(
         raise
 
 
+@router.post(
+    "/shifts/{shift_id}/compliance-overrides",
+    response_model=ShiftComplianceOverrideRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_shift_compliance_override(
+    business_id: UUID,
+    shift_id: UUID,
+    payload: ShiftComplianceOverrideCreate,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    try:
+        artifact = await scheduling.create_shift_compliance_override_artifact(
+            session,
+            business_id,
+            shift_id,
+            payload,
+            approved_by_user_id=auth_ctx.user.id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=artifact.location_id)
+    await audit_service.append(
+        session,
+        event_name="shift.compliance_override_created",
+        target_type="shift",
+        target_id=artifact.shift_id,
+        business_id=business_id,
+        location_id=artifact.location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "artifact_id": str(artifact.id),
+            "employee_id": str(artifact.employee_id),
+            "rule_code": artifact.rule_code,
+            "artifact_type": (
+                artifact.artifact_type.value
+                if hasattr(artifact.artifact_type, "value")
+                else str(artifact.artifact_type)
+            ),
+            "expires_at": artifact.expires_at.isoformat() if artifact.expires_at is not None else None,
+        },
+    )
+    await session.commit()
+    return ShiftComplianceOverrideRead.model_validate(artifact)
+
+
 @router.patch("/shifts/{shift_id}/assignment", response_model=ShiftAssignmentMutationResponse)
 async def update_shift_assignment(
     business_id: UUID,
@@ -588,6 +749,17 @@ async def update_shift_assignment(
                 "code": "stale_assignment_conflict",
                 "current_assignment": _assignment_conflict_payload(exc.current_assignment),
             },
+        ) from exc
+    except scheduling.ShiftAssignmentComplianceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=jsonable_encoder(
+                {
+                    "code": exc.code,
+                    "summary": exc.summary,
+                    "review_items": exc.review_items,
+                }
+            ),
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

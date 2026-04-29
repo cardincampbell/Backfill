@@ -9,6 +9,48 @@ from pydantic import Field
 from app.schemas.common import BaseSchema
 
 
+class ShiftBreakWrite(BaseSchema):
+    break_type: Literal["meal", "rest", "other"]
+    is_paid: bool = False
+    starts_at: datetime
+    ends_at: datetime
+    notes: Optional[str] = None
+    break_metadata: dict = Field(default_factory=dict)
+
+
+class ShiftBreakRead(BaseSchema):
+    id: UUID
+    sequence_no: int
+    break_type: str
+    is_paid: bool
+    starts_at: datetime
+    ends_at: datetime
+    notes: Optional[str] = None
+    break_metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ShiftSegmentWrite(BaseSchema):
+    segment_type: Literal["work"] = "work"
+    starts_at: datetime
+    ends_at: datetime
+    segment_metadata: dict = Field(default_factory=dict)
+    breaks: list[ShiftBreakWrite] = Field(default_factory=list)
+
+
+class ShiftSegmentRead(BaseSchema):
+    id: UUID
+    sequence_no: int
+    segment_type: str
+    starts_at: datetime
+    ends_at: datetime
+    segment_metadata: dict = Field(default_factory=dict)
+    breaks: list[ShiftBreakRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
 class ShiftCreate(BaseSchema):
     location_id: UUID
     role_id: UUID
@@ -22,6 +64,7 @@ class ShiftCreate(BaseSchema):
     premium_cents: int = 0
     notes: Optional[str] = None
     shift_metadata: dict = Field(default_factory=dict)
+    segments: list[ShiftSegmentWrite] = Field(default_factory=list)
 
 
 class ShiftUpdate(BaseSchema):
@@ -34,6 +77,7 @@ class ShiftUpdate(BaseSchema):
     premium_cents: Optional[int] = None
     notes: Optional[str] = None
     shift_metadata: Optional[dict] = None
+    segments: Optional[list[ShiftSegmentWrite]] = None
 
 
 class ShiftRead(BaseSchema):
@@ -55,6 +99,7 @@ class ShiftRead(BaseSchema):
     premium_cents: int
     notes: Optional[str]
     shift_metadata: dict
+    segments: list[ShiftSegmentRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -111,6 +156,80 @@ class ScheduleWeekPublishWrite(BaseSchema):
     note: Optional[str] = None
 
 
+class ScheduleWeekPublishComplianceSummaryRead(BaseSchema):
+    selected_assignment_count: int = 0
+    clear_assignment_count: int = 0
+    warning_assignment_count: int = 0
+    blocked_assignment_count: int = 0
+    override_applied_count: int = 0
+    override_eligible_warning_count: int = 0
+    premium_total_cents: int = 0
+    unresolved_premium_rule_count: int = 0
+    unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
+    warning_rule_codes: list[str] = Field(default_factory=list)
+    override_eligible_artifact_types: list[str] = Field(default_factory=list)
+    warning_shift_ids: list[str] = Field(default_factory=list)
+    blocked_shift_ids: list[str] = Field(default_factory=list)
+    override_eligible_shift_ids: list[str] = Field(default_factory=list)
+
+
+class ScheduleWeekPublishComplianceIssueRead(BaseSchema):
+    rule_code: str
+    status: str
+    reason_codes: list[str] = Field(default_factory=list)
+    premium_required: bool = False
+    premium_type: Optional[str] = None
+    premium_cents: int = 0
+    unresolved_premium: bool = False
+    would_block: bool = False
+    artifact_type_allowed: Optional[str] = None
+    override_applied: bool = False
+    override_artifact_id: Optional[str] = None
+
+
+class ScheduleWeekPublishComplianceReviewItemRead(BaseSchema):
+    assignment_id: Optional[UUID] = None
+    shift_id: UUID
+    employee_id: UUID
+    status: str
+    blocking_rule_codes: list[str] = Field(default_factory=list)
+    warning_rule_codes: list[str] = Field(default_factory=list)
+    premium_total_cents: int = 0
+    unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
+    override_applied: bool = False
+    override_artifact_id: Optional[str] = None
+    override_eligible_artifact_types: list[str] = Field(default_factory=list)
+    policy_version_id: Optional[UUID] = None
+    policy_hash: Optional[str] = None
+    policy_effective_at: Optional[datetime] = None
+    policy_scope: Optional[str] = None
+    issues: list[ScheduleWeekPublishComplianceIssueRead] = Field(default_factory=list)
+
+
+class ScheduleWeekPublishFuturePolicyReviewRead(BaseSchema):
+    policy_version_id: Optional[UUID] = None
+    policy_hash: Optional[str] = None
+    policy_effective_at: datetime
+    policy_scope: str
+    summary: ScheduleWeekPublishComplianceSummaryRead = Field(
+        default_factory=ScheduleWeekPublishComplianceSummaryRead
+    )
+    review_items: list[ScheduleWeekPublishComplianceReviewItemRead] = Field(
+        default_factory=list
+    )
+
+
+class ScheduleWeekFuturePolicyReviewResponseRead(BaseSchema):
+    week_start_date: date
+    week_end_date: date
+    summary: ScheduleWeekPublishComplianceSummaryRead = Field(
+        default_factory=ScheduleWeekPublishComplianceSummaryRead
+    )
+    policy_reviews: list[ScheduleWeekPublishFuturePolicyReviewRead] = Field(
+        default_factory=list
+    )
+
+
 class ScheduleWeekPublishRead(BaseSchema):
     business_id: UUID
     location_id: UUID
@@ -123,6 +242,12 @@ class ScheduleWeekPublishRead(BaseSchema):
     notification_enqueued_employee_count: int
     published_shift_ids: list[UUID]
     already_scheduled_shift_ids: list[UUID]
+    compliance_summary: ScheduleWeekPublishComplianceSummaryRead = Field(
+        default_factory=ScheduleWeekPublishComplianceSummaryRead
+    )
+    compliance_review_items: list[ScheduleWeekPublishComplianceReviewItemRead] = Field(
+        default_factory=list
+    )
 
 
 class ShiftDeleteResponse(BaseSchema):

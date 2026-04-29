@@ -55,6 +55,7 @@ from app.schemas.coverage import (
     Phase2ExecutionResult,
 )
 from app.services import (
+    compliance_decisions,
     coverage_transitions,
     delivery as delivery_service,
     forecast_history,
@@ -1601,6 +1602,8 @@ async def _collect_phase_1_candidates(
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         if isinstance(guardrails.get("overtime_projection"), dict):
             scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
+        if isinstance(guardrails.get("compliance"), dict):
+            scoring_factors["compliance"] = guardrails["compliance"]
         same_day_policy = _evaluate_same_day_shift_policy(
             shift=shift,
             assignments=same_day_assignments_by_employee.get(employee.id, []),
@@ -1775,6 +1778,8 @@ async def _collect_phase_2_candidates(
         scoring_factors["guardrail_multiplier"] = guardrail_multiplier
         if isinstance(guardrails.get("overtime_projection"), dict):
             scoring_factors["overtime_projection"] = guardrails["overtime_projection"]
+        if isinstance(guardrails.get("compliance"), dict):
+            scoring_factors["compliance"] = guardrails["compliance"]
         same_day_policy = _evaluate_same_day_shift_policy(
             shift=shift,
             assignments=same_day_assignments_by_employee.get(employee.id, []),
@@ -2317,6 +2322,38 @@ async def respond_to_offer(
                         },
                     )
             else:
+                from app.services import scheduling as scheduling_service
+
+                employee = await session.get(Employee, offer.employee_id) if offer.employee_id is not None else None
+                if employee is None or employee.business_id != business_id:
+                    raise LookupError("employee_not_found")
+                base_evaluation, resolved_evaluation, override_artifact = await scheduling_service._resolve_assignment_compliance(
+                    session,
+                    shift=shift,
+                    employee=employee,
+                    reference_time=responded_at,
+                )
+                if bool(resolved_evaluation.get("would_block")):
+                    await compliance_decisions.record_shift_compliance_decision(
+                        session,
+                        business_id=business_id,
+                        shift=shift,
+                        employee=employee,
+                        evaluation=resolved_evaluation,
+                        decision_source="coverage_offer",
+                        decision_outcome=(
+                            "blocked_override_required"
+                            if scheduling_service.compliance_overrides.evaluation_has_overridable_block(
+                                base_evaluation
+                            )
+                            else "blocked"
+                        ),
+                        coverage_case_id=coverage_case.id,
+                        actor_type=AuditActorType.system,
+                    )
+                    if scheduling_service.compliance_overrides.evaluation_has_overridable_block(base_evaluation):
+                        raise ValueError("compliance_override_required")
+                    raise ValueError("shift_assignment_compliance_blocked")
                 current_sequence = await session.scalar(
                     select(func.coalesce(func.max(ShiftAssignment.sequence_no), 0)).where(
                         ShiftAssignment.shift_id == shift.id
@@ -2332,10 +2369,27 @@ async def respond_to_offer(
                     assignment_metadata={
                         "coverage_case_id": str(coverage_case.id),
                         "coverage_offer_id": str(offer.id),
+                        "compliance_evaluation": scheduling_service._compliance_metadata_for_assignment(
+                            resolved_evaluation,
+                            override_artifact=override_artifact,
+                        ),
                     },
                 )
                 session.add(assignment)
                 await session.flush()
+                await compliance_decisions.record_shift_compliance_decision(
+                    session,
+                    business_id=business_id,
+                    shift=shift,
+                    employee=employee,
+                    evaluation=resolved_evaluation,
+                    decision_source="coverage_offer",
+                    decision_outcome="accepted",
+                    assignment=assignment,
+                    coverage_case_id=coverage_case.id,
+                    override_artifact=override_artifact,
+                    actor_type=AuditActorType.system,
+                )
                 await forecast_history.sync_attendance_history_fact_for_assignment(
                     session,
                     shift=shift,

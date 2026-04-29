@@ -22,6 +22,7 @@ from app.schemas.workforce import (
     EmployeeRead,
     EmployeeRoleCreate,
     EmployeeRoleRead,
+    EmployeeWorkPermitTemplateRead,
     SelfEmployeeAvailabilityRead,
     EmployeeUpdate,
 )
@@ -38,6 +39,17 @@ async def list_employees(business_id: UUID, session: SessionDep, auth_ctx: AuthD
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
     return await workforce.list_employees(session, business_id)
+
+
+@router.get("/work-permit-templates", response_model=list[EmployeeWorkPermitTemplateRead])
+async def list_work_permit_templates(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    return workforce.list_work_permit_templates()
 
 
 @router.get("/{employee_id}", response_model=EmployeeProfileRead)

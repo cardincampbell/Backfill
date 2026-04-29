@@ -14,6 +14,7 @@ from app.models.business_classification import (
     BusinessDerivationGapSuggestion,
     BusinessDerivationRun,
 )
+from app.models.compliance import ComplianceOverrideArtifact, CompliancePolicyVersion
 from app.models.communications import CommunicationSuppression
 from app.models.coverage import (
     AuditLog,
@@ -70,7 +71,7 @@ from app.models.role_taxonomy import (
     BusinessVerticalRoleArchetype,
     BusinessVerticalTypeMapping,
 )
-from app.models.scheduling import Shift, ShiftAssignment
+from app.models.scheduling import Shift, ShiftAssignment, ShiftBreak, ShiftSegment
 from app.models.webhooks import WebhookDelivery, WebhookSubscription
 from app.models.workforce import (
     Employee,
@@ -79,6 +80,7 @@ from app.models.workforce import (
     EmployeeLocation,
     EmployeeRole,
     EmployeeScheduleAccessLink,
+    EmployeeWorkPermit,
 )
 
 __all__ = [
@@ -95,6 +97,7 @@ __all__ = [
     "BillingLedgerEntry",
     "CalloutHistoryFact",
     "CommunicationSuppression",
+    "ComplianceOverrideArtifact",
     "CoverageCandidate",
     "CoverageCase",
     "CoverageCaseRun",
@@ -111,6 +114,7 @@ __all__ = [
     "EmployeeLocation",
     "EmployeeRole",
     "EmployeeScheduleAccessLink",
+    "EmployeeWorkPermit",
     "FeedProjection",
     "LlmGeneration",
     "LaborIndustryProfile",
@@ -155,6 +159,8 @@ __all__ = [
     "Session",
     "Shift",
     "ShiftAssignment",
+    "ShiftBreak",
+    "ShiftSegment",
     "User",
     "WeatherForecastSnapshot",
     "WebhookDelivery",

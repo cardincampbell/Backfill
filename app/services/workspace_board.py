@@ -66,6 +66,63 @@ def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
     return None
 
 
+def _assignment_compliance_metadata(assignment: ShiftAssignment | None) -> dict:
+    metadata = _assignment_metadata(assignment)
+    raw = metadata.get("compliance_evaluation")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _assignment_read(assignment: ShiftAssignment | None) -> WorkspaceBoardShiftAssignmentRead | None:
+    if assignment is None:
+        return None
+    compliance_metadata = _assignment_compliance_metadata(assignment)
+    return WorkspaceBoardShiftAssignmentRead(
+        assignment_id=assignment.id,
+        employee_id=assignment.employee_id,
+        employee_name=_assignment_employee_name(assignment),
+        status=assignment.status.value if hasattr(assignment.status, "value") else str(assignment.status),
+        assigned_via=assignment.assigned_via,
+        accepted_at=assignment.accepted_at,
+        compliance_status=(
+            str(compliance_metadata.get("status")).strip()
+            if str(compliance_metadata.get("status") or "").strip()
+            else None
+        ),
+        compliance_profile_code=(
+            str(compliance_metadata.get("profile_code")).strip()
+            if str(compliance_metadata.get("profile_code") or "").strip()
+            else None
+        ),
+        compliance_blocking_rule_codes=[
+            str(rule_code).strip()
+            for rule_code in (compliance_metadata.get("blocking_rule_codes") or [])
+            if str(rule_code).strip()
+        ],
+        compliance_warning_rule_codes=[
+            str(rule_code).strip()
+            for rule_code in (compliance_metadata.get("warning_rule_codes") or [])
+            if str(rule_code).strip()
+        ],
+        compliance_premium_rule_codes=[
+            str(rule_code).strip()
+            for rule_code in (compliance_metadata.get("premium_rule_codes") or [])
+            if str(rule_code).strip()
+        ],
+        compliance_premium_total_cents=max(0, int(compliance_metadata.get("premium_total_cents") or 0)),
+        compliance_unresolved_premium_rule_codes=[
+            str(rule_code).strip()
+            for rule_code in (compliance_metadata.get("unresolved_premium_rule_codes") or [])
+            if str(rule_code).strip()
+        ],
+        compliance_override_applied=bool(compliance_metadata.get("override_applied")),
+        compliance_override_artifact_id=(
+            str(compliance_metadata.get("override_artifact_id")).strip()
+            if str(compliance_metadata.get("override_artifact_id") or "").strip()
+            else None
+        ),
+    )
+
+
 def _latest_case(shift: Shift) -> CoverageCase | None:
     cases = list(shift.coverage_cases or [])
     if not cases:
@@ -129,32 +186,62 @@ def _shift_amendment_metadata(shift: Shift) -> dict:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def _inferred_live_schedule_break_reason_code(shift: Shift) -> str | None:
+    if _shift_lifecycle_status_value(shift) not in {
+        ShiftLifecycleStatus.scheduled.value,
+        ShiftLifecycleStatus.in_progress.value,
+    }:
+        return None
+    current_assignment = _best_assignment(shift)
+    if current_assignment is not None:
+        return None
+    latest_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
+    status_value = _assignment_status_value(latest_assignment)
+    if status_value == AssignmentStatus.no_show.value:
+        return "no_show"
+    if status_value == AssignmentStatus.cancelled.value and shift.seats_filled < shift.seats_requested:
+        return "callout"
+    return None
+
+
 def _shift_amended_from_published(shift: Shift) -> bool:
-    return bool(_shift_amendment_metadata(shift).get("amended_from_published"))
+    metadata = _shift_amendment_metadata(shift)
+    if metadata.get("amended_from_published") is not None:
+        return bool(metadata.get("amended_from_published"))
+    return _inferred_live_schedule_break_reason_code(shift) is not None
 
 
 def _shift_amendment_reason_code(shift: Shift) -> str | None:
     raw_reason = _shift_amendment_metadata(shift).get("reason_code")
     if isinstance(raw_reason, str) and raw_reason:
         return raw_reason
-    return None
+    return _inferred_live_schedule_break_reason_code(shift)
 
 
 def _shift_schedule_break(shift: Shift) -> bool:
-    return bool(_shift_amendment_metadata(shift).get("schedule_break"))
+    metadata = _shift_amendment_metadata(shift)
+    if metadata.get("schedule_break") is not None:
+        return bool(metadata.get("schedule_break"))
+    return _inferred_live_schedule_break_reason_code(shift) is not None
 
 
 def _shift_amended_employee_ids(shift: Shift) -> list[UUID]:
     raw_value = _shift_amendment_metadata(shift).get("amended_employee_ids")
-    if not isinstance(raw_value, list):
-        return []
     employee_ids: list[UUID] = []
-    for raw_id in raw_value:
-        try:
-            employee_ids.append(raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id)))
-        except (TypeError, ValueError):
-            continue
-    return employee_ids
+    if isinstance(raw_value, list):
+        for raw_id in raw_value:
+            try:
+                employee_ids.append(raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id)))
+            except (TypeError, ValueError):
+                continue
+    if employee_ids:
+        return employee_ids
+    if _inferred_live_schedule_break_reason_code(shift) is None:
+        return []
+    latest_assignment = shift_assignment_service.latest_assignment(shift.assignments or [])
+    if latest_assignment is None or latest_assignment.employee_id is None:
+        return []
+    return [latest_assignment.employee_id]
 
 
 def _shift_historical_artifacts(shift: Shift) -> list[dict]:
@@ -652,30 +739,8 @@ async def get_location_board(
                 requires_manager_approval=shift.requires_manager_approval,
                 premium_cents=shift.premium_cents,
                 notes=shift.notes,
-                current_assignment=(
-                    WorkspaceBoardShiftAssignmentRead(
-                        assignment_id=current_assignment.id,
-                        employee_id=current_assignment.employee_id,
-                        employee_name=_assignment_employee_name(current_assignment),
-                        status=current_assignment.status.value,
-                        assigned_via=current_assignment.assigned_via,
-                        accepted_at=current_assignment.accepted_at,
-                    )
-                    if current_assignment is not None
-                    else None
-                ),
-                last_assignment=(
-                    WorkspaceBoardShiftAssignmentRead(
-                        assignment_id=last_assignment.id,
-                        employee_id=last_assignment.employee_id,
-                        employee_name=_assignment_employee_name(last_assignment),
-                        status=last_assignment.status.value,
-                        assigned_via=last_assignment.assigned_via,
-                        accepted_at=last_assignment.accepted_at,
-                    )
-                    if last_assignment is not None
-                    else None
-                ),
+                current_assignment=_assignment_read(current_assignment),
+                last_assignment=_assignment_read(last_assignment),
                 coverage_case_id=latest_case.id if latest_case is not None else None,
                 coverage_case_status=latest_case.status.value if latest_case is not None else None,
                 pending_offer_count=pending_offer_count,

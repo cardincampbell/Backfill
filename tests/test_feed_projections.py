@@ -58,6 +58,7 @@ async def test_list_feed_events_falls_back_to_raw_platform_events_when_projectio
     session = DummyProjectionSession()
     business_id = uuid4()
     location_id = uuid4()
+    entity_id = uuid4()
     event_id = uuid4()
     occurred_at = datetime(2026, 4, 10, 18, 30, tzinfo=timezone.utc)
     created_at = datetime(2026, 4, 10, 18, 31, tzinfo=timezone.utc)
@@ -68,6 +69,7 @@ async def test_list_feed_events_falls_back_to_raw_platform_events_when_projectio
     async def fake_list_events(_session, **kwargs):
         assert kwargs["business_id"] == business_id
         assert kwargs["location_id"] == location_id
+        assert kwargs["entity_id"] == entity_id
         return [
             PlatformEvent(
                 id=event_id,
@@ -100,6 +102,7 @@ async def test_list_feed_events_falls_back_to_raw_platform_events_when_projectio
         session,
         business_id=business_id,
         location_id=location_id,
+        entity_id=entity_id,
     )
 
     assert len(result) == 1

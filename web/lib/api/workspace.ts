@@ -77,6 +77,7 @@ export type BusinessProfileUpdatePayload = {
   vertical?: string | null;
   primary_email?: string | null;
   timezone: string;
+  expected_compliance_policy_hash?: string | null;
   company_address?: string | null;
   week_start_day?: string | null;
   same_day_second_shift_allowed?: boolean | null;
@@ -84,6 +85,8 @@ export type BusinessProfileUpdatePayload = {
   cross_location_shift_coverage_allowed?: boolean | null;
   cross_location_min_gap_minutes?: number | null;
   cross_location_max_radius_miles?: number | null;
+  compliance?: CompliancePolicySettingsUpdate | null;
+  compliance_payroll_export?: CompliancePayrollExportSettingsUpdate | null;
 };
 
 export type ShiftDefaultKey = string;
@@ -154,11 +157,63 @@ export type LocationSettings = {
   backfill_shifts_launch_state: string;
   backfill_shifts_beta_eligible: boolean;
   week_start_day?: string | null;
+  compliance: CompliancePolicySettings;
+};
+
+export type CompliancePolicySettings = {
+  minimum_rest_hours?: number | null;
+  written_consent_allowed?: boolean | null;
+  first_meal_waiver_allowed?: boolean | null;
+  second_meal_waiver_allowed?: boolean | null;
+  require_structured_break_plans: boolean;
+  block_unresolved_premiums: boolean;
+  max_daily_minutes?: number | null;
+  max_weekly_minutes?: number | null;
+  school_day_weekdays?: string[] | null;
+  school_dates?: string[] | null;
+  non_school_dates?: string[] | null;
+};
+
+export type CompliancePolicySettingsUpdate = Partial<CompliancePolicySettings>;
+
+export type CompliancePayrollIdentifierField =
+  | "employee_number"
+  | "external_ref";
+
+export type CompliancePayrollExportRuleCodeConfig = {
+  code: string;
+  label?: string | null;
+};
+
+export type CompliancePayrollExportSettings = {
+  employee_identifier_priority: CompliancePayrollIdentifierField[];
+  allow_internal_employee_id_fallback: boolean;
+  default_earning_code: string;
+  default_earning_label: string;
+  earning_codes: Record<string, CompliancePayrollExportRuleCodeConfig>;
+};
+
+export type CompliancePayrollExportRuleCodeConfigUpdate = {
+  code?: string | null;
+  label?: string | null;
+};
+
+export type CompliancePayrollExportSettingsUpdate = {
+  employee_identifier_priority?: CompliancePayrollIdentifierField[] | null;
+  allow_internal_employee_id_fallback?: boolean | null;
+  default_earning_code?: string | null;
+  default_earning_label?: string | null;
+  earning_codes?: Record<
+    string,
+    CompliancePayrollExportRuleCodeConfigUpdate | null
+  > | null;
 };
 
 export type LocationSettingsUpdate = Partial<
-  Omit<LocationSettings, "location_id">
->;
+  Omit<LocationSettings, "location_id" | "compliance">
+> & {
+  compliance?: CompliancePolicySettingsUpdate | null;
+};
 
 export type WorkspaceBoard = {
   business_id: string;
@@ -237,6 +292,15 @@ export type WorkspaceBoard = {
       status: string;
       assigned_via: string;
       accepted_at?: string | null;
+      compliance_status?: string | null;
+      compliance_profile_code?: string | null;
+      compliance_blocking_rule_codes: string[];
+      compliance_warning_rule_codes: string[];
+      compliance_premium_rule_codes: string[];
+      compliance_premium_total_cents: number;
+      compliance_unresolved_premium_rule_codes: string[];
+      compliance_override_applied: boolean;
+      compliance_override_artifact_id?: string | null;
     } | null;
     last_assignment?: {
       assignment_id: string;
@@ -245,6 +309,15 @@ export type WorkspaceBoard = {
       status: string;
       assigned_via: string;
       accepted_at?: string | null;
+      compliance_status?: string | null;
+      compliance_profile_code?: string | null;
+      compliance_blocking_rule_codes: string[];
+      compliance_warning_rule_codes: string[];
+      compliance_premium_rule_codes: string[];
+      compliance_premium_total_cents: number;
+      compliance_unresolved_premium_rule_codes: string[];
+      compliance_override_applied: boolean;
+      compliance_override_artifact_id?: string | null;
     } | null;
     campaign_id?: string | null;
     campaign_status?: string | null;
@@ -346,6 +419,104 @@ export type ScheduleWeekPublishResponse = {
   notification_enqueued_employee_count: number;
   published_shift_ids: string[];
   already_scheduled_shift_ids: string[];
+  compliance_summary?: {
+    selected_assignment_count: number;
+    clear_assignment_count: number;
+    warning_assignment_count: number;
+    blocked_assignment_count: number;
+    override_applied_count: number;
+    override_eligible_warning_count: number;
+    premium_total_cents: number;
+    unresolved_premium_rule_count: number;
+    unresolved_premium_rule_codes: string[];
+    warning_rule_codes: string[];
+    override_eligible_artifact_types: string[];
+    warning_shift_ids: string[];
+    blocked_shift_ids: string[];
+    override_eligible_shift_ids: string[];
+  };
+  compliance_review_items?: Array<{
+    assignment_id?: string | null;
+    shift_id: string;
+    employee_id: string;
+    status: string;
+    blocking_rule_codes: string[];
+    warning_rule_codes: string[];
+    premium_total_cents: number;
+    unresolved_premium_rule_codes: string[];
+    override_applied: boolean;
+    override_artifact_id?: string | null;
+    override_eligible_artifact_types: string[];
+    policy_version_id?: string | null;
+    policy_hash?: string | null;
+    policy_effective_at?: string | null;
+    policy_scope?: string | null;
+    issues: Array<{
+      rule_code: string;
+      status: string;
+      reason_codes: string[];
+      premium_required: boolean;
+      premium_type?: string | null;
+      premium_cents: number;
+      unresolved_premium: boolean;
+      would_block: boolean;
+      artifact_type_allowed?: "written_consent" | "meal_waiver" | null;
+      override_applied: boolean;
+      override_artifact_id?: string | null;
+    }>;
+  }>;
+};
+
+export type ComplianceReviewSummary = NonNullable<
+  ScheduleWeekPublishResponse["compliance_summary"]
+>;
+
+export type ComplianceReviewItem = NonNullable<
+  ScheduleWeekPublishResponse["compliance_review_items"]
+>[number];
+
+export type ScheduleWeekFuturePolicyReview = {
+  policy_version_id?: string | null;
+  policy_hash?: string | null;
+  policy_effective_at: string;
+  policy_scope: string;
+  summary: ComplianceReviewSummary;
+  review_items: ComplianceReviewItem[];
+};
+
+export type ScheduleWeekFuturePolicyReviewResponse = {
+  week_start_date: string;
+  week_end_date: string;
+  summary: ComplianceReviewSummary;
+  policy_reviews: ScheduleWeekFuturePolicyReview[];
+};
+
+export type ShiftComplianceDecisionHistoryItem = {
+  id: string;
+  occurred_at: string;
+  actor_type: string;
+  actor_user_id?: string | null;
+  actor_membership_id?: string | null;
+  trace_id: string;
+  shift_id: string;
+  employee_id: string;
+  assignment_id?: string | null;
+  coverage_case_id?: string | null;
+  decision_source: string;
+  decision_outcome: string;
+  engine_version: string;
+  profile_code?: string | null;
+  profile_version_id?: string | null;
+  profile_payload_hash?: string | null;
+  blocking_rule_codes: string[];
+  warning_rule_codes: string[];
+  premium_rule_codes: string[];
+  premium_total_cents: number;
+  premium_components: Array<Record<string, unknown>>;
+  unresolved_premium_rule_codes: string[];
+  override_applied: boolean;
+  override_artifact_id?: string | null;
+  evaluation: Record<string, unknown>;
 };
 
 export type PublishedShiftAmendmentPayload = {
@@ -400,9 +571,32 @@ export type PredictiveScheduleRun = {
     reliability_snapshot_version?: string | null;
     source_metadata: Record<string, unknown>;
   } | null;
+  proposed_shifts: Array<{
+    id: string;
+    schedule_run_id: string;
+    applied_shift_id?: string | null;
+    source_run_id?: string | null;
+    source_point_id?: string | null;
+    location_id?: string | null;
+    role_id?: string | null;
+    demand_key: string;
+    optimizer_shift_id: string;
+    source_type: string;
+    generation_version: string;
+    timezone: string;
+    starts_at: string;
+    ends_at: string;
+    headcount: number;
+    premium_cents: number;
+    requires_manager_approval: boolean;
+    generation_payload: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  }>;
   assignments: Array<{
     id: string;
     shift_id?: string | null;
+    proposed_shift_id?: string | null;
     employee_id?: string | null;
     decision_score: number;
     decision_rank: number;
@@ -438,6 +632,50 @@ export type PredictiveScheduleRun = {
     solver_runtime_ms: number;
     objective_value?: number | null;
   } | null;
+  compliance_summary?: {
+    selected_assignment_count: number;
+    clear_assignment_count: number;
+    warning_assignment_count: number;
+    blocked_assignment_count: number;
+    override_applied_count: number;
+    override_eligible_warning_count: number;
+    premium_total_cents: number;
+    unresolved_premium_rule_count: number;
+    unresolved_premium_rule_codes: string[];
+    warning_rule_codes: string[];
+    override_eligible_artifact_types: string[];
+    warning_shift_ids: string[];
+    blocked_shift_ids: string[];
+    override_eligible_shift_ids: string[];
+  } | null;
+  compliance_review_items?: Array<{
+    assignment_id: string;
+    shift_id?: string | null;
+    proposed_shift_id?: string | null;
+    optimizer_shift_id?: string | null;
+    employee_id: string;
+    status: string;
+    blocking_rule_codes: string[];
+    warning_rule_codes: string[];
+    premium_total_cents: number;
+    unresolved_premium_rule_codes: string[];
+    override_applied: boolean;
+    override_artifact_id?: string | null;
+    override_eligible_artifact_types: string[];
+    issues: Array<{
+      rule_code: string;
+      status: string;
+      reason_codes: string[];
+      premium_required: boolean;
+      premium_type?: string | null;
+      premium_cents: number;
+      unresolved_premium: boolean;
+      would_block: boolean;
+      artifact_type_allowed?: "written_consent" | "meal_waiver" | null;
+      override_applied: boolean;
+      override_artifact_id?: string | null;
+    }>;
+  }> | null;
   applies: Array<{
     id: string;
     schedule_run_id: string;
@@ -474,6 +712,39 @@ export type PredictiveScheduleApplyResult = {
   updated_at: string;
 };
 
+export type ShiftComplianceOverrideCreatePayload = {
+  employee_id: string;
+  artifact_type: "written_consent" | "meal_waiver";
+  rule_code?: string | null;
+  expires_at?: string | null;
+  note?: string | null;
+  artifact_payload?: Record<string, unknown>;
+};
+
+export type ShiftComplianceOverrideRecord = {
+  id: string;
+  business_id: string;
+  location_id: string;
+  shift_id: string;
+  employee_id: string;
+  assignment_id?: string | null;
+  labor_rule_profile_version_id?: string | null;
+  approved_by_user_id?: string | null;
+  rule_code: string;
+  artifact_type: string;
+  status: string;
+  engine_version: string;
+  profile_payload_hash?: string | null;
+  approved_at: string;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+  note?: string | null;
+  reason_codes: string[];
+  artifact_payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
 export class ShiftAssignmentConflictError extends Error {
   currentAssignment?: ShiftAssignmentMutationResponse["current_assignment"];
 
@@ -484,6 +755,22 @@ export class ShiftAssignmentConflictError extends Error {
     super(message);
     this.name = "ShiftAssignmentConflictError";
     this.currentAssignment = currentAssignment;
+  }
+}
+
+export class ShiftAssignmentComplianceError extends Error {
+  summary?: ComplianceReviewSummary;
+  reviewItems?: ComplianceReviewItem[];
+
+  constructor(
+    message: string,
+    summary?: ShiftAssignmentComplianceError["summary"],
+    reviewItems?: ShiftAssignmentComplianceError["reviewItems"],
+  ) {
+    super(message);
+    this.name = "ShiftAssignmentComplianceError";
+    this.summary = summary;
+    this.reviewItems = reviewItems;
   }
 }
 
@@ -502,6 +789,54 @@ export class ScheduleWeekPublishConflictError extends Error {
     super(message);
     this.name = "ScheduleWeekPublishConflictError";
     this.current = current;
+  }
+}
+
+export class PublishedShiftAmendmentComplianceError extends Error {
+  summary?: ComplianceReviewSummary;
+  reviewItems?: ComplianceReviewItem[];
+
+  constructor(
+    message: string,
+    summary?: PublishedShiftAmendmentComplianceError["summary"],
+    reviewItems?: PublishedShiftAmendmentComplianceError["reviewItems"],
+  ) {
+    super(message);
+    this.name = "PublishedShiftAmendmentComplianceError";
+    this.summary = summary;
+    this.reviewItems = reviewItems;
+  }
+}
+
+export class ScheduleWeekPublishComplianceError extends Error {
+  summary?: ScheduleWeekPublishResponse["compliance_summary"];
+  reviewItems?: ScheduleWeekPublishResponse["compliance_review_items"];
+
+  constructor(
+    message: string,
+    summary?: ScheduleWeekPublishComplianceError["summary"],
+    reviewItems?: ScheduleWeekPublishComplianceError["reviewItems"],
+  ) {
+    super(message);
+    this.name = "ScheduleWeekPublishComplianceError";
+    this.summary = summary;
+    this.reviewItems = reviewItems;
+  }
+}
+
+export class ScheduleWeekPublishFuturePolicyConflictError extends Error {
+  summary?: ComplianceReviewSummary;
+  policyReviews?: ScheduleWeekFuturePolicyReview[];
+
+  constructor(
+    message: string,
+    summary?: ScheduleWeekPublishFuturePolicyConflictError["summary"],
+    policyReviews?: ScheduleWeekPublishFuturePolicyConflictError["policyReviews"],
+  ) {
+    super(message);
+    this.name = "ScheduleWeekPublishFuturePolicyConflictError";
+    this.summary = summary;
+    this.policyReviews = policyReviews;
   }
 }
 
@@ -1007,6 +1342,23 @@ export async function assignShift(
     }
     throw new ShiftAssignmentConflictError("stale_assignment_conflict");
   }
+  if (response.status === 422) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: {
+        code?: string;
+        summary?: ComplianceReviewSummary;
+        review_items?: ComplianceReviewItem[];
+      } | string;
+    } | null;
+    const detail = body?.detail;
+    if (detail && typeof detail === "object" && detail.code === "assignment_compliance_blocked") {
+      throw new ShiftAssignmentComplianceError(
+        detail.code,
+        detail.summary,
+        detail.review_items,
+      );
+    }
+  }
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -1026,6 +1378,27 @@ export async function amendPublishedShift(
       body: JSON.stringify(payload),
     },
   );
+  if (response.status === 422) {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: {
+        code?: string;
+        summary?: ComplianceReviewSummary;
+        review_items?: ComplianceReviewItem[];
+      } | string;
+    } | null;
+    const detail = body?.detail;
+    if (
+      detail
+      && typeof detail === "object"
+      && detail.code === "published_amendment_compliance_blocked"
+    ) {
+      throw new PublishedShiftAmendmentComplianceError(
+        detail.code,
+        detail.summary,
+        detail.review_items,
+      );
+    }
+  }
   if (!response.ok) {
     throw new Error(await parseError(response));
   }
@@ -1046,19 +1419,39 @@ export async function publishScheduleWeek(
       body: JSON.stringify(payload),
     },
   );
-  if (response.status === 409) {
+  if (response.status === 409 || response.status === 422) {
     const body = (await response.json().catch(() => null)) as {
       detail?: {
         code?: string;
         current?: ScheduleWeekPublishConflictError["current"];
+        summary?: ScheduleWeekPublishResponse["compliance_summary"];
+        review_items?: ScheduleWeekPublishResponse["compliance_review_items"];
+        policy_reviews?: ScheduleWeekFuturePolicyReview[];
       } | string;
     } | null;
     const detail = body?.detail;
     if (detail && typeof detail === "object") {
+      if (detail.code === "publish_compliance_blocked") {
+        throw new ScheduleWeekPublishComplianceError(
+          detail.code,
+          detail.summary,
+          detail.review_items,
+        );
+      }
+      if (detail.code === "publish_future_policy_conflict") {
+        throw new ScheduleWeekPublishFuturePolicyConflictError(
+          detail.code,
+          detail.summary,
+          detail.policy_reviews,
+        );
+      }
       throw new ScheduleWeekPublishConflictError(
         detail.code ?? "stale_publish_conflict",
         detail.current,
       );
+    }
+    if (response.status === 422) {
+      throw new ScheduleWeekPublishComplianceError("publish_compliance_blocked");
     }
     throw new ScheduleWeekPublishConflictError("stale_publish_conflict");
   }
@@ -1066,6 +1459,20 @@ export async function publishScheduleWeek(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as ScheduleWeekPublishResponse;
+}
+
+export async function getScheduleWeekFuturePolicyReview(
+  businessId: string,
+  locationId: string,
+  weekStartDate: string,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/locations/${locationId}/schedule-weeks/${weekStartDate}/future-policy-review`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as ScheduleWeekFuturePolicyReviewResponse;
 }
 
 export async function ensurePredictiveSchedule(
@@ -1101,6 +1508,46 @@ export async function applyPredictiveSchedule(
     throw new Error(await parseError(response));
   }
   return (await response.json()) as PredictiveScheduleApplyResult;
+}
+
+export async function createShiftComplianceOverride(
+  businessId: string,
+  shiftId: string,
+  payload: ShiftComplianceOverrideCreatePayload,
+) {
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shifts/${shiftId}/compliance-overrides`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as ShiftComplianceOverrideRecord;
+}
+
+export async function listShiftComplianceDecisions(
+  businessId: string,
+  shiftId: string,
+  options?: { limit?: number },
+) {
+  const search = new URLSearchParams();
+  if (typeof options?.limit === "number") {
+    search.set("limit", String(options.limit));
+  }
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  const response = await apiFetchApp(
+    `${API_PREFIX}/businesses/${businessId}/shifts/${shiftId}/compliance-decisions${suffix}`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+  return (await response.json()) as ShiftComplianceDecisionHistoryItem[];
 }
 
 function normalizeCoverageCampaign(

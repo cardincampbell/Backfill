@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { MapPin, Phone, Plus, Trash2, X, Info } from "lucide-react";
 
@@ -140,6 +140,7 @@ export function LocationRoleEditor({
   saving,
   feedback,
   deleteState,
+  renderExtraSections,
   onClose,
   onDelete,
   onSave,
@@ -155,6 +156,7 @@ export function LocationRoleEditor({
   saving: boolean;
   feedback: LocationRoleEditorFeedback;
   deleteState?: LocationDeleteState;
+  renderExtraSections?(context: { effectiveWeekStartDay: string }): ReactNode;
   onClose(): void;
   onDelete?(): void;
   onSave(
@@ -824,6 +826,13 @@ export function LocationRoleEditor({
               )}
             </div>
           </div>
+
+          {renderExtraSections
+            ? renderExtraSections({
+                effectiveWeekStartDay:
+                  draftWeekStartDay || businessDefaultWeekStartDay,
+              })
+            : null}
 
           <div className={`border-t pt-4 ${borderClass}`}>
             <div className="relative inline-flex group">

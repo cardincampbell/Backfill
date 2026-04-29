@@ -23,9 +23,14 @@ import {
   getEmployeeAvailability,
   getEmployeeDeleteReadiness,
   getEmployeeProfile,
+  listWorkPermitTemplates,
   replaceEmployeeAvailability,
   updateEmployee,
   type EmployeeProfile,
+  type EmployeeWorkPermit,
+  type EmployeeWorkPermitPayload,
+  type EmployeeWorkPermitRuleProfile,
+  type EmployeeWorkPermitTemplate,
 } from "@/lib/api/workforce";
 
 import {
@@ -72,6 +77,25 @@ type EmployeeAssignmentState = {
   selectedLocationIds: string[];
   primaryLocationId: string;
 };
+
+type EmployeeComplianceState = {
+  dateOfBirth: string;
+  minorSchoolStatus: string;
+  permitNumber: string;
+  permitEffectiveStartDate: string;
+  permitEffectiveEndDate: string;
+  permitTemplateCode: string;
+};
+
+type PermitTemplateStatus = "loading" | "ready" | "error";
+
+const MINOR_SCHOOL_STATUS_OPTIONS = [
+  { value: "", label: "Not set" },
+  { value: "in_session", label: "School in session" },
+  { value: "summer_break", label: "Summer / school break" },
+  { value: "not_enrolled", label: "Not enrolled" },
+  { value: "unknown", label: "Unknown" },
+] as const;
 
 function employeeDisplayName(employee: Pick<EmployeeEditorSeed, "full_name" | "preferred_name">) {
   return employee.preferred_name?.trim() || employee.full_name;
@@ -132,6 +156,181 @@ function buildAssignmentStateFromSeed(
       selectedLocationIds[0] ??
       "",
   };
+}
+
+function pickEditableWorkPermit(
+  profile: EmployeeProfile | null,
+): EmployeeWorkPermit | null {
+  const permits = [...(profile?.work_permits ?? [])];
+  if (!permits.length) {
+    return null;
+  }
+  permits.sort((left, right) => {
+    const leftEnd = left.effective_end_date ?? "9999-12-31";
+    const rightEnd = right.effective_end_date ?? "9999-12-31";
+    if (leftEnd !== rightEnd) {
+      return rightEnd.localeCompare(leftEnd);
+    }
+    const leftStart = left.effective_start_date ?? "0000-01-01";
+    const rightStart = right.effective_start_date ?? "0000-01-01";
+    if (leftStart !== rightStart) {
+      return rightStart.localeCompare(leftStart);
+    }
+    return right.updated_at.localeCompare(left.updated_at);
+  });
+  return permits[0] ?? null;
+}
+
+function buildComplianceStateFromProfile(
+  profile: EmployeeProfile | null,
+): EmployeeComplianceState {
+  const permit = pickEditableWorkPermit(profile);
+  return {
+    dateOfBirth: profile?.date_of_birth ?? "",
+    minorSchoolStatus: profile?.minor_school_status ?? "",
+    permitNumber: permit?.permit_number ?? profile?.work_permit_number ?? "",
+    permitEffectiveStartDate:
+      permit?.effective_start_date ?? profile?.work_permit_effective_start_on ?? "",
+    permitEffectiveEndDate:
+      permit?.effective_end_date ?? profile?.work_permit_expires_on ?? "",
+    permitTemplateCode: permit?.rule_profile?.template_code ?? "",
+  };
+}
+
+function buildEmptyComplianceState(): EmployeeComplianceState {
+  return {
+    dateOfBirth: "",
+    minorSchoolStatus: "",
+    permitNumber: "",
+    permitEffectiveStartDate: "",
+    permitEffectiveEndDate: "",
+    permitTemplateCode: "",
+  };
+}
+
+function countComplianceChanges(
+  baseline: EmployeeComplianceState,
+  current: EmployeeComplianceState,
+) {
+  let count = 0;
+  if (baseline.dateOfBirth !== current.dateOfBirth) {
+    count += 1;
+  }
+  if (baseline.minorSchoolStatus !== current.minorSchoolStatus) {
+    count += 1;
+  }
+  if (baseline.permitNumber.trim() !== current.permitNumber.trim()) {
+    count += 1;
+  }
+  if (baseline.permitEffectiveStartDate !== current.permitEffectiveStartDate) {
+    count += 1;
+  }
+  if (baseline.permitEffectiveEndDate !== current.permitEffectiveEndDate) {
+    count += 1;
+  }
+  if (baseline.permitTemplateCode !== current.permitTemplateCode) {
+    count += 1;
+  }
+  return count;
+}
+
+function isPermitConfigurationIncomplete(
+  complianceState: EmployeeComplianceState,
+) {
+  return (
+    !complianceState.permitNumber.trim()
+    && Boolean(
+      complianceState.permitEffectiveStartDate
+        || complianceState.permitEffectiveEndDate
+        || complianceState.permitTemplateCode.trim(),
+    )
+  );
+}
+
+function serializePermitPayload(
+  permit: EmployeeWorkPermit,
+): EmployeeWorkPermitPayload {
+  return {
+    permit_number: permit.permit_number,
+    issuing_authority: permit.issuing_authority ?? null,
+    issued_on: permit.issued_on ?? null,
+    effective_start_date: permit.effective_start_date ?? null,
+    effective_end_date: permit.effective_end_date ?? null,
+    max_daily_minutes: permit.max_daily_minutes ?? null,
+    max_weekly_minutes: permit.max_weekly_minutes ?? null,
+    earliest_start_local_time: permit.earliest_start_local_time ?? null,
+    latest_end_local_time: permit.latest_end_local_time ?? null,
+    rule_profile: permit.rule_profile ?? null,
+    permit_metadata: permit.permit_metadata ?? {},
+  };
+}
+
+function buildUpdatedWorkPermits(
+  profile: EmployeeProfile | null,
+  complianceState: EmployeeComplianceState,
+): EmployeeWorkPermitPayload[] | undefined {
+  const existingPermits = profile?.work_permits ?? [];
+  const editablePermit = pickEditableWorkPermit(profile);
+  const hasPermitInputs = Boolean(
+    complianceState.permitNumber.trim()
+      || complianceState.permitEffectiveStartDate
+      || complianceState.permitEffectiveEndDate
+      || complianceState.permitTemplateCode.trim(),
+  );
+  const buildEditedPermitPayload = (): EmployeeWorkPermitPayload => {
+    const existingRuleProfile = {
+      ...((editablePermit?.rule_profile as EmployeeWorkPermitRuleProfile | null) ?? {}),
+    };
+    if (complianceState.permitTemplateCode.trim()) {
+      existingRuleProfile.template_code = complianceState.permitTemplateCode.trim();
+    } else {
+      delete existingRuleProfile.template_code;
+      delete existingRuleProfile.jurisdiction_code;
+      delete existingRuleProfile.source_url;
+    }
+    return {
+      permit_number: complianceState.permitNumber.trim(),
+      issuing_authority: editablePermit?.issuing_authority ?? null,
+      issued_on: editablePermit?.issued_on ?? null,
+      effective_start_date: complianceState.permitEffectiveStartDate || null,
+      effective_end_date: complianceState.permitEffectiveEndDate || null,
+      max_daily_minutes: editablePermit?.max_daily_minutes ?? null,
+      max_weekly_minutes: editablePermit?.max_weekly_minutes ?? null,
+      earliest_start_local_time: editablePermit?.earliest_start_local_time ?? null,
+      latest_end_local_time: editablePermit?.latest_end_local_time ?? null,
+      rule_profile: Object.keys(existingRuleProfile).length > 0 ? existingRuleProfile : null,
+      permit_metadata: editablePermit?.permit_metadata ?? {},
+    };
+  };
+
+  if (editablePermit) {
+    const preserved = existingPermits
+      .filter((permit) => permit.id !== editablePermit.id)
+      .map(serializePermitPayload);
+    if (!hasPermitInputs) {
+      return preserved.length ? preserved : [];
+    }
+    return [buildEditedPermitPayload(), ...preserved];
+  }
+  if (!hasPermitInputs) {
+    return existingPermits.length ? existingPermits.map(serializePermitPayload) : undefined;
+  }
+  return [buildEditedPermitPayload()];
+}
+
+function formatPermitHours(minutes: number | null | undefined) {
+  if (!minutes || minutes <= 0) {
+    return null;
+  }
+  const hours = minutes / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function formatTimeValue(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  return value.slice(0, 5);
 }
 
 function countSelectionChanges(initialIds: string[], currentIds: string[]) {
@@ -321,6 +520,13 @@ export function EmployeeEditorDrawer({
     createDefaultDayMap,
   );
   const [availabilitySavedPulse, setAvailabilitySavedPulse] = useState(false);
+  const [permitTemplates, setPermitTemplates] = useState<EmployeeWorkPermitTemplate[]>([]);
+  const [permitTemplateStatus, setPermitTemplateStatus] =
+    useState<PermitTemplateStatus>("loading");
+  const [permitTemplateFeedback, setPermitTemplateFeedback] = useState<string | null>(null);
+  const [complianceState, setComplianceState] = useState<EmployeeComplianceState>(
+    buildEmptyComplianceState,
+  );
   const [loading, setLoading] = useState(true);
   const [isEditingName, setIsEditingName] = useState(false);
   const [isEditingEmail, setIsEditingEmail] = useState(false);
@@ -350,6 +556,10 @@ export function EmployeeEditorDrawer({
     setAvailabilityDayStates(createDefaultDayMap());
     setAvailabilityBaseline(createDefaultDayMap());
     setAvailabilitySavedPulse(false);
+    setLoading(true);
+    setPermitTemplateStatus("loading");
+    setPermitTemplateFeedback(null);
+    setComplianceState(buildEmptyComplianceState());
     setIsEditingName(false);
     setIsEditingEmail(false);
     setIsEditingPhone(false);
@@ -357,9 +567,18 @@ export function EmployeeEditorDrawer({
 
     async function loadProfile() {
       try {
-        const [nextProfile, readiness, availability] = await Promise.all([
+        const [nextProfile, readiness, permitTemplatesResult, availability] = await Promise.all([
           getEmployeeProfile(businessId, employee.id).catch(() => null),
           getEmployeeDeleteReadiness(businessId, employee.id).catch(() => null),
+          listWorkPermitTemplates(businessId)
+            .then((value) => ({ value, error: null }))
+            .catch((error: unknown) => ({
+              value: [] as EmployeeWorkPermitTemplate[],
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Could not load work permit templates.",
+            })),
           getEmployeeAvailability(businessId, employee.id)
             .then((value) => ({ value, error: null }))
             .catch((error: unknown) => ({
@@ -379,7 +598,11 @@ export function EmployeeEditorDrawer({
           setEmail(nextProfile.email ?? "");
           setPhone(nextProfile.phone_e164 ?? "");
           setFormData(buildAssignmentStateFromProfile(nextProfile));
+          setComplianceState(buildComplianceStateFromProfile(nextProfile));
         }
+        setPermitTemplates(permitTemplatesResult.value);
+        setPermitTemplateStatus(permitTemplatesResult.error ? "error" : "ready");
+        setPermitTemplateFeedback(permitTemplatesResult.error);
         setDeleteState(
           readiness
             ? {
@@ -448,6 +671,10 @@ export function EmployeeEditorDrawer({
   const baselineFullName = profile?.full_name ?? employee.full_name;
   const baselineEmail = profile?.email ?? employee.email ?? "";
   const baselinePhone = profile?.phone_e164 ?? employee.phone_e164 ?? "";
+  const baselineComplianceState = useMemo(
+    () => buildComplianceStateFromProfile(profile),
+    [profile],
+  );
 
   const selectedRoles = roleCatalog.filter((role) => formData.selectedRoleIds.includes(role.id));
   const availableRoles = roleCatalog.filter((role) => !formData.selectedRoleIds.includes(role.id));
@@ -478,6 +705,12 @@ export function EmployeeEditorDrawer({
     profile?.full_name ||
     employeeDisplayName(employee);
   const headerDisplayName = fullName.trim() || name;
+  const selectedPermitTemplate = useMemo(
+    () =>
+      permitTemplates.find((template) => template.code === complianceState.permitTemplateCode)
+      ?? null,
+    [complianceState.permitTemplateCode, permitTemplates],
+  );
   const theme = {
     textPrimary: dark ? "text-white" : "text-[#0A2540]",
     textSecondary: dark ? "text-[#C1CED8]" : "text-[#8898AA]",
@@ -541,6 +774,14 @@ export function EmployeeEditorDrawer({
     formData.selectedRoleIds,
     phone,
   ]);
+  const complianceDirtyCount = useMemo(
+    () => countComplianceChanges(baselineComplianceState, complianceState),
+    [baselineComplianceState, complianceState],
+  );
+  const permitConfigurationIncomplete = useMemo(
+    () => isPermitConfigurationIncomplete(complianceState),
+    [complianceState],
+  );
 
   const availabilityDirty =
     availabilityStatus === "ready" &&
@@ -552,12 +793,13 @@ export function EmployeeEditorDrawer({
         : 0,
     [availabilityBaseline, availabilityDayStates, availabilityStatus],
   );
-  const dirtyCount = profileDirtyCount + availabilityDirtyCount;
+  const dirtyCount = profileDirtyCount + complianceDirtyCount + availabilityDirtyCount;
 
   const canSave =
     Boolean(fullName.trim()) &&
     Boolean(formData.primaryRoleId) &&
     Boolean(formData.primaryLocationId) &&
+    !permitConfigurationIncomplete &&
     dirtyCount > 0;
 
   useEffect(() => {
@@ -732,7 +974,7 @@ export function EmployeeEditorDrawer({
     }
 
     const pendingChangeCount = dirtyCount;
-    const hasProfileChanges = profileDirtyCount > 0;
+    const hasProfileChanges = profileDirtyCount > 0 || complianceDirtyCount > 0;
     const hasAvailabilityChanges = availabilityDirty;
 
     try {
@@ -745,6 +987,9 @@ export function EmployeeEditorDrawer({
           full_name: fullName.trim(),
           email: email.trim() || null,
           phone_e164: phone.trim() || null,
+          date_of_birth: complianceState.dateOfBirth || null,
+          minor_school_status: complianceState.minorSchoolStatus || null,
+          work_permits: buildUpdatedWorkPermits(profile, complianceState),
           roles: formData.selectedRoleIds.map((roleId) => ({
             role_id: roleId,
             is_primary: roleId === formData.primaryRoleId,
@@ -759,6 +1004,7 @@ export function EmployeeEditorDrawer({
         setFormData(buildAssignmentStateFromProfile(nextProfile));
         setEmail(nextProfile.email ?? "");
         setPhone(nextProfile.phone_e164 ?? "");
+        setComplianceState(buildComplianceStateFromProfile(nextProfile));
       }
 
       if (hasAvailabilityChanges) {
@@ -1061,6 +1307,256 @@ export function EmployeeEditorDrawer({
               {feedback.message}
             </div>
           ) : null}
+
+          <div>
+            <div className="mb-3 flex items-center justify-between">
+              <h3
+                className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]"
+                style={{ fontWeight: 500 }}
+              >
+                Youth Compliance
+              </h3>
+              <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                {complianceDirtyCount > 0
+                  ? `${complianceDirtyCount} change${complianceDirtyCount === 1 ? "" : "s"}`
+                  : "DOB, school status, permits"}
+              </span>
+            </div>
+            <div className={`rounded-2xl border p-4 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Date of birth
+                  </span>
+                  <input
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        dateOfBirth: event.target.value,
+                      }))
+                    }
+                    type="date"
+                    value={complianceState.dateOfBirth}
+                  />
+                </label>
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    School status
+                  </span>
+                  <select
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        minorSchoolStatus: event.target.value,
+                      }))
+                    }
+                    value={complianceState.minorSchoolStatus}
+                  >
+                    {MINOR_SCHOOL_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value || "unset"} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Permit number
+                  </span>
+                  <input
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        permitNumber: event.target.value,
+                      }))
+                    }
+                    placeholder="CA-12345"
+                    type="text"
+                    value={complianceState.permitNumber}
+                  />
+                </label>
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Permit template
+                  </span>
+                  <select
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    disabled={permitTemplateStatus === "loading"}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        permitTemplateCode: event.target.value,
+                      }))
+                    }
+                    value={complianceState.permitTemplateCode}
+                  >
+                    <option value="">
+                      {permitTemplateStatus === "loading" ? "Loading templates..." : "No template"}
+                    </option>
+                    {permitTemplates.map((template) => (
+                      <option key={template.code} value={template.code}>
+                        {template.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Permit effective start
+                  </span>
+                  <input
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        permitEffectiveStartDate: event.target.value,
+                      }))
+                    }
+                    type="date"
+                    value={complianceState.permitEffectiveStartDate}
+                  />
+                </label>
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Permit expires on
+                  </span>
+                  <input
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        permitEffectiveEndDate: event.target.value,
+                      }))
+                    }
+                    type="date"
+                    value={complianceState.permitEffectiveEndDate}
+                  />
+                </label>
+              </div>
+
+              {profile && profile.work_permits.length > 1 ? (
+                <p className={`mt-3 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                  Editing the most recent permit. Older permits stay preserved.
+                </p>
+              ) : null}
+
+              {permitConfigurationIncomplete ? (
+                <div
+                  className={`mt-3 rounded-xl border px-3.5 py-3 text-[12px] ${
+                    dark
+                      ? "border-[#F59E0B]/30 bg-[#F59E0B]/[0.08] text-[#F6D59C]"
+                      : "border-[#F59E0B]/20 bg-[#F59E0B]/[0.06] text-[#8A5A00]"
+                  }`}
+                  style={{ fontWeight: 500 }}
+                >
+                  Permit number is required before permit dates or a permit template can be saved.
+                </div>
+              ) : null}
+
+              {permitTemplateFeedback ? (
+                <div
+                  className={`mt-3 rounded-xl border px-3.5 py-3 text-[12px] ${
+                    dark
+                      ? "border-[#E5484D]/30 bg-[#E5484D]/[0.08] text-[#FFB3B3]"
+                      : "border-[#E5484D]/15 bg-[#E5484D]/[0.05] text-[#C13535]"
+                  }`}
+                  style={{ fontWeight: 500 }}
+                >
+                  {permitTemplateFeedback}
+                </div>
+              ) : null}
+
+              {selectedPermitTemplate ? (
+                <div className={`mt-3 rounded-xl border p-3.5 ${theme.subtleBorderClass} ${theme.subtleSurfacePanelClass}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className={`text-[13px] ${theme.textPrimary}`} style={{ fontWeight: 560 }}>
+                        {selectedPermitTemplate.label}
+                      </p>
+                      {selectedPermitTemplate.description ? (
+                        <p className={`mt-1 text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                          {selectedPermitTemplate.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    {selectedPermitTemplate.source_url ? (
+                      <a
+                        className="shrink-0 text-[11px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                        href={selectedPermitTemplate.source_url}
+                        rel="noreferrer"
+                        style={{ fontWeight: 520 }}
+                        target="_blank"
+                      >
+                        Source
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {selectedPermitTemplate.rule_profile.daily_max_minutes_school_day ? (
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                          School day max
+                        </p>
+                        <p className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                          {formatPermitHours(selectedPermitTemplate.rule_profile.daily_max_minutes_school_day)}
+                        </p>
+                      </div>
+                    ) : null}
+                    {selectedPermitTemplate.rule_profile.daily_max_minutes_non_school_day ? (
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                          Non-school day max
+                        </p>
+                        <p className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                          {formatPermitHours(selectedPermitTemplate.rule_profile.daily_max_minutes_non_school_day)}
+                        </p>
+                      </div>
+                    ) : null}
+                    {(selectedPermitTemplate.rule_profile.weekly_max_minutes_school_week
+                      || selectedPermitTemplate.rule_profile.weekly_max_minutes) ? (
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                          Weekly max
+                        </p>
+                        <p className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                          {formatPermitHours(
+                            selectedPermitTemplate.rule_profile.weekly_max_minutes_school_week
+                              ?? selectedPermitTemplate.rule_profile.weekly_max_minutes,
+                          )}
+                        </p>
+                      </div>
+                    ) : null}
+                    {(selectedPermitTemplate.rule_profile.latest_end_local_time_school_day
+                      || selectedPermitTemplate.rule_profile.latest_end_local_time
+                      || selectedPermitTemplate.rule_profile.latest_end_local_time_preceding_non_school_day) ? (
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.04em] text-[#8898AA]" style={{ fontWeight: 500 }}>
+                          Latest end
+                        </p>
+                        <p className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 500 }}>
+                          {formatTimeValue(
+                            selectedPermitTemplate.rule_profile.latest_end_local_time_school_day
+                              ?? selectedPermitTemplate.rule_profile.latest_end_local_time,
+                          ) ?? "Not set"}
+                          {selectedPermitTemplate.rule_profile.latest_end_local_time_preceding_non_school_day ? (
+                            <span className={theme.textSecondary} style={{ fontWeight: 440 }}>
+                              {" · pre-non-school day "}
+                              {formatTimeValue(
+                                selectedPermitTemplate.rule_profile.latest_end_local_time_preceding_non_school_day,
+                              )}
+                            </span>
+                          ) : null}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
 
           <div>
             <div className="mb-3 flex items-center justify-between">

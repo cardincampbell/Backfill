@@ -38,6 +38,10 @@ import {
   type LocationRoleEditorFeedback as Feedback,
   type LocationRoleEditorSaveSummary,
 } from "./LocationRoleEditor";
+import CompliancePolicySettingsEditor, {
+  readCompliancePolicySnapshot,
+} from "./CompliancePolicySettingsEditor";
+import type { CompliancePolicySettingsSnapshot } from "@/lib/api/finance";
 import {
   formatLocationMeta,
   getLocationReference,
@@ -80,6 +84,7 @@ function adaptWorkspaceLocation(location: WorkspaceLocation): BusinessLocation {
 export default function SettingsLocationsSection({
   businessId,
   businessType,
+  businessWeekStartDay,
   dark,
   editorLocationId,
   onOpenLocationEditor,
@@ -87,6 +92,7 @@ export default function SettingsLocationsSection({
 }: {
   businessId: string;
   businessType?: string | null;
+  businessWeekStartDay?: string | null;
   dark: boolean;
   editorLocationId?: string | null;
   onOpenLocationEditor?(locationId: string): void;
@@ -485,6 +491,32 @@ export default function SettingsLocationsSection({
     }
   };
 
+  const handleLocationComplianceApplied = (
+    nextPolicy: CompliancePolicySettingsSnapshot,
+  ) => {
+    if (!selectedLocation) {
+      return;
+    }
+    const nextSettings = {
+      ...(selectedLocation.settings ?? {}),
+      compliance: nextPolicy,
+    };
+    const nextLocation = {
+      ...selectedLocation,
+      settings: nextSettings,
+    };
+    setSelectedLocation(nextLocation);
+    setLocations((current) => {
+      const nextLocations = current.map((location) =>
+        location.id === nextLocation.id
+          ? { ...location, settings: nextSettings }
+          : location,
+      );
+      locationsCache.set(businessId, nextLocations);
+      return nextLocations;
+    });
+  };
+
   if (loading) {
     return <div className={`py-10 text-[13px] ${textSecondary}`}>Loading business locations...</div>;
   }
@@ -622,6 +654,25 @@ export default function SettingsLocationsSection({
             }}
             onSave={handleSave}
             employees={editorEmployees}
+            renderExtraSections={({ effectiveWeekStartDay }) => (
+              <CompliancePolicySettingsEditor
+                businessId={businessId}
+                currentPolicy={readCompliancePolicySnapshot(
+                  selectedLocation.settings?.compliance,
+                )}
+                dark={dark}
+                description="Preview and apply stricter-than-law compliance rules for this location without leaving the editor."
+                locationId={selectedLocation.id}
+                onApplied={(nextPolicy) => {
+                  handleLocationComplianceApplied(nextPolicy);
+                }}
+                scope="location"
+                title="Location Compliance Policy"
+                weekStartDay={
+                  effectiveWeekStartDay || businessWeekStartDay || "monday"
+                }
+              />
+            )}
             shiftDefaults={shiftDefaults}
             staffCount={selectedLocationStaffCount}
             saving={isPending}

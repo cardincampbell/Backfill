@@ -49,6 +49,7 @@ class SchedulePolicyPayload(BaseSchema):
     ] = "monday"
     publish_mode: Literal["draft_only"] = "draft_only"
     labor_rule_mode: Literal["soft_penalty", "hard_block"] = "soft_penalty"
+    compliance_rule_mode: Literal["soft_penalty", "hard_block"] = "hard_block"
     fairness_mode: Literal["balanced_hours"] = "balanced_hours"
     same_day_second_shift_allowed: bool = True
     cross_location_shift_coverage_allowed: bool = False
@@ -88,6 +89,7 @@ class ScheduleRunInputContract(BaseSchema):
     availability_payload: dict = Field(default_factory=dict)
     policy_payload: SchedulePolicyPayload
     labor_payload: dict = Field(default_factory=dict)
+    compliance_payload: dict = Field(default_factory=dict)
     reliability_payload: ReliabilitySnapshotPayload
     reliability_snapshot_generated_at: datetime
     reliability_snapshot_hash: str
@@ -132,6 +134,7 @@ class ScheduleRunInputRead(BaseSchema):
     availability_payload: dict
     policy_payload: dict
     labor_payload: dict
+    compliance_payload: dict = Field(default_factory=dict)
     reliability_payload: dict
     reliability_snapshot_generated_at: Optional[datetime] = None
     reliability_snapshot_hash: Optional[str] = None
@@ -168,6 +171,7 @@ class ScheduleRunExplanationRead(BaseSchema):
     summary_payload: dict = Field(default_factory=dict)
     fairness_payload: dict = Field(default_factory=dict)
     overtime_payload: dict = Field(default_factory=dict)
+    compliance_payload: dict = Field(default_factory=dict)
     coverage_payload: dict = Field(default_factory=dict)
     unassigned_shift_payload: dict = Field(default_factory=dict)
 
@@ -181,6 +185,54 @@ class ScheduleRunMetricRead(BaseSchema):
     fairness_spread_metrics: dict = Field(default_factory=dict)
     solver_runtime_ms: int
     objective_value: Optional[float] = None
+
+
+class ScheduleRunComplianceSummaryRead(BaseSchema):
+    selected_assignment_count: int = 0
+    clear_assignment_count: int = 0
+    warning_assignment_count: int = 0
+    blocked_assignment_count: int = 0
+    override_applied_count: int = 0
+    override_eligible_warning_count: int = 0
+    premium_total_cents: int = 0
+    unresolved_premium_rule_count: int = 0
+    unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
+    warning_rule_codes: list[str] = Field(default_factory=list)
+    override_eligible_artifact_types: list[str] = Field(default_factory=list)
+    warning_shift_ids: list[str] = Field(default_factory=list)
+    blocked_shift_ids: list[str] = Field(default_factory=list)
+    override_eligible_shift_ids: list[str] = Field(default_factory=list)
+
+
+class ScheduleRunComplianceIssueRead(BaseSchema):
+    rule_code: str
+    status: str
+    reason_codes: list[str] = Field(default_factory=list)
+    premium_required: bool = False
+    premium_type: Optional[str] = None
+    premium_cents: int = 0
+    unresolved_premium: bool = False
+    would_block: bool = False
+    artifact_type_allowed: Optional[str] = None
+    override_applied: bool = False
+    override_artifact_id: Optional[str] = None
+
+
+class ScheduleRunComplianceReviewItemRead(BaseSchema):
+    assignment_id: UUID
+    shift_id: Optional[UUID] = None
+    proposed_shift_id: Optional[UUID] = None
+    optimizer_shift_id: Optional[str] = None
+    employee_id: UUID
+    status: str
+    blocking_rule_codes: list[str] = Field(default_factory=list)
+    warning_rule_codes: list[str] = Field(default_factory=list)
+    premium_total_cents: int = 0
+    unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
+    override_applied: bool = False
+    override_artifact_id: Optional[str] = None
+    override_eligible_artifact_types: list[str] = Field(default_factory=list)
+    issues: list[ScheduleRunComplianceIssueRead] = Field(default_factory=list)
 
 
 class ScheduleRunProposedShiftRead(BaseSchema):
@@ -213,6 +265,8 @@ class ScheduleRunDetailRead(ScheduleRunRead):
     rejections: list[ScheduleRunRejectionRead] = Field(default_factory=list)
     explanation: Optional[ScheduleRunExplanationRead] = None
     metrics: Optional[ScheduleRunMetricRead] = None
+    compliance_summary: ScheduleRunComplianceSummaryRead = Field(default_factory=ScheduleRunComplianceSummaryRead)
+    compliance_review_items: list[ScheduleRunComplianceReviewItemRead] = Field(default_factory=list)
     applies: list["ScheduleRunApplyRead"] = Field(default_factory=list)
     replay_run_ids: list[UUID] = Field(default_factory=list)
 

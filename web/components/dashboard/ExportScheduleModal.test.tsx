@@ -15,11 +15,23 @@ vi.mock('@/lib/export-schedule', () => ({
   exportPDF: (...args: unknown[]) => mockExportPDF(...args),
 }));
 
+const mockGetLocationComplianceWeek = vi.fn();
+const mockGetLocationCompliancePayrollExport = vi.fn();
+
+vi.mock('@/lib/api/finance', () => ({
+  getLocationComplianceWeek: (...args: unknown[]) => mockGetLocationComplianceWeek(...args),
+  getLocationCompliancePayrollExport: (...args: unknown[]) =>
+    mockGetLocationCompliancePayrollExport(...args),
+}));
+
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
 const defaultProps = {
+  businessId: 'biz_1',
+  locationId: 'loc_1',
   businessName: "Coley's Coffee",
   weekLabel: 'Apr 14 – 20',
+  weekStartDateKey: '2025-04-14',
   locationName: 'Downtown',
   weekStart: new Date(2025, 3, 14),
   employees: [
@@ -43,6 +55,8 @@ function renderModal(overrides = {}) {
 describe('ExportScheduleModal — format selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetLocationComplianceWeek.mockResolvedValue(null);
+    mockGetLocationCompliancePayrollExport.mockResolvedValue(null);
   });
 
   it('renders all three format labels', () => {
@@ -106,6 +120,8 @@ describe('ExportScheduleModal — format selection', () => {
 describe('ExportScheduleModal — export trigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetLocationComplianceWeek.mockResolvedValue(null);
+    mockGetLocationCompliancePayrollExport.mockResolvedValue(null);
   });
 
   it('calls exportCSV when CSV is selected and Export is clicked', async () => {
@@ -140,7 +156,48 @@ describe('ExportScheduleModal — export trigger', () => {
   });
 
   it('passes the correct opts to exportCSV', async () => {
+    mockGetLocationComplianceWeek.mockResolvedValue({
+      location_id: 'loc_1',
+      week_start_date: '2025-04-14',
+      week_end_date: '2025-04-20',
+      shift_count: 1,
+      assigned_shift_count: 1,
+      employee_count: 1,
+      warning_assignment_count: 0,
+      blocked_assignment_count: 0,
+      unresolved_premium_assignment_count: 1,
+      premium_total_cents: 1800,
+      override_applied_count: 0,
+      warning_rule_codes: [],
+      premium_rule_codes: ['meal_break_first_window'],
+      unresolved_premium_rule_codes: ['split_shift_premium'],
+      artifact_type_counts: [],
+      shifts: [],
+      employees: [],
+      override_artifacts: [],
+    });
+    mockGetLocationCompliancePayrollExport.mockResolvedValue({
+      location_id: 'loc_1',
+      week_start_date: '2025-04-14',
+      week_end_date: '2025-04-20',
+      row_count: 1,
+      premium_payment_row_count: 1,
+      ready_adjustment_row_count: 1,
+      manual_review_row_count: 1,
+      missing_employee_identifier_row_count: 1,
+      artifact_record_row_count: 1,
+      total_premium_cents: 1800,
+      rows: [],
+    });
     renderModal();
+    await waitFor(() =>
+      expect(mockGetLocationCompliancePayrollExport).toHaveBeenCalledWith(
+        'biz_1',
+        'loc_1',
+        '2025-04-14',
+      ),
+    );
+    await waitFor(() => expect(screen.getByText('Ready Rows')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
     await waitFor(() => expect(mockExportCSV).toHaveBeenCalledOnce());
     const [opts] = mockExportCSV.mock.calls[0] as [Record<string, unknown>];
@@ -149,6 +206,16 @@ describe('ExportScheduleModal — export trigger', () => {
     expect(opts.weekLabel).toBe('Apr 14 – 20');
     expect(opts.employees).toHaveLength(1);
     expect(opts.shifts).toHaveLength(1);
+    expect(opts.compliancePayrollExport).toMatchObject({
+      location_id: 'loc_1',
+      premium_payment_row_count: 1,
+      ready_adjustment_row_count: 1,
+      manual_review_row_count: 1,
+    });
+    expect(screen.getByText('Missing IDs')).toBeInTheDocument();
+    expect(
+      screen.getByText(/some payroll consequence rows still require manual handling/i),
+    ).toBeInTheDocument();
   });
 });
 

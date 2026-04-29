@@ -69,6 +69,12 @@ import { BrandedSelect } from "./BrandedSelect";
 import CustomSelect, { type CustomSelectOption } from "./CustomSelect";
 import DashboardShell from "./DashboardShell";
 import SegmentedControl from "./SegmentedControl";
+import CompliancePolicySettingsEditor, {
+  readCompliancePolicySnapshot,
+} from "./CompliancePolicySettingsEditor";
+import CompliancePayrollExportSettingsEditor, {
+  readCompliancePayrollExportSettingsSnapshot,
+} from "./CompliancePayrollExportSettingsEditor";
 import SettingsAvailabilitySection from "./SettingsAvailabilitySection";
 import SettingsLocationsSection from "./SettingsLocationsSection";
 import SettingsShiftsSection, {
@@ -101,6 +107,12 @@ type CoverageFormState = {
   crossLocationShiftCoverageAllowed: boolean;
   crossLocationMinGapMinutes: number;
   crossLocationMaxRadiusMiles: number;
+};
+
+type ReliabilityCoachingStyle = "supportive" | "direct" | "firm";
+
+type CoveragePreviewState = {
+  coachingStyle: ReliabilityCoachingStyle;
 };
 
 type SettingsSaveTarget =
@@ -166,6 +178,17 @@ function readCoverageInt(
     : fallback;
 }
 
+function readCoverageStyle(
+  settings: Record<string, unknown>,
+  key: string,
+  fallback: ReliabilityCoachingStyle,
+): ReliabilityCoachingStyle {
+  const value = settings[key];
+  return value === "supportive" || value === "direct" || value === "firm"
+    ? value
+    : fallback;
+}
+
 function resolveAppearancePreference(
   value: unknown,
 ): AppearancePreference {
@@ -226,6 +249,140 @@ function buildCoverageForm(business: BusinessProfile): CoverageFormState {
       20,
     ),
   };
+}
+
+function buildCoveragePreviewState(
+  business: BusinessProfile | null,
+): CoveragePreviewState {
+  const settings = getBusinessCoverageSettings(business);
+  return {
+    coachingStyle: readCoverageStyle(settings, "coaching_style", "direct"),
+  };
+}
+
+function ReliabilityCoachingPreview({
+  dark,
+  coachingStyle,
+  onCoachingStyleChange,
+}: {
+  dark: boolean;
+  coachingStyle: ReliabilityCoachingStyle;
+  onCoachingStyleChange(next: ReliabilityCoachingStyle): void;
+}) {
+  const textPrimary = dark ? "text-white" : "text-[#0A2540]";
+  const textMuted = dark ? "text-[#C1CED8]" : "text-[#8898AA]";
+  const rowHover = dark ? "hover:bg-white/[0.03]" : "hover:bg-[#F7F8FA]";
+  const badgeClass = dark
+    ? "bg-white/[0.08] text-[#C1CED8] border border-white/[0.08]"
+    : "bg-[#F4F7FB] text-[#667085] border border-[#E5E7EB]";
+  const activeIndex =
+    coachingStyle === "supportive" ? 0 : coachingStyle === "direct" ? 1 : 2;
+  const activeColor =
+    coachingStyle === "supportive"
+      ? "#00B893"
+      : coachingStyle === "direct"
+        ? "#635BFF"
+        : "#E5484D";
+
+  return (
+    <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 500 }}>
+              Reliability Coaching
+            </p>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] ${badgeClass}`}
+              style={{ fontWeight: 500 }}
+            >
+              Preview
+            </span>
+          </div>
+          <p className={`text-[11px] max-w-md ${textMuted}`} style={{ fontWeight: 420 }}>
+            Choose how the Coverage Engine coaches employees when they have too
+            many callouts.
+          </p>
+          <p className={`text-[10px] mt-1.5 ${textMuted}`} style={{ fontWeight: 420 }}>
+            Save support lands with the reliability coaching backend.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <div className="relative">
+          <input
+            type="range"
+            min="0"
+            max="2"
+            step="1"
+            value={activeIndex}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              onCoachingStyleChange(
+                next === 0 ? "supportive" : next === 1 ? "direct" : "firm",
+              );
+            }}
+            className="coverage-coaching-slider h-2 w-full cursor-pointer appearance-none rounded-full"
+            style={{
+              background:
+                "linear-gradient(to right, #00B893 0%, #635BFF 50%, #E5484D 100%)",
+            }}
+          />
+          <style>{`
+            .coverage-coaching-slider::-webkit-slider-thumb {
+              appearance: none;
+              width: 20px;
+              height: 20px;
+              border-radius: 9999px;
+              background: white;
+              border: 2px solid ${activeColor};
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+              cursor: pointer;
+            }
+
+            .coverage-coaching-slider::-moz-range-thumb {
+              width: 20px;
+              height: 20px;
+              border-radius: 9999px;
+              background: white;
+              border: 2px solid ${activeColor};
+              box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+              cursor: pointer;
+            }
+          `}</style>
+        </div>
+
+        <div className="flex justify-between px-1">
+          {(
+            [
+              { key: "supportive", label: "Supportive", color: "#00B893" },
+              { key: "direct", label: "Direct", color: "#635BFF" },
+              { key: "firm", label: "Firm", color: "#E5484D" },
+            ] as const
+          ).map((option) => {
+            const active = coachingStyle === option.key;
+            return (
+              <button
+                key={option.key}
+                onClick={() => onCoachingStyleChange(option.key)}
+                className={`text-[11px] transition-all ${
+                  active ? "" : textMuted
+                }`}
+                style={{
+                  color: active ? option.color : undefined,
+                  fontWeight: active ? 540 : 440,
+                }}
+                type="button"
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function formatSessionTimestamp(value: string | null | undefined): string | null {
@@ -607,7 +764,15 @@ const businessSections = [
     icon: Sparkles,
     saveTarget: "business-coverage" as const,
     description:
-      "Control automated same-day and cross-location eligibility for coverage outreach.",
+      "Control automated same-day, cross-location, and reliability coaching policy.",
+  },
+  {
+    key: "compliance",
+    label: "Compliance",
+    icon: Shield,
+    saveTarget: null,
+    description:
+      "Preview and apply stricter-than-law compliance policy at the business default layer.",
   },
   { key: "locations", label: "Locations", icon: MapPin, saveTarget: null },
   { key: "shifts", label: "Shifts", icon: CalendarDays, saveTarget: null, description: "Manage the default shift names and time windows used throughout the scheduler." },
@@ -739,6 +904,9 @@ export default function Settings({
     crossLocationMinGapMinutes: 60,
     crossLocationMaxRadiusMiles: 20,
   });
+  const [coveragePreview, setCoveragePreview] = useState<CoveragePreviewState>({
+    coachingStyle: "direct",
+  });
 
   const [personalSaving, setPersonalSaving] = useState(false);
   const [businessSaving, setBusinessSaving] = useState(false);
@@ -850,11 +1018,13 @@ export default function Settings({
         }
         const nextCompanyForm = buildCompanyForm(nextBusiness);
         const nextCoverageForm = buildCoverageForm(nextBusiness);
+        const nextCoveragePreview = buildCoveragePreviewState(nextBusiness);
         setBusiness(nextBusiness);
         setCompanyForm(nextCompanyForm);
         setCompanyBaseline(nextCompanyForm);
         setCoverageForm(nextCoverageForm);
         setCoverageBaseline(nextCoverageForm);
+        setCoveragePreview(nextCoveragePreview);
       } catch (_error) {
         if (!cancelled) {
           setFeedback((current) => ({
@@ -1404,6 +1574,17 @@ export default function Settings({
           transition={{ duration: 0.4 }}
         >
           <div className="space-y-1">
+            <ReliabilityCoachingPreview
+              coachingStyle={coveragePreview.coachingStyle}
+              dark={isDark}
+              onCoachingStyleChange={(next) =>
+                setCoveragePreview((current) => ({
+                  ...current,
+                  coachingStyle: next,
+                }))
+              }
+            />
+
             <div className={`p-4 rounded-xl transition-colors ${rowHover}`}>
               <div className="flex items-center justify-between">
                 <div>
@@ -1585,6 +1766,7 @@ export default function Settings({
         <SettingsLocationsSection
           businessId={primaryBusinessId}
           businessType={business?.vertical ?? null}
+          businessWeekStartDay={getBusinessWeekStartDay(business)}
           dark={isDark}
           editorLocationId={activeSettingsLocationEditorId}
           onCloseLocationEditor={() =>
@@ -1596,6 +1778,85 @@ export default function Settings({
             })
           }
         />
+      );
+    }
+
+    if (scope === "business" && activeSection === "compliance") {
+      if (businessLoading && !business) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Loading compliance policy…
+          </div>
+        );
+      }
+
+      if (!business) {
+        return (
+          <div className={`py-10 text-[13px] ${isDark ? "text-[#C1CED8]" : "text-[#8898AA]"}`}>
+            Create a business first, then you can manage its default compliance policy here.
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-4">
+          <div className={`rounded-2xl border px-4 py-4 ${cardSurface}`}>
+            <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+              Business Default Policy
+            </p>
+            <p className={`mt-1 text-[12px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+              This default applies everywhere a location does not define its own stricter compliance overlay. Use preview before apply so policy changes are evaluated against recent real weeks.
+            </p>
+          </div>
+
+          <CompliancePolicySettingsEditor
+            businessId={business.id}
+            currentPolicy={readCompliancePolicySnapshot(
+              business.settings?.["compliance"],
+            )}
+            dark={isDark}
+            description="Preview the operational impact of stricter rest, break, and premium policy before making it the business default."
+            onApplied={(nextPolicy) => {
+              setBusiness((current) =>
+                current
+                  ? {
+                      ...current,
+                      settings: {
+                        ...(current.settings ?? {}),
+                        compliance: nextPolicy,
+                      },
+                    }
+                  : current,
+              );
+            }}
+            scope="business"
+            title="Business Compliance Policy"
+            weekStartDay={getBusinessWeekStartDay(business)}
+          />
+
+          <CompliancePayrollExportSettingsEditor
+            businessDisplayName={business.display_name}
+            businessId={business.id}
+            businessTimezone={business.timezone}
+            currentSettings={readCompliancePayrollExportSettingsSnapshot(
+              business.settings?.["compliance_payroll_export"],
+            )}
+            dark={isDark}
+            onApplied={(nextSettings) => {
+              setBusiness((current) =>
+                current
+                  ? {
+                      ...current,
+                      settings: {
+                        ...(current.settings ?? {}),
+                        compliance_payroll_export: nextSettings,
+                      },
+                    }
+                  : current,
+              );
+            }}
+          />
+        </div>
       );
     }
 

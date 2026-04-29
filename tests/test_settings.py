@@ -8,11 +8,17 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
 from app.models.business import Business, Location, Role
+from app.models.compliance import CompliancePolicyVersion
 from app.models.common import MembershipRole, MembershipStatus, SessionRiskLevel
 from app.models.coverage import AuditLog
 from app.models.identity import Membership, Session, User
 from app.schemas.business import LocationRoleRead, RoleRead
-from app.services import businesses as businesses_service, shift_defaults
+from app.schemas.settings import (
+    CompliancePayrollExportRuleCodeConfigUpdate,
+    CompliancePayrollExportSettingsUpdate,
+    CompliancePolicyVersionRead,
+)
+from app.services import businesses as businesses_service, settings as settings_service, shift_defaults
 from app.services.auth import AuthContext
 
 
@@ -180,9 +186,60 @@ def test_get_location_settings_returns_defaults():
             "backfill_shifts_launch_state": "off",
             "backfill_shifts_beta_eligible": False,
             "week_start_day": None,
+            "compliance": {
+                "minimum_rest_hours": None,
+                "written_consent_allowed": None,
+                "first_meal_waiver_allowed": None,
+                "second_meal_waiver_allowed": None,
+                "require_structured_break_plans": False,
+                "block_unresolved_premiums": False,
+                "max_daily_minutes": None,
+                "max_weekly_minutes": None,
+                "school_day_weekdays": [],
+                "school_dates": [],
+                "non_school_dates": [],
+            },
+            "compliance_policy_version_id": None,
+            "compliance_policy_hash": None,
+            "compliance_policy_effective_at": None,
+            "compliance_policy_scope": None,
+            "compliance_policy_clears_parent": False,
         }
     finally:
         app.dependency_overrides.clear()
+
+
+def test_merge_compliance_payroll_export_update_normalizes_priority_and_codes():
+    merged = settings_service.merge_compliance_payroll_export_update(
+        {
+            "employee_identifier_priority": ["employee_number", "external_ref"],
+            "allow_internal_employee_id_fallback": False,
+            "default_earning_code": "COMPLIANCE",
+            "default_earning_label": "Compliance Premium",
+            "earning_codes": {
+                "meal_break_first_window": {"code": "MEALPREM", "label": "Meal Break Premium"},
+            },
+        },
+        CompliancePayrollExportSettingsUpdate(
+            employee_identifier_priority=["external_ref"],
+            allow_internal_employee_id_fallback=True,
+            default_earning_code="COMPPREM",
+            earning_codes={
+                "meal_break_first_window": CompliancePayrollExportRuleCodeConfigUpdate(
+                    code=None
+                ),
+                "spread_of_hours_premium": CompliancePayrollExportRuleCodeConfigUpdate(
+                    code="SPREADPREM"
+                ),
+            },
+        ),
+    )
+
+    assert merged["employee_identifier_priority"] == ["external_ref"]
+    assert merged["allow_internal_employee_id_fallback"] is True
+    assert merged["default_earning_code"] == "COMPPREM"
+    assert merged["earning_codes"]["meal_break_first_window"]["code"] == "MEALPREM"
+    assert merged["earning_codes"]["spread_of_hours_premium"]["code"] == "SPREADPREM"
 
 
 def test_get_business_shift_defaults_returns_saved_defaults():
@@ -416,6 +473,17 @@ def test_patch_location_settings_updates_location_and_audits():
                 "backfill_shifts_enabled": True,
                 "backfill_shifts_launch_state": "beta",
                 "integration_status": "connected",
+                "compliance": {
+                    "minimum_rest_hours": 12,
+                    "written_consent_allowed": False,
+                    "require_structured_break_plans": True,
+                    "block_unresolved_premiums": True,
+                    "max_daily_minutes": 480,
+                    "max_weekly_minutes": 2400,
+                    "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                    "school_dates": ["2026-04-18"],
+                    "non_school_dates": ["2026-04-21"],
+                },
             },
         )
         assert response.status_code == 200
@@ -425,13 +493,305 @@ def test_patch_location_settings_updates_location_and_audits():
         assert payload["backfill_shifts_enabled"] is True
         assert payload["backfill_shifts_launch_state"] == "beta"
         assert payload["integration_status"] == "connected"
+        assert payload["compliance"]["minimum_rest_hours"] == 12
+        assert payload["compliance"]["written_consent_allowed"] is False
+        assert payload["compliance"]["require_structured_break_plans"] is True
+        assert payload["compliance"]["block_unresolved_premiums"] is True
+        assert payload["compliance"]["max_daily_minutes"] == 480
+        assert payload["compliance"]["max_weekly_minutes"] == 2400
+        assert payload["compliance"]["school_day_weekdays"] == [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+        ]
+        assert payload["compliance"]["school_dates"] == ["2026-04-18"]
+        assert payload["compliance"]["non_school_dates"] == ["2026-04-21"]
+        assert payload["compliance_policy_scope"] == "location"
+        assert payload["compliance_policy_hash"] == settings_service.compliance_policy_hash(
+            {
+                "minimum_rest_hours": 12,
+                "written_consent_allowed": False,
+                "first_meal_waiver_allowed": None,
+                "second_meal_waiver_allowed": None,
+                "require_structured_break_plans": True,
+                "block_unresolved_premiums": True,
+                "max_daily_minutes": 480,
+                "max_weekly_minutes": 2400,
+                "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "school_dates": ["2026-04-18"],
+                "non_school_dates": ["2026-04-21"],
+            }
+        )
+        assert payload["compliance_policy_version_id"] is not None
         assert location.settings["coverage_requires_manager_approval"] is True
         assert location.settings["late_arrival_policy"] == "start_coverage"
         assert location.settings["backfill_shifts_enabled"] is True
         assert location.settings["backfill_shifts_launch_state"] == "beta"
         assert location.settings["integration_status"] == "connected"
+        assert location.settings["compliance"]["minimum_rest_hours"] == 12
+        assert location.settings["compliance"]["written_consent_allowed"] is False
+        assert location.settings["compliance"]["require_structured_break_plans"] is True
+        assert location.settings["compliance"]["block_unresolved_premiums"] is True
+        assert location.settings["compliance"]["max_daily_minutes"] == 480
+        assert location.settings["compliance"]["max_weekly_minutes"] == 2400
+        assert location.settings["compliance"]["school_day_weekdays"] == [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+        ]
+        assert location.settings["compliance"]["school_dates"] == ["2026-04-18"]
+        assert location.settings["compliance"]["non_school_dates"] == ["2026-04-21"]
+        assert location.settings["compliance_policy_scope"] == "location"
+        assert any(isinstance(entry, CompliancePolicyVersion) for entry in fake_session.added)
         assert any(
             isinstance(entry, AuditLog) and entry.event_name == "location.settings.updated"
+            for entry in fake_session.added
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_patch_location_settings_rejects_stale_compliance_preview():
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(business_id=business_id)
+    location = _make_location(business_id=business_id, location_id=location_id)
+    location.settings = {
+        "compliance": {
+            "minimum_rest_hours": 10,
+            "block_unresolved_premiums": True,
+        }
+    }
+    fake_session.get_map[(Location, location_id)] = location
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/locations/{location_id}/settings",
+            json={
+                "expected_compliance_policy_hash": "stale_preview_hash",
+                "compliance": {
+                    "minimum_rest_hours": 12,
+                    "require_structured_break_plans": True,
+                },
+            },
+        )
+        assert response.status_code == 409
+        payload = response.json()["detail"]
+        assert payload["code"] == "location_compliance_policy_preview_stale"
+        assert payload["current_compliance_policy_hash"] == settings_service.compliance_policy_hash(
+            location.settings["compliance"]
+        )
+        assert payload["current_compliance_settings"]["minimum_rest_hours"] == 10
+        assert payload["current_compliance_settings"]["block_unresolved_premiums"] is True
+        assert "require_structured_break_plans" not in location.settings["compliance"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_list_business_compliance_policy_versions_route_returns_rows(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, role=MembershipRole.owner)
+
+    async def fake_list_versions(_session, **kwargs):
+        assert kwargs["business_id"] == business_id
+        assert kwargs["policy_scope"] == "business"
+        return [
+            CompliancePolicyVersionRead(
+                id=uuid4(),
+                business_id=business_id,
+                location_id=None,
+                policy_scope="business",
+                policy_hash="hash_123",
+                settings={
+                    "minimum_rest_hours": 12,
+                    "written_consent_allowed": None,
+                    "first_meal_waiver_allowed": None,
+                    "second_meal_waiver_allowed": None,
+                    "require_structured_break_plans": True,
+                    "block_unresolved_premiums": False,
+                    "max_daily_minutes": None,
+                    "max_weekly_minutes": None,
+                },
+                effective_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                superseded_at=None,
+                created_by_user_id=None,
+                replaces_version_id=None,
+                clears_parent=False,
+                is_effective=True,
+                is_scheduled=False,
+            )
+        ]
+
+    monkeypatch.setattr(settings_service, "list_compliance_policy_versions", fake_list_versions)
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(f"/api/businesses/{business_id}/compliance-policy-versions")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["policy_scope"] == "business"
+        assert payload[0]["settings"]["minimum_rest_hours"] == 12
+        assert payload[0]["is_effective"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_list_location_compliance_policy_versions_route_returns_rows(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_list_versions(_session, **kwargs):
+        assert kwargs["business_id"] == business_id
+        assert kwargs["location_id"] == location_id
+        assert kwargs["policy_scope"] == "location"
+        return [
+            CompliancePolicyVersionRead(
+                id=uuid4(),
+                business_id=business_id,
+                location_id=location_id,
+                policy_scope="location",
+                policy_hash="hash_loc_123",
+                settings={
+                    "minimum_rest_hours": None,
+                    "written_consent_allowed": None,
+                    "first_meal_waiver_allowed": None,
+                    "second_meal_waiver_allowed": None,
+                    "require_structured_break_plans": False,
+                    "block_unresolved_premiums": False,
+                    "max_daily_minutes": None,
+                    "max_weekly_minutes": None,
+                },
+                effective_at=datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+                superseded_at=None,
+                created_by_user_id=None,
+                replaces_version_id=None,
+                clears_parent=True,
+                is_effective=False,
+                is_scheduled=True,
+            )
+        ]
+
+    monkeypatch.setattr(settings_service, "list_compliance_policy_versions", fake_list_versions)
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/settings/compliance-policy-versions"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["policy_scope"] == "location"
+        assert payload[0]["clears_parent"] is True
+        assert payload[0]["is_scheduled"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_restore_location_compliance_policy_version_route_creates_new_version(monkeypatch):
+    fake_session = FakeSettingsSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    version_id = uuid4()
+    fake_session.get_map[(Business, business_id)] = _make_business(business_id=business_id)
+    fake_session.get_map[(Location, location_id)] = _make_location(
+        business_id=business_id,
+        location_id=location_id,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(
+            business_id=business_id,
+            location_id=location_id,
+            role=MembershipRole.owner,
+        )
+
+    async def fake_restore(_session, **kwargs):
+        assert kwargs["business"].id == business_id
+        assert kwargs["location"].id == location_id
+        assert kwargs["policy_scope"] == "location"
+        assert kwargs["version_id"] == version_id
+        assert kwargs["expected_current_policy_hash"] == "hash_loc_current"
+        return CompliancePolicyVersion(
+            id=uuid4(),
+            business_id=business_id,
+            location_id=location_id,
+            policy_scope="location",
+            policy_hash="hash_loc_restored",
+            settings_payload={
+                "minimum_rest_hours": 12,
+                "written_consent_allowed": None,
+                "first_meal_waiver_allowed": None,
+                "second_meal_waiver_allowed": None,
+                "require_structured_break_plans": True,
+                "block_unresolved_premiums": False,
+                "max_daily_minutes": None,
+                "max_weekly_minutes": None,
+            },
+            effective_at=datetime(2026, 4, 24, 18, 0, tzinfo=timezone.utc),
+            superseded_at=None,
+            replaces_version_id=version_id,
+            created_at=datetime(2026, 4, 24, 18, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 4, 24, 18, 0, tzinfo=timezone.utc),
+        )
+
+    monkeypatch.setattr(settings_service, "restore_compliance_policy_version", fake_restore)
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/settings/compliance-policy-versions/{version_id}/restore",
+            json={"expected_current_policy_hash": "hash_loc_current"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["policy_scope"] == "location"
+        assert payload["policy_hash"] == "hash_loc_restored"
+        assert payload["settings"]["minimum_rest_hours"] == 12
+        assert fake_session.commits == 1
+        assert any(
+            isinstance(entry, AuditLog)
+            and entry.event_name == "location.compliance_policy_version.restored"
             for entry in fake_session.added
         )
     finally:

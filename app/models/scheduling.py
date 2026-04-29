@@ -11,7 +11,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, VersionedMixin
 from app.models.common import (
     AssignmentStatus,
+    ShiftBreakType,
     ShiftLifecycleStatus,
+    ShiftSegmentType,
     ShiftStaffingStatus,
     ShiftStatus,
     compatibility_shift_status,
@@ -56,6 +58,11 @@ class Shift(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     business: Mapped["Business"] = relationship()
     location: Mapped["Location"] = relationship(back_populates="shifts")
     role: Mapped["Role"] = relationship(back_populates="shifts")
+    segments: Mapped[list["ShiftSegment"]] = relationship(
+        back_populates="shift",
+        cascade="all, delete-orphan",
+        order_by="ShiftSegment.sequence_no.asc()",
+    )
     assignments: Mapped[list["ShiftAssignment"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
     coverage_cases: Mapped[list["CoverageCase"]] = relationship(back_populates="shift", cascade="all, delete-orphan")
 
@@ -99,6 +106,69 @@ class ShiftAssignment(UUIDPrimaryKeyMixin, TimestampMixin, VersionedMixin, Base)
     employee: Mapped[Optional["Employee"]] = relationship(back_populates="assignments")
     assigned_by_user: Mapped[Optional["User"]] = relationship()
     replaced_assignment: Mapped[Optional["ShiftAssignment"]] = relationship(remote_side="ShiftAssignment.id")
+
+
+class ShiftSegment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "shift_segments"
+    __table_args__ = (
+        UniqueConstraint("shift_id", "sequence_no", name="uq_shift_segments_shift_id_sequence_no"),
+        Index("ix_shift_segments_shift_id_starts_at", "shift_id", "starts_at"),
+    )
+
+    shift_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    segment_type: Mapped[ShiftSegmentType] = mapped_column(
+        Enum(ShiftSegmentType, name="shift_segment_type"),
+        nullable=False,
+        server_default=ShiftSegmentType.work.value,
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    segment_metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+
+    shift: Mapped["Shift"] = relationship(back_populates="segments")
+    breaks: Mapped[list["ShiftBreak"]] = relationship(
+        back_populates="segment",
+        cascade="all, delete-orphan",
+        order_by="ShiftBreak.sequence_no.asc()",
+    )
+
+
+class ShiftBreak(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "shift_breaks"
+    __table_args__ = (
+        UniqueConstraint("shift_segment_id", "sequence_no", name="uq_shift_breaks_segment_sequence_no"),
+        Index("ix_shift_breaks_shift_id_starts_at", "shift_id", "starts_at"),
+    )
+
+    shift_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False)
+    shift_segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("shift_segments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    break_type: Mapped[ShiftBreakType] = mapped_column(
+        Enum(ShiftBreakType, name="shift_break_type"),
+        nullable=False,
+        server_default=ShiftBreakType.meal.value,
+    )
+    is_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    break_metadata: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+
+    segment: Mapped["ShiftSegment"] = relationship(back_populates="breaks")
 
 
 from app.models.business import Business, Location, Role  # noqa: E402

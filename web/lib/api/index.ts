@@ -5,6 +5,7 @@ export * from "./schedules";
 export * from "./templates";
 export * from "./publishing";
 export * from "./operations";
+export * from "./finance";
 export * from "./ai-actions";
 export * from "./copilot";
 export * from "./events";

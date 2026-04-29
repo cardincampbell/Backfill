@@ -5,6 +5,8 @@
  * Day cells: "9 AM – 5 PM" pipe-joined for multiple shifts, blank if none.
  */
 
+import type { LocationCompliancePayrollExport } from "./api/finance";
+
 export interface ExportEmployee {
   id: string;
   name: string;
@@ -18,6 +20,16 @@ export interface ExportShift {
   day: number; // 0=Mon … 6=Sun
   startHour: number;
   endHour: number;
+  roleName?: string;
+  complianceStatus?: string | null;
+  complianceProfileCode?: string | null;
+  complianceBlockingRuleCodes?: string[];
+  complianceWarningRuleCodes?: string[];
+  compliancePremiumRuleCodes?: string[];
+  compliancePremiumTotalCents?: number;
+  complianceUnresolvedPremiumRuleCodes?: string[];
+  complianceOverrideApplied?: boolean;
+  complianceOverrideArtifactId?: string | null;
 }
 
 export interface ExportOptions {
@@ -28,6 +40,7 @@ export interface ExportOptions {
   weekStart: Date;
   employees: ExportEmployee[];
   shifts: ExportShift[];
+  compliancePayrollExport?: LocationCompliancePayrollExport | null;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -71,10 +84,116 @@ export function buildRows(opts: ExportOptions): { header: string[]; rows: string
   return { header, rows };
 }
 
+function weekdayLabel(day: number): string {
+  return FULL_DAYS[((day % 7) + 7) % 7] ?? 'Day';
+}
+
+function currencyFromCents(cents: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(cents / 100);
+}
+
+export function buildComplianceRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
+  const employeeNameById = new Map(opts.employees.map((employee) => [employee.id, employee.name]));
+  const header = [
+    'Employee',
+    'Role',
+    'Shift',
+    'Status',
+    'Premium',
+    'Unresolved Premium',
+    'Artifact Applied',
+    'Warning Rules',
+    'Blocking Rules',
+  ];
+  const rows = opts.shifts
+    .filter(
+      (shift) =>
+        Boolean(shift.employeeId)
+        && (
+          Boolean(shift.complianceStatus)
+          || (shift.compliancePremiumTotalCents ?? 0) > 0
+          || Boolean(shift.complianceOverrideApplied)
+          || (shift.complianceWarningRuleCodes?.length ?? 0) > 0
+          || (shift.complianceBlockingRuleCodes?.length ?? 0) > 0
+          || (shift.complianceUnresolvedPremiumRuleCodes?.length ?? 0) > 0
+        ),
+    )
+    .map((shift) => {
+      const premiumCents = Math.max(0, shift.compliancePremiumTotalCents ?? 0);
+      return [
+        employeeNameById.get(shift.employeeId!) ?? 'Assigned employee',
+        shift.roleName ?? '',
+        `${weekdayLabel(shift.day)} ${fmtHour(shift.startHour)} – ${fmtHour(shift.endHour)}`,
+        shift.complianceStatus ?? '',
+        premiumCents > 0 ? currencyFromCents(premiumCents) : '',
+        (shift.complianceUnresolvedPremiumRuleCodes ?? []).join(' | '),
+        shift.complianceOverrideApplied ? 'Yes' : '',
+        (shift.complianceWarningRuleCodes ?? []).join(' | '),
+        (shift.complianceBlockingRuleCodes ?? []).join(' | '),
+      ];
+    });
+  return { header, rows };
+}
+
+export function buildCompliancePayrollRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
+  const report = opts.compliancePayrollExport;
+  const header = [
+    'Row Kind',
+    'Export Status',
+    'Employee',
+    'Employee Identifier Type',
+    'Employee Identifier',
+    'Role',
+    'Shift',
+    'Status',
+    'Earning Code',
+    'Earning Label',
+    'Source Rule',
+    'Premium',
+    'Premium Rules',
+    'Unresolved Premium',
+    'Payment Required',
+    'Manual Review',
+    'Artifact Type',
+    'Artifact Note',
+    'Source Reasons',
+  ];
+  if (!report || report.rows.length === 0) {
+    return { header, rows: [] };
+  }
+  const rows = report.rows.map((row) => [
+    row.payroll_row_kind ?? '',
+    row.payroll_status ?? '',
+    row.employee_name ?? '',
+    row.employee_identifier_type ?? '',
+    row.employee_identifier ?? '',
+    row.role_name ?? '',
+    `${row.starts_at} → ${row.ends_at}`,
+    row.compliance_status,
+    row.earning_code ?? '',
+    row.earning_label ?? '',
+    row.source_rule_code ?? '',
+    row.premium_cents > 0 ? currencyFromCents(row.premium_cents) : '',
+    row.premium_rule_codes.join(' | '),
+    row.unresolved_premium_rule_codes.join(' | '),
+    row.premium_payment_required ? 'Yes' : 'No',
+    row.manual_review_required ? 'Yes' : 'No',
+    row.override_artifact_type ?? '',
+    row.override_artifact_note ?? '',
+    (row.source_reason_codes ?? []).join(' | '),
+  ]);
+  return { header, rows };
+}
+
 // ─── CSV ────────────────────────────────────────────────────────────────────
 
 export function exportCSV(opts: ExportOptions): void {
   const { header, rows } = buildRows(opts);
+  const { header: complianceHeader, rows: complianceRows } = buildComplianceRows(opts);
+  const { header: payrollHeader, rows: payrollRows } = buildCompliancePayrollRows(opts);
   const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const titleLines = [
     escape(exportTitle(opts)),
@@ -82,7 +201,23 @@ export function exportCSV(opts: ExportOptions): void {
     '',
   ];
   const dataLines = [header, ...rows].map((row) => row.map(escape).join(','));
-  const csv = [...titleLines, ...dataLines].join('\r\n');
+  const complianceLines =
+    complianceRows.length > 0
+      ? [
+          '',
+          escape('Compliance Summary'),
+          [complianceHeader, ...complianceRows].map((row) => row.map(escape).join(',')),
+        ].flat()
+      : [];
+  const payrollLines =
+    payrollRows.length > 0
+      ? [
+          '',
+          escape('Compliance Payroll Consequences'),
+          [payrollHeader, ...payrollRows].map((row) => row.map(escape).join(',')),
+        ].flat()
+      : [];
+  const csv = [...titleLines, ...dataLines, ...complianceLines, ...payrollLines].join('\r\n');
   triggerDownload(
     new Blob([csv], { type: 'text/csv;charset=utf-8;' }),
     safeFilename(opts.locationName, opts.weekLabel, 'csv'),
@@ -94,6 +229,8 @@ export function exportCSV(opts: ExportOptions): void {
 export async function exportExcel(opts: ExportOptions): Promise<void> {
   const ExcelJS = (await import('exceljs')).default;
   const { header, rows } = buildRows(opts);
+  const { header: complianceHeader, rows: complianceRows } = buildComplianceRows(opts);
+  const { header: payrollHeader, rows: payrollRows } = buildCompliancePayrollRows(opts);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Backfill';
@@ -171,6 +308,140 @@ export async function exportExcel(opts: ExportOptions): Promise<void> {
     });
   });
 
+  if (complianceRows.length > 0) {
+    const complianceSheet = wb.addWorksheet('Compliance', { views: [{ state: 'frozen', ySplit: 3 }] });
+    complianceSheet.columns = complianceHeader.map((column) => ({
+      key: column,
+      width:
+        column === 'Employee'
+          ? 22
+          : column === 'Role'
+            ? 18
+            : column === 'Shift'
+              ? 26
+              : column === 'Warning Rules' || column === 'Blocking Rules'
+                ? 28
+                : 18,
+    }));
+
+    const titleRow = complianceSheet.getRow(1);
+    titleRow.height = 28;
+    titleRow.getCell(1).value = `${exportTitle(opts)} · Compliance`;
+    titleRow.getCell(1).font = { bold: true, color: { argb: 'FF0A2540' }, size: 12 };
+    titleRow.getCell(1).alignment = { vertical: 'middle' };
+    complianceSheet.mergeCells(1, 1, 1, complianceHeader.length);
+
+    const weekRow = complianceSheet.getRow(2);
+    weekRow.height = 18;
+    weekRow.getCell(1).value = `Schedule: ${opts.weekLabel}`;
+    weekRow.getCell(1).font = { color: { argb: 'FF5E6D7A' }, size: 9 };
+    weekRow.getCell(1).alignment = { vertical: 'middle' };
+    complianceSheet.mergeCells(2, 1, 2, complianceHeader.length);
+
+    const complianceHeaderRow = complianceSheet.getRow(3);
+    complianceHeaderRow.height = 26;
+    complianceHeader.forEach((column, index) => {
+      const cell = complianceHeaderRow.getCell(index + 1);
+      cell.value = column;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A2540' } };
+      cell.alignment = { vertical: 'middle', horizontal: index < 3 ? 'left' : 'center', wrapText: true };
+      cell.border = {
+        bottom: { style: 'thin', color: { argb: 'FF635BFF' } },
+      };
+    });
+
+    complianceRows.forEach((row) => {
+      const dataRow = complianceSheet.addRow(row);
+      dataRow.height = 22;
+      row.forEach((value, index) => {
+        const cell = dataRow.getCell(index + 1);
+        cell.value = value;
+        cell.font = { size: 9, color: { argb: 'FF0A2540' } };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: index < 3 ? 'left' : 'center',
+          wrapText: true,
+        };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFFFFF' },
+        };
+        cell.border = {
+          bottom: { style: 'hair', color: { argb: 'FFE5E7EB' } },
+        };
+      });
+    });
+  }
+
+  if (payrollRows.length > 0) {
+    const payrollSheet = wb.addWorksheet('Compliance Payroll', { views: [{ state: 'frozen', ySplit: 3 }] });
+    payrollSheet.columns = payrollHeader.map((column) => ({
+      key: column,
+      width:
+        column === 'Employee'
+          ? 22
+          : column === 'Role'
+            ? 18
+            : column === 'Shift'
+              ? 38
+              : column === 'Premium Rules' || column === 'Unresolved Premium' || column === 'Artifact Note'
+                ? 28
+                : 18,
+    }));
+
+    const titleRow = payrollSheet.getRow(1);
+    titleRow.height = 28;
+    titleRow.getCell(1).value = `${exportTitle(opts)} · Compliance Payroll`;
+    titleRow.getCell(1).font = { bold: true, color: { argb: 'FF0A2540' }, size: 12 };
+    titleRow.getCell(1).alignment = { vertical: 'middle' };
+    payrollSheet.mergeCells(1, 1, 1, payrollHeader.length);
+
+    const weekRow = payrollSheet.getRow(2);
+    weekRow.height = 18;
+    weekRow.getCell(1).value = `Schedule: ${opts.weekLabel}`;
+    weekRow.getCell(1).font = { color: { argb: 'FF5E6D7A' }, size: 9 };
+    weekRow.getCell(1).alignment = { vertical: 'middle' };
+    payrollSheet.mergeCells(2, 1, 2, payrollHeader.length);
+
+    const payrollHeaderRow = payrollSheet.getRow(3);
+    payrollHeaderRow.height = 26;
+    payrollHeader.forEach((column, index) => {
+      const cell = payrollHeaderRow.getCell(index + 1);
+      cell.value = column;
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF635BFF' } };
+      cell.alignment = { vertical: 'middle', horizontal: index < 3 ? 'left' : 'center', wrapText: true };
+      cell.border = {
+        bottom: { style: 'thin', color: { argb: 'FF0A2540' } },
+      };
+    });
+
+    payrollRows.forEach((row) => {
+      const dataRow = payrollSheet.addRow(row);
+      dataRow.height = 22;
+      row.forEach((value, index) => {
+        const cell = dataRow.getCell(index + 1);
+        cell.value = value;
+        cell.font = { size: 9, color: { argb: 'FF0A2540' } };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: index < 3 ? 'left' : 'center',
+          wrapText: true,
+        };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFFFFF' },
+        };
+        cell.border = {
+          bottom: { style: 'hair', color: { argb: 'FFE5E7EB' } },
+        };
+      });
+    });
+  }
+
   const buf = await wb.xlsx.writeBuffer();
   triggerDownload(
     new Blob([buf], {
@@ -186,6 +457,8 @@ export async function exportPDF(opts: ExportOptions): Promise<void> {
   const { default: jsPDF } = await import('jspdf');
   const { default: autoTable } = await import('jspdf-autotable');
   const { header, rows } = buildRows(opts);
+  const { header: complianceHeader, rows: complianceRows } = buildComplianceRows(opts);
+  const { header: payrollHeader, rows: payrollRows } = buildCompliancePayrollRows(opts);
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
 
@@ -253,6 +526,72 @@ export async function exportPDF(opts: ExportOptions): Promise<void> {
       }
     },
   });
+
+  if (complianceRows.length > 0) {
+    autoTable(doc, {
+      head: [complianceHeader],
+      body: complianceRows,
+      startY: (doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY
+        ? ((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable!.finalY ?? 64) + 18
+        : 320,
+      margin: { left: 40, right: 40 },
+      tableWidth: 'auto',
+      styles: {
+        fontSize: 7,
+        cellPadding: { top: 4, bottom: 4, left: 5, right: 5 },
+        valign: 'middle',
+        textColor: [10, 37, 64],
+        lineColor: [229, 231, 235],
+        lineWidth: 0.5,
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [99, 91, 255],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 7,
+        halign: 'center',
+      },
+      columnStyles: {
+        0: { halign: 'left', cellWidth: 68 },
+        1: { halign: 'left', cellWidth: 54 },
+        2: { halign: 'left', cellWidth: 86 },
+      },
+    });
+  }
+
+  if (payrollRows.length > 0) {
+    autoTable(doc, {
+      head: [payrollHeader],
+      body: payrollRows,
+      startY: (doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY
+        ? ((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable!.finalY ?? 64) + 18
+        : 420,
+      margin: { left: 40, right: 40 },
+      tableWidth: 'auto',
+      styles: {
+        fontSize: 7,
+        cellPadding: { top: 4, bottom: 4, left: 5, right: 5 },
+        valign: 'middle',
+        textColor: [10, 37, 64],
+        lineColor: [229, 231, 235],
+        lineWidth: 0.5,
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [245, 158, 11],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 7,
+        halign: 'center',
+      },
+      columnStyles: {
+        0: { halign: 'left', cellWidth: 62 },
+        1: { halign: 'left', cellWidth: 48 },
+        2: { halign: 'left', cellWidth: 120 },
+      },
+    });
+  }
 
   doc.save(safeFilename(opts.locationName, opts.weekLabel, 'pdf'));
 }

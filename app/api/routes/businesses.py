@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.api.deps import AuthDep, SessionDep
+from app.models.business import Business, Location
 from app.models.common import AuditActorType, MembershipRole, MembershipStatus
 from app.models.identity import Membership
 from app.schemas.business import (
@@ -33,10 +34,15 @@ from app.schemas.reliability_coaching import (
     ReliabilityCoachingCaseRead,
     ReliabilityCoachingCaseSuppressWrite,
 )
-from app.schemas.settings import LocationSettingsRead, LocationSettingsUpdate
+from app.schemas.settings import (
+    CompliancePolicyVersionRestoreWrite,
+    LocationSettingsRead,
+    LocationSettingsUpdate,
+)
 from app.schemas.settings import (
     BusinessShiftDefaultsRead,
     BusinessShiftDefaultsUpdate,
+    CompliancePolicyVersionRead,
     LocationShiftDefaultsRead,
     LocationShiftDefaultsUpdate,
 )
@@ -48,6 +54,69 @@ router = APIRouter(prefix="/businesses", tags=["businesses"])
 
 MANAGER_ROLES = {MembershipRole.owner, MembershipRole.admin, MembershipRole.manager}
 ADMIN_ROLES = {MembershipRole.owner, MembershipRole.admin}
+
+
+async def _business_read_with_effective_settings(
+    session: SessionDep,
+    *,
+    business: Business,
+) -> BusinessRead:
+    resolved_settings = await settings_service.effective_business_settings_payload(
+        session,
+        business=business,
+        as_of=datetime.now(timezone.utc),
+    )
+    return BusinessRead(
+        id=business.id,
+        name=business.name,
+        display_name=business.display_name,
+        slug=business.slug,
+        vertical=business.vertical,
+        primary_phone_e164=business.primary_phone_e164,
+        primary_email=business.primary_email,
+        timezone=business.timezone,
+        status=business.status,
+        settings=resolved_settings,
+        place_metadata=business.place_metadata,
+        created_at=business.created_at,
+        updated_at=business.updated_at,
+    )
+
+
+async def _location_read_with_effective_settings(
+    session: SessionDep,
+    *,
+    business: Business,
+    location: Location,
+) -> LocationRead:
+    resolved_settings = await settings_service.effective_location_settings_payload(
+        session,
+        business=business,
+        location=location,
+        as_of=datetime.now(timezone.utc),
+    )
+    return LocationRead(
+        id=location.id,
+        business_id=location.business_id,
+        name=location.name,
+        display_name=location.display_name,
+        slug=location.slug,
+        address_line_1=location.address_line_1,
+        address_line_2=location.address_line_2,
+        locality=location.locality,
+        region=location.region,
+        postal_code=location.postal_code,
+        country_code=location.country_code,
+        timezone=location.timezone,
+        latitude=location.latitude,
+        longitude=location.longitude,
+        google_place_id=location.google_place_id,
+        google_place_metadata=location.google_place_metadata,
+        is_active=location.is_active,
+        settings=resolved_settings,
+        created_at=location.created_at,
+        updated_at=location.updated_at,
+    )
 
 
 @router.get("", response_model=list[BusinessRead])
@@ -102,7 +171,7 @@ async def get_business(business_id: UUID, session: SessionDep, auth_ctx: AuthDep
     business = await businesses.get_business(session, business_id)
     if business is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
-    return business
+    return await _business_read_with_effective_settings(session, business=business)
 
 
 @router.patch("/{business_id}", response_model=BusinessRead)
@@ -119,7 +188,21 @@ async def update_business(
     if business is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
     try:
-        changes = await businesses.update_business_profile(session, business, payload)
+        changes = await businesses.update_business_profile(
+            session,
+            business,
+            payload,
+            actor_user_id=auth_ctx.user.id,
+        )
+    except settings_service.CompliancePolicyPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "business_compliance_policy_preview_stale",
+                "current_compliance_policy_hash": exc.current_compliance_policy_hash,
+                "current_compliance_settings": exc.current_compliance_settings.model_dump(),
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id)
@@ -139,7 +222,7 @@ async def update_business(
         )
         await session.commit()
         await session.refresh(business)
-    return business
+    return await _business_read_with_effective_settings(session, business=business)
 
 
 @router.get(
@@ -337,7 +420,18 @@ async def update_business_shift_defaults(
 async def list_locations(business_id: UUID, session: SessionDep, auth_ctx: AuthDep):
     if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
-    return await businesses.list_locations(session, business_id)
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    locations = await businesses.list_locations(session, business_id)
+    return [
+        await _location_read_with_effective_settings(
+            session,
+            business=business,
+            location=location,
+        )
+        for location in locations
+    ]
 
 
 @router.get("/{business_id}/locations/{location_id}", response_model=LocationRead)
@@ -357,7 +451,14 @@ async def get_location(
     location = await businesses.get_location(session, business_id, location_id)
     if location is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location_not_found")
-    return location
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    return await _location_read_with_effective_settings(
+        session,
+        business=business,
+        location=location,
+    )
 
 
 @router.post("/{business_id}/locations", response_model=LocationRead, status_code=status.HTTP_201_CREATED)
@@ -516,7 +617,17 @@ async def update_location_settings(
             business_id=business_id,
             location_id=location_id,
             payload=payload,
+            actor_user_id=auth_ctx.user.id,
         )
+    except settings_service.CompliancePolicyPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "location_compliance_policy_preview_stale",
+                "current_compliance_policy_hash": exc.current_compliance_policy_hash,
+                "current_compliance_settings": exc.current_compliance_settings.model_dump(),
+            },
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
@@ -532,10 +643,195 @@ async def update_location_settings(
         actor_membership_id=membership.id if membership is not None else None,
         ip_address=audit_service.request_client_ip(request),
         user_agent=audit_service.request_user_agent(request),
-        payload=payload.model_dump(exclude_unset=True),
+        payload=payload.model_dump(
+            exclude_unset=True,
+            exclude={"expected_compliance_policy_hash"},
+        ),
     )
     await session.commit()
     return settings_state
+
+
+@router.get(
+    "/{business_id}/compliance-policy-versions",
+    response_model=list[CompliancePolicyVersionRead],
+)
+async def list_business_compliance_policy_versions(
+    business_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    limit: int = 20,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=MANAGER_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_access_denied")
+    return await settings_service.list_compliance_policy_versions(
+        session,
+        business_id=business_id,
+        policy_scope="business",
+        limit=limit,
+    )
+
+
+@router.post(
+    "/{business_id}/compliance-policy-versions/{version_id}/restore",
+    response_model=CompliancePolicyVersionRead,
+)
+async def restore_business_compliance_policy_version(
+    business_id: UUID,
+    version_id: UUID,
+    payload: CompliancePolicyVersionRestoreWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_business_access(auth_ctx, business_id, allowed_roles=ADMIN_ROLES):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="business_admin_required")
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    try:
+        version = await settings_service.restore_compliance_policy_version(
+            session,
+            business=business,
+            policy_scope="business",
+            version_id=version_id,
+            actor_user_id=auth_ctx.user.id,
+            expected_current_policy_hash=payload.expected_current_policy_hash,
+            effective_at=payload.effective_at,
+            note=payload.note,
+        )
+    except settings_service.CompliancePolicyPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "business_compliance_policy_preview_stale",
+                "current_compliance_policy_hash": exc.current_compliance_policy_hash,
+                "current_compliance_settings": exc.current_compliance_settings.model_dump(),
+            },
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id)
+    await audit_service.append(
+        session,
+        event_name="business.compliance_policy_version.restored",
+        target_type="business",
+        target_id=business_id,
+        business_id=business_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "restored_version_id": str(version_id),
+            "new_version_id": str(version.id),
+            "effective_at": version.effective_at.isoformat(),
+            "policy_scope": "business",
+        },
+    )
+    await session.commit()
+    return settings_service.compliance_policy_version_read(version)
+
+
+@router.get(
+    "/{business_id}/locations/{location_id}/settings/compliance-policy-versions",
+    response_model=list[CompliancePolicyVersionRead],
+)
+async def list_location_compliance_policy_versions(
+    business_id: UUID,
+    location_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    limit: int = 20,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    return await settings_service.list_compliance_policy_versions(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+        policy_scope="location",
+        limit=limit,
+    )
+
+
+@router.post(
+    "/{business_id}/locations/{location_id}/settings/compliance-policy-versions/{version_id}/restore",
+    response_model=CompliancePolicyVersionRead,
+)
+async def restore_location_compliance_policy_version(
+    business_id: UUID,
+    location_id: UUID,
+    version_id: UUID,
+    payload: CompliancePolicyVersionRestoreWrite,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    request: Request,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=ADMIN_ROLES,
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="location_access_denied")
+    business = await businesses.get_business(session, business_id)
+    if business is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="business_not_found")
+    location = await businesses.get_location(session, business_id, location_id)
+    if location is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location_not_found")
+    try:
+        version = await settings_service.restore_compliance_policy_version(
+            session,
+            business=business,
+            location=location,
+            policy_scope="location",
+            version_id=version_id,
+            actor_user_id=auth_ctx.user.id,
+            expected_current_policy_hash=payload.expected_current_policy_hash,
+            effective_at=payload.effective_at,
+            note=payload.note,
+        )
+    except settings_service.CompliancePolicyPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "location_compliance_policy_preview_stale",
+                "current_compliance_policy_hash": exc.current_compliance_policy_hash,
+                "current_compliance_settings": exc.current_compliance_settings.model_dump(),
+            },
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    membership = auth_service.membership_for_scope(auth_ctx, business_id, location_id=location_id)
+    await audit_service.append(
+        session,
+        event_name="location.compliance_policy_version.restored",
+        target_type="location",
+        target_id=location_id,
+        business_id=business_id,
+        location_id=location_id,
+        actor_type=AuditActorType.user,
+        actor_user_id=auth_ctx.user.id,
+        actor_membership_id=membership.id if membership is not None else None,
+        ip_address=audit_service.request_client_ip(request),
+        user_agent=audit_service.request_user_agent(request),
+        payload={
+            "restored_version_id": str(version_id),
+            "new_version_id": str(version.id),
+            "effective_at": version.effective_at.isoformat(),
+            "policy_scope": "location",
+        },
+    )
+    await session.commit()
+    return settings_service.compliance_policy_version_read(version)
 
 
 @router.get(

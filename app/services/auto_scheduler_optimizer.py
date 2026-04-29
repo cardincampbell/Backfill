@@ -24,6 +24,7 @@ def optimize_schedule_inputs(
     rejections: list[dict[str, object]] = []
     candidate_considered_count = 0
     overtime_assignment_count = 0
+    compliance_blocked_candidate_count = 0
     assigned_hours_by_employee = {
         employee_id: _as_float(row.get("assigned_hours"), default=0.0)
         for employee_id, row in employees.items()
@@ -51,11 +52,19 @@ def optimize_schedule_inputs(
                     shift_id=shift_id,
                     employee_id=employee_id,
                 ),
+                compliance_evaluation=_compliance_evaluation_for_shift_employee(
+                    inputs.compliance_payload,
+                    shift_id=shift_id,
+                    employee_id=employee_id,
+                ),
                 policy_labor_rule_mode=inputs.policy_payload.labor_rule_mode,
+                policy_compliance_rule_mode=inputs.policy_payload.compliance_rule_mode,
                 assigned_hours=assigned_hours_by_employee.get(employee_id, 0.0),
             )
             candidate_considered_count += 1
             if score_payload["qualified"] is False:
+                if score_payload["would_violate_compliance"]:
+                    compliance_blocked_candidate_count += 1
                 shift_rejections.append(
                     {
                         "shift_id": shift_id,
@@ -96,6 +105,10 @@ def optimize_schedule_inputs(
                     "shift_location_id": shift["location_id"],
                     "reliability_score": best_payload["reliability_score"],
                     "labor_penalty": best_payload["labor_penalty"],
+                    "compliance_penalty": best_payload["compliance_penalty"],
+                    "compliance_status": best_payload["compliance_status"],
+                    "blocking_rule_codes": best_payload["blocking_rule_codes"],
+                    "warning_rule_codes": best_payload["warning_rule_codes"],
                     "fairness_adjustment": best_payload["fairness_adjustment"],
                     "scoring_components": best_payload["scoring_components"],
                 },
@@ -149,6 +162,10 @@ def optimize_schedule_inputs(
             "overtime_payload": {
                 "overtime_assignment_count": overtime_assignment_count,
                 "labor_rule_mode": inputs.policy_payload.labor_rule_mode,
+            },
+            "compliance_payload": {
+                "compliance_rule_mode": inputs.policy_payload.compliance_rule_mode,
+                "blocked_candidate_count": compliance_blocked_candidate_count,
             },
             "coverage_payload": {
                 "assigned_shift_ids": [assignment["shift_id"] for assignment in assignments],
@@ -261,6 +278,28 @@ def _labor_projection_for_shift_employee(
     return _labor_projection_by_employee(payload).get(employee_id)
 
 
+def _compliance_evaluation_for_shift_employee(
+    payload: Mapping[str, object],
+    *,
+    shift_id: UUID,
+    employee_id: UUID,
+) -> dict[str, object] | None:
+    raw_shift_mapping = payload.get("employees_by_shift")
+    if isinstance(raw_shift_mapping, Mapping):
+        raw_shift_payload = raw_shift_mapping.get(str(shift_id)) or raw_shift_mapping.get(shift_id)
+        if isinstance(raw_shift_payload, Mapping):
+            raw_evaluation = raw_shift_payload.get(str(employee_id)) or raw_shift_payload.get(employee_id)
+            if isinstance(raw_evaluation, Mapping):
+                return dict(raw_evaluation)
+    mapping = payload.get("employees")
+    if not isinstance(mapping, Mapping):
+        return None
+    raw_evaluation = mapping.get(str(employee_id)) or mapping.get(employee_id)
+    if isinstance(raw_evaluation, Mapping):
+        return dict(raw_evaluation)
+    return None
+
+
 def _reliability_index(
     employee_snapshots: list[ReliabilityEmployeeSnapshotPayload],
 ) -> dict[UUID, ReliabilityEmployeeSnapshotPayload]:
@@ -273,7 +312,9 @@ def _candidate_score_payload(
     employee: Mapping[str, object],
     reliability_snapshot: ReliabilityEmployeeSnapshotPayload | None,
     labor_projection: Mapping[str, object] | None,
+    compliance_evaluation: Mapping[str, object] | None,
     policy_labor_rule_mode: str,
+    policy_compliance_rule_mode: str,
     assigned_hours: float,
 ) -> dict[str, object]:
     rejection_reason_codes: list[str] = []
@@ -292,9 +333,16 @@ def _candidate_score_payload(
         if reliability_snapshot is not None
         else 0.0
     )
+    compliance_status = str((compliance_evaluation or {}).get("status") or "clear").strip().lower()
+    blocking_rule_codes = list((compliance_evaluation or {}).get("blocking_rule_codes") or [])
+    warning_rule_codes = list((compliance_evaluation or {}).get("warning_rule_codes") or [])
+    would_violate_compliance = bool((compliance_evaluation or {}).get("would_block"))
     would_trigger_overtime = bool((labor_projection or {}).get("would_trigger_overtime"))
     if would_trigger_overtime and policy_labor_rule_mode == "hard_block":
         rejection_reason_codes.append("labor_rule_hard_block")
+    if would_violate_compliance and policy_compliance_rule_mode == "hard_block":
+        rejection_reason_codes.append("compliance_rule_hard_block")
+        rejection_reason_codes.extend(blocking_rule_codes)
 
     qualified = not rejection_reason_codes
     fairness_adjustment = _fairness_adjustment(
@@ -302,11 +350,21 @@ def _candidate_score_payload(
         target_hours=_as_float(employee.get("target_hours"), default=0.0),
     )
     labor_penalty = -20.0 if would_trigger_overtime and policy_labor_rule_mode == "soft_penalty" else 0.0
+    compliance_penalty = (
+        -15.0
+        if (
+            warning_rule_codes
+            and any(code != "overtime_projection" for code in warning_rule_codes)
+            and policy_compliance_rule_mode == "soft_penalty"
+        )
+        else 0.0
+    )
     total_score = (
         (reliability_score * 100.0)
         + (reliability_confidence * 10.0)
         + fairness_adjustment
         + labor_penalty
+        + compliance_penalty
     )
 
     return {
@@ -316,6 +374,11 @@ def _candidate_score_payload(
         "reliability_confidence": round(reliability_confidence, 4),
         "fairness_adjustment": round(fairness_adjustment, 4),
         "labor_penalty": round(labor_penalty, 4),
+        "compliance_penalty": round(compliance_penalty, 4),
+        "compliance_status": compliance_status,
+        "blocking_rule_codes": blocking_rule_codes,
+        "warning_rule_codes": warning_rule_codes,
+        "would_violate_compliance": would_violate_compliance,
         "would_trigger_overtime": would_trigger_overtime,
         "total_score": round(total_score, 4),
         "scoring_components": {
@@ -323,6 +386,7 @@ def _candidate_score_payload(
             "confidence": round(reliability_confidence * 10.0, 4),
             "fairness": round(fairness_adjustment, 4),
             "labor_penalty": round(labor_penalty, 4),
+            "compliance_penalty": round(compliance_penalty, 4),
         },
     }
 

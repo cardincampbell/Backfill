@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional, Sequence
 from uuid import UUID
 
@@ -309,12 +310,14 @@ async def update_business_profile(
     session: AsyncSession,
     business: Business,
     payload: BusinessProfileUpdate,
+    *,
+    actor_user_id: UUID | None = None,
 ) -> dict[str, object]:
     display_name = payload.display_name.strip()
-    timezone = payload.timezone.strip()
+    timezone_name = payload.timezone.strip()
     if not display_name:
         raise ValueError("business_name_required")
-    if not timezone:
+    if not timezone_name:
         raise ValueError("timezone_required")
 
     vertical = _normalize_optional(payload.vertical)
@@ -357,9 +360,9 @@ async def update_business_profile(
     if business.primary_email != primary_email:
         business.primary_email = primary_email
         changes["primary_email"] = primary_email
-    if business.timezone != timezone:
-        business.timezone = timezone
-        changes["timezone"] = timezone
+    if business.timezone != timezone_name:
+        business.timezone = timezone_name
+        changes["timezone"] = timezone_name
 
     current_company_address = _normalize_optional(settings.get("company_profile_address"))
     if current_company_address != company_address:
@@ -462,6 +465,87 @@ async def update_business_profile(
             settings["reliability_coaching"] = reliability_coaching_settings
         else:
             settings.pop("reliability_coaching", None)
+
+    if "compliance" in payload.model_fields_set:
+        from app.services import settings as settings_service
+
+        reference_time = datetime.now(timezone.utc)
+        current_context = await settings_service.resolve_business_compliance_policy_context(
+            session,
+            business=business,
+            as_of=reference_time,
+        )
+        expected_hash = payload.expected_compliance_policy_hash
+        if expected_hash is not None:
+            current_hash = (
+                current_context.policy_hash
+                if current_context is not None
+                else settings_service.compliance_policy_hash({})
+            )
+            if current_hash != expected_hash:
+                raise settings_service.CompliancePolicyPreviewStaleError(
+                    current_compliance_policy_hash=current_hash,
+                    current_compliance_settings=(
+                        current_context.settings
+                        if current_context is not None
+                        else settings_service.read_compliance_settings({})
+                    ),
+                )
+        next_compliance_settings = (
+            settings_service.read_compliance_settings({}).model_dump()
+            if payload.compliance is None
+            else settings_service.merge_compliance_policy_update(
+                current_context.settings.model_dump()
+                if current_context is not None
+                else {},
+                payload.compliance,
+            )
+        )
+        effective_at = payload.compliance_effective_at or reference_time
+        current_settings_payload = (
+            current_context.settings.model_dump()
+            if current_context is not None
+            else settings_service.read_compliance_settings({}).model_dump()
+        )
+        effective_context = current_context
+        if (
+            next_compliance_settings != current_settings_payload
+            or payload.compliance_effective_at is not None
+        ):
+            created_version = await settings_service.create_compliance_policy_version(
+                session,
+                business=business,
+                policy_scope="business",
+                settings_payload=next_compliance_settings,
+                effective_at=effective_at,
+                created_by_user_id=actor_user_id,
+            )
+            if effective_at <= reference_time:
+                effective_context = settings_service._context_from_version(created_version)
+        settings = settings_service.apply_compliance_policy_context_to_settings(
+            settings,
+            context=effective_context,
+        )
+        changes["compliance"] = next_compliance_settings
+        changes["compliance_effective_at"] = effective_at.isoformat()
+
+    if "compliance_payroll_export" in payload.model_fields_set:
+        from app.services import settings as settings_service
+
+        if payload.compliance_payroll_export is None:
+            if "compliance_payroll_export" in settings:
+                settings.pop("compliance_payroll_export", None)
+                changes["compliance_payroll_export"] = None
+        else:
+            next_payroll_export_settings = (
+                settings_service.merge_compliance_payroll_export_update(
+                    settings.get("compliance_payroll_export"),
+                    payload.compliance_payroll_export,
+                )
+            )
+            if settings.get("compliance_payroll_export") != next_payroll_export_settings:
+                settings["compliance_payroll_export"] = next_payroll_export_settings
+                changes["compliance_payroll_export"] = next_payroll_export_settings
 
     if settings != current_settings:
         business.settings = settings

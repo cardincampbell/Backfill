@@ -6,8 +6,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.common import CoverageAttemptStatus, ShiftStatus
+from app.models.common import (
+    ComplianceOverrideArtifactStatus,
+    ComplianceOverrideArtifactType,
+    CoverageAttemptStatus,
+    ShiftStatus,
+)
 from app.models.business import Location
+from app.models.compliance import ComplianceOverrideArtifact
 from app.models.scheduling import Shift
 from app.models.workforce import Employee
 from app.schemas.coverage import CoverageCandidatePreview
@@ -133,6 +139,7 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
                 "policy_version": "coverage_policy_v1",
                 "snapshot_generated_at": "2026-04-17T12:00:00+00:00",
                 "inputs_version": "runtime_projection_inputs_v1",
+                "compliance": {"status": "warning"},
             },
             availability_snapshot={},
         ),
@@ -143,7 +150,7 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
             primary_location_id=uuid4(),
             rank=2,
             score=80.0,
-            scoring_factors={"score_snapshot": {"status": "refreshed"}},
+            scoring_factors={"score_snapshot": {"status": "refreshed"}, "compliance": {"status": "block"}},
             availability_snapshot={},
         ),
         CoverageCandidatePreview(
@@ -166,6 +173,9 @@ def test_build_runtime_projection_metadata_summarizes_candidate_snapshot_statuse
     assert metadata["score_snapshots"]["fresh"] == 1
     assert metadata["score_snapshots"]["refreshed"] == 1
     assert metadata["score_snapshots"]["unknown"] == 1
+    assert metadata["compliance"]["resolved"] == 2
+    assert metadata["compliance"]["warning"] == 1
+    assert metadata["compliance"]["blocked"] == 1
     assert metadata["policy"]["policy_version"] == "coverage_policy_v1"
     assert metadata["policy"]["inputs_version"] == "runtime_projection_inputs_v1"
 
@@ -384,6 +394,225 @@ async def test_build_outreach_guardrail_snapshots_downranks_for_overtime_risk(mo
     assert guardrails["overtime_risk"]["multiplier"] < 1.0
     assert guardrails["overtime_projection"]["profile_code"] == "us_ca_general_nonexempt"
     assert guardrails["overall_multiplier"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_blocks_minimum_rest_violation(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="Clopening Risk",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    shift.location = Location(
+        id=shift.location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        region="NY",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [],
+        [],
+        [
+            (
+                employee.id,
+                uuid4(),
+                "completed",
+                now - timedelta(hours=6),
+                now + timedelta(hours=1),
+                "completed",
+            ),
+        ],
+    ]
+
+    profile = _make_profile(code="us_nyc_fast_food")
+    profile = labor_rules.LaborRuleProfileSnapshot(
+        profile_id=profile.profile_id,
+        code=profile.code,
+        jurisdiction_code=profile.jurisdiction_code,
+        display_name=profile.display_name,
+        overtime_mode=profile.overtime_mode,
+        daily_ot_threshold_hours=profile.daily_ot_threshold_hours,
+        weekly_ot_threshold_hours=profile.weekly_ot_threshold_hours,
+        double_time_threshold_hours=profile.double_time_threshold_hours,
+        consecutive_hours_threshold_hours=profile.consecutive_hours_threshold_hours,
+        industry_profile_code=profile.industry_profile_code,
+        rules_json={
+            **profile.rules_json,
+            "minimum_rest_hours": 11,
+            "written_consent_allowed": True,
+            "clopening_premium_cents": 10000,
+            "rest_window_rule_code": "clopening_restricted",
+        },
+        effective_start_date=profile.effective_start_date,
+        effective_end_date=profile.effective_end_date,
+        source_urls=profile.source_urls,
+        source_version=profile.source_version,
+        source_hash=profile.source_hash,
+        version_id=profile.version_id,
+        version_no=profile.version_no,
+        payload_hash=profile.payload_hash,
+        payload_json=profile.payload_json,
+    )
+
+    async def fake_profile_loader(*_args, **_kwargs):
+        return profile
+
+    monkeypatch.setattr(runtime_projections, "_load_labor_rule_profile_for_shift", fake_profile_loader)
+
+    snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    guardrails = snapshots[employee.id]
+    assert guardrails["hard_excluded"] is True
+    assert guardrails["overall_multiplier"] == 0.0
+    assert guardrails["compliance"]["status"] == "block"
+    assert guardrails["compliance"]["blocking_rule_codes"] == ["clopening_restricted"]
+
+
+@pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_applies_written_consent_override(monkeypatch):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="Clopening Override",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    shift.location = Location(
+        id=shift.location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        region="NY",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [],
+        [],
+        [
+            (
+                employee.id,
+                uuid4(),
+                "completed",
+                now - timedelta(hours=6),
+                now + timedelta(hours=1),
+                "completed",
+            ),
+        ],
+    ]
+
+    profile = _make_profile(code="us_nyc_fast_food")
+    profile = labor_rules.LaborRuleProfileSnapshot(
+        profile_id=profile.profile_id,
+        code=profile.code,
+        jurisdiction_code=profile.jurisdiction_code,
+        display_name=profile.display_name,
+        overtime_mode=profile.overtime_mode,
+        daily_ot_threshold_hours=profile.daily_ot_threshold_hours,
+        weekly_ot_threshold_hours=profile.weekly_ot_threshold_hours,
+        double_time_threshold_hours=profile.double_time_threshold_hours,
+        consecutive_hours_threshold_hours=profile.consecutive_hours_threshold_hours,
+        industry_profile_code=profile.industry_profile_code,
+        rules_json={
+            **profile.rules_json,
+            "minimum_rest_hours": 11,
+            "written_consent_allowed": True,
+            "clopening_premium_cents": 10000,
+            "rest_window_rule_code": "clopening_restricted",
+        },
+        effective_start_date=profile.effective_start_date,
+        effective_end_date=profile.effective_end_date,
+        source_urls=profile.source_urls,
+        source_version=profile.source_version,
+        source_hash=profile.source_hash,
+        version_id=profile.version_id,
+        version_no=profile.version_no,
+        payload_hash=profile.payload_hash,
+        payload_json=profile.payload_json,
+    )
+    artifact = ComplianceOverrideArtifact(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=shift.location_id,
+        shift_id=shift.id,
+        employee_id=employee.id,
+        rule_code="clopening_restricted",
+        artifact_type=ComplianceOverrideArtifactType.written_consent,
+        status=ComplianceOverrideArtifactStatus.approved,
+        engine_version="deterministic_compliance_engine_v1",
+        approved_at=now,
+        expires_at=now + timedelta(hours=12),
+        note="Written consent collected.",
+        reason_codes=["minimum_rest_window_violation"],
+        artifact_payload={},
+    )
+
+    async def fake_profile_loader(*_args, **_kwargs):
+        return profile
+
+    async def fake_active_artifacts(*_args, **_kwargs):
+        return {employee.id: [artifact]}
+
+    monkeypatch.setattr(runtime_projections, "_load_labor_rule_profile_for_shift", fake_profile_loader)
+    monkeypatch.setattr(
+        runtime_projections.compliance_overrides,
+        "active_artifacts_for_shift_employees",
+        fake_active_artifacts,
+    )
+
+    snapshots = await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    guardrails = snapshots[employee.id]
+    assert guardrails["hard_excluded"] is False
+    assert guardrails["overall_multiplier"] > 0.0
+    assert guardrails["compliance"]["status"] == "warning"
+    assert guardrails["compliance"]["override_applied"] is True
+    assert guardrails["compliance"]["override_artifact_id"] == str(artifact.id)
 
 
 @pytest.mark.asyncio

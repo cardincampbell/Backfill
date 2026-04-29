@@ -45,6 +45,7 @@ def _inputs(
     reliability_scores: dict,
     eligible_by_shift: dict,
     labor_projection: dict | None = None,
+    compliance_payload: dict | None = None,
 ) -> ScheduleRunInputContract:
     if isinstance(labor_projection, dict) and (
         "employees" in labor_projection or "employees_by_shift" in labor_projection
@@ -58,6 +59,7 @@ def _inputs(
         availability_payload={"eligible_employee_ids_by_shift": eligible_by_shift},
         policy_payload=policy,
         labor_payload=labor_payload,
+        compliance_payload=compliance_payload or {},
         reliability_payload=ReliabilitySnapshotPayload(
             generated_at=datetime(2026, 4, 18, 18, 0, tzinfo=timezone.utc),
             snapshot_hash="sha256:reliability",
@@ -264,3 +266,64 @@ def test_optimizer_prefers_shift_specific_labor_projection_over_employee_fallbac
     assert result["assignments"][0]["employee_id"] == employee_b
     rejected = next(item for item in result["rejections"] if item["employee_id"] == employee_a)
     assert "labor_rule_hard_block" in rejected["rejection_reason_codes"]
+
+
+def test_optimizer_blocks_compliance_violations_even_when_reliability_is_higher():
+    shift_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    blocked_employee = uuid4()
+    eligible_employee = uuid4()
+
+    result = auto_scheduler_optimizer.optimize_schedule_inputs(
+        _inputs(
+            policy=SchedulePolicyPayload(compliance_rule_mode="hard_block"),
+            shifts=[
+                {
+                    "shift_id": str(shift_id),
+                    "location_id": str(location_id),
+                    "role_id": str(role_id),
+                    "starts_at": "2026-04-21T16:00:00+00:00",
+                    "ends_at": "2026-04-21T22:00:00+00:00",
+                }
+            ],
+            employees=[
+                {
+                    "employee_id": str(blocked_employee),
+                    "role_ids": [str(role_id)],
+                    "location_ids": [str(location_id)],
+                },
+                {
+                    "employee_id": str(eligible_employee),
+                    "role_ids": [str(role_id)],
+                    "location_ids": [str(location_id)],
+                },
+            ],
+            reliability_scores={blocked_employee: 0.95, eligible_employee: 0.75},
+            eligible_by_shift={str(shift_id): [str(blocked_employee), str(eligible_employee)]},
+            compliance_payload={
+                "employees_by_shift": {
+                    str(shift_id): {
+                        str(blocked_employee): {
+                            "status": "block",
+                            "would_block": True,
+                            "blocking_rule_codes": ["minimum_rest_window"],
+                            "warning_rule_codes": [],
+                        },
+                        str(eligible_employee): {
+                            "status": "clear",
+                            "would_block": False,
+                            "blocking_rule_codes": [],
+                            "warning_rule_codes": [],
+                        },
+                    }
+                }
+            },
+        )
+    )
+
+    assert result["assignments"][0]["employee_id"] == eligible_employee
+    rejected = next(item for item in result["rejections"] if item["employee_id"] == blocked_employee)
+    assert "compliance_rule_hard_block" in rejected["rejection_reason_codes"]
+    assert "minimum_rest_window" in rejected["rejection_reason_codes"]
+    assert result["explanation"]["compliance_payload"]["blocked_candidate_count"] == 1

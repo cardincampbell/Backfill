@@ -155,6 +155,12 @@ class ScheduleRunInput(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=text("'{}'::jsonb"),
         default=dict,
     )
+    compliance_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
     reliability_payload: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
@@ -342,6 +348,12 @@ class ScheduleRunExplanation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=dict,
     )
     overtime_payload: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+        default=dict,
+    )
+    compliance_payload: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
         server_default=text("'{}'::jsonb"),

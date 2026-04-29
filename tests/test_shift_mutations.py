@@ -9,8 +9,11 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_auth_context, get_db_session
 from app.main import app
 from app.models.business import Business, Location, LocationRole, Role
+from app.models.compliance import ComplianceOverrideArtifact
 from app.models.common import (
     AssignmentStatus,
+    ComplianceOverrideArtifactStatus,
+    ComplianceOverrideArtifactType,
     CoverageAttemptStatus,
     CoverageCaseStatus,
     CoverageRunStatus,
@@ -28,8 +31,9 @@ from app.models.common import (
 from app.models.coverage import AuditLog, CoverageCase, CoverageCaseRun, CoverageContactAttempt, CoverageOffer, OutboxEvent
 from app.models.identity import Membership, Session, User
 from app.models.events import PlatformEvent
-from app.models.scheduling import Shift, ShiftAssignment
+from app.models.scheduling import Shift, ShiftAssignment, ShiftBreak, ShiftSegment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
+from app.schemas.compliance import ShiftComplianceOverrideCreate
 from app.services.auth import AuthContext
 from app.services import scheduling
 
@@ -55,6 +59,31 @@ class FakeSchedulingSession:
             obj.updated_at = now
         self.added.append(obj)
         self.get_map[(type(obj), obj.id)] = obj
+        if isinstance(obj, Shift):
+            if getattr(obj, "lifecycle_status", None) is None:
+                obj.lifecycle_status = ShiftLifecycleStatus.draft
+            if getattr(obj, "staffing_status", None) is None:
+                obj.staffing_status = ShiftStaffingStatus.open
+            if getattr(obj, "seats_filled", None) is None:
+                obj.seats_filled = 0
+            if getattr(obj, "shift_metadata", None) is None:
+                obj.shift_metadata = {}
+            for segment in obj.segments or []:
+                if getattr(segment, "id", None) is None:
+                    segment.id = uuid4()
+                if getattr(segment, "created_at", None) is None:
+                    segment.created_at = now
+                if getattr(segment, "updated_at", None) is None:
+                    segment.updated_at = now
+                self.get_map[(type(segment), segment.id)] = segment
+                for shift_break in segment.breaks or []:
+                    if getattr(shift_break, "id", None) is None:
+                        shift_break.id = uuid4()
+                    if getattr(shift_break, "created_at", None) is None:
+                        shift_break.created_at = now
+                    if getattr(shift_break, "updated_at", None) is None:
+                        shift_break.updated_at = now
+                    self.get_map[(type(shift_break), shift_break.id)] = shift_break
 
     async def get(self, model, object_id, **_kwargs):
         self.get_kwargs.append((model, object_id, dict(_kwargs)))
@@ -78,6 +107,9 @@ class FakeSchedulingSession:
 
             def all(self):
                 return list(self._values)
+
+            def first(self):
+                return self._values[0] if self._values else None
 
         class _Result:
             def __init__(self, values):
@@ -344,6 +376,441 @@ def test_create_shift_route_rejects_end_before_start():
         assert response.status_code == 400
         assert response.json() == {"detail": "shift_end_must_be_after_start"}
         assert all(not isinstance(entry, Shift) for entry in fake_session.added)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_shift_persists_structured_segments_and_breaks():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.get_map[(Role, role_id)] = role
+    fake_session.scalar_queue = [location_role]
+
+    shift = await scheduling.create_shift(
+        fake_session,
+        business_id,
+        scheduling.ShiftCreate(
+            location_id=location_id,
+            role_id=role_id,
+            timezone="America/Los_Angeles",
+            starts_at=now,
+            ends_at=now + timedelta(hours=8),
+            segments=[
+                scheduling.ShiftSegmentWrite(
+                    segment_type="work",
+                    starts_at=now,
+                    ends_at=now + timedelta(hours=8),
+                    segment_metadata={"label": "main"},
+                    breaks=[
+                        scheduling.ShiftBreakWrite(
+                            break_type="meal",
+                            is_paid=False,
+                            starts_at=now + timedelta(hours=4),
+                            ends_at=now + timedelta(hours=4, minutes=30),
+                            notes="Lunch",
+                            break_metadata={"waived": False},
+                        ),
+                        scheduling.ShiftBreakWrite(
+                            break_type="rest",
+                            is_paid=True,
+                            starts_at=now + timedelta(hours=6),
+                            ends_at=now + timedelta(hours=6, minutes=10),
+                            notes=None,
+                            break_metadata={},
+                        ),
+                    ],
+                )
+            ],
+        ),
+    )
+
+    assert len(shift.segments) == 1
+    assert isinstance(shift.segments[0], ShiftSegment)
+    assert shift.segments[0].sequence_no == 1
+    assert shift.segments[0].segment_metadata["label"] == "main"
+    assert len(shift.segments[0].breaks) == 2
+    assert isinstance(shift.segments[0].breaks[0], ShiftBreak)
+    assert shift.segments[0].breaks[0].sequence_no == 1
+    assert shift.segments[0].breaks[0].break_type == "meal"
+    assert shift.segments[0].breaks[1].break_type == "rest"
+    assert len(shift.shift_metadata["compliance_segments"]) == 1
+    assert shift.shift_metadata["compliance_segments"][0]["breaks"][0]["break_type"] == "meal"
+
+
+@pytest.mark.asyncio
+async def test_create_shift_rejects_break_outside_segment():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.get_map[(Role, role_id)] = role
+    fake_session.scalar_queue = [location_role]
+
+    with pytest.raises(ValueError, match="shift_break_outside_segment"):
+        await scheduling.create_shift(
+            fake_session,
+            business_id,
+            scheduling.ShiftCreate(
+                location_id=location_id,
+                role_id=role_id,
+                timezone="America/Los_Angeles",
+                starts_at=now,
+                ends_at=now + timedelta(hours=8),
+                segments=[
+                    scheduling.ShiftSegmentWrite(
+                        segment_type="work",
+                        starts_at=now,
+                        ends_at=now + timedelta(hours=8),
+                        breaks=[
+                            scheduling.ShiftBreakWrite(
+                                break_type="meal",
+                                is_paid=False,
+                                starts_at=now + timedelta(hours=8, minutes=5),
+                                ends_at=now + timedelta(hours=8, minutes=35),
+                            )
+                        ],
+                    )
+                ],
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_shift_replaces_structured_segments():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.segments = [
+        ShiftSegment(
+            id=uuid4(),
+            shift_id=shift_id,
+            sequence_no=1,
+            segment_type="work",
+            starts_at=now,
+            ends_at=now + timedelta(hours=8),
+            segment_metadata={"label": "original"},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    updated = await scheduling.update_shift(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.ShiftUpdate(
+            segments=[
+                scheduling.ShiftSegmentWrite(
+                    segment_type="work",
+                    starts_at=now,
+                    ends_at=now + timedelta(hours=3),
+                    segment_metadata={"label": "morning"},
+                    breaks=[
+                        scheduling.ShiftBreakWrite(
+                            break_type="rest",
+                            is_paid=True,
+                            starts_at=now + timedelta(hours=2),
+                            ends_at=now + timedelta(hours=2, minutes=10),
+                        )
+                    ],
+                ),
+                scheduling.ShiftSegmentWrite(
+                    segment_type="work",
+                    starts_at=now + timedelta(hours=4),
+                    ends_at=now + timedelta(hours=8),
+                    segment_metadata={"label": "evening"},
+                    breaks=[],
+                ),
+            ]
+        ),
+    )
+
+    assert updated is shift
+    assert len(updated.segments) == 2
+    assert updated.segments[0].segment_metadata["label"] == "morning"
+    assert updated.segments[0].breaks[0].break_type == "rest"
+    assert updated.segments[1].segment_metadata["label"] == "evening"
+    assert len(updated.shift_metadata["compliance_segments"]) == 2
+    assert updated.shift_metadata["compliance_segments"][0]["segment_metadata"]["label"] == "morning"
+
+
+@pytest.mark.asyncio
+async def test_update_shift_clears_structure_snapshot_when_segments_are_removed():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={
+            "compliance_segments": [
+                {
+                    "segment_type": "work",
+                    "starts_at": now.isoformat(),
+                    "ends_at": (now + timedelta(hours=8)).isoformat(),
+                    "segment_metadata": {},
+                    "breaks": [],
+                }
+            ]
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    shift.segments = [
+        ShiftSegment(
+            id=uuid4(),
+            shift_id=shift_id,
+            sequence_no=1,
+            segment_type="work",
+            starts_at=now,
+            ends_at=now + timedelta(hours=8),
+            segment_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    updated = await scheduling.update_shift(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.ShiftUpdate(segments=[]),
+    )
+
+    assert updated is shift
+    assert updated.segments == []
+    assert "compliance_segments" not in updated.shift_metadata
+
+
+def test_create_shift_route_returns_segments_when_provided():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.get_map[(Role, role_id)] = role
+    fake_session.scalar_queue = [location_role]
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts",
+            json={
+                "location_id": str(location_id),
+                "role_id": str(role_id),
+                "source_system": "backfill_native",
+                "timezone": "America/Los_Angeles",
+                "starts_at": now.isoformat(),
+                "ends_at": (now + timedelta(hours=8)).isoformat(),
+                "seats_requested": 1,
+                "requires_manager_approval": False,
+                "premium_cents": 0,
+                "notes": None,
+                "shift_metadata": {},
+                "segments": [
+                    {
+                        "segment_type": "work",
+                        "starts_at": now.isoformat(),
+                        "ends_at": (now + timedelta(hours=8)).isoformat(),
+                        "segment_metadata": {"label": "main"},
+                        "breaks": [
+                            {
+                                "break_type": "meal",
+                                "is_paid": False,
+                                "starts_at": (now + timedelta(hours=4)).isoformat(),
+                                "ends_at": (now + timedelta(hours=4, minutes=30)).isoformat(),
+                                "notes": "Lunch",
+                                "break_metadata": {"waived": False},
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert len(payload["segments"]) == 1
+        assert payload["segments"][0]["segment_type"] == "work"
+        assert payload["segments"][0]["segment_metadata"]["label"] == "main"
+        assert payload["segments"][0]["breaks"][0]["break_type"] == "meal"
+        assert payload["segments"][0]["breaks"][0]["notes"] == "Lunch"
     finally:
         app.dependency_overrides.clear()
 
@@ -801,8 +1268,313 @@ def test_update_shift_assignment_conflict_tolerates_unloaded_employee_relation()
         app.dependency_overrides.clear()
 
 
+def test_update_shift_assignment_route_returns_compliance_review():
+    fake_session = FakeSchedulingSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    async def fake_set_shift_assignment(*_args, **_kwargs):
+        raise scheduling.ShiftAssignmentComplianceError(
+            summary={
+                "selected_assignment_count": 1,
+                "clear_assignment_count": 0,
+                "warning_assignment_count": 0,
+                "blocked_assignment_count": 1,
+                "override_applied_count": 0,
+                "override_eligible_warning_count": 1,
+                "premium_total_cents": 0,
+                "unresolved_premium_rule_count": 0,
+                "unresolved_premium_rule_codes": [],
+                "warning_rule_codes": [],
+                "override_eligible_artifact_types": ["written_consent"],
+                "warning_shift_ids": [],
+                "blocked_shift_ids": [str(shift_id)],
+                "override_eligible_shift_ids": [str(shift_id)],
+            },
+            review_items=[
+                {
+                    "assignment_id": None,
+                    "shift_id": shift_id,
+                    "employee_id": employee_id,
+                    "status": "block",
+                    "blocking_rule_codes": ["clopening_restricted"],
+                    "warning_rule_codes": [],
+                    "premium_total_cents": 0,
+                    "unresolved_premium_rule_codes": [],
+                    "override_applied": False,
+                    "override_artifact_id": None,
+                    "override_eligible_artifact_types": ["written_consent"],
+                    "issues": [
+                        {
+                            "rule_code": "clopening_restricted",
+                            "status": "block",
+                            "reason_codes": ["written_consent_required"],
+                            "premium_required": False,
+                            "premium_type": None,
+                            "premium_cents": 0,
+                            "unresolved_premium": False,
+                            "would_block": True,
+                            "artifact_type_allowed": "written_consent",
+                            "override_applied": False,
+                            "override_artifact_id": None,
+                        }
+                    ],
+                }
+            ],
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.set_shift_assignment
+    scheduling.set_shift_assignment = fake_set_shift_assignment
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.patch(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/assignment",
+            json={
+                "employee_id": str(employee_id),
+                "source": "scheduler_ui",
+                "expected_assignment_id": None,
+            },
+        )
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["detail"]["code"] == "assignment_compliance_blocked"
+        assert payload["detail"]["summary"]["blocked_assignment_count"] == 1
+        assert payload["detail"]["review_items"][0]["shift_id"] == str(shift_id)
+        assert payload["detail"]["review_items"][0]["issues"][0]["artifact_type_allowed"] == "written_consent"
+    finally:
+        scheduling.set_shift_assignment = original
+        app.dependency_overrides.clear()
+
+
+def test_create_shift_compliance_override_route_returns_artifact_and_audits():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    artifact_id = uuid4()
+
+    artifact = ComplianceOverrideArtifact(
+        id=artifact_id,
+        business_id=business_id,
+        location_id=location_id,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        rule_code="clopening_restricted",
+        artifact_type=ComplianceOverrideArtifactType.written_consent,
+        status=ComplianceOverrideArtifactStatus.approved,
+        engine_version="deterministic_compliance_engine_v1",
+        approved_at=now,
+        expires_at=now + timedelta(hours=6),
+        note="Written consent captured.",
+        reason_codes=["minimum_rest_window_violation"],
+        artifact_payload={"evidence": {"channel": "manager_ui"}},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def fake_create_override(*_args, **_kwargs):
+        return artifact
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.create_shift_compliance_override_artifact
+    scheduling.create_shift_compliance_override_artifact = fake_create_override
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/compliance-overrides",
+            json={
+                "employee_id": str(employee_id),
+                "artifact_type": "written_consent",
+                "rule_code": "clopening_restricted",
+                "note": "Written consent captured.",
+                "artifact_payload": {"channel": "manager_ui"},
+            },
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["id"] == str(artifact_id)
+        assert payload["rule_code"] == "clopening_restricted"
+        assert any(
+            isinstance(entry, AuditLog)
+            and entry.event_name == "shift.compliance_override_created"
+            for entry in fake_session.added
+        )
+    finally:
+        scheduling.create_shift_compliance_override_artifact = original
+        app.dependency_overrides.clear()
+
+
 @pytest.mark.asyncio
-async def test_set_shift_assignment_reassigns_and_cancels_active_automation():
+async def test_create_shift_compliance_override_artifact_accepts_meal_waiver(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        name="Line Cook",
+        code="line_cook",
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Operator",
+        phone_e164="+15555550155",
+        status=EmployeeStatus.active,
+        reliability_score=0,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            employee_id=employee_id,
+            role_id=role_id,
+            is_primary=True,
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_roles[0].role = role
+    employee.employee_locations = [
+        EmployeeLocation(
+            employee_id=employee_id,
+            location_id=location_id,
+            access_level="approved",
+            is_primary=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations[0].location = location
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=5, minutes=30),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = []
+    shift.coverage_cases = []
+
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Employee, employee_id)] = employee
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        base = {
+            "status": "warning",
+            "blocking_rule_codes": [],
+            "warning_rule_codes": ["meal_break_first_window"],
+            "premium_rule_codes": ["meal_break_first_window"],
+            "premium_total_cents": 0,
+            "premium_components": [],
+            "unresolved_premium_rule_codes": ["meal_break_first_window"],
+            "would_block": False,
+            "requires_override": False,
+            "profile_code": "ca_restaurant_core",
+            "profile_version_id": str(uuid4()),
+            "profile_payload_hash": "sha256:test",
+            "evaluation_reference_time": now.isoformat(),
+            "rule_results": [
+                {
+                    "rule_code": "meal_break_first_window",
+                    "status": "warning",
+                    "reason_codes": ["first_meal_break_missing", "waiver_possible_but_not_modelled"],
+                    "premium_required": True,
+                    "premium_type": "wage_dependent_unresolved",
+                    "premium_cents": 0,
+                    "would_block": False,
+                    "waiver_possible": True,
+                    "artifact_type_allowed": "meal_waiver",
+                }
+            ],
+        }
+        return base, base, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
+    artifact = await scheduling.create_shift_compliance_override_artifact(
+        fake_session,
+        business_id,
+        shift_id,
+        ShiftComplianceOverrideCreate(
+            employee_id=employee_id,
+            artifact_type="meal_waiver",
+            rule_code="meal_break_first_window",
+            note="Employee waived first meal.",
+            artifact_payload={"channel": "manager_ui"},
+        ),
+        approved_by_user_id=uuid4(),
+    )
+
+    assert artifact.artifact_type == ComplianceOverrideArtifactType.meal_waiver
+    assert artifact.rule_code == "meal_break_first_window"
+    assert artifact.reason_codes == ["first_meal_break_missing", "waiver_possible_but_not_modelled"]
+    assert artifact.artifact_payload["matched_rule_result"]["artifact_type_allowed"] == "meal_waiver"
+
+
+@pytest.mark.asyncio
+async def test_set_shift_assignment_reassigns_and_cancels_active_automation(monkeypatch):
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
     business_id = uuid4()
@@ -1002,6 +1774,20 @@ async def test_set_shift_assignment_reassigns_and_cancels_active_automation():
     fake_session.get_map[(Employee, next_employee_id)] = next_employee
     fake_session.execute_queue = [[outbox_event]]
 
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "clear",
+            "blocking_rule_codes": [],
+            "warning_rule_codes": [],
+            "premium_rule_codes": [],
+            "would_block": False,
+            "requires_override": False,
+            "rule_results": [],
+        }
+        return evaluation, evaluation, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
     result = await scheduling.set_shift_assignment(
         fake_session,
         business_id,
@@ -1187,6 +1973,321 @@ async def test_set_shift_assignment_keeps_draft_lifecycle_until_publish():
     assert shift.lifecycle_status == ShiftLifecycleStatus.draft
     assert shift.staffing_status == ShiftStaffingStatus.covered
     assert shift.status == ShiftStatus.draft
+
+
+@pytest.mark.asyncio
+async def test_set_shift_assignment_requires_compliance_override_for_overridable_block(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Draft",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = []
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Employee, employee_id)] = employee
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "block",
+            "blocking_rule_codes": ["clopening_restricted"],
+            "warning_rule_codes": [],
+            "premium_rule_codes": ["clopening_restricted"],
+            "would_block": True,
+            "requires_override": True,
+            "rule_results": [
+                {
+                    "rule_code": "clopening_restricted",
+                    "status": "block",
+                    "written_consent_allowed": True,
+                }
+            ],
+        }
+        return evaluation, evaluation, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
+    with pytest.raises(scheduling.ShiftAssignmentComplianceError) as exc_info:
+        await scheduling.set_shift_assignment(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.ShiftAssignmentWrite(
+                employee_id=employee_id,
+                source="scheduler_ui",
+                expected_assignment_id=None,
+            ),
+        )
+    assert exc_info.value.summary["blocked_assignment_count"] == 1
+    assert exc_info.value.review_items[0]["shift_id"] == shift_id
+    assert exc_info.value.review_items[0]["employee_id"] == employee_id
+    assert exc_info.value.review_items[0]["issues"][0]["artifact_type_allowed"] == "written_consent"
+
+    decision_logs = [
+        entry
+        for entry in fake_session.added
+        if isinstance(entry, AuditLog) and entry.event_name == "compliance.decision.recorded"
+    ]
+    assert len(decision_logs) == 1
+    assert decision_logs[0].payload["decision_outcome"] == "blocked_override_required"
+    assert decision_logs[0].payload["blocking_rule_codes"] == ["clopening_restricted"]
+
+
+@pytest.mark.asyncio
+async def test_set_shift_assignment_records_override_artifact_metadata(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Draft",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    shift.assignments = []
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Employee, employee_id)] = employee
+    artifact = ComplianceOverrideArtifact(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=location_id,
+        shift_id=shift_id,
+        employee_id=employee_id,
+        rule_code="clopening_restricted",
+        artifact_type=ComplianceOverrideArtifactType.written_consent,
+        status=ComplianceOverrideArtifactStatus.approved,
+        engine_version="deterministic_compliance_engine_v1",
+        approved_at=now,
+        expires_at=now + timedelta(hours=8),
+        note="Consent on file.",
+        reason_codes=["minimum_rest_window_violation"],
+        artifact_payload={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        base = {
+            "status": "block",
+            "blocking_rule_codes": ["clopening_restricted"],
+            "warning_rule_codes": [],
+            "premium_rule_codes": ["clopening_restricted"],
+            "would_block": True,
+            "requires_override": True,
+            "profile_code": "us_nyc_fast_food",
+            "profile_version_id": str(uuid4()),
+            "profile_payload_hash": "sha256:test",
+            "rule_results": [],
+        }
+        resolved = {
+            **base,
+            "status": "warning",
+            "blocking_rule_codes": [],
+            "warning_rule_codes": ["clopening_restricted"],
+            "would_block": False,
+            "requires_override": False,
+            "override_applied": True,
+        }
+        return base, resolved, artifact
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
+    result = await scheduling.set_shift_assignment(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.ShiftAssignmentWrite(
+            employee_id=employee_id,
+            source="scheduler_ui",
+            expected_assignment_id=None,
+        ),
+    )
+
+    assert result.current_assignment is not None
+    metadata = result.current_assignment.assignment_metadata["compliance_evaluation"]
+    assert metadata["override_artifact_id"] == str(artifact.id)
+    assert metadata["warning_rule_codes"] == ["clopening_restricted"]
+    decision_logs = [
+        entry
+        for entry in fake_session.added
+        if isinstance(entry, AuditLog) and entry.event_name == "compliance.decision.recorded"
+    ]
+    assert len(decision_logs) == 1
+    assert decision_logs[0].payload["decision_outcome"] == "assigned"
+    assert decision_logs[0].payload["override_artifact_id"] == str(artifact.id)
 
 
 @pytest.mark.asyncio
@@ -1529,6 +2630,167 @@ async def test_apply_published_shift_amendment_reassigns_live_shift_without_demo
     assert shift.lifecycle_status == ShiftLifecycleStatus.scheduled
     assert shift.staffing_status == ShiftStaffingStatus.covered
     assert shift.shift_metadata["published_amendment"]["reason_code"] == "reassignment"
+
+
+@pytest.mark.asyncio
+async def test_apply_published_shift_amendment_requires_compliance_override(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Jordan Draft",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee.employee_roles = [
+        EmployeeRole(
+            id=uuid4(),
+            employee_id=employee_id,
+            role_id=role_id,
+            is_primary=True,
+            role_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    employee.employee_locations = [
+        EmployeeLocation(
+            id=uuid4(),
+            employee_id=employee_id,
+            location_id=location_id,
+            is_primary=True,
+            access_level="approved",
+            can_cover_last_minute=True,
+            can_blast=True,
+            location_metadata={},
+            created_at=now,
+            updated_at=now,
+        )
+    ]
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.location = location
+    shift.role = role
+    current_assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=shift_id,
+        employee_id=uuid4(),
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": "Jordan Current"},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = [current_assignment]
+    shift.coverage_cases = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+    fake_session.get_map[(Business, business_id)] = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Employee, employee_id)] = employee
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        evaluation = {
+            "status": "block",
+            "blocking_rule_codes": ["clopening_restricted"],
+            "warning_rule_codes": [],
+            "premium_rule_codes": ["clopening_restricted"],
+            "would_block": True,
+            "requires_override": True,
+            "rule_results": [
+                {
+                    "rule_code": "clopening_restricted",
+                    "status": "block",
+                    "written_consent_allowed": True,
+                }
+            ],
+        }
+        return evaluation, evaluation, None
+
+    monkeypatch.setattr(scheduling, "_resolve_assignment_compliance", fake_resolve_assignment_compliance)
+
+    with pytest.raises(scheduling.PublishedShiftAmendmentComplianceError) as exc_info:
+        await scheduling.apply_published_shift_amendment(
+            fake_session,
+            business_id,
+            shift_id,
+            scheduling.PublishedShiftAmendmentWrite(
+                action="reassign_shift",
+                reason_code="reassignment",
+                target_employee_id=employee_id,
+                source="scheduler_ui",
+            ),
+        )
+    assert exc_info.value.summary["blocked_assignment_count"] == 1
+    assert exc_info.value.review_items[0]["shift_id"] == shift_id
+    assert exc_info.value.review_items[0]["employee_id"] == employee_id
+    assert exc_info.value.review_items[0]["issues"][0]["artifact_type_allowed"] == "written_consent"
 
 
 @pytest.mark.asyncio
@@ -3186,6 +4448,347 @@ async def test_publish_schedule_week_skips_globally_suppressed_email_notificatio
     assert queued_events == []
 
 
+@pytest.mark.asyncio
+async def test_publish_schedule_week_raises_compliance_review_for_blocked_assignment(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=uuid4(),
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    draft_shift = Shift(
+        id=assignment.shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    draft_shift.location = location
+    draft_shift.role = role
+    draft_shift.assignments = [assignment]
+    draft_shift.coverage_cases = []
+
+    blocked_evaluation = {
+        "status": "block",
+        "blocking_rule_codes": ["meal_break_first_window"],
+        "warning_rule_codes": [],
+        "premium_rule_codes": ["meal_break_first_window"],
+        "premium_total_cents": 2500,
+        "unresolved_premium_rule_codes": [],
+        "override_applied": False,
+        "override_artifact_id": None,
+        "rule_results": [
+            {
+                "rule_code": "meal_break_first_window",
+                "status": "block",
+                "reason_codes": ["meal_break_missing"],
+                "premium_required": True,
+                "premium_type": "fixed",
+                "premium_cents": 2500,
+                "would_block": True,
+                "artifact_type_allowed": "meal_waiver",
+                "override_artifact_id": None,
+            }
+        ],
+    }
+
+    async def fake_resolve_assignment_compliance(*_args, **_kwargs):
+        return blocked_evaluation, blocked_evaluation, None
+
+    monkeypatch.setattr(
+        scheduling,
+        "_resolve_assignment_compliance",
+        fake_resolve_assignment_compliance,
+    )
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.execute_queue = [[draft_shift]]
+
+    with pytest.raises(scheduling.ScheduleWeekPublishComplianceError) as exc_info:
+        await scheduling.publish_schedule_week(
+            fake_session,
+            business_id,
+            location_id,
+            week_start,
+            scheduling.ScheduleWeekPublishWrite(
+                source="scheduler_ui",
+                notify_channels=["email"],
+                expected_shift_ids=[draft_shift.id],
+            ),
+        )
+
+    assert draft_shift.lifecycle_status == ShiftLifecycleStatus.draft
+    assert exc_info.value.summary["blocked_assignment_count"] == 1
+    assert exc_info.value.summary["override_eligible_artifact_types"] == ["meal_waiver"]
+    assert exc_info.value.review_items[0]["shift_id"] == draft_shift.id
+    assert exc_info.value.review_items[0]["employee_id"] == employee_id
+    assert exc_info.value.review_items[0]["issues"][0]["rule_code"] == "meal_break_first_window"
+
+
+@pytest.mark.asyncio
+async def test_publish_schedule_week_blocks_when_scheduled_future_policy_would_break_assignment(monkeypatch):
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+    employee_id = uuid4()
+    policy_version_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+    future_policy_effective_at = now + timedelta(days=2)
+
+    business = Business(
+        id=business_id,
+        name="Backfill Coffee",
+        display_name="Backfill Coffee",
+        slug="backfill-coffee",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={"week_start_day": "monday"},
+        place_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="barista",
+        name="Barista",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    employee = Employee(
+        id=employee_id,
+        business_id=business_id,
+        full_name="Taylor Schedule",
+        phone_e164="+15555550100",
+        email="taylor@example.com",
+        status=EmployeeStatus.active,
+        response_profile={},
+        employee_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment = ShiftAssignment(
+        id=uuid4(),
+        shift_id=uuid4(),
+        employee_id=employee_id,
+        assigned_via="scheduler_ui",
+        status=AssignmentStatus.assigned,
+        sequence_no=1,
+        assignment_metadata={"employee_name": employee.full_name},
+        created_at=now,
+        updated_at=now,
+    )
+    assignment.employee = employee
+    draft_shift = Shift(
+        id=assignment.shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=role_id,
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=future_policy_effective_at + timedelta(hours=4),
+        ends_at=future_policy_effective_at + timedelta(hours=12),
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    draft_shift.location = location
+    draft_shift.role = role
+    draft_shift.assignments = [assignment]
+    draft_shift.coverage_cases = []
+
+    clear_evaluation = {
+        "status": "clear",
+        "blocking_rule_codes": [],
+        "warning_rule_codes": [],
+        "premium_rule_codes": [],
+        "premium_total_cents": 0,
+        "unresolved_premium_rule_codes": [],
+        "override_applied": False,
+        "override_artifact_id": None,
+        "rule_results": [],
+        "policy_version_id": None,
+        "policy_hash": None,
+        "policy_effective_at": None,
+        "policy_scope": None,
+    }
+    future_blocked_evaluation = {
+        "status": "block",
+        "blocking_rule_codes": ["meal_break_first_window"],
+        "warning_rule_codes": [],
+        "premium_rule_codes": ["meal_break_first_window"],
+        "premium_total_cents": 2500,
+        "unresolved_premium_rule_codes": [],
+        "override_applied": False,
+        "override_artifact_id": None,
+        "rule_results": [
+            {
+                "rule_code": "meal_break_first_window",
+                "status": "block",
+                "reason_codes": ["meal_break_missing"],
+                "premium_required": True,
+                "premium_type": "fixed",
+                "premium_cents": 2500,
+                "would_block": True,
+                "artifact_type_allowed": "meal_waiver",
+                "override_artifact_id": None,
+            }
+        ],
+        "policy_version_id": str(policy_version_id),
+        "policy_hash": "future-location-policy",
+        "policy_effective_at": future_policy_effective_at.isoformat(),
+        "policy_scope": "location",
+    }
+
+    async def fake_resolve_assignment_compliance(*_args, **kwargs):
+        reference_time = kwargs["reference_time"]
+        if reference_time >= draft_shift.starts_at:
+            return future_blocked_evaluation, future_blocked_evaluation, None
+        return clear_evaluation, clear_evaluation, None
+
+    monkeypatch.setattr(
+        scheduling,
+        "_resolve_assignment_compliance",
+        fake_resolve_assignment_compliance,
+    )
+
+    fake_session.get_map[(Business, business_id)] = business
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.execute_queue = [[draft_shift]]
+
+    with pytest.raises(scheduling.ScheduleWeekPublishFuturePolicyConflictError) as exc_info:
+        await scheduling.publish_schedule_week(
+            fake_session,
+            business_id,
+            location_id,
+            week_start,
+            scheduling.ScheduleWeekPublishWrite(
+                source="scheduler_ui",
+                notify_channels=["email"],
+                expected_shift_ids=[draft_shift.id],
+            ),
+        )
+
+    assert draft_shift.lifecycle_status == ShiftLifecycleStatus.draft
+    assert exc_info.value.summary["blocked_assignment_count"] == 1
+    assert len(exc_info.value.policy_reviews) == 1
+    assert exc_info.value.policy_reviews[0]["policy_scope"] == "location"
+    assert exc_info.value.policy_reviews[0]["policy_hash"] == "future-location-policy"
+    assert exc_info.value.policy_reviews[0]["review_items"][0]["shift_id"] == draft_shift.id
+    assert exc_info.value.policy_reviews[0]["review_items"][0]["policy_effective_at"] == future_policy_effective_at.isoformat()
+
+
 def test_publish_schedule_week_route_emits_shift_and_week_events():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
@@ -3361,6 +4964,298 @@ def test_publish_schedule_week_route_returns_conflict_snapshot():
         app.dependency_overrides.clear()
 
 
+def test_publish_schedule_week_route_returns_compliance_review():
+    fake_session = FakeSchedulingSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    assignment_id = uuid4()
+
+    async def fake_publish_schedule_week(*_args, **_kwargs):
+        raise scheduling.ScheduleWeekPublishComplianceError(
+            summary={
+                "selected_assignment_count": 1,
+                "clear_assignment_count": 0,
+                "warning_assignment_count": 0,
+                "blocked_assignment_count": 1,
+                "override_applied_count": 0,
+                "override_eligible_warning_count": 1,
+                "premium_total_cents": 2500,
+                "unresolved_premium_rule_count": 0,
+                "unresolved_premium_rule_codes": [],
+                "warning_rule_codes": [],
+                "override_eligible_artifact_types": ["meal_waiver"],
+                "warning_shift_ids": [],
+                "blocked_shift_ids": [str(shift_id)],
+                "override_eligible_shift_ids": [str(shift_id)],
+            },
+            review_items=[
+                {
+                    "assignment_id": assignment_id,
+                    "shift_id": shift_id,
+                    "employee_id": employee_id,
+                    "status": "block",
+                    "blocking_rule_codes": ["meal_break_first_window"],
+                    "warning_rule_codes": [],
+                    "premium_total_cents": 2500,
+                    "unresolved_premium_rule_codes": [],
+                    "override_applied": False,
+                    "override_artifact_id": None,
+                    "override_eligible_artifact_types": ["meal_waiver"],
+                    "issues": [
+                        {
+                            "rule_code": "meal_break_first_window",
+                            "status": "block",
+                            "reason_codes": ["meal_break_missing"],
+                            "premium_required": True,
+                            "premium_type": "fixed",
+                            "premium_cents": 2500,
+                            "unresolved_premium": False,
+                            "would_block": True,
+                            "artifact_type_allowed": "meal_waiver",
+                            "override_applied": False,
+                            "override_artifact_id": None,
+                        }
+                    ],
+                }
+            ],
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.publish_schedule_week
+    scheduling.publish_schedule_week = fake_publish_schedule_week
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/schedule-weeks/{week_start.isoformat()}/publish",
+            json={
+                "source": "scheduler_ui",
+                "notify_channels": ["email"],
+                "expected_shift_ids": [str(shift_id)],
+            },
+        )
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["detail"]["code"] == "publish_compliance_blocked"
+        assert payload["detail"]["summary"]["blocked_assignment_count"] == 1
+        assert payload["detail"]["review_items"][0]["shift_id"] == str(shift_id)
+        assert payload["detail"]["review_items"][0]["issues"][0]["artifact_type_allowed"] == "meal_waiver"
+    finally:
+        scheduling.publish_schedule_week = original
+        app.dependency_overrides.clear()
+
+
+def test_publish_schedule_week_route_returns_future_policy_review():
+    fake_session = FakeSchedulingSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    assignment_id = uuid4()
+    policy_version_id = uuid4()
+    policy_effective_at = datetime(2026, 4, 15, 9, tzinfo=timezone.utc)
+
+    async def fake_publish_schedule_week(*_args, **_kwargs):
+        raise scheduling.ScheduleWeekPublishFuturePolicyConflictError(
+            summary={
+                "selected_assignment_count": 1,
+                "clear_assignment_count": 0,
+                "warning_assignment_count": 0,
+                "blocked_assignment_count": 1,
+                "override_applied_count": 0,
+                "override_eligible_warning_count": 1,
+                "premium_total_cents": 2500,
+                "unresolved_premium_rule_count": 0,
+                "unresolved_premium_rule_codes": [],
+                "warning_rule_codes": [],
+                "override_eligible_artifact_types": ["meal_waiver"],
+                "warning_shift_ids": [],
+                "blocked_shift_ids": [str(shift_id)],
+                "override_eligible_shift_ids": [str(shift_id)],
+            },
+            policy_reviews=[
+                {
+                    "policy_version_id": policy_version_id,
+                    "policy_hash": "future-location-policy",
+                    "policy_effective_at": policy_effective_at,
+                    "policy_scope": "location",
+                    "summary": {
+                        "selected_assignment_count": 1,
+                        "clear_assignment_count": 0,
+                        "warning_assignment_count": 0,
+                        "blocked_assignment_count": 1,
+                        "override_applied_count": 0,
+                        "override_eligible_warning_count": 1,
+                        "premium_total_cents": 2500,
+                        "unresolved_premium_rule_count": 0,
+                        "unresolved_premium_rule_codes": [],
+                        "warning_rule_codes": [],
+                        "override_eligible_artifact_types": ["meal_waiver"],
+                        "warning_shift_ids": [],
+                        "blocked_shift_ids": [str(shift_id)],
+                        "override_eligible_shift_ids": [str(shift_id)],
+                    },
+                    "review_items": [
+                        {
+                            "assignment_id": assignment_id,
+                            "shift_id": shift_id,
+                            "employee_id": employee_id,
+                            "status": "block",
+                            "blocking_rule_codes": ["meal_break_first_window"],
+                            "warning_rule_codes": [],
+                            "premium_total_cents": 2500,
+                            "unresolved_premium_rule_codes": [],
+                            "override_applied": False,
+                            "override_artifact_id": None,
+                            "override_eligible_artifact_types": ["meal_waiver"],
+                            "policy_version_id": policy_version_id,
+                            "policy_hash": "future-location-policy",
+                            "policy_effective_at": policy_effective_at,
+                            "policy_scope": "location",
+                            "issues": [
+                                {
+                                    "rule_code": "meal_break_first_window",
+                                    "status": "block",
+                                    "reason_codes": ["meal_break_missing"],
+                                    "premium_required": True,
+                                    "premium_type": "fixed",
+                                    "premium_cents": 2500,
+                                    "unresolved_premium": False,
+                                    "would_block": True,
+                                    "artifact_type_allowed": "meal_waiver",
+                                    "override_applied": False,
+                                    "override_artifact_id": None,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.publish_schedule_week
+    scheduling.publish_schedule_week = fake_publish_schedule_week
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/locations/{location_id}/schedule-weeks/{week_start.isoformat()}/publish",
+            json={
+                "source": "scheduler_ui",
+                "notify_channels": ["email"],
+                "expected_shift_ids": [str(shift_id)],
+            },
+        )
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["detail"]["code"] == "publish_future_policy_conflict"
+        assert payload["detail"]["summary"]["blocked_assignment_count"] == 1
+        assert payload["detail"]["policy_reviews"][0]["policy_hash"] == "future-location-policy"
+        assert payload["detail"]["policy_reviews"][0]["review_items"][0]["policy_scope"] == "location"
+    finally:
+        scheduling.publish_schedule_week = original
+        app.dependency_overrides.clear()
+
+
+def test_get_schedule_week_future_policy_review_route_returns_preview():
+    fake_session = FakeSchedulingSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    week_start = datetime(2026, 4, 13, tzinfo=timezone.utc).date()
+    policy_effective_at = datetime(2026, 4, 15, 9, tzinfo=timezone.utc)
+
+    async def fake_get_schedule_week_future_policy_review(*_args, **_kwargs):
+        return {
+            "week_start_date": week_start,
+            "week_end_date": week_start + timedelta(days=6),
+            "summary": {
+                "selected_assignment_count": 1,
+                "clear_assignment_count": 0,
+                "warning_assignment_count": 0,
+                "blocked_assignment_count": 1,
+                "override_applied_count": 0,
+                "override_eligible_warning_count": 1,
+                "premium_total_cents": 2500,
+                "unresolved_premium_rule_count": 0,
+                "unresolved_premium_rule_codes": [],
+                "warning_rule_codes": [],
+                "override_eligible_artifact_types": ["meal_waiver"],
+                "warning_shift_ids": [],
+                "blocked_shift_ids": [str(uuid4())],
+                "override_eligible_shift_ids": [],
+            },
+            "policy_reviews": [
+                {
+                    "policy_version_id": uuid4(),
+                    "policy_hash": "future-location-policy",
+                    "policy_effective_at": policy_effective_at,
+                    "policy_scope": "location",
+                    "summary": {
+                        "selected_assignment_count": 1,
+                        "clear_assignment_count": 0,
+                        "warning_assignment_count": 0,
+                        "blocked_assignment_count": 1,
+                        "override_applied_count": 0,
+                        "override_eligible_warning_count": 1,
+                        "premium_total_cents": 2500,
+                        "unresolved_premium_rule_count": 0,
+                        "unresolved_premium_rule_codes": [],
+                        "warning_rule_codes": [],
+                        "override_eligible_artifact_types": ["meal_waiver"],
+                        "warning_shift_ids": [],
+                        "blocked_shift_ids": [],
+                        "override_eligible_shift_ids": [],
+                    },
+                    "review_items": [],
+                }
+            ],
+        }
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.get_schedule_week_future_policy_review
+    scheduling.get_schedule_week_future_policy_review = fake_get_schedule_week_future_policy_review
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/schedule-weeks/{week_start.isoformat()}/future-policy-review",
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["summary"]["blocked_assignment_count"] == 1
+        assert payload["policy_reviews"][0]["policy_hash"] == "future-location-policy"
+        assert payload["policy_reviews"][0]["policy_scope"] == "location"
+    finally:
+        scheduling.get_schedule_week_future_policy_review = original
+        app.dependency_overrides.clear()
+
+
 def test_publish_schedule_week_route_requires_target_location_access():
     fake_session = FakeSchedulingSession()
     business_id = uuid4()
@@ -3530,6 +5425,117 @@ def test_published_amendment_route_emits_amendment_and_assignment_events():
         assert "schedule.shift.unassigned" in event_types
         assert "schedule.shift.amended" in event_types
         assert "schedule.week.amended" in event_types
+    finally:
+        scheduling.apply_published_shift_amendment = original
+        app.dependency_overrides.clear()
+
+
+def test_published_amendment_route_returns_compliance_review():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    shift_id = uuid4()
+    employee_id = uuid4()
+    fake_session.get_map[(Shift, shift_id)] = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=location_id,
+        role_id=uuid4(),
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=8),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.covered,
+        seats_requested=1,
+        seats_filled=1,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+
+    async def fake_apply_published_shift_amendment(*_args, **_kwargs):
+        raise scheduling.PublishedShiftAmendmentComplianceError(
+            summary={
+                "selected_assignment_count": 1,
+                "clear_assignment_count": 0,
+                "warning_assignment_count": 0,
+                "blocked_assignment_count": 1,
+                "override_applied_count": 0,
+                "override_eligible_warning_count": 1,
+                "premium_total_cents": 0,
+                "unresolved_premium_rule_count": 0,
+                "unresolved_premium_rule_codes": [],
+                "warning_rule_codes": [],
+                "override_eligible_artifact_types": ["written_consent"],
+                "warning_shift_ids": [],
+                "blocked_shift_ids": [str(shift_id)],
+                "override_eligible_shift_ids": [str(shift_id)],
+            },
+            review_items=[
+                {
+                    "assignment_id": None,
+                    "shift_id": shift_id,
+                    "employee_id": employee_id,
+                    "status": "block",
+                    "blocking_rule_codes": ["clopening_restricted"],
+                    "warning_rule_codes": [],
+                    "premium_total_cents": 0,
+                    "unresolved_premium_rule_codes": [],
+                    "override_applied": False,
+                    "override_artifact_id": None,
+                    "override_eligible_artifact_types": ["written_consent"],
+                    "issues": [
+                        {
+                            "rule_code": "clopening_restricted",
+                            "status": "block",
+                            "reason_codes": ["written_consent_required"],
+                            "premium_required": False,
+                            "premium_type": None,
+                            "premium_cents": 0,
+                            "unresolved_premium": False,
+                            "would_block": True,
+                            "artifact_type_allowed": "written_consent",
+                            "override_applied": False,
+                            "override_artifact_id": None,
+                        }
+                    ],
+                }
+            ],
+        )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    original = scheduling.apply_published_shift_amendment
+    scheduling.apply_published_shift_amendment = fake_apply_published_shift_amendment
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.post(
+            f"/api/businesses/{business_id}/shifts/{shift_id}/published-amendment",
+            json={
+                "action": "reassign_shift",
+                "reason_code": "reassignment",
+                "target_employee_id": str(employee_id),
+                "source": "scheduler_ui",
+            },
+        )
+        assert response.status_code == 422
+        payload = response.json()
+        assert payload["detail"]["code"] == "published_amendment_compliance_blocked"
+        assert payload["detail"]["summary"]["blocked_assignment_count"] == 1
+        assert payload["detail"]["review_items"][0]["shift_id"] == str(shift_id)
+        assert payload["detail"]["review_items"][0]["issues"][0]["artifact_type_allowed"] == "written_consent"
     finally:
         scheduling.apply_published_shift_amendment = original
         app.dependency_overrides.clear()

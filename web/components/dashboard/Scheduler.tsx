@@ -57,15 +57,23 @@ import {
   applyPredictiveSchedule,
   amendPublishedShift,
   assignShift as assignWorkspaceShift,
+  type ComplianceReviewItem,
+  type ComplianceReviewSummary,
+  createShiftComplianceOverride,
   createShift as createWorkspaceShift,
   deleteLocation as deleteWorkspaceLocation,
   deleteShift as deleteWorkspaceShift,
   ensurePredictiveSchedule,
+  getScheduleWeekFuturePolicyReview,
   getLocationBoard,
   getLocationShiftDefaults,
+  listShiftComplianceDecisions,
+  PublishedShiftAmendmentComplianceError,
   type PredictiveScheduleRun,
   publishScheduleWeek,
   ScheduleWeekPublishConflictError,
+  type ShiftComplianceDecisionHistoryItem,
+  ShiftAssignmentComplianceError,
   updateLocationSettings,
   ShiftAssignmentConflictError,
   updateLocationShiftDefaults,
@@ -119,7 +127,19 @@ import { getLocationReference } from './location-role-reference';
 import { PublishWeekModal } from './PublishWeekModal';
 import { CalendarSyncModal } from './CalendarSyncModal';
 import { ExportScheduleModal } from './ExportScheduleModal';
+import { ComplianceFinanceModal } from './ComplianceFinanceModal';
 import { PrintScheduleModal } from './PrintScheduleModal';
+import {
+  applyArtifactToComplianceReviewItems,
+  complianceArtifactActionLabel,
+  complianceArtifactRecordedLabel,
+  complianceReasonLabel,
+  describeComplianceIssue,
+  humanizeComplianceCode,
+  summarizeComplianceReviewItems,
+  type ComplianceArtifactType,
+  type ComplianceReviewIssue,
+} from './compliance-review';
 import {
   SchedulerEmployeeEnrollmentModal,
 } from './LocationEmployeeActions';
@@ -139,6 +159,15 @@ interface Shift {
   displayEmployeeId: string | null;
   displayEmployeeName?: string | null;
   currentAssignmentId?: string | null;
+  complianceStatus?: string | null;
+  complianceProfileCode?: string | null;
+  complianceBlockingRuleCodes: string[];
+  complianceWarningRuleCodes: string[];
+  compliancePremiumRuleCodes: string[];
+  compliancePremiumTotalCents: number;
+  complianceUnresolvedPremiumRuleCodes: string[];
+  complianceOverrideApplied: boolean;
+  complianceOverrideArtifactId?: string | null;
   lifecycleStatus: string;
   staffingStatus: string;
   amendedFromPublished: boolean;
@@ -172,6 +201,34 @@ type PublishedChangeAction =
   | { kind: 'edit'; shift: Shift; targetDay?: number; showTransitionIntro?: boolean }
   | { kind: 'delete'; shift: Shift; showTransitionIntro?: boolean }
   | { kind: 'reassign'; shift: Shift; targetEmployeeId: string; targetDay: number; showTransitionIntro?: boolean };
+type PredictiveComplianceReviewIssue = ComplianceReviewIssue;
+type PredictiveComplianceReviewItem = NonNullable<NonNullable<PredictiveScheduleRun['compliance_review_items']>[number]> & {
+  employeeName: string;
+  roleName: string;
+  shiftLabel: string;
+  canCreateArtifact: boolean;
+};
+type ManualComplianceReviewItem = ComplianceReviewItem & {
+  employeeName: string;
+  shiftLabel: string;
+};
+type ComplianceDecisionHistoryDisplayItem = ShiftComplianceDecisionHistoryItem & {
+  employeeName: string;
+  shiftLabel: string;
+};
+type ManualComplianceBlockedAction =
+  | {
+      kind: 'draft_assignment';
+      shift: Shift;
+      targetEmployeeId: string;
+      targetDay: number;
+    }
+  | {
+      kind: 'published_reassignment';
+      shift: Shift;
+      targetEmployeeId: string;
+      targetDay: number;
+    };
 
 const DRAG_TYPE = 'SHIFT';
 interface DragItem { type: string; shiftId: string; }
@@ -182,6 +239,11 @@ const roleColors: Record<string, string> = {
 const roleOrder = ['RN', 'LPN', 'CNA', 'NP', 'Medical Assistant'];
 const ROLE_COLOR_PALETTE = ['#635BFF', '#8B5CF6', '#00B893', '#3B82F6', '#EC4899', '#F59E0B', '#14B8A6'];
 const OPEN_SHIFT_COLOR = '#E5484D';
+const USD_WHOLE_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+});
 
 function employeeInitials(name: string) {
   return name
@@ -213,6 +275,54 @@ function formatHour(h: number) {
     return `${hour12} ${suffix}`;
   }
   return `${hour12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+}
+
+function formatWholeDollarsFromCents(cents: number) {
+  return USD_WHOLE_FORMATTER.format((cents || 0) / 100);
+}
+
+function formatPredictiveComplianceShiftLabel({
+  startsAt,
+  endsAt,
+  roleName,
+}: {
+  startsAt: string;
+  endsAt: string;
+  roleName: string;
+}) {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return roleName;
+  }
+  const dayLabel = start.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  const startLabel = start.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const endLabel = end.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${roleName} • ${dayLabel}, ${startLabel}–${endLabel}`;
+}
+
+function formatPredictiveComplianceDraftShiftLabel({
+  day,
+  startHour,
+  endHour,
+  roleName,
+}: {
+  day: number;
+  startHour: number;
+  endHour: number;
+  roleName: string;
+}) {
+  return `${roleName} • ${FULL_DAYS[day] ?? 'Shift'}, ${formatHour(startHour)}–${formatHour(endHour)}`;
 }
 
 function shiftDuration(s: Shift) {
@@ -558,6 +668,17 @@ function boardShiftToSchedulerShift(
       shift.last_assignment?.employee_name ??
       null,
     currentAssignmentId: shift.current_assignment?.assignment_id ?? null,
+    complianceStatus: shift.current_assignment?.compliance_status ?? null,
+    complianceProfileCode: shift.current_assignment?.compliance_profile_code ?? null,
+    complianceBlockingRuleCodes: shift.current_assignment?.compliance_blocking_rule_codes ?? [],
+    complianceWarningRuleCodes: shift.current_assignment?.compliance_warning_rule_codes ?? [],
+    compliancePremiumRuleCodes: shift.current_assignment?.compliance_premium_rule_codes ?? [],
+    compliancePremiumTotalCents: shift.current_assignment?.compliance_premium_total_cents ?? 0,
+    complianceUnresolvedPremiumRuleCodes:
+      shift.current_assignment?.compliance_unresolved_premium_rule_codes ?? [],
+    complianceOverrideApplied: shift.current_assignment?.compliance_override_applied ?? false,
+    complianceOverrideArtifactId:
+      shift.current_assignment?.compliance_override_artifact_id ?? null,
     lifecycleStatus: shift.lifecycle_status,
     staffingStatus: shift.staffing_status,
     amendedFromPublished: shift.amended_from_published,
@@ -1123,6 +1244,22 @@ function SchedulerContent({
   const [predictiveRunError, setPredictiveRunError] = useState<string | null>(null);
   const [dismissedPredictiveWeeks, setDismissedPredictiveWeeks] = useState<Set<string>>(new Set());
   const [acceptingPredictiveRun, setAcceptingPredictiveRun] = useState(false);
+  const [showPredictiveComplianceModal, setShowPredictiveComplianceModal] = useState(false);
+  const [submittingPredictiveComplianceActionKey, setSubmittingPredictiveComplianceActionKey] = useState<string | null>(null);
+  const [manualComplianceReviewState, setManualComplianceReviewState] = useState<{
+    blockedAction: ManualComplianceBlockedAction;
+    summary: ComplianceReviewSummary | null;
+    reviewItems: ManualComplianceReviewItem[];
+  } | null>(null);
+  const [complianceHistoryState, setComplianceHistoryState] = useState<{
+    shiftId: string;
+    shiftLabel: string;
+    items: ShiftComplianceDecisionHistoryItem[];
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+  const [submittingManualComplianceActionKey, setSubmittingManualComplianceActionKey] = useState<string | null>(null);
+  const [retryingManualComplianceAction, setRetryingManualComplianceAction] = useState(false);
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [creatingAt, setCreatingAt] = useState<{
     day: number;
@@ -1146,6 +1283,7 @@ function SchedulerContent({
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showComplianceFinanceModal, setShowComplianceFinanceModal] = useState(false);
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [collapsedRoles, setCollapsedRoles] = useState<Set<string>>(new Set());
@@ -1782,6 +1920,8 @@ function SchedulerContent({
     () => formatPredictiveGeneratedDate(predictiveRun?.created_at),
     [predictiveRun?.created_at],
   );
+  const predictiveComplianceSummary = predictiveRun?.compliance_summary ?? null;
+  const predictiveComplianceReviewItems = predictiveRun?.compliance_review_items ?? [];
   const canAcceptPredictiveSchedule = Boolean(
     predictiveRun
       && predictiveRun.status === 'completed'
@@ -1810,6 +1950,191 @@ function SchedulerContent({
     }
     return null;
   }, [amendedEmployeeIds, publishedEmployeeIds]);
+
+  const boardRoleNamesById = useMemo(
+    () => new Map((board?.roles ?? []).map((role) => [role.role_id, role.role_name])),
+    [board?.roles],
+  );
+
+  const boardShiftById = useMemo(
+    () => new Map(shifts.map((shift) => [shift.id, shift])),
+    [shifts],
+  );
+
+  const predictiveProposedShiftById = useMemo(
+    () => new Map((predictiveRun?.proposed_shifts ?? []).map((shift) => [shift.id, shift])),
+    [predictiveRun?.proposed_shifts],
+  );
+
+  const employeeNameById = useMemo(
+    () => new Map(businessEmployees.map((employee) => [employee.id, employee.full_name])),
+    [businessEmployees],
+  );
+  const schedulerEmployeeNameById = useMemo(
+    () => new Map(schedulerEmployees.map((employee) => [employee.id, employee.name])),
+    [schedulerEmployees],
+  );
+  const complianceHistoryDisplayItems = useMemo<ComplianceDecisionHistoryDisplayItem[]>(
+    () =>
+      (complianceHistoryState?.items ?? []).map((item) => ({
+        ...item,
+        employeeName:
+          schedulerEmployeeNameById.get(item.employee_id)
+          ?? employeeNameById.get(item.employee_id)
+          ?? 'Assigned employee',
+        shiftLabel:
+          complianceHistoryState?.shiftId === item.shift_id
+            ? complianceHistoryState.shiftLabel
+            : boardShiftById.get(item.shift_id)
+              ? formatPredictiveComplianceDraftShiftLabel({
+                  day: boardShiftById.get(item.shift_id)!.day,
+                  startHour: boardShiftById.get(item.shift_id)!.startHour,
+                  endHour: boardShiftById.get(item.shift_id)!.endHour,
+                  roleName: boardShiftById.get(item.shift_id)!.role,
+                })
+              : 'Shift history',
+      })),
+    [boardShiftById, complianceHistoryState, employeeNameById, schedulerEmployeeNameById],
+  );
+
+  const predictiveComplianceReviewDisplayItems = useMemo(
+    () =>
+      predictiveComplianceReviewItems.map((item) => {
+        const persistedShift = item.shift_id ? boardShiftById.get(item.shift_id) ?? null : null;
+        const proposedShift = item.proposed_shift_id ? predictiveProposedShiftById.get(item.proposed_shift_id) ?? null : null;
+        const employeeName =
+          employeeNameById.get(item.employee_id)
+          ?? persistedShift?.displayEmployeeName
+          ?? 'Assigned employee';
+        const roleName =
+          persistedShift?.role
+          ?? (proposedShift?.role_id ? boardRoleNamesById.get(proposedShift.role_id) : null)
+          ?? 'Shift';
+        const shiftLabel =
+          persistedShift
+            ? formatPredictiveComplianceDraftShiftLabel({
+                day: persistedShift.day,
+                startHour: persistedShift.startHour,
+                endHour: persistedShift.endHour,
+                roleName,
+              })
+            : proposedShift
+              ? formatPredictiveComplianceShiftLabel({
+                  startsAt: proposedShift.starts_at,
+                  endsAt: proposedShift.ends_at,
+                  roleName,
+                })
+              : roleName;
+        return {
+          ...item,
+          employeeName,
+          roleName,
+          shiftLabel,
+          canCreateArtifact: Boolean(item.shift_id),
+        };
+      }),
+    [boardRoleNamesById, boardShiftById, businessEmployees, employeeNameById, predictiveComplianceReviewItems, predictiveProposedShiftById],
+  );
+
+  const formatManualComplianceReviewItems = useCallback(
+    (reviewItems: ComplianceReviewItem[]): ManualComplianceReviewItem[] =>
+      reviewItems.map((item) => {
+        const shift = boardShiftById.get(item.shift_id) ?? null;
+        const employeeName =
+          schedulerEmployeeNameById.get(item.employee_id)
+          ?? employeeNameById.get(item.employee_id)
+          ?? shift?.displayEmployeeName
+          ?? 'Assigned employee';
+        const shiftLabel = shift
+          ? formatPredictiveComplianceDraftShiftLabel({
+              day: shift.day,
+              startHour: shift.startHour,
+              endHour: shift.endHour,
+              roleName: shift.role,
+            })
+          : 'Draft shift';
+        return {
+          ...item,
+          employeeName,
+          shiftLabel,
+        };
+      }),
+    [boardShiftById, employeeNameById, schedulerEmployeeNameById],
+  );
+
+  const openComplianceHistory = useCallback((shiftId: string) => {
+    const shift = boardShiftById.get(shiftId) ?? null;
+    const shiftLabel = shift
+      ? formatPredictiveComplianceDraftShiftLabel({
+          day: shift.day,
+          startHour: shift.startHour,
+          endHour: shift.endHour,
+          roleName: shift.role,
+        })
+      : 'Shift history';
+    setComplianceHistoryState({
+      shiftId,
+      shiftLabel,
+      items: [],
+      loading: true,
+      error: null,
+    });
+    void (async () => {
+      try {
+        const items = await listShiftComplianceDecisions(
+          location.business_id,
+          shiftId,
+          { limit: 20 },
+        );
+        setComplianceHistoryState((current) => {
+          if (!current || current.shiftId !== shiftId) {
+            return current;
+          }
+          return {
+            ...current,
+            items,
+            loading: false,
+            error: null,
+          };
+        });
+      } catch (error) {
+        setComplianceHistoryState((current) => {
+          if (!current || current.shiftId !== shiftId) {
+            return current;
+          }
+          return {
+            ...current,
+            loading: false,
+            error: error instanceof Error ? error.message : 'Could not load compliance history.',
+          };
+        });
+      }
+    })();
+  }, [boardShiftById, location.business_id]);
+
+  const closeComplianceHistory = useCallback(() => {
+    setComplianceHistoryState(null);
+  }, []);
+
+  const openManualComplianceReview = useCallback((payload: {
+    blockedAction: ManualComplianceBlockedAction;
+    summary?: ComplianceReviewSummary | null;
+    reviewItems?: ComplianceReviewItem[] | null;
+  }) => {
+    const normalizedItems = formatManualComplianceReviewItems(payload.reviewItems ?? []);
+    setManualComplianceReviewState({
+      blockedAction: payload.blockedAction,
+      summary: payload.summary ?? summarizeComplianceReviewItems(normalizedItems),
+      reviewItems: normalizedItems,
+    });
+  }, [formatManualComplianceReviewItems]);
+
+  const closeManualComplianceReview = useCallback(() => {
+    if (submittingManualComplianceActionKey || retryingManualComplianceAction) {
+      return;
+    }
+    setManualComplianceReviewState(null);
+  }, [retryingManualComplianceAction, submittingManualComplianceActionKey]);
 
   const openPublishedChangeAlert = useCallback((change: PublishedChangeAction) => {
     setOperationalBreakShift(null);
@@ -1950,6 +2275,7 @@ function SchedulerContent({
     if (!board) {
       return;
     }
+    setShowPredictiveComplianceModal(false);
     setDismissedPredictiveWeeks((current) => {
       const next = new Set(current);
       next.add(board.week_start_date);
@@ -1963,6 +2289,7 @@ function SchedulerContent({
     if (!board) {
       return;
     }
+    setShowPredictiveComplianceModal(false);
     setDismissedPredictiveWeeks((current) => {
       const next = new Set(current);
       next.delete(board.week_start_date);
@@ -1989,6 +2316,7 @@ function SchedulerContent({
 
         if (applyResult.status === 'applied' || applyResult.status === 'no_op') {
           await refreshSchedulerData({ force: true });
+          setShowPredictiveComplianceModal(false);
           setPredictiveRun(null);
           setPredictiveRunError(null);
           setSchedulerNotice({
@@ -2042,6 +2370,175 @@ function SchedulerContent({
     predictiveRun,
     refreshSchedulerData,
   ]);
+
+  const createPredictiveComplianceArtifact = useCallback(async ({
+    shiftId,
+    employeeId,
+    ruleCode,
+    artifactType,
+  }: {
+    shiftId: string;
+    employeeId: string;
+    ruleCode: string;
+    artifactType: 'written_consent' | 'meal_waiver';
+  }) => {
+    if (!board || !predictiveRun) {
+      return;
+    }
+    const actionKey = `${shiftId}:${employeeId}:${ruleCode}:${artifactType}`;
+    setSubmittingPredictiveComplianceActionKey(actionKey);
+    try {
+      await createShiftComplianceOverride(location.business_id, shiftId, {
+        employee_id: employeeId,
+        artifact_type: artifactType,
+        rule_code: ruleCode,
+        note:
+          artifactType === 'meal_waiver'
+            ? 'Recorded from predictive schedule review.'
+            : 'Written consent recorded from predictive schedule review.',
+        artifact_payload: {
+          source: 'predictive_schedule_review',
+          schedule_run_id: predictiveRun.id,
+        },
+      });
+      const refreshedRun = await ensurePredictiveSchedule(
+        location.business_id,
+        location.location_id,
+        board.week_start_date,
+      );
+      setPredictiveRun(refreshedRun);
+      setPredictiveRunError(null);
+      setSchedulerNotice({
+        tone: 'success',
+        title:
+          artifactType === 'meal_waiver'
+            ? 'Meal waiver recorded'
+            : 'Written consent recorded',
+        detail: 'Predictive compliance review has been refreshed.',
+      });
+    } catch (error) {
+      setSchedulerNotice({
+        tone: 'error',
+        title: 'Could not record compliance artifact',
+        detail: error instanceof Error ? error.message : 'Please try again.',
+      });
+    } finally {
+      setSubmittingPredictiveComplianceActionKey(null);
+    }
+  }, [board, location.business_id, location.location_id, predictiveRun]);
+
+  const createPublishComplianceArtifact = useCallback(async ({
+    shiftId,
+    employeeId,
+    ruleCode,
+    artifactType,
+  }: {
+    shiftId: string;
+    employeeId: string;
+    ruleCode: string;
+    artifactType: 'written_consent' | 'meal_waiver';
+  }) => {
+    try {
+      const artifact = await createShiftComplianceOverride(location.business_id, shiftId, {
+        employee_id: employeeId,
+        artifact_type: artifactType,
+        rule_code: ruleCode,
+        note:
+          artifactType === 'meal_waiver'
+            ? 'Recorded from schedule publish review.'
+            : 'Written consent recorded from schedule publish review.',
+        artifact_payload: {
+          source: 'schedule_publish_review',
+          week_start_date: board?.week_start_date ?? null,
+        },
+      });
+      void refreshSchedulerData({ force: true, silent: true }).catch(() => undefined);
+      setSchedulerNotice({
+        tone: 'success',
+        title:
+          artifactType === 'meal_waiver'
+            ? 'Meal waiver recorded'
+            : 'Written consent recorded',
+        detail: 'Publish review updated. Publish again to re-run compliance validation.',
+      });
+      return { artifactId: artifact.id };
+    } catch (error) {
+      setSchedulerNotice({
+        tone: 'error',
+        title: 'Could not record compliance artifact',
+        detail: error instanceof Error ? error.message : 'Please try again.',
+      });
+      throw error;
+    }
+  }, [board?.week_start_date, location.business_id, refreshSchedulerData]);
+
+  const createManualComplianceArtifact = useCallback(async ({
+    shiftId,
+    employeeId,
+    ruleCode,
+    artifactType,
+  }: {
+    shiftId: string;
+    employeeId: string;
+    ruleCode: string;
+    artifactType: ComplianceArtifactType;
+  }) => {
+    const actionKey = `${shiftId}:${employeeId}:${ruleCode}:${artifactType}`;
+    setSubmittingManualComplianceActionKey(actionKey);
+    try {
+      const artifact = await createShiftComplianceOverride(location.business_id, shiftId, {
+        employee_id: employeeId,
+        artifact_type: artifactType,
+        rule_code: ruleCode,
+        note:
+          artifactType === 'meal_waiver'
+            ? 'Recorded from manual schedule review.'
+            : 'Written consent recorded from manual schedule review.',
+        artifact_payload: {
+          source: 'manual_schedule_review',
+          week_start_date: board?.week_start_date ?? null,
+        },
+      });
+      setManualComplianceReviewState((current) => {
+        if (!current) {
+          return current;
+        }
+        const nextReviewItems = formatManualComplianceReviewItems(
+          applyArtifactToComplianceReviewItems(current.reviewItems, {
+            shiftId,
+            employeeId,
+            ruleCode,
+            artifactType,
+            artifactId: artifact.id,
+          }),
+        );
+        return {
+          ...current,
+          summary: summarizeComplianceReviewItems(nextReviewItems),
+          reviewItems: nextReviewItems,
+        };
+      });
+      void refreshSchedulerData({ force: true, silent: true }).catch(() => undefined);
+      setSchedulerNotice({
+        tone: 'success',
+        title:
+          artifactType === 'meal_waiver'
+            ? 'Meal waiver recorded'
+            : 'Written consent recorded',
+        detail: 'Retry the assignment so Backfill can re-run compliance with the updated artifact.',
+      });
+      return { artifactId: artifact.id };
+    } catch (error) {
+      setSchedulerNotice({
+        tone: 'error',
+        title: 'Could not record compliance artifact',
+        detail: error instanceof Error ? error.message : 'Please try again.',
+      });
+      throw error;
+    } finally {
+      setSubmittingManualComplianceActionKey(null);
+    }
+  }, [board?.week_start_date, formatManualComplianceReviewItems, location.business_id, refreshSchedulerData]);
 
   const getEmployeeWeekHours = useCallback((empId: string) =>
     displayShifts.filter(s => s.employeeId === empId).reduce((sum, s) => sum + shiftDuration(s), 0), [displayShifts]);
@@ -2314,6 +2811,74 @@ function SchedulerContent({
     return { moveFailed };
   }, [location.business_id, refreshSchedulerData, saveShiftToDay]);
 
+  const retryManualComplianceBlockedAction = useCallback(async () => {
+    if (!manualComplianceReviewState) {
+      return;
+    }
+    setRetryingManualComplianceAction(true);
+    const { blockedAction } = manualComplianceReviewState;
+    try {
+      if (blockedAction.kind === 'draft_assignment') {
+        await applyShiftAssignment(blockedAction.shift, blockedAction.targetEmployeeId);
+        if (blockedAction.targetDay !== blockedAction.shift.day) {
+          await moveShiftToDay(blockedAction.shift, blockedAction.targetDay);
+        }
+        await refreshSchedulerData({ force: true });
+        setManualComplianceReviewState(null);
+        setSchedulerNotice({
+          tone: 'success',
+          title: 'Shift updated',
+          detail:
+            blockedAction.targetDay !== blockedAction.shift.day
+              ? 'The assignment and day change were both applied.'
+              : undefined,
+        });
+        return;
+      }
+
+      const { moveFailed } = await runPublishedReassignment({
+        shift: blockedAction.shift,
+        targetEmployeeId: blockedAction.targetEmployeeId,
+        targetDay: blockedAction.targetDay,
+      });
+      setManualComplianceReviewState(null);
+      setSchedulerNotice({
+        tone: moveFailed ? 'info' : 'success',
+        title: 'Shift reassigned',
+        detail: moveFailed
+          ? 'The reassignment succeeded, but the day change could not be applied. Backfill refreshed the scheduler.'
+          : undefined,
+      });
+    } catch (error) {
+      if (error instanceof ShiftAssignmentComplianceError || error instanceof PublishedShiftAmendmentComplianceError) {
+        openManualComplianceReview({
+          blockedAction,
+          summary: error.summary ?? null,
+          reviewItems: error.reviewItems ?? [],
+        });
+        return;
+      }
+      await refreshSchedulerData({ force: true });
+      setSchedulerNotice({
+        tone: 'error',
+        title:
+          blockedAction.kind === 'published_reassignment'
+            ? 'Could not reassign shift'
+            : 'Could not update shift',
+        detail: error instanceof Error ? error.message : 'Please try again.',
+      });
+    } finally {
+      setRetryingManualComplianceAction(false);
+    }
+  }, [
+    applyShiftAssignment,
+    manualComplianceReviewState,
+    moveShiftToDay,
+    openManualComplianceReview,
+    refreshSchedulerData,
+    runPublishedReassignment,
+  ]);
+
   const promptOperationalBreakReassignment = useCallback(() => {
     setOperationalBreakShift(null);
     setSchedulerNotice({
@@ -2428,6 +2993,22 @@ function SchedulerContent({
           });
         }
       } catch (error) {
+        if (
+          pendingPublishedChange.kind === 'reassign'
+          && error instanceof PublishedShiftAmendmentComplianceError
+        ) {
+          openManualComplianceReview({
+            blockedAction: {
+              kind: 'published_reassignment',
+              shift: pendingPublishedChange.shift,
+              targetEmployeeId: pendingPublishedChange.targetEmployeeId,
+              targetDay: pendingPublishedChange.targetDay,
+            },
+            summary: error.summary ?? null,
+            reviewItems: error.reviewItems ?? [],
+          });
+          return;
+        }
         await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'error',
@@ -2446,6 +3027,7 @@ function SchedulerContent({
     })();
   }, [
     location.business_id,
+    openManualComplianceReview,
     pendingPublishedChange,
     refreshSchedulerData,
     runPublishedDeleteReason,
@@ -2513,6 +3095,19 @@ function SchedulerContent({
                   : undefined,
               });
             } catch (error) {
+              if (error instanceof PublishedShiftAmendmentComplianceError) {
+                openManualComplianceReview({
+                  blockedAction: {
+                    kind: 'published_reassignment',
+                    shift,
+                    targetEmployeeId,
+                    targetDay: newDay,
+                  },
+                  summary: error.summary ?? null,
+                  reviewItems: error.reviewItems ?? [],
+                });
+                return;
+              }
               await refreshSchedulerData({ force: true });
               setSchedulerNotice({
                 tone: 'error',
@@ -2552,6 +3147,19 @@ function SchedulerContent({
                 : undefined,
             });
           } catch (error) {
+            if (error instanceof PublishedShiftAmendmentComplianceError) {
+              openManualComplianceReview({
+                blockedAction: {
+                  kind: 'published_reassignment',
+                  shift,
+                  targetEmployeeId,
+                  targetDay: newDay,
+                },
+                summary: error.summary ?? null,
+                reviewItems: error.reviewItems ?? [],
+              });
+              return;
+            }
             await refreshSchedulerData({ force: true });
             setSchedulerNotice({
               tone: 'error',
@@ -2627,8 +3235,8 @@ function SchedulerContent({
           detail: dayChanged ? 'The shift was updated for the new day.' : undefined,
         });
       } catch (error) {
-        await refreshSchedulerData({ force: true });
         if (error instanceof ShiftAssignmentConflictError) {
+          await refreshSchedulerData({ force: true });
           setSchedulerNotice({
             tone: 'info',
             title: 'Schedule changed',
@@ -2636,6 +3244,20 @@ function SchedulerContent({
           });
           return;
         }
+        if (error instanceof ShiftAssignmentComplianceError && targetEmployeeId) {
+          openManualComplianceReview({
+            blockedAction: {
+              kind: 'draft_assignment',
+              shift,
+              targetEmployeeId,
+              targetDay: newDay,
+            },
+            summary: error.summary ?? null,
+            reviewItems: error.reviewItems ?? [],
+          });
+          return;
+        }
+        await refreshSchedulerData({ force: true });
         setSchedulerNotice({
           tone: 'error',
           title: 'Could not move shift',
@@ -2653,6 +3275,7 @@ function SchedulerContent({
     businessEmployees,
     moveShiftToDay,
     openPublishedChangeAlert,
+    openManualComplianceReview,
     refreshSchedulerData,
     runPublishedReassignment,
     shifts,
@@ -3239,6 +3862,19 @@ function SchedulerContent({
                   <button
                     onClick={() => {
                       setShowSettingsMenu(false);
+                      setShowComplianceFinanceModal(true);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
+                    type="button"
+                  >
+                    <AlertTriangle size={14} className={`${theme.textSecondary} shrink-0`} />
+                    <span className={`text-[12px] ${theme.textPrimary}`} style={{ fontWeight: 480 }}>
+                      Compliance Finance
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSettingsMenu(false);
                       setShowCalendarSyncModal(true);
                     }}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-[#F7F8FA]'}`}
@@ -3350,8 +3986,33 @@ function SchedulerContent({
                 <span className="hidden lg:inline">Copy Schedule</span>
                 <span className="lg:hidden">Copy</span>
               </button>
+              <button
+                onClick={() => setShowComplianceFinanceModal(true)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+                style={{ fontWeight: 500 }}
+                type="button"
+              >
+                <AlertTriangle size={13} />
+                <span className="hidden lg:inline">Compliance Finance</span>
+                <span className="lg:hidden">Compliance</span>
+              </button>
               {predictiveBannerVisible ? (
                 <>
+                  {!loadingPredictiveRun && predictiveComplianceReviewDisplayItems.length > 0 ? (
+                    <button
+                      onClick={() => setShowPredictiveComplianceModal(true)}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-[12px] border transition-all ${theme.cardClass} ${theme.textMuted} ${theme.ghostButtonClass}`}
+                      style={{ fontWeight: 500 }}
+                      type="button"
+                    >
+                      <AlertTriangle size={13} />
+                      <span className="hidden lg:inline">
+                        Review Compliance
+                        {predictiveComplianceReviewDisplayItems.length > 0 ? ` (${predictiveComplianceReviewDisplayItems.length})` : ''}
+                      </span>
+                      <span className="lg:hidden">Review</span>
+                    </button>
+                  ) : null}
                   {!loadingPredictiveRun ? (
                     <button
                       onClick={dismissPredictivePreview}
@@ -3489,6 +4150,46 @@ function SchedulerContent({
                       <Info size={12} className={theme.textSecondary} />
                       <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
                         {predictiveRun.metrics.assigned_shift_count}/{predictiveRun.metrics.shift_count} shifts assigned
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveComplianceSummary?.blocked_assignment_count ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-[#E5484D]/30 bg-[#3A1B1B]/70' : 'border-[#E5484D]/20 bg-[#FFF1F2]'}`}>
+                      <AlertTriangle size={12} className="text-[#E5484D]" />
+                      <span className="text-[11px] text-[#E5484D]" style={{ fontWeight: 560 }}>
+                        {predictiveComplianceSummary.blocked_assignment_count} blocked by compliance
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveComplianceSummary?.override_eligible_warning_count ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-[#F59E0B]/25 bg-[#3B2A13]/70' : 'border-[#F59E0B]/20 bg-[#FFF7ED]'}`}>
+                      <AlertTriangle size={12} className="text-[#F59E0B]" />
+                      <span className="text-[11px] text-[#F59E0B]" style={{ fontWeight: 560 }}>
+                        {predictiveComplianceSummary.override_eligible_warning_count} waiver/consent ready
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveComplianceSummary?.override_applied_count ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-[#00B893]/25 bg-[#0D2C28]/70' : 'border-[#00B893]/20 bg-[#ECFDF5]'}`}>
+                      <Check size={12} className="text-[#00B893]" />
+                      <span className="text-[11px] text-[#00B893]" style={{ fontWeight: 560 }}>
+                        {predictiveComplianceSummary.override_applied_count} artifacts applied
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveComplianceSummary && predictiveComplianceSummary.premium_total_cents > 0 ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-white/[0.08] bg-[#0F2E4C]/70' : 'border-[#635BFF]/20 bg-white/60'}`}>
+                      <Info size={12} className={theme.textSecondary} />
+                      <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                        {formatWholeDollarsFromCents(predictiveComplianceSummary.premium_total_cents)} premium exposure
+                      </span>
+                    </div>
+                  ) : null}
+                  {predictiveComplianceSummary?.unresolved_premium_rule_count ? (
+                    <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'border-[#635BFF]/25 bg-[#1B1F46]/70' : 'border-[#635BFF]/20 bg-[#F5F3FF]'}`}>
+                      <Info size={12} className="text-[#635BFF]" />
+                      <span className="text-[11px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                        {predictiveComplianceSummary.unresolved_premium_rule_count} premium calc unresolved
                       </span>
                     </div>
                   ) : null}
@@ -4017,6 +4718,53 @@ function SchedulerContent({
           ) : null}
         </AnimatePresence>
 
+        <AnimatePresence>
+          {showPredictiveComplianceModal ? (
+            <PredictiveComplianceReviewModal
+              dark={isDark}
+              reviewItems={predictiveComplianceReviewDisplayItems}
+              isSubmittingActionKey={submittingPredictiveComplianceActionKey}
+              onViewHistory={(shiftId) => openComplianceHistory(shiftId)}
+              onClose={() => {
+                if (!submittingPredictiveComplianceActionKey) {
+                  setShowPredictiveComplianceModal(false);
+                }
+              }}
+              onRecordArtifact={(payload) => void createPredictiveComplianceArtifact(payload)}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {manualComplianceReviewState ? (
+            <ManualComplianceReviewModal
+              dark={isDark}
+              blockedAction={manualComplianceReviewState.blockedAction}
+              reviewItems={manualComplianceReviewState.reviewItems}
+              summary={manualComplianceReviewState.summary}
+              isSubmittingActionKey={submittingManualComplianceActionKey}
+              isRetrying={retryingManualComplianceAction}
+              onClose={closeManualComplianceReview}
+              onRetry={() => void retryManualComplianceBlockedAction()}
+              onRecordArtifact={(payload) => void createManualComplianceArtifact(payload)}
+              onViewHistory={(shiftId) => openComplianceHistory(shiftId)}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {complianceHistoryState ? (
+            <ComplianceDecisionHistoryModal
+              dark={isDark}
+              shiftLabel={complianceHistoryState.shiftLabel}
+              loading={complianceHistoryState.loading}
+              error={complianceHistoryState.error}
+              items={complianceHistoryDisplayItems}
+              onClose={closeComplianceHistory}
+            />
+          ) : null}
+        </AnimatePresence>
+
         {/* ─── Copy Schedule Modal ─── */}
         <AnimatePresence>
           {showCopyModal && (
@@ -4044,6 +4792,15 @@ function SchedulerContent({
               isRepublish={Boolean(publishSummary?.published_at)}
               publishedDateLabel={publishedDateLabel}
               onPublish={publishWeek}
+              loadFuturePolicyReview={() =>
+                getScheduleWeekFuturePolicyReview(
+                  location.business_id,
+                  location.location_id,
+                  activeWeekStart,
+                )
+              }
+              onRecordArtifact={(payload) => createPublishComplianceArtifact(payload)}
+              onViewHistory={(shiftId) => openComplianceHistory(shiftId)}
               onClose={() => setShowPublishModal(false)}
               onComplete={(result) => {
                 setShowPublishModal(false);
@@ -4113,12 +4870,33 @@ function SchedulerContent({
         </AnimatePresence>
 
         <AnimatePresence>
+          {showComplianceFinanceModal ? (
+            <ComplianceFinanceModal
+              dark={isDark}
+              businessId={location.business_id}
+              locationId={location.location_id}
+              locationName={location.location_display_name}
+              weekLabel={weekLabel}
+              weekStartDateKey={formatDateKey(weekDates[0])}
+              onClose={() => setShowComplianceFinanceModal(false)}
+              onOpenExport={() => {
+                setShowComplianceFinanceModal(false);
+                setShowExportModal(true);
+              }}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {showExportModal ? (
             <ExportScheduleModal
               dark={isDark}
+              businessId={location.business_id}
+              locationId={location.location_id}
               weekLabel={weekLabel}
               businessName={location.business_display_name}
               locationName={location.location_display_name}
+              weekStartDateKey={formatDateKey(weekDates[0])}
               weekStart={weekDates[0]}
               employees={activeEmployees.map((emp) => ({
                 id: emp.id,
@@ -4129,10 +4907,20 @@ function SchedulerContent({
                 ) ?? '#635BFF',
               }))}
               shifts={displayShifts.map((s) => ({
-                employeeId: s.displayEmployeeId,
+                employeeId: s.employeeId,
                 day: s.day,
                 startHour: s.startHour,
                 endHour: s.endHour,
+                roleName: s.role,
+                complianceStatus: s.complianceStatus,
+                complianceProfileCode: s.complianceProfileCode,
+                complianceBlockingRuleCodes: s.complianceBlockingRuleCodes,
+                complianceWarningRuleCodes: s.complianceWarningRuleCodes,
+                compliancePremiumRuleCodes: s.compliancePremiumRuleCodes,
+                compliancePremiumTotalCents: s.compliancePremiumTotalCents,
+                complianceUnresolvedPremiumRuleCodes: s.complianceUnresolvedPremiumRuleCodes,
+                complianceOverrideApplied: s.complianceOverrideApplied,
+                complianceOverrideArtifactId: s.complianceOverrideArtifactId,
               }))}
               onClose={() => setShowExportModal(false)}
               onExport={() => setShowExportModal(false)}
@@ -4776,6 +5564,768 @@ function OperationalBreakShiftModal({
           >
             Reassign Shift
           </motion.button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+
+function PredictiveComplianceReviewModal({
+  dark = false,
+  reviewItems,
+  isSubmittingActionKey,
+  onViewHistory,
+  onClose,
+  onRecordArtifact,
+}: {
+  dark?: boolean;
+  reviewItems: PredictiveComplianceReviewItem[];
+  isSubmittingActionKey: string | null;
+  onViewHistory: (shiftId: string) => void;
+  onClose: () => void;
+  onRecordArtifact: (payload: {
+    shiftId: string;
+    employeeId: string;
+    ruleCode: string;
+    artifactType: 'written_consent' | 'meal_waiver';
+  }) => void;
+}) {
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedText = dark ? 'text-[#8898AA]' : 'text-[#8898AA]';
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 0.32 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black"
+        onClick={onClose}
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className={`fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92vw] max-w-[860px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border shadow-2xl ${panelClass}`}
+      >
+        <div className={`flex items-start justify-between border-b px-6 py-5 ${borderClass}`}>
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#F59E0B]/10">
+              <AlertTriangle size={20} className="text-[#F59E0B]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                Predictive Compliance Review
+              </h3>
+              <p className={`mt-1 text-[12px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                Review shift-level warnings, premium exposure, and waiver-ready rules before accepting this predictive schedule.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className={`rounded-lg p-1.5 transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}
+            type="button"
+          >
+            <X size={16} className={mutedText} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="space-y-3">
+            {reviewItems.map((item) => {
+              const statusLabel =
+                item.status === 'block'
+                  ? 'Blocked'
+                  : item.status === 'warning'
+                    ? 'Needs review'
+                    : item.override_applied
+                      ? 'Artifact applied'
+                      : 'Clear';
+              const cardClass =
+                item.status === 'block'
+                  ? dark
+                    ? 'border-[#E5484D]/30 bg-[#3A1B1B]/70'
+                    : 'border-[#E5484D]/20 bg-[#FFF1F2]'
+                  : item.status === 'warning'
+                    ? dark
+                      ? 'border-[#F59E0B]/25 bg-[#3B2A13]/70'
+                      : 'border-[#F59E0B]/20 bg-[#FFF7ED]'
+                    : dark
+                      ? 'border-white/[0.08] bg-white/[0.03]'
+                      : 'border-[#E5E7EB] bg-[#F7F8FA]';
+              return (
+                <div key={item.assignment_id} className={`rounded-2xl border p-4 ${cardClass}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                          {item.shiftLabel}
+                        </p>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] ${
+                            item.status === 'block'
+                              ? 'bg-[#E5484D]/12 text-[#E5484D]'
+                              : item.status === 'warning'
+                                ? 'bg-[#F59E0B]/12 text-[#F59E0B]'
+                                : 'bg-[#00B893]/12 text-[#00B893]'
+                          }`}
+                          style={{ fontWeight: 560 }}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <p className={`mt-1 text-[12px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                        {item.employeeName}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {item.shift_id ? (
+                        <button
+                          onClick={() => onViewHistory(item.shift_id!)}
+                          className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-white'}`}
+                          style={{ fontWeight: 560 }}
+                          type="button"
+                        >
+                          View history
+                        </button>
+                      ) : null}
+                      {item.premium_total_cents > 0 ? (
+                        <span className={`rounded-full px-2 py-1 text-[10px] ${dark ? 'bg-white/[0.06] text-[#C1CED8]' : 'bg-white text-[#5E6D7A]'}`} style={{ fontWeight: 520 }}>
+                          {formatWholeDollarsFromCents(item.premium_total_cents)} premium
+                        </span>
+                      ) : null}
+                      {item.unresolved_premium_rule_codes.length > 0 ? (
+                        <span className="rounded-full bg-[#635BFF]/12 px-2 py-1 text-[10px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                          Premium calc unresolved
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2.5">
+                    {item.issues.map((issue: PredictiveComplianceReviewIssue) => {
+                      const artifactType = issue.artifact_type_allowed;
+                      const actionKey =
+                        item.shift_id && artifactType
+                          ? `${item.shift_id}:${item.employee_id}:${issue.rule_code}:${artifactType}`
+                          : null;
+                      const isSubmitting = actionKey !== null && isSubmittingActionKey === actionKey;
+                      return (
+                        <div
+                          key={`${item.assignment_id}:${issue.rule_code}:${artifactType ?? 'none'}`}
+                          className={`rounded-xl border p-3 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-white bg-white/80'}`}
+                        >
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 580 }}>
+                                  {humanizeComplianceCode(issue.rule_code)}
+                                </p>
+                                {issue.override_applied ? (
+                                  <span className="rounded-full bg-[#00B893]/12 px-2 py-0.5 text-[10px] text-[#00B893]" style={{ fontWeight: 560 }}>
+                                    {complianceArtifactRecordedLabel(artifactType)}
+                                  </span>
+                                ) : null}
+                                {issue.unresolved_premium ? (
+                                  <span className="rounded-full bg-[#635BFF]/12 px-2 py-0.5 text-[10px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                                    Wage-dependent premium
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                {issue.reason_codes.map((reasonCode) => (
+                                  <span
+                                    key={`${issue.rule_code}:${reasonCode}`}
+                                    className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? 'bg-white/[0.05] text-[#C1CED8]' : 'bg-[#F7F8FA] text-[#5E6D7A]'}`}
+                                    style={{ fontWeight: 500 }}
+                                  >
+                                    {complianceReasonLabel(reasonCode)}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-start gap-2 md:items-end">
+                              {issue.premium_required ? (
+                                <span className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 500 }}>
+                                  {issue.unresolved_premium
+                                    ? 'Premium applies but needs wage data'
+                                    : issue.premium_cents > 0
+                                      ? `${formatWholeDollarsFromCents(issue.premium_cents)} premium`
+                                      : 'Premium applies'}
+                                </span>
+                              ) : null}
+                              {artifactType && item.shift_id ? (
+                                <button
+                                  onClick={() =>
+                                    onRecordArtifact({
+                                      shiftId: item.shift_id!,
+                                      employeeId: item.employee_id,
+                                      ruleCode: issue.rule_code,
+                                      artifactType,
+                                    })
+                                  }
+                                  className="rounded-full bg-[#635BFF] px-3 py-1.5 text-[11px] text-white transition-colors hover:bg-[#564FD8] disabled:cursor-not-allowed disabled:opacity-60"
+                                  style={{ fontWeight: 560 }}
+                                  disabled={isSubmitting}
+                                  type="button"
+                                >
+                                  {isSubmitting ? 'Recording…' : complianceArtifactActionLabel(artifactType)}
+                                </button>
+                              ) : artifactType ? (
+                                <span className={`text-[11px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                                  Record this after the generated shift exists in draft.
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className={`flex justify-end border-t px-6 py-4 ${borderClass}`}>
+          <button
+            onClick={onClose}
+            className={`rounded-xl border px-4 py-2 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 520 }}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function ComplianceDecisionHistoryModal({
+  dark = false,
+  shiftLabel,
+  loading,
+  error,
+  items,
+  onClose,
+}: {
+  dark?: boolean;
+  shiftLabel: string;
+  loading: boolean;
+  error: string | null;
+  items: ComplianceDecisionHistoryDisplayItem[];
+  onClose: () => void;
+}) {
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedText = dark ? 'text-[#8898AA]' : 'text-[#8898AA]';
+  const timestampFormatter = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  const sourceLabel = (value: string) =>
+    ({
+      scheduler_ui: 'Scheduler',
+      scheduler_assignment: 'Scheduler',
+      coverage_offer: 'Coverage',
+      copilot: 'Copilot',
+      retell_voice: 'Voice',
+      sms_automation: 'SMS',
+    }[value] ?? humanizeComplianceCode(value));
+
+  const outcomeLabel = (value: string) =>
+    ({
+      blocked: 'Blocked',
+      blocked_override_required: 'Blocked, artifact eligible',
+      assigned: 'Assigned',
+      reassigned: 'Reassigned',
+      accepted: 'Accepted',
+      reassign_shift: 'Reassigned',
+      cancel_shift: 'Cancelled',
+      unassign_shift: 'Unassigned',
+    }[value] ?? humanizeComplianceCode(value));
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 0.32 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black"
+        onClick={onClose}
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className={`fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92vw] max-w-[860px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border shadow-2xl ${panelClass}`}
+      >
+        <div className={`flex items-start justify-between border-b px-6 py-5 ${borderClass}`}>
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#635BFF]/10">
+              <ClipboardCopy size={20} className="text-[#635BFF]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                Compliance Decision History
+              </h3>
+              <p className={`mt-1 text-[12px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                {shiftLabel}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className={`rounded-lg p-1.5 transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}
+            type="button"
+          >
+            <X size={16} className={mutedText} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading ? (
+            <div className={`rounded-2xl border px-4 py-6 text-[13px] ${dark ? 'border-white/[0.08] bg-white/[0.03] text-[#C1CED8]' : 'border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]'}`}>
+              Loading compliance history…
+            </div>
+          ) : error ? (
+            <div className="rounded-2xl border border-[#E5484D]/20 bg-[#FFF1F2] px-4 py-6 text-[13px] text-[#E5484D]">
+              {error}
+            </div>
+          ) : items.length === 0 ? (
+            <div className={`rounded-2xl border px-4 py-6 text-[13px] ${dark ? 'border-white/[0.08] bg-white/[0.03] text-[#C1CED8]' : 'border-[#E5E7EB] bg-[#F7F8FA] text-[#5E6D7A]'}`}>
+              No recorded compliance decisions for this shift yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item) => {
+                const statusClass =
+                  item.decision_outcome.startsWith('blocked')
+                    ? 'bg-[#E5484D]/12 text-[#E5484D]'
+                    : item.override_applied || item.warning_rule_codes.length || item.premium_total_cents > 0
+                      ? 'bg-[#F59E0B]/12 text-[#F59E0B]'
+                      : 'bg-[#00B893]/12 text-[#00B893]';
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-2xl border p-4 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-[#E5E7EB] bg-[#F7F8FA]'}`}
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                            {item.employeeName}
+                          </p>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${statusClass}`} style={{ fontWeight: 560 }}>
+                            {outcomeLabel(item.decision_outcome)}
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? 'bg-white/[0.06] text-[#C1CED8]' : 'bg-white text-[#5E6D7A]'}`} style={{ fontWeight: 520 }}>
+                            {sourceLabel(item.decision_source)}
+                          </span>
+                        </div>
+                        <p className={`mt-1 text-[11px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                          {timestampFormatter.format(new Date(item.occurred_at))}
+                          {item.profile_code ? ` · ${item.profile_code}` : ''}
+                          {item.engine_version ? ` · ${item.engine_version}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {item.premium_total_cents > 0 ? (
+                          <span className={`rounded-full px-2 py-1 text-[10px] ${dark ? 'bg-white/[0.06] text-[#C1CED8]' : 'bg-white text-[#5E6D7A]'}`} style={{ fontWeight: 520 }}>
+                            {formatWholeDollarsFromCents(item.premium_total_cents)} premium
+                          </span>
+                        ) : null}
+                        {item.unresolved_premium_rule_codes.length > 0 ? (
+                          <span className="rounded-full bg-[#635BFF]/12 px-2 py-1 text-[10px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                            {item.unresolved_premium_rule_codes.length} unresolved
+                          </span>
+                        ) : null}
+                        {item.override_applied ? (
+                          <span className="rounded-full bg-[#00B893]/12 px-2 py-1 text-[10px] text-[#00B893]" style={{ fontWeight: 560 }}>
+                            Artifact applied
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-3">
+                      {item.blocking_rule_codes.length ? (
+                        <div>
+                          <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                            Blocking rules
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {item.blocking_rule_codes.map((ruleCode) => (
+                              <span key={`${item.id}:block:${ruleCode}`} className="rounded-full bg-[#E5484D]/12 px-2 py-0.5 text-[10px] text-[#E5484D]" style={{ fontWeight: 560 }}>
+                                {humanizeComplianceCode(ruleCode)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {item.warning_rule_codes.length ? (
+                        <div>
+                          <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                            Warning rules
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {item.warning_rule_codes.map((ruleCode) => (
+                              <span
+                                key={`${item.id}:warn:${ruleCode}`}
+                                className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? 'bg-white/[0.05] text-[#C1CED8]' : 'bg-white text-[#5E6D7A]'}`}
+                                style={{ fontWeight: 520 }}
+                              >
+                                {humanizeComplianceCode(ruleCode)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className={`flex justify-end border-t px-6 py-4 ${borderClass}`}>
+          <button
+            onClick={onClose}
+            className={`rounded-xl border px-4 py-2 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 520 }}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
+function ManualComplianceReviewModal({
+  dark = false,
+  blockedAction,
+  summary,
+  reviewItems,
+  isSubmittingActionKey,
+  isRetrying,
+  onViewHistory,
+  onClose,
+  onRetry,
+  onRecordArtifact,
+}: {
+  dark?: boolean;
+  blockedAction: ManualComplianceBlockedAction;
+  summary: ComplianceReviewSummary | null;
+  reviewItems: ManualComplianceReviewItem[];
+  isSubmittingActionKey: string | null;
+  isRetrying: boolean;
+  onViewHistory: (shiftId: string) => void;
+  onClose: () => void;
+  onRetry: () => void;
+  onRecordArtifact: (payload: {
+    shiftId: string;
+    employeeId: string;
+    ruleCode: string;
+    artifactType: ComplianceArtifactType;
+  }) => void;
+}) {
+  const borderClass = dark ? 'border-white/[0.08]' : 'border-[#E5E7EB]';
+  const panelClass = dark ? 'bg-[#0F2E4C] border-white/[0.08]' : 'bg-white border-[#E5E7EB]';
+  const textPrimary = dark ? 'text-white' : 'text-[#0A2540]';
+  const textSecondary = dark ? 'text-[#C1CED8]' : 'text-[#5E6D7A]';
+  const mutedText = dark ? 'text-[#8898AA]' : 'text-[#8898AA]';
+  const actionLabel =
+    blockedAction.kind === 'published_reassignment'
+      ? 'Published reassignment blocked'
+      : 'Assignment blocked';
+  const actionSubhead =
+    blockedAction.kind === 'published_reassignment'
+      ? 'Review the reassignment issues, record any valid artifact, then retry the published change.'
+      : 'Review the assignment issues, record any valid artifact, then retry the scheduler change.';
+  const retryLabel =
+    blockedAction.kind === 'published_reassignment'
+      ? 'Retry reassignment'
+      : 'Retry assignment';
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 0.32 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-40 bg-black"
+        onClick={onClose}
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 10 }}
+        transition={{ duration: 0.2 }}
+        className={`fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[92vw] max-w-[860px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border shadow-2xl ${panelClass}`}
+      >
+        <div className={`flex items-start justify-between border-b px-6 py-5 ${borderClass}`}>
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#E5484D]/10">
+              <AlertTriangle size={20} className="text-[#E5484D]" />
+            </div>
+            <div>
+              <h3 className={`text-[17px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                {actionLabel}
+              </h3>
+              <p className={`mt-1 text-[12px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                {actionSubhead}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className={`rounded-lg p-1.5 transition-colors ${dark ? 'hover:bg-white/[0.06]' : 'hover:bg-[#F7F8FA]'}`}
+            type="button"
+            disabled={isSubmittingActionKey !== null || isRetrying}
+          >
+            <X size={16} className={mutedText} />
+          </button>
+        </div>
+
+        {summary ? (
+          <div className={`border-b px-6 py-4 ${borderClass}`}>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <div>
+                <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                  Blocked
+                </p>
+                <p className={`mt-1 text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                  {summary.blocked_assignment_count}
+                </p>
+              </div>
+              <div>
+                <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                  Warnings
+                </p>
+                <p className={`mt-1 text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                  {summary.warning_assignment_count}
+                </p>
+              </div>
+              <div>
+                <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                  Premiums
+                </p>
+                <p className={`mt-1 text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                  {formatWholeDollarsFromCents(summary.premium_total_cents)}
+                </p>
+              </div>
+              <div>
+                <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+                  Unresolved
+                </p>
+                <p className={`mt-1 text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                  {summary.unresolved_premium_rule_count}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="space-y-3">
+            {reviewItems.map((item) => {
+              const statusLabel =
+                item.status === 'block'
+                  ? 'Blocked'
+                  : item.status === 'warning'
+                    ? 'Needs review'
+                    : item.override_applied
+                      ? 'Artifact applied'
+                      : 'Clear';
+              const cardClass =
+                item.status === 'block'
+                  ? dark
+                    ? 'border-[#E5484D]/30 bg-[#3A1B1B]/70'
+                    : 'border-[#E5484D]/20 bg-[#FFF1F2]'
+                  : item.status === 'warning'
+                    ? dark
+                      ? 'border-[#F59E0B]/25 bg-[#3B2A13]/70'
+                      : 'border-[#F59E0B]/20 bg-[#FFF7ED]'
+                    : dark
+                      ? 'border-white/[0.08] bg-white/[0.03]'
+                      : 'border-[#E5E7EB] bg-[#F7F8FA]';
+              return (
+                <div key={item.assignment_id ?? `${item.shift_id}:${item.employee_id}`} className={`rounded-2xl border p-4 ${cardClass}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={`text-[13px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                          {item.shiftLabel}
+                        </p>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] ${
+                            item.status === 'block'
+                              ? 'bg-[#E5484D]/12 text-[#E5484D]'
+                              : item.status === 'warning'
+                                ? 'bg-[#F59E0B]/12 text-[#F59E0B]'
+                                : 'bg-[#00B893]/12 text-[#00B893]'
+                          }`}
+                          style={{ fontWeight: 560 }}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <p className={`mt-1 text-[12px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                        {item.employeeName}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => onViewHistory(item.shift_id)}
+                        className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-white'}`}
+                        style={{ fontWeight: 560 }}
+                        type="button"
+                        disabled={isRetrying}
+                      >
+                        View history
+                      </button>
+                      {item.premium_total_cents > 0 ? (
+                        <span className={`rounded-full px-2 py-1 text-[10px] ${dark ? 'bg-white/[0.06] text-[#C1CED8]' : 'bg-white text-[#5E6D7A]'}`} style={{ fontWeight: 520 }}>
+                          {formatWholeDollarsFromCents(item.premium_total_cents)} premium
+                        </span>
+                      ) : null}
+                      {item.unresolved_premium_rule_codes.length > 0 ? (
+                        <span className="rounded-full bg-[#635BFF]/12 px-2 py-1 text-[10px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                          Premium calc unresolved
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2.5">
+                    {item.issues.map((issue) => {
+                      const guidance = describeComplianceIssue(issue);
+                      const artifactType = issue.artifact_type_allowed;
+                      const actionKey =
+                        artifactType
+                          ? `${item.shift_id}:${item.employee_id}:${issue.rule_code}:${artifactType}`
+                          : null;
+                      const isSubmitting = actionKey !== null && isSubmittingActionKey === actionKey;
+                      return (
+                        <div
+                          key={`${item.assignment_id ?? item.shift_id}:${issue.rule_code}:${artifactType ?? 'none'}`}
+                          className={`rounded-xl border p-3 ${dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-white bg-white/80'}`}
+                        >
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 580 }}>
+                                  {guidance.title}
+                                </p>
+                                {issue.override_applied ? (
+                                  <span className="rounded-full bg-[#00B893]/12 px-2 py-0.5 text-[10px] text-[#00B893]" style={{ fontWeight: 560 }}>
+                                    {complianceArtifactRecordedLabel(artifactType)}
+                                  </span>
+                                ) : null}
+                                {artifactType && !issue.override_applied ? (
+                                  <span className="rounded-full bg-[#635BFF]/12 px-2 py-0.5 text-[10px] text-[#635BFF]" style={{ fontWeight: 560 }}>
+                                    {complianceReasonLabel(artifactType)} allowed
+                                  </span>
+                                ) : null}
+                                {guidance.premiumLabel ? (
+                                  <span className="rounded-full bg-[#F59E0B]/12 px-2 py-0.5 text-[10px] text-[#F59E0B]" style={{ fontWeight: 560 }}>
+                                    {guidance.premiumLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                {issue.reason_codes.map((reasonCode) => (
+                                  <span
+                                    key={`${issue.rule_code}:${reasonCode}`}
+                                    className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? 'bg-white/[0.05] text-[#C1CED8]' : 'bg-[#F7F8FA] text-[#5E6D7A]'}`}
+                                    style={{ fontWeight: 500 }}
+                                  >
+                                    {complianceReasonLabel(reasonCode)}
+                                  </span>
+                                ))}
+                              </div>
+                              <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                {guidance.detail}
+                              </p>
+                              {guidance.recommendedAction ? (
+                                <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                  {guidance.recommendedAction}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-col items-start gap-2 md:items-end">
+                              {artifactType ? (
+                                issue.override_applied ? (
+                                  <span className={`text-[11px] ${mutedText}`} style={{ fontWeight: 430 }}>
+                                    Retry the action to refresh this review.
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      onRecordArtifact({
+                                        shiftId: item.shift_id,
+                                        employeeId: item.employee_id,
+                                        ruleCode: issue.rule_code,
+                                        artifactType,
+                                      })
+                                    }
+                                    className="rounded-full bg-[#635BFF] px-3 py-1.5 text-[11px] text-white transition-colors hover:bg-[#564FD8] disabled:cursor-not-allowed disabled:opacity-60"
+                                    style={{ fontWeight: 560 }}
+                                    disabled={isSubmitting || isRetrying}
+                                    type="button"
+                                  >
+                                    {isSubmitting ? 'Recording…' : complianceArtifactActionLabel(artifactType)}
+                                  </button>
+                                )
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className={`flex justify-between gap-3 border-t px-6 py-4 ${borderClass}`}>
+          <button
+            onClick={onClose}
+            className={`rounded-xl border px-4 py-2 text-[12px] transition-colors ${dark ? 'border-white/[0.08] text-[#C1CED8] hover:bg-white/[0.04]' : 'border-[#E5E7EB] text-[#5E6D7A] hover:bg-[#F7F8FA]'}`}
+            style={{ fontWeight: 520 }}
+            type="button"
+            disabled={isSubmittingActionKey !== null || isRetrying}
+          >
+            Close
+          </button>
+          <button
+            onClick={onRetry}
+            className="rounded-xl bg-[#635BFF] px-4 py-2 text-[12px] text-white transition-colors hover:bg-[#564FD8] disabled:cursor-not-allowed disabled:opacity-60"
+            style={{ fontWeight: 560 }}
+            type="button"
+            disabled={isSubmittingActionKey !== null || isRetrying}
+          >
+            {isRetrying ? 'Retrying…' : retryLabel}
+          </button>
         </div>
       </motion.div>
     </>

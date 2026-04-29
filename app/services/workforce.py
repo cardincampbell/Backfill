@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import csv
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from io import BytesIO, StringIO
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -19,6 +20,7 @@ from app.models.workforce import (
     EmployeeAvailabilityRule,
     EmployeeLocation,
     EmployeeRole,
+    EmployeeWorkPermit,
 )
 from app.schemas.workforce import (
     EmployeeAvailabilityRuleCreate,
@@ -33,8 +35,11 @@ from app.schemas.workforce import (
     EmployeeLocationUpsert,
     EmployeeRoleCreate,
     EmployeeRoleUpsert,
+    EmployeeWorkPermitCreate,
+    EmployeeWorkPermitTemplateRead,
     EmployeeUpdate,
 )
+from app.services import work_permit_rules
 
 
 _DEFAULT_EMPLOYEE_NOTIFICATION_PREFERENCES = {
@@ -51,6 +56,10 @@ EMPLOYEE_IMPORT_HEADERS = (
     "last_name",
     "phone_number",
     "email_address",
+    "date_of_birth",
+    "minor_school_status",
+    "work_permit_number",
+    "work_permit_expires_on",
 )
 
 EMPLOYEE_IMPORT_REQUIRED_FIELDS = (
@@ -99,6 +108,23 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "external_id": "external_ref",
     "employment_type": "employment_type",
     "employment_status": "employment_type",
+    "pay_rate": "base_hourly_rate_cents",
+    "hourly_rate": "base_hourly_rate_cents",
+    "base_hourly_rate": "base_hourly_rate_cents",
+    "date_of_birth": "date_of_birth",
+    "birth_date": "date_of_birth",
+    "dob": "date_of_birth",
+    "minor_school_status": "minor_school_status",
+    "school_status": "minor_school_status",
+    "school_calendar_status": "minor_school_status",
+    "work_permit_number": "work_permit_number",
+    "permit_number": "work_permit_number",
+    "work_permit_id": "work_permit_number",
+    "permit_id": "work_permit_number",
+    "work_permit_expires_on": "work_permit_expires_on",
+    "work_permit_expiration_date": "work_permit_expires_on",
+    "permit_expires_on": "work_permit_expires_on",
+    "permit_expiration_date": "work_permit_expires_on",
     "hire_date": "hire_date",
     "start_date": "hire_date",
     "notes": "notes",
@@ -115,7 +141,6 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "surname": "last_name",
 }
 
-
 def _require_openpyxl():
     try:
         from openpyxl import Workbook, load_workbook
@@ -123,6 +148,13 @@ def _require_openpyxl():
     except ModuleNotFoundError as exc:
         raise RuntimeError("employee_import_xlsx_dependency_missing") from exc
     return Workbook, load_workbook, Font, PatternFill
+
+
+def list_work_permit_templates() -> list[EmployeeWorkPermitTemplateRead]:
+    return [
+        EmployeeWorkPermitTemplateRead.model_validate(item)
+        for item in work_permit_rules.list_work_permit_templates()
+    ]
 
 
 async def _require_business(session: AsyncSession, business_id: UUID) -> Business:
@@ -158,11 +190,249 @@ async def _list_employee_roles(
     return list(result.scalars().all())
 
 
+async def _list_employee_work_permits(
+    session: AsyncSession,
+    employee_id: UUID,
+) -> list[EmployeeWorkPermit]:
+    result = await session.execute(
+        select(EmployeeWorkPermit)
+        .where(EmployeeWorkPermit.employee_id == employee_id)
+        .order_by(
+            EmployeeWorkPermit.effective_start_date.asc().nullsfirst(),
+            EmployeeWorkPermit.created_at.asc(),
+        )
+    )
+    return list(result.scalars().all())
+
+
 def _employee_query():
     return select(Employee).options(
         selectinload(Employee.employee_roles).selectinload(EmployeeRole.role),
         selectinload(Employee.employee_locations).selectinload(EmployeeLocation.location),
     )
+
+
+def _work_permit_sort_key(permit: EmployeeWorkPermit | EmployeeWorkPermitCreate) -> tuple[date, date, str]:
+    effective_end_date = getattr(permit, "effective_end_date", None) or date.max
+    effective_start_date = getattr(permit, "effective_start_date", None) or date.min
+    permit_number = str(getattr(permit, "permit_number", "") or "")
+    return effective_end_date, effective_start_date, permit_number
+
+
+def _serialized_work_permit_rule_profile(
+    value: object | None,
+) -> dict[str, object] | None:
+    return work_permit_rules.resolve_work_permit_rule_profile_payload(value)
+
+
+def _work_permit_rule_profile_from_metadata(
+    metadata: object | None,
+) -> dict[str, object] | None:
+    if not isinstance(metadata, dict):
+        return None
+    return _serialized_work_permit_rule_profile(metadata.get("rule_profile"))
+
+
+def _employee_work_permit_rule_profile_snapshot(
+    employee: Employee,
+) -> dict[str, object] | None:
+    if not isinstance(employee.employee_metadata, dict):
+        return None
+    return _serialized_work_permit_rule_profile(
+        employee.employee_metadata.get("work_permit_rule_profile")
+    )
+
+
+def _set_employee_work_permit_rule_profile_snapshot(
+    employee: Employee,
+    rule_profile: dict[str, object] | None,
+) -> None:
+    metadata = dict(employee.employee_metadata or {})
+    if rule_profile:
+        metadata["work_permit_rule_profile"] = rule_profile
+    else:
+        metadata.pop("work_permit_rule_profile", None)
+    employee.employee_metadata = metadata
+
+
+def _hydrate_employee_defaults(employee: Employee) -> None:
+    now = datetime.now(timezone.utc)
+    if employee.id is None:
+        employee.id = uuid4()
+    if employee.created_at is None:
+        employee.created_at = now
+    if employee.updated_at is None:
+        employee.updated_at = now
+
+
+def _hydrate_work_permit_defaults(employee: Employee, permit: EmployeeWorkPermit) -> None:
+    _hydrate_employee_defaults(employee)
+    now = datetime.now(timezone.utc)
+    permit.employee_id = employee.id
+    if permit.id is None:
+        permit.id = uuid4()
+    if permit.created_at is None:
+        permit.created_at = now
+    if permit.updated_at is None:
+        permit.updated_at = now
+
+
+def _sync_employee_work_permit_snapshot(
+    employee: Employee,
+    permits: list[EmployeeWorkPermit] | list[EmployeeWorkPermitCreate],
+) -> None:
+    if not permits:
+        employee.work_permit_number = None
+        employee.work_permit_effective_start_on = None
+        employee.work_permit_expires_on = None
+        employee.work_permit_max_daily_minutes = None
+        employee.work_permit_max_weekly_minutes = None
+        employee.work_permit_earliest_start_local_time = None
+        employee.work_permit_latest_end_local_time = None
+        _set_employee_work_permit_rule_profile_snapshot(employee, None)
+        return
+    best = sorted(permits, key=_work_permit_sort_key, reverse=True)[0]
+    employee.work_permit_number = str(getattr(best, "permit_number", "") or "").strip() or None
+    employee.work_permit_effective_start_on = getattr(best, "effective_start_date", None)
+    employee.work_permit_expires_on = getattr(best, "effective_end_date", None)
+    employee.work_permit_max_daily_minutes = getattr(best, "max_daily_minutes", None)
+    employee.work_permit_max_weekly_minutes = getattr(best, "max_weekly_minutes", None)
+    employee.work_permit_earliest_start_local_time = getattr(best, "earliest_start_local_time", None)
+    employee.work_permit_latest_end_local_time = getattr(best, "latest_end_local_time", None)
+    _set_employee_work_permit_rule_profile_snapshot(
+        employee,
+        _serialized_work_permit_rule_profile(
+            getattr(best, "rule_profile", None)
+            or _work_permit_rule_profile_from_metadata(
+                getattr(best, "permit_metadata", None)
+            )
+        ),
+    )
+
+
+def _loaded_employee_work_permits(employee: Employee) -> list[EmployeeWorkPermit]:
+    try:
+        state = inspect(employee)
+        if "work_permits" in getattr(state, "unloaded", ()):
+            return []
+    except Exception:
+        return []
+    return list(getattr(employee, "work_permits", []) or [])
+
+
+def _permit_covers_date(permit: EmployeeWorkPermit, reference_date: date) -> bool:
+    start_on = permit.effective_start_date
+    end_on = permit.effective_end_date
+    if start_on is not None and start_on > reference_date:
+        return False
+    if end_on is not None and end_on < reference_date:
+        return False
+    return True
+
+
+def _active_work_permit_sort_key(permit: EmployeeWorkPermit) -> tuple[date, date, str]:
+    effective_start_date = permit.effective_start_date or date.min
+    effective_end_date = permit.effective_end_date or date.max
+    permit_number = str(permit.permit_number or "")
+    return effective_start_date, effective_end_date, permit_number
+
+
+def _snapshot_work_permit_context(employee: Employee, *, reference_date: date) -> dict[str, object]:
+    permit_number = str(getattr(employee, "work_permit_number", "") or "").strip() or None
+    effective_start_on = getattr(employee, "work_permit_effective_start_on", None)
+    expires_on = getattr(employee, "work_permit_expires_on", None)
+    is_active = bool(permit_number)
+    if effective_start_on is not None and effective_start_on > reference_date:
+        is_active = False
+    if expires_on is not None and expires_on < reference_date:
+        is_active = False
+    return {
+        "permit_number": permit_number,
+        "effective_start_on": effective_start_on,
+        "expires_on": expires_on,
+        "max_daily_minutes": getattr(employee, "work_permit_max_daily_minutes", None),
+        "max_weekly_minutes": getattr(employee, "work_permit_max_weekly_minutes", None),
+        "earliest_start_local_time": getattr(employee, "work_permit_earliest_start_local_time", None),
+        "latest_end_local_time": getattr(employee, "work_permit_latest_end_local_time", None),
+        "rule_profile": _employee_work_permit_rule_profile_snapshot(employee),
+        "is_active": is_active,
+        "source": "employee_snapshot",
+    }
+
+
+def resolve_employee_work_permit_context(
+    employee: Employee,
+    *,
+    shift_starts_at: datetime,
+    timezone_name: str | None,
+) -> dict[str, object]:
+    try:
+        shift_timezone = ZoneInfo(str(timezone_name or "").strip() or "UTC")
+    except Exception:
+        shift_timezone = ZoneInfo("UTC")
+    shift_local_date = shift_starts_at.astimezone(shift_timezone).date()
+    loaded_permits = _loaded_employee_work_permits(employee)
+    if not loaded_permits:
+        return _snapshot_work_permit_context(employee, reference_date=shift_local_date)
+
+    active_permits = [permit for permit in loaded_permits if _permit_covers_date(permit, shift_local_date)]
+    if active_permits:
+        permit = sorted(active_permits, key=_active_work_permit_sort_key, reverse=True)[0]
+        return {
+            "permit_number": permit.permit_number,
+            "effective_start_on": permit.effective_start_date,
+            "expires_on": permit.effective_end_date,
+            "max_daily_minutes": permit.max_daily_minutes,
+            "max_weekly_minutes": permit.max_weekly_minutes,
+            "earliest_start_local_time": permit.earliest_start_local_time,
+            "latest_end_local_time": permit.latest_end_local_time,
+            "rule_profile": _serialized_work_permit_rule_profile(permit.rule_profile),
+            "is_active": True,
+            "source": "employee_work_permit",
+        }
+
+    future_permits = sorted(
+        [
+            permit
+            for permit in loaded_permits
+            if permit.effective_start_date is not None and permit.effective_start_date > shift_local_date
+        ],
+        key=lambda permit: (
+            permit.effective_start_date or date.max,
+            permit.effective_end_date or date.max,
+            permit.permit_number,
+        ),
+    )
+    if future_permits:
+        permit = future_permits[0]
+    else:
+        past_permits = sorted(
+            [
+                permit
+                for permit in loaded_permits
+                if permit.effective_end_date is not None and permit.effective_end_date < shift_local_date
+            ],
+            key=lambda permit: (
+                permit.effective_end_date or date.min,
+                permit.effective_start_date or date.min,
+                permit.permit_number,
+            ),
+            reverse=True,
+        )
+        permit = past_permits[0] if past_permits else sorted(loaded_permits, key=_work_permit_sort_key, reverse=True)[0]
+
+    return {
+        "permit_number": permit.permit_number,
+        "effective_start_on": permit.effective_start_date,
+        "expires_on": permit.effective_end_date,
+        "max_daily_minutes": permit.max_daily_minutes,
+        "max_weekly_minutes": permit.max_weekly_minutes,
+        "earliest_start_local_time": permit.earliest_start_local_time,
+        "latest_end_local_time": permit.latest_end_local_time,
+        "rule_profile": _serialized_work_permit_rule_profile(permit.rule_profile),
+        "is_active": False,
+        "source": "employee_work_permit",
+    }
 
 
 def _normalize_employee_phone(value: str | None) -> str | None:
@@ -187,6 +457,26 @@ def _normalize_employee_email(value: str | None) -> str | None:
 def _normalize_employee_external_ref(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _normalize_minor_school_status(value: object | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    aliases = {
+        "unknown": "unknown",
+        "in_session": "in_session",
+        "school_year": "in_session",
+        "school_in_session": "in_session",
+        "on_break": "summer_break",
+        "summer_break": "summer_break",
+        "summer": "summer_break",
+        "not_enrolled": "not_enrolled",
+    }
+    resolved = aliases.get(normalized)
+    if resolved is None:
+        raise ValueError("invalid_minor_school_status")
+    return resolved
 
 
 def _normalize_notification_datetime(value: object) -> datetime | None:
@@ -565,6 +855,18 @@ def _normalize_import_value(value: object) -> str:
 
 
 def _parse_hire_date(raw: object) -> date | None:
+    return _parse_optional_date(raw, error_code="invalid_hire_date")
+
+
+def _parse_date_of_birth(raw: object) -> date | None:
+    return _parse_optional_date(raw, error_code="invalid_date_of_birth")
+
+
+def _parse_work_permit_expires_on(raw: object) -> date | None:
+    return _parse_optional_date(raw, error_code="invalid_work_permit_expires_on")
+
+
+def _parse_optional_date(raw: object, *, error_code: str) -> date | None:
     if raw in (None, ""):
         return None
     if isinstance(raw, datetime):
@@ -588,7 +890,23 @@ def _parse_hire_date(raw: object) -> date | None:
         except ValueError:
             continue
 
-    raise ValueError("invalid_hire_date")
+    raise ValueError(error_code)
+
+
+def _parse_base_hourly_rate_cents(raw: object) -> int | None:
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, int):
+        return max(0, raw)
+
+    normalized = str(raw).strip()
+    if not normalized:
+        return None
+    normalized = normalized.replace("$", "").replace(",", "")
+    try:
+        return max(0, int(round(float(normalized) * 100)))
+    except ValueError as exc:
+        raise ValueError("invalid_base_hourly_rate") from exc
 
 
 def _canonicalize_import_row(raw_row: dict[object, object]) -> dict[str, object]:
@@ -683,6 +1001,15 @@ def parse_employee_import_file(
                 phone_e164=normalized_phone,
                 employee_number=str(canonical.get("employee_number") or "").strip() or None,
                 external_ref=str(canonical.get("external_ref") or "").strip() or None,
+                base_hourly_rate_cents=_parse_base_hourly_rate_cents(
+                    canonical.get("base_hourly_rate_cents")
+                ),
+                date_of_birth=_parse_date_of_birth(canonical.get("date_of_birth")),
+                minor_school_status=_normalize_minor_school_status(canonical.get("minor_school_status")),
+                work_permit_number=str(canonical.get("work_permit_number") or "").strip() or None,
+                work_permit_expires_on=_parse_work_permit_expires_on(
+                    canonical.get("work_permit_expires_on")
+                ),
                 employment_type=str(canonical.get("employment_type") or "").strip() or None,
                 primary_location_id=default_location_id,
                 hire_date=_parse_hire_date(canonical.get("hire_date")),
@@ -719,6 +1046,10 @@ def build_employee_import_template() -> bytes:
             "Smith",
             "+15555550123",
             "taylor@example.com",
+            "1998-04-12",
+            "unknown",
+            "",
+            "",
         ]
     )
     return buffer.getvalue().encode("utf-8")
@@ -916,6 +1247,54 @@ async def _replace_employee_locations(
             existing.location_metadata = item.location_metadata or {}
 
 
+async def _replace_employee_work_permits(
+    session: AsyncSession,
+    employee: Employee,
+    permits: list[EmployeeWorkPermitCreate],
+) -> list[EmployeeWorkPermit]:
+    normalized_permit_numbers = [str(permit.permit_number or "").strip() for permit in permits]
+    if any(not permit_number for permit_number in normalized_permit_numbers):
+        raise ValueError("invalid_work_permit_number")
+    if len(set(normalized_permit_numbers)) != len(normalized_permit_numbers):
+        raise ValueError("duplicate_work_permit_numbers")
+
+    _hydrate_employee_defaults(employee)
+    try:
+        existing_work_permits = await _list_employee_work_permits(session, employee.id)
+    except AttributeError:
+        existing_work_permits = list(getattr(employee, "work_permits", []) or [])
+    for existing in existing_work_permits:
+        await session.delete(existing)
+    await session.flush()
+
+    records: list[EmployeeWorkPermit] = []
+    for permit, normalized_permit_number in zip(permits, normalized_permit_numbers):
+        permit_metadata = dict(permit.permit_metadata or {})
+        permit_metadata.pop("rule_profile", None)
+        rule_profile = _serialized_work_permit_rule_profile(permit.rule_profile)
+        if rule_profile is not None:
+            permit_metadata["rule_profile"] = rule_profile
+        record = EmployeeWorkPermit(
+            employee_id=employee.id,
+            permit_number=normalized_permit_number,
+            issuing_authority=str(permit.issuing_authority or "").strip() or None,
+            issued_on=permit.issued_on,
+            effective_start_date=permit.effective_start_date,
+            effective_end_date=permit.effective_end_date,
+            max_daily_minutes=permit.max_daily_minutes,
+            max_weekly_minutes=permit.max_weekly_minutes,
+            earliest_start_local_time=permit.earliest_start_local_time,
+            latest_end_local_time=permit.latest_end_local_time,
+            permit_metadata=permit_metadata,
+        )
+        _hydrate_work_permit_defaults(employee, record)
+        session.add(record)
+        records.append(record)
+    await session.flush()
+    _sync_employee_work_permit_snapshot(employee, records)
+    return records
+
+
 async def create_employee(
     session: AsyncSession,
     business_id: UUID,
@@ -952,11 +1331,22 @@ async def create_employee(
         preferred_name=payload.preferred_name,
         phone_e164=normalized_phone,
         email=normalized_email,
+        base_hourly_rate_cents=payload.base_hourly_rate_cents,
+        date_of_birth=payload.date_of_birth,
+        minor_school_status=_normalize_minor_school_status(payload.minor_school_status),
+        work_permit_number=str(payload.work_permit_number or "").strip() or None,
+        work_permit_effective_start_on=payload.work_permit_effective_start_on,
+        work_permit_expires_on=payload.work_permit_expires_on,
+        work_permit_max_daily_minutes=payload.work_permit_max_daily_minutes,
+        work_permit_max_weekly_minutes=payload.work_permit_max_weekly_minutes,
+        work_permit_earliest_start_local_time=payload.work_permit_earliest_start_local_time,
+        work_permit_latest_end_local_time=payload.work_permit_latest_end_local_time,
         employment_type=payload.employment_type,
         hire_date=payload.hire_date,
         notes=payload.notes,
         employee_metadata=payload.employee_metadata,
     )
+    _hydrate_employee_defaults(employee)
     session.add(employee)
     await session.flush()
     primary_location: EmployeeLocation | None = None
@@ -985,6 +1375,10 @@ async def create_employee(
     for rule in default_availability_rules:
         session.add(rule)
 
+    work_permits: list[EmployeeWorkPermit] = []
+    if payload.work_permits:
+        work_permits = await _replace_employee_work_permits(session, employee, payload.work_permits)
+
     await session.flush()
     await session.refresh(employee)
     if primary_location is not None:
@@ -994,6 +1388,7 @@ async def create_employee(
     else:
         set_committed_value(employee, "employee_locations", [])
     set_committed_value(employee, "employee_roles", [])
+    set_committed_value(employee, "work_permits", work_permits)
     set_committed_value(employee, "availability_rules", default_availability_rules)
     return _attach_employee_notification_preferences(employee)
 
@@ -1079,11 +1474,22 @@ async def enroll_employee_at_location(
         preferred_name=payload.preferred_name,
         phone_e164=payload.phone_e164,
         email=payload.email,
+        base_hourly_rate_cents=payload.base_hourly_rate_cents,
+        date_of_birth=payload.date_of_birth,
+        minor_school_status=_normalize_minor_school_status(payload.minor_school_status),
+        work_permit_number=str(payload.work_permit_number or "").strip() or None,
+        work_permit_effective_start_on=payload.work_permit_effective_start_on,
+        work_permit_expires_on=payload.work_permit_expires_on,
+        work_permit_max_daily_minutes=payload.work_permit_max_daily_minutes,
+        work_permit_max_weekly_minutes=payload.work_permit_max_weekly_minutes,
+        work_permit_earliest_start_local_time=payload.work_permit_earliest_start_local_time,
+        work_permit_latest_end_local_time=payload.work_permit_latest_end_local_time,
         employment_type=payload.employment_type,
         hire_date=payload.hire_date,
         notes=payload.notes,
         employee_metadata=payload.employee_metadata,
     )
+    _hydrate_employee_defaults(employee)
     session.add(employee)
     await session.flush()
 
@@ -1111,6 +1517,10 @@ async def enroll_employee_at_location(
         session.add(employee_role)
         employee_roles.append(employee_role)
 
+    work_permits: list[EmployeeWorkPermit] = []
+    if payload.work_permits:
+        work_permits = await _replace_employee_work_permits(session, employee, payload.work_permits)
+
     await session.flush()
     await session.refresh(employee)
     set_committed_value(primary_employee_location, "location", location)
@@ -1118,6 +1528,7 @@ async def enroll_employee_at_location(
         set_committed_value(employee_role, "role", role)
     set_committed_value(employee, "employee_locations", [primary_employee_location])
     set_committed_value(employee, "employee_roles", employee_roles)
+    set_committed_value(employee, "work_permits", work_permits)
 
     return EmployeeEnrollmentRead(
         employee=_attach_employee_notification_preferences(employee),
@@ -1133,8 +1544,13 @@ async def get_employee_profile(
     employee = await _require_employee(session, business_id, employee_id)
     employee_roles = await _list_employee_roles(session, employee_id)
     employee_locations = await _list_employee_locations(session, employee_id)
+    try:
+        employee_work_permits = await _list_employee_work_permits(session, employee_id)
+    except AttributeError:
+        employee_work_permits = list(getattr(employee, "work_permits", []) or [])
     set_committed_value(employee, "employee_roles", employee_roles)
     set_committed_value(employee, "employee_locations", employee_locations)
+    set_committed_value(employee, "work_permits", employee_work_permits)
     return _attach_employee_notification_preferences(employee)
 
 
@@ -1248,6 +1664,24 @@ async def update_employee(
         "email": normalized_email,
         "external_ref": normalized_external_ref,
         "employee_number": payload.employee_number,
+        "base_hourly_rate_cents": payload.base_hourly_rate_cents,
+        "date_of_birth": payload.date_of_birth,
+        "minor_school_status": (
+            _normalize_minor_school_status(payload.minor_school_status)
+            if "minor_school_status" in payload.model_fields_set
+            else employee.minor_school_status
+        ),
+        "work_permit_number": (
+            str(payload.work_permit_number or "").strip() or None
+            if "work_permit_number" in payload.model_fields_set
+            else employee.work_permit_number
+        ),
+        "work_permit_effective_start_on": payload.work_permit_effective_start_on,
+        "work_permit_expires_on": payload.work_permit_expires_on,
+        "work_permit_max_daily_minutes": payload.work_permit_max_daily_minutes,
+        "work_permit_max_weekly_minutes": payload.work_permit_max_weekly_minutes,
+        "work_permit_earliest_start_local_time": payload.work_permit_earliest_start_local_time,
+        "work_permit_latest_end_local_time": payload.work_permit_latest_end_local_time,
         "employment_type": payload.employment_type,
         "status": payload.status,
         "hire_date": payload.hire_date,
@@ -1268,14 +1702,22 @@ async def update_employee(
     if "locations" in payload.model_fields_set:
         await _replace_employee_locations(session, employee, business_id, payload.locations or [])
 
+    if "work_permits" in payload.model_fields_set and payload.work_permits is not None:
+        await _replace_employee_work_permits(session, employee, payload.work_permits)
+
     await session.flush()
     refreshed = await get_employee(session, business_id, employee_id)
     if refreshed is None:
         raise LookupError("employee_not_found")
     employee_roles = await _list_employee_roles(session, employee_id)
     employee_locations = await _list_employee_locations(session, employee_id)
+    try:
+        employee_work_permits = await _list_employee_work_permits(session, employee_id)
+    except AttributeError:
+        employee_work_permits = list(getattr(refreshed, "work_permits", []) or [])
     set_committed_value(refreshed, "employee_roles", employee_roles)
     set_committed_value(refreshed, "employee_locations", employee_locations)
+    set_committed_value(refreshed, "work_permits", employee_work_permits)
     return _attach_employee_notification_preferences(refreshed)
 
 

@@ -28,6 +28,16 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     preferred_name: Mapped[Optional[str]] = mapped_column(String(255))
     phone_e164: Mapped[Optional[str]] = mapped_column(String(24))
     email: Mapped[Optional[str]] = mapped_column(String(320))
+    base_hourly_rate_cents: Mapped[Optional[int]] = mapped_column(Integer)
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date)
+    minor_school_status: Mapped[Optional[str]] = mapped_column(String(32))
+    work_permit_number: Mapped[Optional[str]] = mapped_column(String(80))
+    work_permit_effective_start_on: Mapped[Optional[date]] = mapped_column(Date)
+    work_permit_expires_on: Mapped[Optional[date]] = mapped_column(Date)
+    work_permit_max_daily_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    work_permit_max_weekly_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    work_permit_earliest_start_local_time: Mapped[Optional[time]] = mapped_column(Time)
+    work_permit_latest_end_local_time: Mapped[Optional[time]] = mapped_column(Time)
     reliability_score: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False, server_default="0.700")
     avg_response_time_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     status: Mapped[EmployeeStatus] = mapped_column(
@@ -60,6 +70,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     availability_rules: Mapped[list["EmployeeAvailabilityRule"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
     availability_exceptions: Mapped[list["EmployeeAvailabilityException"]] = relationship(back_populates="employee", cascade="all, delete-orphan")
+    work_permits: Mapped[list["EmployeeWorkPermit"]] = relationship(
+        back_populates="employee",
+        cascade="all, delete-orphan",
+        order_by="EmployeeWorkPermit.created_at.asc()",
+    )
     assignments: Mapped[list["ShiftAssignment"]] = relationship(back_populates="employee")
 
     def _loaded_employee_roles(self) -> list["EmployeeRole"]:
@@ -267,6 +282,39 @@ class EmployeeAvailabilityRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     availability_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
 
     employee: Mapped["Employee"] = relationship(back_populates="availability_rules")
+
+
+class EmployeeWorkPermit(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "employee_work_permits"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "permit_number", name="uq_employee_work_permits_employee_id_permit_number"),
+        Index("ix_employee_work_permits_employee_id", "employee_id"),
+        Index("ix_employee_work_permits_effective_end_date", "effective_end_date"),
+    )
+
+    employee_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    permit_number: Mapped[str] = mapped_column(String(80), nullable=False)
+    issuing_authority: Mapped[Optional[str]] = mapped_column(String(255))
+    issued_on: Mapped[Optional[date]] = mapped_column(Date)
+    effective_start_date: Mapped[Optional[date]] = mapped_column(Date)
+    effective_end_date: Mapped[Optional[date]] = mapped_column(Date)
+    max_daily_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    max_weekly_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    earliest_start_local_time: Mapped[Optional[time]] = mapped_column(Time)
+    latest_end_local_time: Mapped[Optional[time]] = mapped_column(Time)
+    permit_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict)
+
+    employee: Mapped["Employee"] = relationship(back_populates="work_permits")
+
+    @property
+    def rule_profile(self) -> Optional[dict]:
+        raw = dict(self.permit_metadata or {})
+        profile = raw.get("rule_profile")
+        if not isinstance(profile, dict) or not profile:
+            return None
+        from app.services import work_permit_rules
+
+        return work_permit_rules.resolve_work_permit_rule_profile_payload(profile)
 
 
 class EmployeeAvailabilityException(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -26,15 +26,20 @@ from app.models.auto_scheduler import (
 from app.models.business import Business, Location
 from app.models.common import (
     AssignmentStatus,
+    ComplianceOverrideArtifactType,
+    ComplianceOverrideArtifactStatus,
     EmployeeStatus,
     LaborForecastRunStatus,
     ScheduleApplyStatus,
     ScheduleRunStatus,
     ScheduleRunType,
+    ShiftBreakType,
     ShiftLifecycleStatus,
+    ShiftSegmentType,
     ShiftStaffingStatus,
 )
-from app.models.scheduling import Shift, ShiftAssignment
+from app.models.compliance import ComplianceOverrideArtifact
+from app.models.scheduling import Shift, ShiftAssignment, ShiftBreak, ShiftSegment
 from app.models.workforce import Employee, EmployeeLocation, EmployeeRole
 from app.schemas.auto_scheduler import (
     GeneratedDemandPayload,
@@ -44,12 +49,17 @@ from app.schemas.auto_scheduler import (
 )
 from app.services import (
     auto_scheduler_optimizer,
+    compliance_break_planner,
+    compliance_engine,
+    compliance_overrides,
     feature_snapshot_builder,
     forecast_engine,
     forecast_history,
     labor_forecasting,
     pos_sales,
+    settings as settings_service,
     shift_assignments,
+    workforce,
 )
 from app.services.schedule_weeks import effective_week_start_day
 
@@ -108,6 +118,11 @@ def resolve_schedule_policy_payload(
             auto_scheduler_settings.get("labor_rule_mode"),
             allowed={"soft_penalty", "hard_block"},
             default=_DEFAULT_LABOR_RULE_MODE,
+        ),
+        compliance_rule_mode=_scheduler_choice(
+            auto_scheduler_settings.get("compliance_rule_mode") or auto_scheduler_settings.get("labor_rule_mode"),
+            allowed={"soft_penalty", "hard_block"},
+            default="hard_block",
         ),
         fairness_mode=_scheduler_choice(
             auto_scheduler_settings.get("fairness_mode"),
@@ -214,6 +229,7 @@ def build_schedule_run_inputs_from_loaded_scope(
     location_id: UUID | None = None,
     location_settings: Mapping[str, object] | None = None,
     labor_payload: Mapping[str, object] | None = None,
+    compliance_payload: Mapping[str, object] | None = None,
     generated_demand_payload: Mapping[str, object] | GeneratedDemandPayload | None = None,
     source_metadata: Mapping[str, object] | None = None,
 ) -> tuple[ScheduleRunInputContract, str]:
@@ -269,6 +285,7 @@ def build_schedule_run_inputs_from_loaded_scope(
         availability_payload={"eligible_employee_ids_by_shift": eligible_employee_ids_by_shift},
         policy_payload=policy_payload,
         labor_payload=dict(labor_payload or {}),
+        compliance_payload=dict(compliance_payload or {}),
         reliability_payload=reliability_payload,
         reliability_snapshot_generated_at=reliability_payload.generated_at,
         reliability_snapshot_hash=reliability_payload.snapshot_hash,
@@ -329,6 +346,7 @@ async def create_schedule_run(
         availability_payload=inputs.availability_payload,
         policy_payload=inputs.policy_payload.model_dump(),
         labor_payload=inputs.labor_payload,
+        compliance_payload=inputs.compliance_payload,
         reliability_payload=inputs.reliability_payload.model_dump(),
         reliability_snapshot_generated_at=inputs.reliability_snapshot_generated_at,
         reliability_snapshot_hash=inputs.reliability_snapshot_hash,
@@ -404,6 +422,7 @@ async def create_and_execute_schedule_run_for_scope(
         location_id=location_id,
         location_settings=location.settings if location is not None and isinstance(location.settings, Mapping) else {},
         labor_payload=labor_payload,
+        compliance_payload={},
         generated_demand_payload=generated_demand_payload,
         source_metadata={
             "source": "auto_scheduler_scope_loader_v1",
@@ -419,6 +438,41 @@ async def create_and_execute_schedule_run_for_scope(
         planning_window_end=planning_window_end,
         inputs=inputs,
     )
+    generated_locations = await _load_generated_demand_locations(
+        session,
+        business_id=business_id,
+        generated_demand_payload=inputs.generated_demand_payload,
+        scope_shifts=shifts,
+        fallback_location=location,
+    )
+    inputs, break_plan_metadata = await _attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business_id,
+        inputs=inputs,
+        reference_time=generated_at,
+        business_settings=business.settings if isinstance(business.settings, Mapping) else {},
+        generated_locations=generated_locations,
+    )
+    compliance_payload = await _build_scope_compliance_payload(
+        session,
+        business_id=business_id,
+        shifts=shifts,
+        employees=employees,
+        reference_time=generated_at,
+        business_settings=business.settings if isinstance(business.settings, Mapping) else {},
+        generated_demand_payload=inputs.generated_demand_payload,
+        generated_locations=generated_locations,
+    )
+    source_metadata_with_compliance = {
+        **dict(inputs.source_metadata or {}),
+        **break_plan_metadata,
+    }
+    inputs = inputs.model_copy(
+        update={
+            "compliance_payload": compliance_payload,
+            "source_metadata": source_metadata_with_compliance,
+        }
+    )
     schedule_run = await create_schedule_run(
         session,
         business_id=business_id,
@@ -432,6 +486,7 @@ async def create_and_execute_schedule_run_for_scope(
             "scope_employee_count": len(employees),
             "source": "auto_scheduler_scope_loader_v1",
             **artifact_metadata,
+            **break_plan_metadata,
         },
     )
     return await execute_schedule_run(
@@ -462,6 +517,11 @@ async def current_scope_snapshot_hash(
         business_id=business_id,
         shifts=shifts,
     )
+    compliance_override_artifacts = await _load_scope_compliance_override_artifacts(
+        session,
+        shifts=shifts,
+        reference_time=datetime.now(timezone.utc),
+    )
     generated_demand = _normalized_generated_demand_payload(
         generated_demand_payload,
         location_id=location_id,
@@ -481,6 +541,7 @@ async def current_scope_snapshot_hash(
             planning_window_start=planning_window_start,
             planning_window_end=planning_window_end,
             shifts=shifts,
+            compliance_override_artifacts=compliance_override_artifacts,
         ),
     )
 
@@ -526,6 +587,7 @@ def schedule_run_input_contract(schedule_run: ScheduleRun) -> ScheduleRunInputCo
             "availability_payload": run_inputs.availability_payload or {},
             "policy_payload": run_inputs.policy_payload or {},
             "labor_payload": run_inputs.labor_payload or {},
+            "compliance_payload": run_inputs.compliance_payload or {},
             "reliability_payload": run_inputs.reliability_payload or {},
             "reliability_snapshot_generated_at": run_inputs.reliability_snapshot_generated_at,
             "reliability_snapshot_hash": run_inputs.reliability_snapshot_hash,
@@ -676,6 +738,289 @@ async def get_schedule_run_detail(
     return await load_schedule_run(session, schedule_run_id)
 
 
+def schedule_run_compliance_summary(
+    schedule_run: ScheduleRun,
+) -> dict[str, object]:
+    summary = {
+        "selected_assignment_count": 0,
+        "clear_assignment_count": 0,
+        "warning_assignment_count": 0,
+        "blocked_assignment_count": 0,
+        "override_applied_count": 0,
+        "override_eligible_warning_count": 0,
+        "premium_total_cents": 0,
+        "unresolved_premium_rule_count": 0,
+        "unresolved_premium_rule_codes": [],
+        "warning_rule_codes": [],
+        "override_eligible_artifact_types": [],
+        "warning_shift_ids": [],
+        "blocked_shift_ids": [],
+        "override_eligible_shift_ids": [],
+    }
+    warning_rule_codes: set[str] = set()
+    unresolved_premium_rule_codes: set[str] = set()
+    override_eligible_artifact_types: set[str] = set()
+    warning_shift_ids: set[str] = set()
+    blocked_shift_ids: set[str] = set()
+    override_eligible_shift_ids: set[str] = set()
+    override_artifact_ids: set[str] = set()
+
+    for assignment_evaluation in _schedule_run_assignment_evaluations(schedule_run):
+        shift_key = assignment_evaluation["shift_key"]
+        evaluation = assignment_evaluation["evaluation"]
+        summary["selected_assignment_count"] += 1
+        status = str(evaluation.get("status") or "").strip().lower()
+        if status == "block":
+            summary["blocked_assignment_count"] += 1
+            blocked_shift_ids.add(shift_key)
+        elif status == "warning":
+            summary["warning_assignment_count"] += 1
+            warning_shift_ids.add(shift_key)
+        elif status == "clear":
+            summary["clear_assignment_count"] += 1
+
+        summary["premium_total_cents"] += _int_setting(
+            evaluation.get("premium_total_cents"),
+            default=0,
+            minimum=0,
+        )
+
+        for rule_code in evaluation.get("warning_rule_codes") or []:
+            normalized = str(rule_code or "").strip()
+            if normalized:
+                warning_rule_codes.add(normalized)
+        for rule_code in evaluation.get("unresolved_premium_rule_codes") or []:
+            normalized = str(rule_code or "").strip()
+            if normalized:
+                unresolved_premium_rule_codes.add(normalized)
+
+        override_artifact_id = str(evaluation.get("override_artifact_id") or "").strip()
+        if bool(evaluation.get("override_applied")) and override_artifact_id:
+            override_artifact_ids.add(override_artifact_id)
+
+        for raw_result in evaluation.get("rule_results") or []:
+            result = _mapping(raw_result)
+            artifact_type = str(result.get("artifact_type_allowed") or "").strip()
+            if not artifact_type:
+                continue
+            if str(result.get("override_artifact_id") or "").strip():
+                continue
+            override_eligible_artifact_types.add(artifact_type)
+            override_eligible_shift_ids.add(shift_key)
+            summary["override_eligible_warning_count"] += 1
+
+    summary["override_applied_count"] = len(override_artifact_ids)
+    summary["unresolved_premium_rule_count"] = len(unresolved_premium_rule_codes)
+    summary["unresolved_premium_rule_codes"] = sorted(unresolved_premium_rule_codes)
+    summary["warning_rule_codes"] = sorted(warning_rule_codes)
+    summary["override_eligible_artifact_types"] = sorted(override_eligible_artifact_types)
+    summary["warning_shift_ids"] = sorted(warning_shift_ids)
+    summary["blocked_shift_ids"] = sorted(blocked_shift_ids)
+    summary["override_eligible_shift_ids"] = sorted(override_eligible_shift_ids)
+    return summary
+
+
+def schedule_run_compliance_review_items(
+    schedule_run: ScheduleRun,
+) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for assignment_evaluation in _schedule_run_assignment_evaluations(schedule_run):
+        assignment = assignment_evaluation["assignment"]
+        evaluation = assignment_evaluation["evaluation"]
+        issues = _schedule_run_compliance_review_issues(evaluation)
+        status = str(evaluation.get("status") or "").strip().lower() or "clear"
+        premium_total_cents = _int_setting(
+            evaluation.get("premium_total_cents"),
+            default=0,
+            minimum=0,
+        )
+        override_applied = bool(evaluation.get("override_applied"))
+        unresolved_premium_rule_codes = sorted(
+            {
+                str(rule_code or "").strip()
+                for rule_code in evaluation.get("unresolved_premium_rule_codes") or []
+                if str(rule_code or "").strip()
+            }
+        )
+        if (
+            status == "clear"
+            and not override_applied
+            and premium_total_cents == 0
+            and not unresolved_premium_rule_codes
+            and not issues
+        ):
+            continue
+
+        items.append(
+            {
+                "assignment_id": assignment.id,
+                "shift_id": assignment.shift_id,
+                "proposed_shift_id": assignment.proposed_shift_id,
+                "optimizer_shift_id": assignment_evaluation["optimizer_shift_id"],
+                "employee_id": assignment.employee_id,
+                "status": status,
+                "blocking_rule_codes": sorted(
+                    {
+                        str(rule_code or "").strip()
+                        for rule_code in evaluation.get("blocking_rule_codes") or []
+                        if str(rule_code or "").strip()
+                    }
+                ),
+                "warning_rule_codes": sorted(
+                    {
+                        str(rule_code or "").strip()
+                        for rule_code in evaluation.get("warning_rule_codes") or []
+                        if str(rule_code or "").strip()
+                    }
+                ),
+                "premium_total_cents": premium_total_cents,
+                "unresolved_premium_rule_codes": unresolved_premium_rule_codes,
+                "override_applied": override_applied,
+                "override_artifact_id": (
+                    str(evaluation.get("override_artifact_id") or "").strip() or None
+                ),
+                "override_eligible_artifact_types": sorted(
+                    {
+                        str(issue.get("artifact_type_allowed") or "").strip()
+                        for issue in issues
+                        if str(issue.get("artifact_type_allowed") or "").strip()
+                        and not bool(issue.get("override_applied"))
+                    }
+                ),
+                "issues": issues,
+            }
+        )
+
+    items.sort(
+        key=lambda item: (
+            _compliance_review_status_rank(str(item.get("status") or "")),
+            0 if item.get("shift_id") is not None else 1,
+            str(item.get("shift_id") or item.get("proposed_shift_id") or ""),
+            str(item.get("employee_id") or ""),
+        )
+    )
+    return items
+
+
+def _schedule_run_assignment_evaluations(
+    schedule_run: ScheduleRun,
+) -> list[dict[str, object]]:
+    inputs = getattr(schedule_run, "inputs", None)
+    compliance_payload = _mapping(getattr(inputs, "compliance_payload", None))
+    employees_by_shift = _mapping(compliance_payload.get("employees_by_shift"))
+    if not employees_by_shift:
+        return []
+
+    proposed_optimizer_ids = {
+        str(proposed_shift.id): str(proposed_shift.optimizer_shift_id)
+        for proposed_shift in (schedule_run.proposed_shifts or [])
+    }
+    rows: list[dict[str, object]] = []
+    for assignment in schedule_run.assignments or []:
+        employee_id = getattr(assignment, "employee_id", None)
+        if employee_id is None:
+            continue
+        shift_key: str | None = None
+        if getattr(assignment, "shift_id", None) is not None:
+            shift_key = str(assignment.shift_id)
+        elif getattr(assignment, "proposed_shift_id", None) is not None:
+            shift_key = proposed_optimizer_ids.get(str(assignment.proposed_shift_id))
+        if not shift_key:
+            continue
+        evaluation = _mapping(_mapping(employees_by_shift.get(shift_key)).get(str(employee_id)))
+        if not evaluation:
+            continue
+        rows.append(
+            {
+                "assignment": assignment,
+                "shift_key": shift_key,
+                "optimizer_shift_id": shift_key,
+                "evaluation": evaluation,
+            }
+        )
+    return rows
+
+
+def _schedule_run_compliance_review_issues(
+    evaluation: Mapping[str, object],
+) -> list[dict[str, object]]:
+    issues: list[dict[str, object]] = []
+    for raw_result in evaluation.get("rule_results") or []:
+        result = _mapping(raw_result)
+        if not result:
+            continue
+        status = str(result.get("status") or "").strip().lower() or "clear"
+        premium_required = bool(result.get("premium_required"))
+        override_artifact_id = str(result.get("override_artifact_id") or "").strip() or None
+        if status == "clear" and not premium_required and override_artifact_id is None:
+            continue
+
+        premium_type = str(result.get("premium_type") or "").strip() or None
+        artifact_type_allowed = str(result.get("artifact_type_allowed") or "").strip() or None
+        if artifact_type_allowed is None and bool(result.get("written_consent_allowed")):
+            artifact_type_allowed = ComplianceOverrideArtifactType.written_consent.value
+        if (
+            artifact_type_allowed is None
+            and bool(result.get("waiver_possible"))
+            and "meal" in str(result.get("rule_code") or "").strip().lower()
+        ):
+            artifact_type_allowed = ComplianceOverrideArtifactType.meal_waiver.value
+        issues.append(
+            {
+                "rule_code": str(result.get("rule_code") or "").strip() or "compliance_rule",
+                "status": status,
+                "reason_codes": list(result.get("reason_codes") or []),
+                "premium_required": premium_required,
+                "premium_type": premium_type,
+                "premium_cents": _int_setting(
+                    result.get("premium_cents"),
+                    default=0,
+                    minimum=0,
+                ),
+                "unresolved_premium": premium_type == "wage_dependent_unresolved",
+                "would_block": bool(result.get("would_block")),
+                "artifact_type_allowed": artifact_type_allowed,
+                "override_applied": override_artifact_id is not None,
+                "override_artifact_id": override_artifact_id,
+            }
+        )
+
+    if not issues and str(evaluation.get("status") or "").strip().lower() == "unresolved":
+        issues.append(
+            {
+                "rule_code": "compliance_profile_unresolved",
+                "status": "warning",
+                "reason_codes": ["labor_rule_profile_unresolved"],
+                "premium_required": False,
+                "premium_type": None,
+                "premium_cents": 0,
+                "unresolved_premium": False,
+                "would_block": False,
+                "artifact_type_allowed": None,
+                "override_applied": False,
+                "override_artifact_id": None,
+            }
+        )
+
+    issues.sort(
+        key=lambda issue: (
+            _compliance_review_status_rank(str(issue.get("status") or "")),
+            str(issue.get("rule_code") or ""),
+        )
+    )
+    return issues
+
+
+def _compliance_review_status_rank(status: str) -> int:
+    normalized = status.strip().lower()
+    return {
+        "block": 0,
+        "warning": 1,
+        "unresolved": 2,
+        "clear": 3,
+    }.get(normalized, 4)
+
+
 async def record_schedule_run_result(
     session: AsyncSession,
     schedule_run: ScheduleRun,
@@ -755,6 +1100,7 @@ async def record_schedule_run_result(
                 summary_payload=dict(payload.get("summary_payload") or {}),
                 fairness_payload=dict(payload.get("fairness_payload") or {}),
                 overtime_payload=dict(payload.get("overtime_payload") or {}),
+                compliance_payload=dict(payload.get("compliance_payload") or {}),
                 coverage_payload=dict(payload.get("coverage_payload") or {}),
                 unassigned_shift_payload=dict(payload.get("unassigned_shift_payload") or {}),
             )
@@ -764,6 +1110,7 @@ async def record_schedule_run_result(
             current.summary_payload = dict(payload.get("summary_payload") or {})
             current.fairness_payload = dict(payload.get("fairness_payload") or {})
             current.overtime_payload = dict(payload.get("overtime_payload") or {})
+            current.compliance_payload = dict(payload.get("compliance_payload") or {})
             current.coverage_payload = dict(payload.get("coverage_payload") or {})
             current.unassigned_shift_payload = dict(payload.get("unassigned_shift_payload") or {})
 
@@ -1016,6 +1363,10 @@ async def _materialize_schedule_run_proposed_shifts(
                 "source_point_id": str(proposed_shift.source_point_id) if proposed_shift.source_point_id else None,
                 **dict(proposed_shift.generation_payload or {}),
             },
+        )
+        created_shift.segments = _shift_segments_from_generation_payload(
+            shift_id=created_shift.id,
+            generation_payload=proposed_shift.generation_payload,
         )
         session.add(created_shift)
         await session.flush()
@@ -2357,6 +2708,7 @@ def _scope_payload_for_hash(
     planning_window_start: datetime,
     planning_window_end: datetime,
     shifts: Sequence[Shift],
+    compliance_override_artifacts: Sequence[ComplianceOverrideArtifact],
 ) -> dict[str, object]:
     location_scope = [
         shift.location_id
@@ -2369,6 +2721,9 @@ def _scope_payload_for_hash(
         "location_scope": [str(value) for value in sorted(set(location_scope), key=str)],
         "planning_window_start": planning_window_start.isoformat(),
         "planning_window_end": planning_window_end.isoformat(),
+        "compliance_override_artifacts": _scope_compliance_override_artifact_rows(
+            compliance_override_artifacts
+        ),
         "policy_version": "v1",
     }
 
@@ -2379,6 +2734,67 @@ async def _load_scope_business(session: AsyncSession, business_id: UUID) -> Busi
 
 async def _load_scope_location(session: AsyncSession, location_id: UUID) -> Location | None:
     return await session.get(Location, location_id)
+
+
+async def _load_scope_compliance_override_artifacts(
+    session: AsyncSession,
+    *,
+    shifts: Sequence[Shift],
+    reference_time: datetime,
+) -> list[ComplianceOverrideArtifact]:
+    shift_ids = sorted({shift.id for shift in shifts if shift.id is not None}, key=str)
+    if not shift_ids:
+        return []
+    stmt = (
+        select(ComplianceOverrideArtifact)
+        .where(ComplianceOverrideArtifact.shift_id.in_(shift_ids))
+        .where(ComplianceOverrideArtifact.status == ComplianceOverrideArtifactStatus.approved)
+        .where(ComplianceOverrideArtifact.approved_at <= reference_time)
+        .where(ComplianceOverrideArtifact.revoked_at.is_(None))
+        .where(
+            (ComplianceOverrideArtifact.expires_at.is_(None))
+            | (ComplianceOverrideArtifact.expires_at > reference_time)
+        )
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+def _scope_compliance_override_artifact_rows(
+    artifacts: Sequence[ComplianceOverrideArtifact],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for artifact in artifacts:
+        rows.append(
+            {
+                "id": str(artifact.id),
+                "shift_id": str(artifact.shift_id),
+                "employee_id": str(artifact.employee_id),
+                "rule_code": artifact.rule_code,
+                "artifact_type": (
+                    artifact.artifact_type.value
+                    if hasattr(artifact.artifact_type, "value")
+                    else str(artifact.artifact_type)
+                ),
+                "status": (
+                    artifact.status.value
+                    if hasattr(artifact.status, "value")
+                    else str(artifact.status)
+                ),
+                "expires_at": artifact.expires_at.isoformat() if artifact.expires_at is not None else None,
+                "profile_payload_hash": artifact.profile_payload_hash,
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["shift_id"],
+            row["employee_id"],
+            row["rule_code"],
+            row["artifact_type"],
+            row["id"],
+        ),
+    )
 
 
 async def _load_scope_shifts(
@@ -2544,6 +2960,397 @@ async def _build_scope_labor_payload(
         "employees": employee_rows,
         "employees_by_shift": shift_rows,
     }
+
+
+async def _build_scope_compliance_payload(
+    session: AsyncSession,
+    *,
+    business_id: UUID | None = None,
+    shifts: Sequence[Shift],
+    employees: Sequence[Employee],
+    reference_time: datetime,
+    business_settings: Mapping[str, object] | None = None,
+    generated_demand_payload: GeneratedDemandPayload | None = None,
+    generated_locations: Mapping[UUID, Location] | None = None,
+) -> dict[str, object]:
+    from app.services import labor_rules
+
+    employee_rows: dict[str, dict[str, object]] = {
+        str(employee.id): {
+            "status": "unresolved",
+            "source": compliance_engine.COMPLIANCE_ENGINE_VERSION,
+            "rule_results": [],
+        }
+        for employee in employees
+        }
+    shift_rows: dict[str, dict[str, dict[str, object]]] = {}
+    candidate_shifts = list(shifts)
+    candidate_shifts.extend(
+        _generated_shifts_for_compliance(
+            business_id=business_id or (shifts[0].business_id if shifts else None),
+            generated_demand_payload=generated_demand_payload,
+            generated_locations=generated_locations,
+        )
+    )
+    if not candidate_shifts or not employees:
+        return {
+            "employees": employee_rows,
+            "employees_by_shift": shift_rows,
+            "metadata": {
+                "engine_version": compliance_engine.COMPLIANCE_ENGINE_VERSION,
+                "resolved_profile_codes_by_location": {},
+                "generated_shift_count": max(0, len(candidate_shifts) - len(shifts)),
+            },
+        }
+
+    worst_evaluation_by_employee: dict[str, dict[str, object]] = {}
+    resolved_profile_codes_by_location: dict[str, str] = {}
+    persisted_shift_ids = {shift.id for shift in shifts}
+
+    for shift in candidate_shifts:
+        resolved_business_settings, resolved_location_settings = await settings_service.resolved_compliance_settings_inputs(
+            session,
+            business=getattr(getattr(shift, "location", None), "business", None),
+            location=getattr(shift, "location", None),
+            as_of=shift.starts_at if getattr(shift, "starts_at", None) is not None else reference_time,
+        )
+        profile = await labor_rules.runtime_resolved_profile(
+            session,
+            location=shift.location,
+            business=None,
+            as_of=reference_time,
+        )
+        if profile is not None:
+            resolved_profile_codes_by_location[str(shift.location_id)] = profile.code
+
+        if profile is None:
+            shift_evaluations = {}
+            for employee in employees:
+                work_permit_context = workforce.resolve_employee_work_permit_context(
+                    employee,
+                    shift_starts_at=shift.starts_at,
+                    timezone_name=shift.timezone,
+                )
+                shift_evaluations[str(employee.id)] = compliance_engine.evaluate_shift_assignment_compliance(
+                    None,
+                    candidate_shift=shift,
+                    counted_intervals=(),
+                    reference_time=reference_time,
+                    employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+                    employee_date_of_birth=getattr(employee, "date_of_birth", None),
+                    employee_minor_school_status=getattr(employee, "minor_school_status", None),
+                    employee_work_permit_number=work_permit_context.get("permit_number"),
+                    employee_work_permit_effective_start_on=work_permit_context.get("effective_start_on"),
+                    employee_work_permit_expires_on=work_permit_context.get("expires_on"),
+                    employee_work_permit_max_daily_minutes=work_permit_context.get("max_daily_minutes"),
+                    employee_work_permit_max_weekly_minutes=work_permit_context.get("max_weekly_minutes"),
+                    employee_work_permit_earliest_start_local_time=work_permit_context.get("earliest_start_local_time"),
+                    employee_work_permit_latest_end_local_time=work_permit_context.get("latest_end_local_time"),
+                    employee_work_permit_rule_profile=work_permit_context.get("rule_profile"),
+                    business_settings=resolved_business_settings or dict(business_settings or {}),
+                    location_settings=resolved_location_settings,
+                )
+            
+        else:
+            snapshots = await labor_rules.build_hours_snapshots(
+                session,
+                employees=employees,
+                shift=shift,
+                profile=profile,
+                now=reference_time,
+            )
+            shift_evaluations = {}
+            artifacts_by_employee = (
+                await compliance_overrides.active_artifacts_for_shift_employees(
+                    session,
+                    shift_id=shift.id,
+                    employee_ids=[employee.id for employee in employees],
+                    reference_time=reference_time,
+                )
+                if shift.id in persisted_shift_ids
+                else {}
+            )
+            for employee in employees:
+                snapshot = snapshots.get(employee.id)
+                counted_intervals = snapshot.counted_intervals if snapshot is not None else ()
+                overtime_projection = labor_rules.evaluate_overtime_projection(
+                    profile,
+                    candidate_shift=shift,
+                    counted_intervals=counted_intervals,
+                    reference_time=reference_time,
+                )
+                work_permit_context = workforce.resolve_employee_work_permit_context(
+                    employee,
+                    shift_starts_at=shift.starts_at,
+                    timezone_name=shift.timezone,
+                )
+                base_evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+                    profile,
+                    candidate_shift=shift,
+                    counted_intervals=counted_intervals,
+                    reference_time=reference_time,
+                    overtime_projection=overtime_projection,
+                    employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+                    employee_date_of_birth=getattr(employee, "date_of_birth", None),
+                    employee_minor_school_status=getattr(employee, "minor_school_status", None),
+                    employee_work_permit_number=work_permit_context.get("permit_number"),
+                    employee_work_permit_effective_start_on=work_permit_context.get("effective_start_on"),
+                    employee_work_permit_expires_on=work_permit_context.get("expires_on"),
+                    employee_work_permit_max_daily_minutes=work_permit_context.get("max_daily_minutes"),
+                    employee_work_permit_max_weekly_minutes=work_permit_context.get("max_weekly_minutes"),
+                    employee_work_permit_earliest_start_local_time=work_permit_context.get("earliest_start_local_time"),
+                    employee_work_permit_latest_end_local_time=work_permit_context.get("latest_end_local_time"),
+                    employee_work_permit_rule_profile=work_permit_context.get("rule_profile"),
+                    business_settings=resolved_business_settings or dict(business_settings or {}),
+                    location_settings=resolved_location_settings,
+                )
+                override_artifact = compliance_overrides.matching_override_artifact(
+                    base_evaluation,
+                    artifacts_by_employee.get(employee.id, []),
+                    reference_time=reference_time,
+                )
+                shift_evaluations[str(employee.id)] = compliance_overrides.apply_override_artifact(
+                    base_evaluation,
+                    override_artifact,
+                )
+
+        shift_rows[str(shift.id)] = shift_evaluations
+        for employee_id, evaluation in shift_evaluations.items():
+            existing = worst_evaluation_by_employee.get(employee_id)
+            if existing is None or compliance_engine.compliance_rank(evaluation) > compliance_engine.compliance_rank(existing):
+                worst_evaluation_by_employee[employee_id] = evaluation
+
+    for employee_id, evaluation in worst_evaluation_by_employee.items():
+        employee_rows[employee_id] = evaluation
+
+    return {
+        "employees": employee_rows,
+        "employees_by_shift": shift_rows,
+        "metadata": {
+            "engine_version": compliance_engine.COMPLIANCE_ENGINE_VERSION,
+            "resolved_profile_codes_by_location": resolved_profile_codes_by_location,
+            "generated_shift_count": len(candidate_shifts) - len(shifts),
+        },
+    }
+
+
+async def _load_generated_demand_locations(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    generated_demand_payload: GeneratedDemandPayload,
+    scope_shifts: Sequence[Shift],
+    fallback_location: Location | None,
+) -> dict[UUID, Location]:
+    locations_by_id: dict[UUID, Location] = {}
+    if fallback_location is not None:
+        locations_by_id[fallback_location.id] = fallback_location
+    for shift in scope_shifts:
+        if getattr(shift, "location", None) is not None and shift.location_id is not None:
+            locations_by_id[shift.location_id] = shift.location
+    for proposed_shift in generated_demand_payload.proposed_shifts:
+        if proposed_shift.location_id in locations_by_id:
+            continue
+        location = await session.get(Location, proposed_shift.location_id)
+        if location is None or location.business_id != business_id:
+            continue
+        locations_by_id[location.id] = location
+    return locations_by_id
+
+
+async def _attach_generated_demand_break_plans_to_inputs(
+    session: AsyncSession,
+    *,
+    business_id: UUID,
+    inputs: ScheduleRunInputContract,
+    reference_time: datetime,
+    business_settings: Mapping[str, object] | None,
+    generated_locations: Mapping[UUID, Location],
+) -> tuple[ScheduleRunInputContract, dict[str, object]]:
+    if not inputs.generated_demand_payload.proposed_shifts:
+        return inputs, {
+            "compliance_break_plan_status": "skipped",
+            "compliance_break_planned_shift_count": 0,
+        }
+
+    from app.services import labor_rules
+
+    planned_shift_count = 0
+    profiles_by_location: dict[UUID, object | None] = {}
+    proposed_shifts: list[ProposedShiftPayload] = []
+    for proposed_shift in inputs.generated_demand_payload.proposed_shifts:
+        generation_payload = dict(proposed_shift.generation_payload or {})
+        if isinstance(generation_payload.get("planned_segments"), list):
+            proposed_shifts.append(proposed_shift)
+            continue
+
+        location = generated_locations.get(proposed_shift.location_id)
+        profile = profiles_by_location.get(proposed_shift.location_id)
+        if proposed_shift.location_id not in profiles_by_location:
+            profile = (
+                await labor_rules.runtime_resolved_profile(
+                    session,
+                    location=location,
+                    business=None,
+                    as_of=reference_time,
+                )
+                if location is not None
+                else None
+            )
+            profiles_by_location[proposed_shift.location_id] = profile
+
+        transient_shift = _transient_generated_shift(
+            business_id=business_id,
+            proposed_shift=proposed_shift,
+            location=location,
+        )
+        planned_segments = compliance_break_planner.plan_shift_segments(
+            profile,
+            shift=transient_shift,
+            business_settings=business_settings,
+            location_settings=(
+                location.settings
+                if location is not None and isinstance(location.settings, Mapping)
+                else {}
+            ),
+        )
+        if planned_segments:
+            generation_payload.update(
+                {
+                    "planned_segments": planned_segments,
+                    "compliance_break_plan_version": compliance_break_planner.COMPLIANCE_BREAK_PLAN_VERSION,
+                    "compliance_break_plan_status": "planned",
+                }
+            )
+            planned_shift_count += 1
+        proposed_shifts.append(
+            proposed_shift.model_copy(
+                update={"generation_payload": generation_payload}
+            )
+        )
+
+    next_generated_demand = GeneratedDemandPayload(
+        proposed_shifts=proposed_shifts,
+        metadata=dict(inputs.generated_demand_payload.metadata or {}),
+    )
+    return (
+        inputs.model_copy(update={"generated_demand_payload": next_generated_demand}),
+        {
+            "compliance_break_plan_status": "attached",
+            "compliance_break_planned_shift_count": planned_shift_count,
+        },
+    )
+
+
+def _generated_shifts_for_compliance(
+    *,
+    business_id: UUID | None,
+    generated_demand_payload: GeneratedDemandPayload | None,
+    generated_locations: Mapping[UUID, Location] | None,
+) -> list[Shift]:
+    if business_id is None or generated_demand_payload is None:
+        return []
+    return [
+        _transient_generated_shift(
+            business_id=business_id,
+            proposed_shift=proposed_shift,
+            location=(generated_locations or {}).get(proposed_shift.location_id),
+        )
+        for proposed_shift in generated_demand_payload.proposed_shifts
+    ]
+
+
+def _transient_generated_shift(
+    *,
+    business_id: UUID,
+    proposed_shift: ProposedShiftPayload,
+    location: Location | None,
+) -> Shift:
+    shift = Shift(
+        id=UUID(_optimizer_shift_id_for_demand_key(proposed_shift.demand_key)),
+        business_id=business_id,
+        location_id=proposed_shift.location_id,
+        role_id=proposed_shift.role_id,
+        timezone=proposed_shift.timezone,
+        starts_at=proposed_shift.starts_at,
+        ends_at=proposed_shift.ends_at,
+        lifecycle_status=ShiftLifecycleStatus.draft,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=proposed_shift.headcount,
+        seats_filled=0,
+        requires_manager_approval=proposed_shift.requires_manager_approval,
+        premium_cents=proposed_shift.premium_cents,
+        shift_metadata=dict(proposed_shift.generation_payload or {}),
+    )
+    shift.location = location
+    shift.segments = _shift_segments_from_generation_payload(
+        shift_id=shift.id,
+        generation_payload=proposed_shift.generation_payload,
+    )
+    return shift
+
+
+def _shift_segments_from_generation_payload(
+    *,
+    shift_id: UUID,
+    generation_payload: Mapping[str, object] | None,
+) -> list[ShiftSegment]:
+    raw_segments = generation_payload.get("planned_segments") if isinstance(generation_payload, Mapping) else None
+    if not isinstance(raw_segments, list):
+        return []
+
+    segments: list[ShiftSegment] = []
+    for segment_index, raw_segment in enumerate(raw_segments, start=1):
+        if not isinstance(raw_segment, Mapping):
+            continue
+        starts_at = _datetime_from_payload(raw_segment.get("starts_at"))
+        ends_at = _datetime_from_payload(raw_segment.get("ends_at"))
+        if starts_at is None or ends_at is None:
+            continue
+        segment = ShiftSegment(
+            shift_id=shift_id,
+            sequence_no=int(raw_segment.get("sequence_no") or segment_index),
+            segment_type=ShiftSegmentType(str(raw_segment.get("segment_type") or ShiftSegmentType.work.value)),
+            starts_at=starts_at,
+            ends_at=ends_at,
+            segment_metadata=dict(raw_segment.get("segment_metadata") or {}),
+        )
+        segment.breaks = []
+        raw_breaks = raw_segment.get("breaks")
+        if isinstance(raw_breaks, list):
+            for break_index, raw_break in enumerate(raw_breaks, start=1):
+                if not isinstance(raw_break, Mapping):
+                    continue
+                break_starts_at = _datetime_from_payload(raw_break.get("starts_at"))
+                break_ends_at = _datetime_from_payload(raw_break.get("ends_at"))
+                if break_starts_at is None or break_ends_at is None:
+                    continue
+                segment.breaks.append(
+                    ShiftBreak(
+                        shift_id=shift_id,
+                        shift_segment_id=segment.id,
+                        sequence_no=int(raw_break.get("sequence_no") or break_index),
+                        break_type=ShiftBreakType(str(raw_break.get("break_type") or ShiftBreakType.other.value)),
+                        is_paid=bool(raw_break.get("is_paid")),
+                        starts_at=break_starts_at,
+                        ends_at=break_ends_at,
+                        notes=str(raw_break.get("notes") or "") or None,
+                        break_metadata=dict(raw_break.get("break_metadata") or {}),
+                    )
+                )
+        segments.append(segment)
+    return segments
+
+
+def _datetime_from_payload(value: object | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _labor_projection_rank(projection: Mapping[str, object]) -> tuple[int, float, float]:

@@ -83,6 +83,16 @@ class ShiftStatus(str, Enum):
     completed = "completed"
 
 
+class ShiftSegmentType(str, Enum):
+    work = "work"
+
+
+class ShiftBreakType(str, Enum):
+    meal = "meal"
+    rest = "rest"
+    other = "other"
+
+
 class AssignmentStatus(str, Enum):
     proposed = "proposed"
     assigned = "assigned"
@@ -92,6 +102,18 @@ class AssignmentStatus(str, Enum):
     replaced = "replaced"
     no_show = "no_show"
     completed = "completed"
+
+
+class ComplianceOverrideArtifactType(str, Enum):
+    written_consent = "written_consent"
+    meal_waiver = "meal_waiver"
+    manager_override = "manager_override"
+
+
+class ComplianceOverrideArtifactStatus(str, Enum):
+    approved = "approved"
+    revoked = "revoked"
+    expired = "expired"
 
 
 class CoverageCaseStatus(str, Enum):
