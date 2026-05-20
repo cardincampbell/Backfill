@@ -17,12 +17,17 @@ from app.models.compliance import ComplianceOverrideArtifact, CompliancePolicyVe
 from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.models.scheduling import Shift, ShiftAssignment
 from app.models.workforce import Employee
-from app.services import billing_ledger, cost_ledger, workforce
+from app.services import billing_ledger, compliance_source_references, cost_ledger, workforce
 from app.services import settings as settings_service
 from app.services import shift_assignments
 from app.services.schedule_weeks import schedule_week_window
 
 MICROS_PER_CENT = 10_000
+_MISSING_PAYROLL_IDENTIFIER_REASON_CODES = {
+    "missing_employee_identifier",
+    "missing_employee_number",
+    "missing_quickbooks_employee_reference",
+}
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ class ComplianceWeekShiftRow:
     override_applied: bool
     override_artifact_id: UUID | None
     premium_components: list[dict[str, object]] = field(default_factory=list)
+    rule_source_references: list[dict[str, object]] = field(default_factory=list)
     policy_version_id: UUID | None = None
     policy_hash: str | None = None
     policy_effective_at: Any = None
@@ -172,12 +178,15 @@ class CompliancePayrollAdjustmentRow:
     override_artifact_note: str | None
     payroll_row_kind: str = "premium_payment"
     payroll_status: str = "ready"
+    employee_number: str | None = None
+    external_ref: str | None = None
     employee_identifier: str | None = None
     employee_identifier_type: str | None = None
     earning_code: str | None = None
     earning_label: str | None = None
     source_rule_code: str | None = None
     source_reason_codes: list[str] = field(default_factory=list)
+    rule_source_references: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -185,6 +194,7 @@ class LocationCompliancePayrollExport:
     location_id: UUID
     week_start_date: date
     week_end_date: date
+    provider_profile: str
     row_count: int
     premium_payment_row_count: int
     ready_adjustment_row_count: int
@@ -549,6 +559,9 @@ def _evaluation_metadata_payload(
         "policy_hash": payload.get("policy_hash"),
         "policy_effective_at": payload.get("policy_effective_at"),
         "policy_scope": payload.get("policy_scope"),
+        "rule_source_references": compliance_source_references.rule_source_references_from_evaluation(
+            payload
+        ),
     }
 
 
@@ -678,6 +691,10 @@ async def _resolved_assignment_compliance_metadata(
         employees=[employee],
         shift=shift,
         profile=profile,
+        compliance_settings=settings_service.merged_compliance_settings_from_inputs(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
         now=shift.starts_at,
     )
     snapshot = snapshots.get(employee.id)
@@ -834,6 +851,9 @@ async def location_compliance_week_snapshot(
                     for component in compliance.get("premium_components") or []
                     if isinstance(component, Mapping)
                 ],
+                rule_source_references=compliance_source_references.rule_source_references_from_evaluation(
+                    compliance
+                ),
                 policy_version_id=_uuid_or_none(compliance.get("policy_version_id")),
                 policy_hash=(
                     str(compliance.get("policy_hash") or "").strip() or None
@@ -1066,7 +1086,10 @@ async def location_compliance_payroll_export(
                 ready_adjustment_row_count += 1
             elif row.payroll_row_kind == "manual_review":
                 manual_review_row_count += 1
-                if "missing_employee_identifier" in row.source_reason_codes:
+                if any(
+                    reason_code in _MISSING_PAYROLL_IDENTIFIER_REASON_CODES
+                    for reason_code in row.source_reason_codes
+                ):
                     missing_employee_identifier_row_count += 1
             elif row.payroll_row_kind == "artifact_record":
                 artifact_record_row_count += 1
@@ -1085,6 +1108,7 @@ async def location_compliance_payroll_export(
         location_id=snapshot.location_id,
         week_start_date=snapshot.week_start_date,
         week_end_date=snapshot.week_end_date,
+        provider_profile=_payroll_provider_profile(payroll_settings),
         row_count=len(rows),
         premium_payment_row_count=premium_payment_row_count,
         ready_adjustment_row_count=ready_adjustment_row_count,
@@ -1107,6 +1131,15 @@ def _compliance_payroll_export_settings(
     return settings_service.read_compliance_payroll_export_settings(raw).model_dump()
 
 
+def _payroll_provider_profile(
+    payroll_settings: Mapping[str, object],
+) -> str:
+    return (
+        str(payroll_settings.get("provider_profile") or "generic_csv_v1").strip()
+        or "generic_csv_v1"
+    )
+
+
 def _employee_identifier_for_payroll(
     employee: Employee | None,
     *,
@@ -1125,6 +1158,54 @@ def _employee_identifier_for_payroll(
     if bool(payroll_settings.get("allow_internal_employee_id_fallback")):
         return str(employee_id), "employee_id"
     return None, None
+
+
+def _employee_identifier_candidates(
+    employee: Employee | None,
+) -> tuple[str | None, str | None]:
+    employee_number = (
+        str(getattr(employee, "employee_number", "") or "").strip()
+        if employee is not None
+        else ""
+    )
+    external_ref = (
+        str(getattr(employee, "external_ref", "") or "").strip()
+        if employee is not None
+        else ""
+    )
+    return (
+        employee_number or None,
+        external_ref or None,
+    )
+
+
+def _provider_identifier_readiness(
+    *,
+    provider_profile: str,
+    employee_identifier: str | None,
+    employee_number: str | None,
+    external_ref: str | None,
+) -> tuple[bool, list[str]]:
+    if provider_profile == "gusto_csv_v1":
+        return (
+            employee_number is not None,
+            [] if employee_number is not None else ["missing_employee_number"],
+        )
+    if provider_profile == "quickbooks_csv_v1":
+        ready = employee_number is not None or external_ref is not None
+        return (
+            ready,
+            [] if ready else ["missing_quickbooks_employee_reference"],
+        )
+    if provider_profile == "adp_csv_v1":
+        return (
+            employee_number is not None,
+            [] if employee_number is not None else ["missing_employee_number"],
+        )
+    return (
+        employee_identifier is not None,
+        [] if employee_identifier is not None else ["missing_employee_identifier"],
+    )
 
 
 def _payroll_earning_code(
@@ -1156,10 +1237,18 @@ def _build_compliance_payroll_rows_for_shift(
     payroll_settings: Mapping[str, object],
 ) -> list[CompliancePayrollAdjustmentRow]:
     rows: list[CompliancePayrollAdjustmentRow] = []
+    employee_number, external_ref = _employee_identifier_candidates(employee)
     employee_identifier, employee_identifier_type = _employee_identifier_for_payroll(
         employee,
         employee_id=shift.employee_id,
         payroll_settings=payroll_settings,
+    )
+    provider_profile = _payroll_provider_profile(payroll_settings)
+    provider_identifier_ready, provider_missing_reason_codes = _provider_identifier_readiness(
+        provider_profile=provider_profile,
+        employee_identifier=employee_identifier,
+        employee_number=employee_number,
+        external_ref=external_ref,
     )
     unresolved_rule_codes_emitted: set[str] = set()
 
@@ -1175,12 +1264,13 @@ def _build_compliance_payroll_rows_for_shift(
         is_ready_payment = (
             premium_type == "fixed_cents"
             and premium_cents > 0
-            and employee_identifier is not None
+            and provider_identifier_ready
         )
         row_kind = "premium_payment" if is_ready_payment else "manual_review"
         row_status = "ready" if is_ready_payment else "manual_review"
-        if employee_identifier is None and "missing_employee_identifier" not in reason_codes:
-            reason_codes.append("missing_employee_identifier")
+        for missing_reason_code in provider_missing_reason_codes:
+            if missing_reason_code not in reason_codes:
+                reason_codes.append(missing_reason_code)
         if premium_type == "wage_dependent_unresolved" and rule_code:
             unresolved_rule_codes_emitted.add(rule_code)
         earning_code = None
@@ -1213,12 +1303,18 @@ def _build_compliance_payroll_rows_for_shift(
                 override_artifact_note=artifact.note if artifact is not None else None,
                 payroll_row_kind=row_kind,
                 payroll_status=row_status,
+                employee_number=employee_number,
+                external_ref=external_ref,
                 employee_identifier=employee_identifier,
                 employee_identifier_type=employee_identifier_type,
                 earning_code=earning_code,
                 earning_label=earning_label,
                 source_rule_code=rule_code,
                 source_reason_codes=reason_codes,
+                rule_source_references=_payroll_row_rule_source_references(
+                    shift,
+                    rule_codes=[rule_code] if rule_code else [],
+                ),
             )
         )
 
@@ -1226,8 +1322,9 @@ def _build_compliance_payroll_rows_for_shift(
         if rule_code in unresolved_rule_codes_emitted:
             continue
         reason_codes = ["wage_dependent_premium_unresolved"]
-        if employee_identifier is None:
-            reason_codes.append("missing_employee_identifier")
+        for missing_reason_code in provider_missing_reason_codes:
+            if missing_reason_code not in reason_codes:
+                reason_codes.append(missing_reason_code)
         rows.append(
             CompliancePayrollAdjustmentRow(
                 shift_id=shift.shift_id,
@@ -1249,12 +1346,18 @@ def _build_compliance_payroll_rows_for_shift(
                 override_artifact_note=artifact.note if artifact is not None else None,
                 payroll_row_kind="manual_review",
                 payroll_status="manual_review",
+                employee_number=employee_number,
+                external_ref=external_ref,
                 employee_identifier=employee_identifier,
                 employee_identifier_type=employee_identifier_type,
                 earning_code=None,
                 earning_label=None,
                 source_rule_code=rule_code,
                 source_reason_codes=reason_codes,
+                rule_source_references=_payroll_row_rule_source_references(
+                    shift,
+                    rule_codes=[rule_code],
+                ),
             )
         )
 
@@ -1280,12 +1383,18 @@ def _build_compliance_payroll_rows_for_shift(
                 override_artifact_note=artifact.note if artifact is not None else None,
                 payroll_row_kind="artifact_record",
                 payroll_status="info_only",
+                employee_number=employee_number,
+                external_ref=external_ref,
                 employee_identifier=employee_identifier,
                 employee_identifier_type=employee_identifier_type,
                 earning_code=None,
                 earning_label=None,
                 source_rule_code=artifact.rule_code if artifact is not None else None,
                 source_reason_codes=["override_artifact_applied"],
+                rule_source_references=_payroll_row_rule_source_references(
+                    shift,
+                    rule_codes=[artifact.rule_code] if artifact is not None and artifact.rule_code else [],
+                ),
             )
         )
     return rows
@@ -1312,6 +1421,23 @@ def _normalized_payroll_premium_components(
             }
         ]
     return []
+
+
+def _payroll_row_rule_source_references(
+    shift: ComplianceWeekShiftRow,
+    *,
+    rule_codes: list[str],
+) -> list[dict[str, object]]:
+    existing = compliance_source_references.filter_rule_source_references(
+        shift.rule_source_references,
+        rule_codes=rule_codes,
+    )
+    if existing:
+        return existing
+    return compliance_source_references.build_rule_source_references(
+        rule_codes=rule_codes,
+        profile_code=shift.profile_code,
+    )
 
 
 def _humanize_rule_code(value: str | None) -> str:

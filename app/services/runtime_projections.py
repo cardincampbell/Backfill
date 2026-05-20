@@ -485,23 +485,6 @@ async def build_outreach_guardrail_snapshots(
         shift=shift,
         now=reference_time,
     )
-    hours_snapshots = (
-        await labor_rules.build_hours_snapshots(
-            session,
-            employees=employees_list,
-            shift=shift,
-            profile=resolved_profile,
-            now=reference_time,
-        )
-        if resolved_profile is not None
-        else {}
-    )
-    active_override_artifacts = await compliance_overrides.active_artifacts_for_shift_employees(
-        session,
-        shift_id=shift.id,
-        employee_ids=[employee.id for employee in employees_list],
-        reference_time=reference_time,
-    )
     business = getattr(getattr(shift, "location", None), "business", None)
     session_get = getattr(session, "get", None)
     if (
@@ -515,6 +498,27 @@ async def build_outreach_guardrail_snapshots(
         business=business,
         location=getattr(shift, "location", None),
         as_of=reference_time,
+    )
+    hours_snapshots = (
+        await labor_rules.build_hours_snapshots(
+            session,
+            employees=employees_list,
+            shift=shift,
+            profile=resolved_profile,
+            compliance_settings=settings_service.merged_compliance_settings_from_inputs(
+                business_settings=business_settings,
+                location_settings=location_settings,
+            ),
+            now=reference_time,
+        )
+        if resolved_profile is not None
+        else {}
+    )
+    active_override_artifacts = await compliance_overrides.active_artifacts_for_shift_employees(
+        session,
+        shift_id=shift.id,
+        employee_ids=[employee.id for employee in employees_list],
+        reference_time=reference_time,
     )
     snapshots: dict[UUID, dict[str, object]] = {}
     for employee in employees_list:

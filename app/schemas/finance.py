@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
+from app.schemas.compliance import ComplianceRuleSourceReferenceRead
 from app.schemas.settings import CompliancePolicySettingsRead, CompliancePolicySettingsUpdate
 
 
@@ -84,6 +85,33 @@ class ComplianceArtifactTypeCountRead(BaseSchema):
     count: int
 
 
+class ComplianceRuleCatalogEntryRead(BaseSchema):
+    catalog_kind: str
+    code: str
+    label: str
+    description: str | None = None
+    jurisdiction_code: str | None = None
+    source_document_title: str | None = None
+    source_urls: list[str] = Field(default_factory=list)
+    source_version: str | None = None
+    source_hash: str | None = None
+    effective_start_date: date | None = None
+    effective_end_date: date | None = None
+    payload_hash: str | None = None
+    rule_families: list[str] = Field(default_factory=list)
+    version_id: UUID | None = None
+    version_no: int | None = None
+    rule_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class LocationComplianceRuleCatalogRead(BaseSchema):
+    location_id: UUID
+    jurisdiction_code: str
+    as_of: datetime
+    labor_rule_profiles: list[ComplianceRuleCatalogEntryRead] = Field(default_factory=list)
+    work_permit_templates: list[ComplianceRuleCatalogEntryRead] = Field(default_factory=list)
+
+
 class ComplianceWeekShiftRead(BaseSchema):
     shift_id: UUID
     employee_id: UUID
@@ -101,6 +129,7 @@ class ComplianceWeekShiftRead(BaseSchema):
     unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
     override_applied: bool = False
     override_artifact_id: UUID | None = None
+    rule_source_references: list[ComplianceRuleSourceReferenceRead] = Field(default_factory=list)
     policy_version_id: UUID | None = None
     policy_hash: str | None = None
     policy_effective_at: datetime | None = None
@@ -172,18 +201,22 @@ class CompliancePayrollAdjustmentRead(BaseSchema):
     override_artifact_note: str | None = None
     payroll_row_kind: str = "premium_payment"
     payroll_status: str = "ready"
+    employee_number: str | None = None
+    external_ref: str | None = None
     employee_identifier: str | None = None
     employee_identifier_type: str | None = None
     earning_code: str | None = None
     earning_label: str | None = None
     source_rule_code: str | None = None
     source_reason_codes: list[str] = Field(default_factory=list)
+    rule_source_references: list[ComplianceRuleSourceReferenceRead] = Field(default_factory=list)
 
 
 class LocationCompliancePayrollExportRead(BaseSchema):
     location_id: UUID
     week_start_date: date
     week_end_date: date
+    provider_profile: str = "generic_csv_v1"
     row_count: int
     premium_payment_row_count: int
     ready_adjustment_row_count: int = 0

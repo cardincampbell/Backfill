@@ -10,6 +10,7 @@ import {
   type LocationCompliancePayrollExport,
   type LocationComplianceWeek,
 } from "@/lib/api/finance";
+import { describeCompliancePayrollProviderProfile } from "@/lib/export-compliance-payroll";
 
 export interface ExportModalEmployee {
   id: string;
@@ -19,6 +20,7 @@ export interface ExportModalEmployee {
 }
 
 export interface ExportModalShift {
+  id?: string | null;
   employeeId: string | null;
   day: number;
   startHour: number;
@@ -116,6 +118,7 @@ export function ExportScheduleModal({
       weekStart,
       employees,
       shifts,
+      complianceWeek: weekCompliance,
       compliancePayrollExport: payrollExport,
     };
     try {
@@ -249,6 +252,9 @@ export function ExportScheduleModal({
                       </p>
                     </div>
                   </div>
+                  <p className={`mt-2 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                    Payroll adapter: {describeCompliancePayrollProviderProfile(payrollExport.provider_profile)}
+                  </p>
                   <p className={`mt-2 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
                     Export includes {payrollExport.premium_payment_row_count} premium payment row{payrollExport.premium_payment_row_count === 1 ? '' : 's'} and {payrollExport.manual_review_row_count} manual review row{payrollExport.manual_review_row_count === 1 ? '' : 's'}.
                   </p>

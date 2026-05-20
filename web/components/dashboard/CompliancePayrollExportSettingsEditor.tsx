@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   type CompliancePayrollExportSettings,
+  type CompliancePayrollProviderProfile,
   type CompliancePayrollExportSettingsUpdate,
   type CompliancePayrollIdentifierField,
   updateBusinessProfile,
@@ -43,7 +44,35 @@ const RULE_CODE_FIELDS: RuleCodeField[] = [
   },
 ];
 
+const PROVIDER_PROFILES: Array<{
+  value: CompliancePayrollProviderProfile;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "generic_csv_v1",
+    label: "Backfill generic CSV",
+    description: "Full-fidelity export with Backfill’s canonical compliance payroll columns.",
+  },
+  {
+    value: "gusto_csv_v1",
+    label: "Gusto-aligned CSV",
+    description: "Earnings-oriented CSV tuned for Gusto-style amount imports and audit notes.",
+  },
+  {
+    value: "quickbooks_csv_v1",
+    label: "QuickBooks-aligned CSV",
+    description: "Payroll-item oriented CSV with employee identifiers and premium memo context.",
+  },
+  {
+    value: "adp_csv_v1",
+    label: "ADP-aligned CSV",
+    description: "Associate/pay-code oriented CSV that preserves manual-review and source metadata.",
+  },
+];
+
 type DraftState = {
+  providerProfile: CompliancePayrollProviderProfile;
   preferredIdentifier: CompliancePayrollIdentifierField;
   useSecondaryIdentifier: boolean;
   allowInternalIdFallback: boolean;
@@ -51,6 +80,14 @@ type DraftState = {
   defaultEarningLabel: string;
   earningCodes: Record<string, string>;
 };
+
+function normalizeProviderProfile(
+  value: unknown,
+): CompliancePayrollProviderProfile {
+  const normalized = String(value ?? "").trim();
+  const matched = PROVIDER_PROFILES.find((profile) => profile.value === normalized);
+  return matched?.value ?? "generic_csv_v1";
+}
 
 function normalizePriority(
   priority: readonly CompliancePayrollIdentifierField[] | null | undefined,
@@ -106,6 +143,7 @@ export function readCompliancePayrollExportSettingsSnapshot(
     }
   }
   return {
+    provider_profile: normalizeProviderProfile(raw.provider_profile),
     employee_identifier_priority: normalizedPriority,
     allow_internal_employee_id_fallback: Boolean(
       raw.allow_internal_employee_id_fallback,
@@ -123,6 +161,7 @@ function buildDraftState(
 ): DraftState {
   const normalized = readCompliancePayrollExportSettingsSnapshot(currentSettings);
   return {
+    providerProfile: normalized.provider_profile,
     preferredIdentifier: normalized.employee_identifier_priority[0] ?? "employee_number",
     useSecondaryIdentifier:
       normalized.employee_identifier_priority.length > 1,
@@ -164,6 +203,7 @@ function draftToSettings(
   }
 
   return {
+    provider_profile: draft.providerProfile,
     employee_identifier_priority: priority,
     allow_internal_employee_id_fallback: draft.allowInternalIdFallback,
     default_earning_code: draft.defaultEarningCode.trim() || "COMPLIANCE",
@@ -177,6 +217,7 @@ function settingsToUpdatePayload(
   settings: CompliancePayrollExportSettings,
 ): CompliancePayrollExportSettingsUpdate {
   return {
+    provider_profile: settings.provider_profile,
     employee_identifier_priority: settings.employee_identifier_priority,
     allow_internal_employee_id_fallback:
       settings.allow_internal_employee_id_fallback,
@@ -300,7 +341,36 @@ export default function CompliancePayrollExportSettingsEditor({
         </button>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <div className={`rounded-2xl border p-3 ${cardSurface}`}>
+          <p className={`text-[12px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 600 }}>
+            Provider Profile
+          </p>
+          <label className={`mt-3 block text-[12px] ${textSecondary}`} style={{ fontWeight: 500 }}>
+            Payroll export format
+          </label>
+          <select
+            aria-label="Payroll export format"
+            value={draft.providerProfile}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                providerProfile: event.target.value as CompliancePayrollProviderProfile,
+              }))
+            }
+            className={`mt-1 w-full rounded-2xl border px-3 py-2 text-[13px] ${inputSurface}`}
+          >
+            {PROVIDER_PROFILES.map((profile) => (
+              <option key={profile.value} value={profile.value}>
+                {profile.label}
+              </option>
+            ))}
+          </select>
+          <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+            {PROVIDER_PROFILES.find((profile) => profile.value === draft.providerProfile)?.description}
+          </p>
+        </div>
+
         <div className={`rounded-2xl border p-3 ${cardSurface}`}>
           <p className={`text-[12px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 600 }}>
             Employee Identifier

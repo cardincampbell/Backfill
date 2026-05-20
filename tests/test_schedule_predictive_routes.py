@@ -224,6 +224,11 @@ def test_ensure_predictive_schedule_route_returns_compliance_summary(monkeypatch
                 str(assignment.shift_id): {
                     str(assignment.employee_id): {
                         "status": "warning",
+                        "profile_code": "ca_restaurant_v1",
+                        "profile_display_name": "California restaurant baseline",
+                        "profile_source_version": "ca_rule_pack_v3",
+                        "profile_source_hash": "sha256:ca-pack",
+                        "profile_source_urls": ["https://example.com/ca-rule-pack"],
                         "warning_rule_codes": ["meal_break_first_window"],
                         "premium_total_cents": 0,
                         "unresolved_premium_rule_codes": ["meal_break_first_window"],
@@ -315,6 +320,22 @@ def test_ensure_predictive_schedule_route_returns_compliance_summary(monkeypatch
         assert payload["compliance_review_items"][0]["override_eligible_artifact_types"] == ["meal_waiver"]
         assert payload["compliance_review_items"][0]["issues"][0]["rule_code"] == "meal_break_first_window"
         assert payload["compliance_review_items"][0]["issues"][0]["artifact_type_allowed"] == "meal_waiver"
+        assert payload["compliance_review_items"][0]["issues"][0]["rule_source_references"] == [
+            {
+                "rule_code": "meal_break_first_window",
+                "source_kind": "labor_rule_profile",
+                "source_code": "ca_restaurant_v1",
+                "source_label": "California restaurant baseline",
+                "jurisdiction_code": None,
+                "source_document_title": None,
+                "source_urls": ["https://example.com/ca-rule-pack"],
+                "source_version": "ca_rule_pack_v3",
+                "source_hash": "sha256:ca-pack",
+                "version_id": None,
+                "payload_hash": None,
+                "effective_at": None,
+            }
+        ]
         assert created["count"] == 0
         assert db_session.commit_count == 0
     finally:

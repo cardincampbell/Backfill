@@ -21,12 +21,14 @@ from app.schemas.finance import (
     LocationCompliancePayrollExportRead,
     LocationCompliancePolicySimulationRead,
     LocationCompliancePolicySimulationRequest,
+    LocationComplianceRuleCatalogRead,
     LocationComplianceScheduledPolicyDriftRead,
     LocationComplianceTrendRead,
     LocationComplianceWeekRead,
     LocationComplianceWeekReplayRead,
 )
 from app.services import auth as auth_service
+from app.services import compliance_rule_catalog
 from app.services import finance_reporting
 
 router = APIRouter(tags=["finance"])
@@ -193,6 +195,35 @@ async def get_location_compliance_payroll_export(
         week_start_date=week_start_date,
     )
     return LocationCompliancePayrollExportRead.model_validate(snapshot)
+
+
+@location_router.get("/compliance-rule-catalog", response_model=LocationComplianceRuleCatalogRead)
+async def get_location_compliance_rule_catalog(
+    business_id: UUID,
+    location_id: UUID,
+    session: SessionDep,
+    auth_ctx: AuthDep,
+    as_of: datetime | None = None,
+):
+    if not auth_service.has_location_access(
+        auth_ctx,
+        business_id,
+        location_id,
+        allowed_roles=MANAGER_ROLES,
+    ):
+        raise HTTPException(status_code=403, detail="location_access_denied")
+
+    location = await _load_location_or_404(
+        session,
+        business_id=business_id,
+        location_id=location_id,
+    )
+    snapshot = await compliance_rule_catalog.location_compliance_rule_catalog(
+        session,
+        location=location,
+        as_of=as_of,
+    )
+    return LocationComplianceRuleCatalogRead.model_validate(snapshot)
 
 
 @location_router.get("/compliance-trends/{end_week_start_date}", response_model=LocationComplianceTrendRead)

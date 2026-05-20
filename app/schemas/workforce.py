@@ -85,6 +85,13 @@ class EmployeeWorkPermitTemplateRead(BaseSchema):
     description: Optional[str] = None
     jurisdiction_code: Optional[str] = None
     source_url: Optional[str] = None
+    source_document_title: Optional[str] = None
+    source_version: Optional[str] = None
+    source_hash: Optional[str] = None
+    effective_start_date: Optional[date] = None
+    effective_end_date: Optional[date] = None
+    payload_hash: Optional[str] = None
+    rule_families: list[str] = Field(default_factory=list)
     rule_profile: EmployeeWorkPermitRuleProfile
 
 

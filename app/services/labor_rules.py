@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 from types import SimpleNamespace
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -101,6 +101,25 @@ def _as_float(value: object | None) -> float | None:
         return round(float(value), 4)
     except (TypeError, ValueError):
         return None
+
+
+def _as_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return False
 
 
 def _json_dict(value: object | None) -> dict[str, object]:
@@ -326,6 +345,43 @@ def _workweek_boundary_config(profile: LaborRuleProfileSnapshot) -> tuple[int, t
     return weekday, local_time
 
 
+def max_consecutive_work_days(profile: LaborRuleProfileSnapshot) -> int:
+    rules = profile.rules_json if isinstance(profile.rules_json, dict) else {}
+    configured = _as_int(rules.get("max_consecutive_work_days")) or 0
+    if configured > 0:
+        return configured
+    raw_ruleset = str(rules.get("day_of_rest_ruleset") or "").strip().lower()
+    if _as_bool(rules.get("day_of_rest_required")) or raw_ruleset in {
+        "ca_v1",
+        "california_v1",
+    }:
+        return 6
+    return 0
+
+
+def required_rest_days_per_workweek(profile: LaborRuleProfileSnapshot) -> int:
+    rules = profile.rules_json if isinstance(profile.rules_json, dict) else {}
+    configured = _as_int(rules.get("required_rest_days_per_workweek")) or 0
+    if configured > 0:
+        return min(configured, 7)
+    if _as_bool(rules.get("day_of_rest_workweek_required")):
+        return 1
+    return 0
+
+
+def effective_max_consecutive_work_days(
+    profile: LaborRuleProfileSnapshot,
+    *,
+    compliance_settings: Mapping[str, object] | None = None,
+) -> int:
+    policy_days = (
+        _as_int(compliance_settings.get("max_consecutive_work_days"))
+        if isinstance(compliance_settings, Mapping)
+        else 0
+    ) or 0
+    return max(max_consecutive_work_days(profile), policy_days)
+
+
 def workweek_window_for_shift(
     profile: LaborRuleProfileSnapshot,
     *,
@@ -429,6 +485,7 @@ async def build_hours_snapshots(
     employees: Sequence[Employee],
     shift: Shift,
     profile: LaborRuleProfileSnapshot,
+    compliance_settings: Mapping[str, object] | None = None,
     now: datetime | None = None,
 ) -> dict[UUID, HoursSnapshot]:
     reference_time = now or datetime.now(timezone.utc)
@@ -439,8 +496,24 @@ async def build_hours_snapshots(
     workweek_start, workweek_end = workweek_window_for_shift(profile, shift=shift)
     workday_start, workday_end = workday_window_for_shift(shift)
     consecutive_threshold = max(12.0, float(profile.consecutive_hours_threshold_hours or 0.0))
-    query_start = min(workweek_start, workday_start, shift.starts_at - timedelta(hours=consecutive_threshold))
-    query_end = max(workweek_end, shift.ends_at, reference_time)
+    consecutive_workday_lookaround_days = max(
+        0,
+        effective_max_consecutive_work_days(
+            profile,
+            compliance_settings=compliance_settings,
+        ),
+    )
+    query_start = min(
+        workweek_start,
+        workday_start,
+        shift.starts_at - timedelta(hours=consecutive_threshold),
+        shift.starts_at - timedelta(days=consecutive_workday_lookaround_days),
+    )
+    query_end = max(
+        workweek_end,
+        shift.ends_at + timedelta(days=consecutive_workday_lookaround_days),
+        reference_time,
+    )
 
     rows = await session.execute(
         select(

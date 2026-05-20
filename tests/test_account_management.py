@@ -444,6 +444,8 @@ def test_business_profile_route_updates_current_business():
                     "written_consent_allowed": False,
                     "require_structured_break_plans": True,
                     "block_unresolved_premiums": True,
+                    "max_consecutive_work_days": None,
+                    "required_rest_days_per_workweek": None,
                     "max_daily_minutes": 480,
                     "max_weekly_minutes": 2400,
                     "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -451,6 +453,7 @@ def test_business_profile_route_updates_current_business():
                     "non_school_dates": ["2026-04-21"],
                 },
                 "compliance_payroll_export": {
+                    "provider_profile": "gusto_csv_v1",
                     "employee_identifier_priority": ["external_ref", "employee_number"],
                     "allow_internal_employee_id_fallback": True,
                     "default_earning_code": "COMPPREM",
@@ -501,6 +504,7 @@ def test_business_profile_route_updates_current_business():
             "external_ref",
             "employee_number",
         ]
+        assert business.settings["compliance_payroll_export"]["provider_profile"] == "gusto_csv_v1"
         assert business.settings["compliance_payroll_export"]["allow_internal_employee_id_fallback"] is True
         assert business.settings["compliance_payroll_export"]["default_earning_code"] == "COMPPREM"
         assert business.settings["compliance_payroll_export"]["earning_codes"][
@@ -518,6 +522,8 @@ def test_business_profile_route_updates_current_business():
                 "second_meal_waiver_allowed": None,
                 "require_structured_break_plans": True,
                 "block_unresolved_premiums": True,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
                 "max_daily_minutes": 480,
                 "max_weekly_minutes": 2400,
                 "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -616,6 +622,8 @@ def test_restore_business_compliance_policy_version_route_creates_new_version(mo
                 "second_meal_waiver_allowed": None,
                 "require_structured_break_plans": True,
                 "block_unresolved_premiums": True,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
                 "max_daily_minutes": 480,
                 "max_weekly_minutes": None,
             },

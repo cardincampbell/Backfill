@@ -10,6 +10,12 @@ from app.schemas.common import BaseSchema
 
 ShiftPresetKey = str
 CompliancePayrollIdentifierField = Literal["employee_number", "external_ref"]
+CompliancePayrollProviderProfile = Literal[
+    "generic_csv_v1",
+    "gusto_csv_v1",
+    "quickbooks_csv_v1",
+    "adp_csv_v1",
+]
 SchoolDayWeekday = Literal[
     "sunday",
     "monday",
@@ -68,6 +74,8 @@ class CompliancePolicySettingsRead(BaseSchema):
     block_unresolved_premiums: bool = False
     max_daily_minutes: int | None = None
     max_weekly_minutes: int | None = None
+    max_consecutive_work_days: int | None = None
+    required_rest_days_per_workweek: int | None = None
     school_day_weekdays: list[SchoolDayWeekday] = Field(default_factory=list)
     school_dates: list[str] = Field(default_factory=list)
     non_school_dates: list[str] = Field(default_factory=list)
@@ -82,6 +90,8 @@ class CompliancePolicySettingsUpdate(BaseSchema):
     block_unresolved_premiums: bool | None = None
     max_daily_minutes: int | None = Field(default=None, ge=0)
     max_weekly_minutes: int | None = Field(default=None, ge=0)
+    max_consecutive_work_days: int | None = Field(default=None, ge=0)
+    required_rest_days_per_workweek: int | None = Field(default=None, ge=0, le=7)
     school_day_weekdays: list[SchoolDayWeekday] | None = None
     school_dates: list[str] | None = None
     non_school_dates: list[str] | None = None
@@ -98,6 +108,7 @@ class CompliancePayrollExportRuleCodeConfigUpdate(BaseSchema):
 
 
 class CompliancePayrollExportSettingsRead(BaseSchema):
+    provider_profile: CompliancePayrollProviderProfile = "generic_csv_v1"
     employee_identifier_priority: list[CompliancePayrollIdentifierField] = Field(
         default_factory=lambda: ["employee_number", "external_ref"]
     )
@@ -110,6 +121,7 @@ class CompliancePayrollExportSettingsRead(BaseSchema):
 
 
 class CompliancePayrollExportSettingsUpdate(BaseSchema):
+    provider_profile: CompliancePayrollProviderProfile | None = None
     employee_identifier_priority: list[CompliancePayrollIdentifierField] | None = None
     allow_internal_employee_id_fallback: bool | None = None
     default_earning_code: str | None = None

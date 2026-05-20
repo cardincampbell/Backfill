@@ -523,6 +523,10 @@ def test_list_work_permit_templates_route_returns_catalog(monkeypatch):
                 description="4 hours on schooldays, 8 hours on non-schooldays.",
                 jurisdiction_code="US-CA",
                 source_url="https://www.dir.ca.gov/dlse/MinorsSummaryCharts.pdf",
+                source_document_title="California Department of Industrial Relations minors summary charts",
+                source_version="dir_minors_summary_charts_v1",
+                payload_hash="sha256:permit-payload",
+                rule_families=["minor_labor", "work_permit"],
                 rule_profile=EmployeeWorkPermitRuleProfile(
                     template_code="ca_16_17_school_required_v1",
                     daily_max_minutes_school_day=240,
@@ -548,6 +552,8 @@ def test_list_work_permit_templates_route_returns_catalog(monkeypatch):
         assert response.status_code == 200
         payload = response.json()
         assert payload[0]["code"] == "ca_16_17_school_required_v1"
+        assert payload[0]["source_version"] == "dir_minors_summary_charts_v1"
+        assert payload[0]["rule_families"] == ["minor_labor", "work_permit"]
         assert payload[0]["rule_profile"]["daily_max_minutes_school_day"] == 240
         assert payload[0]["rule_profile"]["latest_end_local_time_preceding_non_school_day"] == "00:30:00"
     finally:

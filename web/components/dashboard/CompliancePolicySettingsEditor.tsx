@@ -26,6 +26,8 @@ type DraftState = {
   minimumRestHours: string;
   maxDailyMinutes: string;
   maxWeeklyMinutes: string;
+  maxConsecutiveWorkDays: string;
+  requiredRestDaysPerWorkweek: string;
   requireStructuredBreakPlans: boolean;
   blockUnresolvedPremiums: boolean;
   disableWrittenConsent: boolean;
@@ -88,6 +90,14 @@ function buildDraftState(
       currentPolicy?.max_weekly_minutes != null
         ? String(currentPolicy.max_weekly_minutes)
         : "",
+    maxConsecutiveWorkDays:
+      currentPolicy?.max_consecutive_work_days != null
+        ? String(currentPolicy.max_consecutive_work_days)
+        : "",
+    requiredRestDaysPerWorkweek:
+      currentPolicy?.required_rest_days_per_workweek != null
+        ? String(currentPolicy.required_rest_days_per_workweek)
+        : "",
     requireStructuredBreakPlans: Boolean(
       currentPolicy?.require_structured_break_plans,
     ),
@@ -115,6 +125,12 @@ function draftToPolicyPayload(draft: DraftState): Record<string, unknown> {
     max_weekly_minutes: draft.maxWeeklyMinutes.trim()
       ? Number(draft.maxWeeklyMinutes)
       : null,
+    max_consecutive_work_days: draft.maxConsecutiveWorkDays.trim()
+      ? Number(draft.maxConsecutiveWorkDays)
+      : null,
+    required_rest_days_per_workweek: draft.requiredRestDaysPerWorkweek.trim()
+      ? Number(draft.requiredRestDaysPerWorkweek)
+      : null,
     require_structured_break_plans: draft.requireStructuredBreakPlans,
     block_unresolved_premiums: draft.blockUnresolvedPremiums,
     written_consent_allowed: draft.disableWrittenConsent ? false : null,
@@ -133,6 +149,8 @@ function currentPolicyToPayload(
     minimum_rest_hours: currentPolicy?.minimum_rest_hours ?? null,
     max_daily_minutes: currentPolicy?.max_daily_minutes ?? null,
     max_weekly_minutes: currentPolicy?.max_weekly_minutes ?? null,
+    max_consecutive_work_days: currentPolicy?.max_consecutive_work_days ?? null,
+    required_rest_days_per_workweek: currentPolicy?.required_rest_days_per_workweek ?? null,
     require_structured_break_plans: Boolean(
       currentPolicy?.require_structured_break_plans,
     ),
@@ -179,6 +197,14 @@ function payloadToSnapshot(
     max_weekly_minutes:
       typeof payload.max_weekly_minutes === "number"
         ? payload.max_weekly_minutes
+        : null,
+    max_consecutive_work_days:
+      typeof payload.max_consecutive_work_days === "number"
+        ? payload.max_consecutive_work_days
+        : null,
+    required_rest_days_per_workweek:
+      typeof payload.required_rest_days_per_workweek === "number"
+        ? payload.required_rest_days_per_workweek
         : null,
     school_day_weekdays: Array.isArray(payload.school_day_weekdays)
       ? normalizeWeekdayList(
@@ -251,6 +277,12 @@ function summarizePolicy(policy: CompliancePolicySettingsSnapshot) {
       : null,
     policy.max_weekly_minutes != null
       ? `Max weekly minutes: ${policy.max_weekly_minutes}`
+      : null,
+    policy.max_consecutive_work_days != null
+      ? `Max consecutive days: ${policy.max_consecutive_work_days}`
+      : null,
+    policy.required_rest_days_per_workweek != null
+      ? `Required rest days / week: ${policy.required_rest_days_per_workweek}`
       : null,
     policy.require_structured_break_plans
       ? "Structured break plans required"
@@ -335,6 +367,14 @@ export function readCompliancePolicySnapshot(
     max_weekly_minutes:
       typeof raw.max_weekly_minutes === "number"
         ? raw.max_weekly_minutes
+        : null,
+    max_consecutive_work_days:
+      typeof raw.max_consecutive_work_days === "number"
+        ? raw.max_consecutive_work_days
+        : null,
+    required_rest_days_per_workweek:
+      typeof raw.required_rest_days_per_workweek === "number"
+        ? raw.required_rest_days_per_workweek
         : null,
     school_day_weekdays: Array.isArray(raw.school_day_weekdays)
       ? normalizeWeekdayList(
@@ -789,7 +829,7 @@ export default function CompliancePolicySettingsEditor({
         )}
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        <div className="mt-4 grid gap-3 lg:grid-cols-5">
         <label className="space-y-1">
           <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
             Minimum Rest Hours
@@ -838,7 +878,40 @@ export default function CompliancePolicySettingsEditor({
             placeholder="e.g. 2400"
           />
         </label>
-      </div>
+          <label className="space-y-1">
+            <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+              Max Consecutive Days
+            </span>
+          <input
+            type="number"
+            min={0}
+            step="1"
+            value={draft.maxConsecutiveWorkDays}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, maxConsecutiveWorkDays: event.target.value }))
+            }
+            className={`w-full rounded-xl border px-3 py-2 text-[12px] outline-none ${dark ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8FA3B5]" : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#9CA3AF]"}`}
+              placeholder="e.g. 6"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+              Rest Days / Week
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={7}
+              step="1"
+              value={draft.requiredRestDaysPerWorkweek}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, requiredRestDaysPerWorkweek: event.target.value }))
+              }
+              className={`w-full rounded-xl border px-3 py-2 text-[12px] outline-none ${dark ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8FA3B5]" : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#9CA3AF]"}`}
+              placeholder="e.g. 1"
+            />
+          </label>
+        </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <div className="space-y-2">

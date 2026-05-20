@@ -2,7 +2,9 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import CompliancePayrollExportSettingsEditor from "./CompliancePayrollExportSettingsEditor";
+import CompliancePayrollExportSettingsEditor, {
+  readCompliancePayrollExportSettingsSnapshot,
+} from "./CompliancePayrollExportSettingsEditor";
 
 const mockUpdateBusinessProfile = vi.fn();
 
@@ -22,6 +24,7 @@ describe("CompliancePayrollExportSettingsEditor", () => {
       status: "active",
       settings: {
         compliance_payroll_export: {
+          provider_profile: "gusto_csv_v1",
           employee_identifier_priority: ["external_ref", "employee_number"],
           allow_internal_employee_id_fallback: true,
           default_earning_code: "COMPPREM",
@@ -37,6 +40,14 @@ describe("CompliancePayrollExportSettingsEditor", () => {
     });
   });
 
+  it("falls back to the generic provider profile when persisted data is invalid", () => {
+    expect(
+      readCompliancePayrollExportSettingsSnapshot({
+        provider_profile: "unknown_csv_v999",
+      }).provider_profile,
+    ).toBe("generic_csv_v1");
+  });
+
   it("saves business payroll export settings through the business profile update route", async () => {
     const onApplied = vi.fn();
     render(
@@ -45,6 +56,7 @@ describe("CompliancePayrollExportSettingsEditor", () => {
         businessId="biz_123"
         businessTimezone="America/Los_Angeles"
         currentSettings={{
+          provider_profile: "generic_csv_v1",
           employee_identifier_priority: ["employee_number", "external_ref"],
           allow_internal_employee_id_fallback: false,
           default_earning_code: "COMPLIANCE",
@@ -58,6 +70,9 @@ describe("CompliancePayrollExportSettingsEditor", () => {
 
     fireEvent.change(screen.getByLabelText(/preferred identifier/i), {
       target: { value: "external_ref" },
+    });
+    fireEvent.change(screen.getByLabelText(/payroll export format/i), {
+      target: { value: "gusto_csv_v1" },
     });
     fireEvent.click(
       screen.getByLabelText(/fall back to backfill’s internal employee id/i),
@@ -78,6 +93,7 @@ describe("CompliancePayrollExportSettingsEditor", () => {
       display_name: "Backfill",
       timezone: "America/Los_Angeles",
       compliance_payroll_export: {
+        provider_profile: "gusto_csv_v1",
         employee_identifier_priority: ["external_ref", "employee_number"],
         allow_internal_employee_id_fallback: true,
         default_earning_code: "COMPPREM",
@@ -97,6 +113,7 @@ describe("CompliancePayrollExportSettingsEditor", () => {
     await waitFor(() =>
       expect(onApplied).toHaveBeenCalledWith(
         expect.objectContaining({
+          provider_profile: "gusto_csv_v1",
           employee_identifier_priority: ["external_ref", "employee_number"],
           allow_internal_employee_id_fallback: true,
           default_earning_code: "COMPPREM",

@@ -48,6 +48,7 @@ from app.schemas.scheduling import (
 from app.services import (
     compliance_decisions,
     compliance_engine,
+    compliance_source_references,
     compliance_overrides,
     communication_suppressions,
     delivery,
@@ -700,6 +701,9 @@ async def schedule_week_publish_future_policy_review(
 def _schedule_week_publish_review_issues(
     evaluation: Mapping[str, object],
 ) -> list[dict[str, object]]:
+    evaluation_rule_source_references = compliance_source_references.rule_source_references_from_evaluation(
+        evaluation
+    )
     issues: list[dict[str, object]] = []
     for raw_result in evaluation.get("rule_results") or []:
         result = _publish_review_mapping(raw_result)
@@ -720,9 +724,10 @@ def _schedule_week_publish_review_issues(
             and "meal" in str(result.get("rule_code") or "").strip().lower()
         ):
             artifact_type_allowed = ComplianceOverrideArtifactType.meal_waiver.value
+        rule_code = str(result.get("rule_code") or "").strip() or "compliance_rule"
         issues.append(
             {
-                "rule_code": str(result.get("rule_code") or "").strip() or "compliance_rule",
+                "rule_code": rule_code,
                 "status": status,
                 "reason_codes": list(result.get("reason_codes") or []),
                 "premium_required": premium_required,
@@ -737,12 +742,17 @@ def _schedule_week_publish_review_issues(
                 "artifact_type_allowed": artifact_type_allowed,
                 "override_applied": override_artifact_id is not None,
                 "override_artifact_id": override_artifact_id,
+                "rule_source_references": compliance_source_references.filter_rule_source_references(
+                    evaluation_rule_source_references,
+                    rule_codes=[rule_code],
+                ),
             }
         )
     if not issues and str(evaluation.get("status") or "").strip().lower() == "unresolved":
+        fallback_rule_code = "compliance_profile_unresolved"
         issues.append(
             {
-                "rule_code": "compliance_profile_unresolved",
+                "rule_code": fallback_rule_code,
                 "status": "warning",
                 "reason_codes": ["labor_rule_profile_unresolved"],
                 "premium_required": False,
@@ -753,6 +763,29 @@ def _schedule_week_publish_review_issues(
                 "artifact_type_allowed": None,
                 "override_applied": False,
                 "override_artifact_id": None,
+                "rule_source_references": compliance_source_references.build_rule_source_references(
+                    rule_codes=[fallback_rule_code],
+                    profile_code=evaluation.get("profile_code"),
+                    profile_display_name=evaluation.get("profile_display_name"),
+                    profile_version_id=evaluation.get("profile_version_id"),
+                    profile_source_version=evaluation.get("profile_source_version"),
+                    profile_source_hash=evaluation.get("profile_source_hash"),
+                    profile_source_urls=evaluation.get("profile_source_urls"),
+                    work_permit_template_code=evaluation.get("work_permit_template_code"),
+                    work_permit_template_label=evaluation.get("work_permit_template_label"),
+                    work_permit_jurisdiction_code=evaluation.get("work_permit_jurisdiction_code"),
+                    work_permit_source_document_title=evaluation.get(
+                        "work_permit_source_document_title"
+                    ),
+                    work_permit_source_urls=evaluation.get("work_permit_source_urls"),
+                    work_permit_source_version=evaluation.get("work_permit_source_version"),
+                    work_permit_source_hash=evaluation.get("work_permit_source_hash"),
+                    work_permit_payload_hash=evaluation.get("work_permit_payload_hash"),
+                    policy_version_id=evaluation.get("policy_version_id"),
+                    policy_hash=evaluation.get("policy_hash"),
+                    policy_effective_at=evaluation.get("policy_effective_at"),
+                    policy_scope=evaluation.get("policy_scope"),
+                ),
             }
         )
     issues.sort(
@@ -801,6 +834,7 @@ def _compliance_metadata_for_assignment(
             default=0,
             minimum=0,
         ),
+        "premium_components": list(evaluation.get("premium_components") or []),
         "unresolved_premium_rule_codes": list(evaluation.get("unresolved_premium_rule_codes") or []),
         "override_applied": bool(evaluation.get("override_applied")),
         "override_artifact_id": str(override_artifact.id) if override_artifact is not None else None,
@@ -811,6 +845,9 @@ def _compliance_metadata_for_assignment(
         "policy_hash": evaluation.get("policy_hash"),
         "policy_effective_at": evaluation.get("policy_effective_at"),
         "policy_scope": evaluation.get("policy_scope"),
+        "rule_source_references": compliance_source_references.rule_source_references_from_evaluation(
+            evaluation
+        ),
     }
 
 
@@ -873,6 +910,10 @@ async def _resolve_assignment_compliance(
         employees=[employee],
         shift=shift,
         profile=profile,
+        compliance_settings=settings_service.merged_compliance_settings_from_inputs(
+            business_settings=business_settings,
+            location_settings=location_settings,
+        ),
         now=reference_time,
     )
     snapshot = snapshots.get(employee.id)

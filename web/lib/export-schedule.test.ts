@@ -38,8 +38,64 @@ const baseOpts: ExportOptions = {
 
 const complianceOpts: ExportOptions = {
   ...baseOpts,
+  complianceWeek: {
+    location_id: 'loc_1',
+    week_start_date: '2025-04-14',
+    week_end_date: '2025-04-20',
+    shift_count: 1,
+    assigned_shift_count: 1,
+    employee_count: 1,
+    warning_assignment_count: 1,
+    blocked_assignment_count: 0,
+    unresolved_premium_assignment_count: 0,
+    premium_total_cents: 2100,
+    override_applied_count: 1,
+    warning_rule_codes: ['paid_rest_break_quota'],
+    premium_rule_codes: [],
+    unresolved_premium_rule_codes: [],
+    artifact_type_counts: [],
+    shifts: [
+      {
+        shift_id: 'shift_1',
+        employee_id: 'e1',
+        employee_name: 'Alice Smith',
+        role_id: 'role_1',
+        role_name: 'Barista',
+        starts_at: '2025-04-14T16:00:00Z',
+        ends_at: '2025-04-14T23:00:00Z',
+        compliance_status: 'warning',
+        profile_code: 'ca_restaurant_v1',
+        blocking_rule_codes: [],
+        warning_rule_codes: ['paid_rest_break_quota'],
+        premium_rule_codes: [],
+        premium_total_cents: 2100,
+        unresolved_premium_rule_codes: [],
+        override_applied: true,
+        override_artifact_id: 'artifact_123',
+        rule_source_references: [
+          {
+            rule_code: 'paid_rest_break_quota',
+            source_kind: 'labor_rule_profile',
+            source_code: 'ca_restaurant_v1',
+            source_label: 'California restaurant baseline',
+            jurisdiction_code: 'US-CA',
+            source_document_title: null,
+            source_urls: ['https://example.com/ca-rule-pack'],
+            source_version: 'ca_rule_pack_v3',
+            source_hash: 'sha256:ca-pack',
+            version_id: 'profile_version_1',
+            payload_hash: null,
+            effective_at: null,
+          },
+        ],
+      },
+    ],
+    employees: [],
+    override_artifacts: [],
+  },
   shifts: [
     {
+      id: 'shift_1',
       employeeId: 'e1',
       day: 0,
       startHour: 9,
@@ -62,6 +118,7 @@ const payrollComplianceOpts: ExportOptions = {
     location_id: 'loc_1',
     week_start_date: '2025-04-14',
     week_end_date: '2025-04-20',
+    provider_profile: 'gusto_csv_v1',
     row_count: 1,
     premium_payment_row_count: 1,
     ready_adjustment_row_count: 1,
@@ -92,10 +149,28 @@ const payrollComplianceOpts: ExportOptions = {
         payroll_status: 'ready',
         employee_identifier: 'EMP-42',
         employee_identifier_type: 'employee_number',
+        employee_number: 'EMP-42',
+        external_ref: 'toast-42',
         earning_code: 'RESTPREM',
         earning_label: 'Rest Break Premium',
         source_rule_code: 'paid_rest_break_quota',
         source_reason_codes: ['rest_break_quota_missing'],
+        rule_source_references: [
+          {
+            rule_code: 'paid_rest_break_quota',
+            source_kind: 'labor_rule_profile',
+            source_code: 'ca_restaurant_v1',
+            source_label: 'California restaurant baseline',
+            jurisdiction_code: 'US-CA',
+            source_document_title: null,
+            source_urls: ['https://example.com/ca-rule-pack'],
+            source_version: 'ca_rule_pack_v3',
+            source_hash: 'sha256:ca-pack',
+            version_id: 'profile_version_1',
+            payload_hash: null,
+            effective_at: null,
+          },
+        ],
       },
     ],
   },
@@ -263,6 +338,7 @@ describe('buildComplianceRows', () => {
       'Artifact Applied',
       'Warning Rules',
       'Blocking Rules',
+      'Rule Sources',
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0][0]).toBe('Alice Smith');
@@ -272,6 +348,7 @@ describe('buildComplianceRows', () => {
     expect(rows[0][4]).toBe('$21.00');
     expect(rows[0][6]).toBe('Yes');
     expect(rows[0][7]).toBe('paid_rest_break_quota');
+    expect(rows[0][9]).toContain('California restaurant baseline');
   });
 });
 
@@ -303,6 +380,7 @@ describe('buildCompliancePayrollRows', () => {
       'Artifact Type',
       'Artifact Note',
       'Source Reasons',
+      'Rule Sources',
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0][0]).toBe('premium_payment');
@@ -314,6 +392,7 @@ describe('buildCompliancePayrollRows', () => {
     expect(rows[0][15]).toBe('Yes');
     expect(rows[0][16]).toBe('meal_waiver');
     expect(rows[0][17]).toBe('Signed waiver on file');
+    expect(rows[0][19]).toContain('California restaurant baseline');
   });
 });
 
@@ -418,9 +497,10 @@ describe('exportCSV', () => {
     exportCSV(complianceOpts);
     const text = await (capturedBlob as Blob).text();
     expect(text).toContain('"Compliance Summary"');
-    expect(text).toContain('"Employee","Role","Shift","Status","Premium","Unresolved Premium","Artifact Applied","Warning Rules","Blocking Rules"');
+    expect(text).toContain('"Employee","Role","Shift","Status","Premium","Unresolved Premium","Artifact Applied","Warning Rules","Blocking Rules","Rule Sources"');
     expect(text).toContain('"Alice Smith","Barista"');
     expect(text).toContain('"$21.00"');
+    expect(text).toContain('"Labor Rule Profile · California restaurant baseline"');
   });
 
   it('appends a compliance payroll consequence section when payroll export rows are present', async () => {
@@ -431,5 +511,6 @@ describe('exportCSV', () => {
     expect(text).toContain('"Manual Review"');
     expect(text).toContain('"meal_waiver"');
     expect(text).toContain('"Signed waiver on file"');
+    expect(text).toContain('"Labor Rule Profile · California restaurant baseline"');
   });
 });

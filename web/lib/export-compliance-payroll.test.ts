@@ -9,6 +9,7 @@ const report = {
   location_id: "loc_123",
   week_start_date: "2026-04-06",
   week_end_date: "2026-04-12",
+  provider_profile: "generic_csv_v1" as const,
   row_count: 1,
   premium_payment_row_count: 1,
   ready_adjustment_row_count: 1,
@@ -39,10 +40,28 @@ const report = {
       payroll_status: "ready",
       employee_identifier: "EMP-42",
       employee_identifier_type: "employee_number",
+      employee_number: "EMP-42",
+      external_ref: "toast-42",
       earning_code: "MEALPREM",
       earning_label: "Meal Break Premium",
       source_rule_code: "meal_break_first_window",
       source_reason_codes: ["first_meal_break_missing"],
+      rule_source_references: [
+        {
+          rule_code: "meal_break_first_window",
+          source_kind: "labor_rule_profile",
+          source_code: "ca_restaurant_v1",
+          source_label: "California restaurant baseline",
+          jurisdiction_code: "US-CA",
+          source_document_title: null,
+          source_urls: ["https://example.com/ca-rule-pack"],
+          source_version: "ca_rule_pack_v3",
+          source_hash: "sha256:ca-pack",
+          version_id: "profile_version_1",
+          payload_hash: null,
+          effective_at: null,
+        },
+      ],
     },
   ],
 };
@@ -63,6 +82,26 @@ describe("buildCompliancePayrollCsv", () => {
     expect(csv).toContain('"meal_break_first_window"');
     expect(csv).toContain('"split_shift_premium"');
     expect(csv).toContain('"meal_waiver"');
+    expect(csv).toContain('"Labor Rule Profile · California restaurant baseline"');
+  });
+
+  it("renders provider-specific gusto headers and employee number rows", () => {
+    const csv = buildCompliancePayrollCsv(
+      {
+        ...report,
+        provider_profile: "gusto_csv_v1",
+      },
+      {
+        locationName: "Downtown",
+        weekLabel: "Apr 6 – 12",
+      },
+    );
+
+    expect(csv).toContain('"Employee Number"');
+    expect(csv).toContain('"Amount USD"');
+    expect(csv).not.toContain('"Employee Identifier Type"');
+    expect(csv).toContain('"EMP-42"');
+    expect(csv).toContain('"22.50"');
   });
 });
 
@@ -86,6 +125,29 @@ describe("exportCompliancePayrollCsv", () => {
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
     expect(anchor.download).toContain("compliance-payroll.csv");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
+  });
+
+  it("uses the provider-specific filename suffix", () => {
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const click = vi.fn();
+    const anchor = { click, href: "", download: "" } as unknown as HTMLAnchorElement;
+    vi.spyOn(document, "createElement").mockReturnValue(anchor);
+
+    exportCompliancePayrollCsv(
+      {
+        ...report,
+        provider_profile: "gusto_csv_v1",
+      },
+      {
+        locationName: "Downtown",
+        weekLabel: "Apr 6 – 12",
+      },
+    );
+
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(anchor.download).toContain("gusto.csv");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
   });
 });

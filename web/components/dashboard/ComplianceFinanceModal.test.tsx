@@ -6,6 +6,7 @@ import { ComplianceFinanceModal } from "./ComplianceFinanceModal";
 
 const mockGetLocationComplianceWeek = vi.fn();
 const mockGetLocationComplianceTrend = vi.fn();
+const mockGetLocationComplianceRuleCatalog = vi.fn();
 const mockGetLocationComplianceScheduledPolicyDrift = vi.fn();
 const mockGetBusinessComplianceScheduledPolicyDrift = vi.fn();
 const mockGetLocationCompliancePayrollExport = vi.fn();
@@ -18,6 +19,8 @@ const mockExportCompliancePayrollCsv = vi.fn();
 vi.mock("@/lib/api/finance", () => ({
   getLocationComplianceWeek: (...args: unknown[]) => mockGetLocationComplianceWeek(...args),
   getLocationComplianceTrend: (...args: unknown[]) => mockGetLocationComplianceTrend(...args),
+  getLocationComplianceRuleCatalog: (...args: unknown[]) =>
+    mockGetLocationComplianceRuleCatalog(...args),
   getLocationComplianceScheduledPolicyDrift: (...args: unknown[]) =>
     mockGetLocationComplianceScheduledPolicyDrift(...args),
   getBusinessComplianceScheduledPolicyDrift: (...args: unknown[]) =>
@@ -36,6 +39,18 @@ vi.mock("@/lib/api/finance", () => ({
 
 vi.mock("@/lib/export-compliance-payroll", () => ({
   exportCompliancePayrollCsv: (...args: unknown[]) => mockExportCompliancePayrollCsv(...args),
+  describeCompliancePayrollProviderProfile: (profile: string | undefined) => {
+    switch (profile) {
+      case "gusto_csv_v1":
+        return "Gusto-aligned CSV";
+      case "quickbooks_csv_v1":
+        return "QuickBooks-aligned CSV";
+      case "adp_csv_v1":
+        return "ADP-aligned CSV";
+      default:
+        return "Backfill generic CSV";
+    }
+  },
 }));
 
 const defaultReport = {
@@ -149,6 +164,52 @@ const defaultTrendReport = {
       unresolved_premium_assignment_count: 1,
       premium_total_cents: 1845,
       override_applied_count: 1,
+    },
+  ],
+};
+
+const defaultRuleCatalog = {
+  location_id: "loc_123",
+  jurisdiction_code: "US-CA",
+  as_of: "2026-04-28T18:00:00Z",
+  labor_rule_profiles: [
+    {
+      catalog_kind: "labor_rule_profile",
+      code: "ca_restaurant_v1",
+      label: "California restaurant baseline",
+      description: null,
+      jurisdiction_code: "US-CA",
+      source_document_title: null,
+      source_urls: ["https://example.com/ca-rule-pack"],
+      source_version: "ca_rule_pack_v3",
+      source_hash: "sha256:ca-pack",
+      effective_start_date: null,
+      effective_end_date: null,
+      payload_hash: "sha256:labor-payload",
+      rule_families: ["meal_break", "rest_break", "rest_window"],
+      version_id: "profile_version_1",
+      version_no: 3,
+      rule_payload: { code: "ca_restaurant_v1" },
+    },
+  ],
+  work_permit_templates: [
+    {
+      catalog_kind: "work_permit_template",
+      code: "ca_16_17_school_required_v1",
+      label: "California ages 16-17 while school required",
+      description: "4 hours on schooldays, 8 hours on non-schooldays.",
+      jurisdiction_code: "US-CA",
+      source_document_title: "California Department of Industrial Relations minors summary charts",
+      source_urls: ["https://www.dir.ca.gov/dlse/MinorsSummaryCharts.pdf"],
+      source_version: "dir_minors_summary_charts_v1",
+      source_hash: null,
+      effective_start_date: null,
+      effective_end_date: null,
+      payload_hash: "sha256:permit-payload",
+      rule_families: ["minor_labor", "work_permit"],
+      version_id: null,
+      version_no: null,
+      rule_payload: { template_code: "ca_16_17_school_required_v1" },
     },
   ],
 };
@@ -289,12 +350,14 @@ describe("ComplianceFinanceModal", () => {
     vi.clearAllMocks();
     mockGetLocationComplianceWeek.mockResolvedValue(defaultReport);
     mockGetLocationComplianceTrend.mockResolvedValue(defaultTrendReport);
+    mockGetLocationComplianceRuleCatalog.mockResolvedValue(defaultRuleCatalog);
     mockGetLocationComplianceScheduledPolicyDrift.mockResolvedValue(defaultLocationDrift);
     mockGetBusinessComplianceScheduledPolicyDrift.mockResolvedValue(defaultBusinessDrift);
     mockGetLocationCompliancePayrollExport.mockResolvedValue({
       location_id: "loc_123",
       week_start_date: "2026-04-06",
       week_end_date: "2026-04-12",
+      provider_profile: "gusto_csv_v1",
       row_count: 1,
       premium_payment_row_count: 1,
       manual_review_row_count: 1,
@@ -432,6 +495,9 @@ describe("ComplianceFinanceModal", () => {
     expect(screen.getByText("Taylor Server")).toBeInTheDocument();
     expect(screen.getByText(/Signed waiver on file/)).toBeInTheDocument();
     expect(screen.getByText("Trend Window")).toBeInTheDocument();
+    expect(screen.getByText("Rule Sources")).toBeInTheDocument();
+    expect(screen.getByText("California restaurant baseline")).toBeInTheDocument();
+    expect(screen.getByText("Permit Template Catalog")).toBeInTheDocument();
     expect(screen.getByText("Scheduled Policy Drift")).toBeInTheDocument();
     expect(screen.getByText("Activating Policies")).toBeInTheDocument();
     expect(screen.getByText("Policy Simulation")).toBeInTheDocument();
@@ -446,6 +512,10 @@ describe("ComplianceFinanceModal", () => {
       "loc_123",
       "2026-04-06",
       6,
+    );
+    expect(mockGetLocationComplianceRuleCatalog).toHaveBeenCalledWith(
+      "biz_123",
+      "loc_123",
     );
     expect(mockGetLocationComplianceScheduledPolicyDrift).toHaveBeenCalledWith(
       "biz_123",
@@ -479,8 +549,8 @@ describe("ComplianceFinanceModal", () => {
   it("exports payroll csv from the footer action", async () => {
     renderModal();
 
-    await screen.findByText("Export Payroll CSV");
-    fireEvent.click(screen.getByRole("button", { name: /export payroll csv/i }));
+    await screen.findByText("Export Gusto CSV");
+    fireEvent.click(screen.getByRole("button", { name: /export gusto csv/i }));
 
     await waitFor(() =>
       expect(mockGetLocationCompliancePayrollExport).toHaveBeenCalledWith(
@@ -497,6 +567,7 @@ describe("ComplianceFinanceModal", () => {
 
     await screen.findByText("Run Preview");
     fireEvent.change(screen.getByPlaceholderText("e.g. 12"), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText(/rest days \/ week/i), { target: { value: "1" } });
     fireEvent.click(screen.getByLabelText(/require structured break plans/i));
     fireEvent.click(screen.getByRole("button", { name: /run preview/i }));
 
@@ -509,6 +580,7 @@ describe("ComplianceFinanceModal", () => {
           week_count: 6,
           compliance: {
             minimum_rest_hours: 12,
+            required_rest_days_per_workweek: 1,
             require_structured_break_plans: true,
           },
         },

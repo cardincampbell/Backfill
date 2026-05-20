@@ -188,6 +188,105 @@ def test_evaluate_overtime_projection_california_daily_and_double_time():
     assert "double_time_triggered" in projection["reason_codes"]
 
 
+def test_max_consecutive_work_days_defaults_for_day_of_rest_ruleset():
+    profile = _profile(
+        code="us_ca_general_nonexempt",
+        jurisdiction_code="US-CA",
+        overtime_mode="daily_8_plus_weekly_plus_7th_day",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_ruleset": "ca_v1",
+        },
+    )
+
+    assert labor_rules.max_consecutive_work_days(profile) == 6
+
+
+def test_max_consecutive_work_days_prefers_explicit_profile_override():
+    profile = _profile(
+        code="custom_profile",
+        jurisdiction_code="US-CA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "max_consecutive_work_days": 4,
+        },
+    )
+
+    assert labor_rules.max_consecutive_work_days(profile) == 4
+
+
+def test_effective_max_consecutive_work_days_prefers_stricter_policy_override():
+    profile = _profile(
+        code="custom_profile",
+        jurisdiction_code="US-CA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+        },
+    )
+
+    assert (
+        labor_rules.effective_max_consecutive_work_days(
+            profile,
+            compliance_settings={"max_consecutive_work_days": 6},
+        )
+        == 6
+    )
+
+
+def test_required_rest_days_per_workweek_defaults_when_enabled():
+    profile = _profile(
+        code="custom_profile",
+        jurisdiction_code="US-CA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_workweek_required": True,
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 1
+
+
+def test_required_rest_days_per_workweek_prefers_explicit_profile_override():
+    profile = _profile(
+        code="custom_profile",
+        jurisdiction_code="US-CA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "required_rest_days_per_workweek": 2,
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 2
+
+
+def test_california_seed_profile_defaults_enable_break_and_rest_day_rules():
+    profile = _profile(
+        code="us_ca_general_nonexempt",
+        jurisdiction_code="US-CA",
+        overtime_mode="daily_8_plus_weekly_plus_7th_day",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ca_v1",
+            "rest_break_ruleset": "ca_v1",
+            "day_of_rest_ruleset": "ca_v1",
+            "day_of_rest_workweek_required": True,
+        },
+    )
+
+    assert labor_rules.max_consecutive_work_days(profile) == 6
+    assert labor_rules.required_rest_days_per_workweek(profile) == 1
+
+
 @pytest.mark.asyncio
 async def test_build_hours_snapshots_deduplicates_overlaps_and_clips_in_progress():
     employee = Employee(id=uuid4(), business_id=uuid4(), full_name="Worker")
@@ -237,3 +336,52 @@ async def test_build_hours_snapshots_deduplicates_overlaps_and_clips_in_progress
     snapshot = snapshots[employee.id]
     assert snapshot.gross_hours_by_window["workday"] == 8.0
     assert snapshot.gross_hours_by_window["workweek"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolved_profile_prefers_seeded_hospitality_profile_for_matching_location(monkeypatch):
+    location = Location(
+        id=uuid4(),
+        business_id=uuid4(),
+        name="Hotel",
+        display_name="Hotel",
+        slug="hotel",
+        region="NY",
+        country_code="US",
+        timezone="America/New_York",
+        settings={"labor_industry_profile_code": "hospitality"},
+    )
+    generic = _profile(
+        code="us_flsa_general",
+        jurisdiction_code="US",
+        overtime_mode="weekly_only",
+    )
+    hospitality = _profile(
+        code="us_ny_hospitality_nonexempt",
+        jurisdiction_code="US-NY",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "spread_of_hours_ruleset": "ny_v1",
+            "day_of_rest_workweek_required": True,
+        },
+    )
+    object.__setattr__(hospitality, "industry_profile_code", "hospitality")
+
+    async def fake_existing(*args, **kwargs):
+        return None
+
+    async def fake_profiles(*args, **kwargs):
+        return [generic, hospitality]
+
+    monkeypatch.setattr(labor_rules, "load_authoritative_location_resolution", fake_existing)
+    monkeypatch.setattr(labor_rules, "active_profiles_for_jurisdiction", fake_profiles)
+
+    resolved = await labor_rules.runtime_resolved_profile(
+        None,  # type: ignore[arg-type]
+        location=location,
+    )
+
+    assert resolved is not None
+    assert resolved.code == "us_ny_hospitality_nonexempt"

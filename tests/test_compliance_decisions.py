@@ -131,6 +131,8 @@ async def test_list_shift_compliance_decisions_reads_from_feed_events(monkeypatc
     assert result[0].decision_source == "scheduler_assignment"
     assert result[0].decision_outcome == "blocked"
     assert result[0].blocking_rule_codes == ["minimum_rest_window"]
+    assert result[0].rule_source_references[0].rule_code == "minimum_rest_window"
+    assert result[0].rule_source_references[0].source_kind == "unknown"
 
 
 def test_list_shift_compliance_decisions_route_returns_history(monkeypatch):
@@ -202,5 +204,6 @@ def test_list_shift_compliance_decisions_route_returns_history(monkeypatch):
         assert payload[0]["employee_id"] == str(employee_id)
         assert payload[0]["decision_source"] == "scheduler_assignment"
         assert payload[0]["premium_total_cents"] == 2100
+        assert payload[0]["rule_source_references"] == []
     finally:
         app.dependency_overrides.clear()

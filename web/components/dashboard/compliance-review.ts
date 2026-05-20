@@ -1,4 +1,5 @@
 import type {
+  ComplianceRuleSourceReference,
   ComplianceReviewItem,
   ComplianceReviewSummary,
 } from "@/lib/api/workspace";
@@ -45,11 +46,27 @@ export function complianceReasonLabel(value: string) {
     minimum_rest_window_violation: "Required rest window not met",
     first_meal_break_missing: "First meal break missing",
     second_meal_break_missing: "Second meal break missing",
+    midday_meal_break_missing: "Midday meal break missing",
+    evening_meal_break_missing: "Evening meal break missing",
+    midshift_meal_break_missing: "Midshift meal break missing",
+    midday_meal_break_scheduled: "Midday meal break scheduled",
+    evening_meal_break_scheduled: "Evening meal break scheduled",
+    midshift_meal_break_scheduled: "Midshift meal break scheduled",
     rest_break_quota_missing: "Required paid rest break missing",
+    consecutive_workday_limit_exceeded: "Consecutive-day limit exceeded",
+    consecutive_workday_limit_satisfied: "Consecutive-day limit satisfied",
+    seven_consecutive_workdays_projected: "Seven consecutive workdays projected",
+    workweek_rest_day_missing: "Required workweek rest day missing",
+    workweek_rest_day_satisfied: "Workweek rest-day requirement satisfied",
+    seven_workdays_in_workweek_projected: "Seven workdays projected in the workweek",
     override_artifact_applied: "Artifact recorded",
     structured_break_plan_required_by_policy: "Company policy requires structured breaks",
     max_daily_minutes_exceeded_by_policy: "Company daily-hours limit exceeded",
     max_weekly_minutes_exceeded_by_policy: "Company weekly-hours limit exceeded",
+    max_consecutive_work_days_exceeded_by_policy: "Company consecutive-day limit exceeded",
+    max_consecutive_work_days_satisfied_by_policy: "Company consecutive-day limit satisfied",
+    workweek_rest_day_missing_by_policy: "Company workweek rest-day requirement violated",
+    workweek_rest_day_satisfied_by_policy: "Company workweek rest-day requirement satisfied",
     unresolved_premium_blocked_by_policy: "Company policy blocks unresolved premiums",
     waiver_disabled_by_policy: "Company policy disables waivers here",
     employee_is_minor: "Employee is a minor",
@@ -76,6 +93,65 @@ export function complianceReasonLabel(value: string) {
     minor_time_window_satisfied: "Minor time window satisfied",
   };
   return labels[normalized] ?? humanizeComplianceCode(normalized);
+}
+
+export function humanizeComplianceSourceKind(value: string | null | undefined) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    labor_rule_profile: "Labor rule profile",
+    work_permit_template: "Work permit template",
+    policy_overlay: "Policy overlay",
+    unknown: "Source needs review",
+  };
+  return labels[normalized] ?? humanizeComplianceCode(normalized || "compliance_source");
+}
+
+export function dedupeComplianceSourceReferences(
+  references: ComplianceRuleSourceReference[] | null | undefined,
+) {
+  const items = references ?? [];
+  const seen = new Set<string>();
+  const deduped: ComplianceRuleSourceReference[] = [];
+  for (const reference of items) {
+    const key = [
+      reference.rule_code,
+      reference.source_kind,
+      reference.source_code ?? "",
+      reference.source_hash ?? "",
+      reference.version_id ?? "",
+      reference.payload_hash ?? "",
+      reference.effective_at ?? "",
+    ].join(":");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(reference);
+  }
+  return deduped;
+}
+
+export function describeComplianceSourceReference(reference: ComplianceRuleSourceReference) {
+  const kindLabel = humanizeComplianceSourceKind(reference.source_kind);
+  const primaryLabel =
+    reference.source_label
+    ?? reference.source_document_title
+    ?? reference.source_code
+    ?? kindLabel;
+  const secondaryParts = [
+    reference.jurisdiction_code,
+    reference.source_version,
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  return {
+    kindLabel,
+    primaryLabel,
+    secondaryLabel: secondaryParts.join(" · ") || null,
+    href: reference.source_urls[0] ?? null,
+    pillLabel:
+      kindLabel === primaryLabel
+        ? primaryLabel
+        : `${kindLabel} · ${primaryLabel}`,
+  };
 }
 
 export function summarizeComplianceReviewItems(
@@ -242,6 +318,15 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
   } else if (normalizedRuleCode === "meal_break_second_window") {
     title = "Second meal break is missing";
     detail = "This long shift needs a compliant second meal break unless a valid waiver applies.";
+  } else if (normalizedRuleCode === "meal_break_midday_window") {
+    title = "Midday meal period is missing";
+    detail = "This New York shift extends over the noonday period and needs a compliant meal break between 11:00 AM and 2:00 PM.";
+  } else if (normalizedRuleCode === "meal_break_evening_window") {
+    title = "Evening meal period is missing";
+    detail = "This New York day shift runs late enough to require the additional evening meal period.";
+  } else if (normalizedRuleCode === "meal_break_midshift_window") {
+    title = "Midshift meal period is missing";
+    detail = "This New York evening or overnight shift needs a compliant midshift meal period near the middle of the shift.";
   } else if (normalizedRuleCode === "paid_rest_break_quota") {
     title = "Paid rest break quota is missing";
     detail = "This shift structure does not currently include enough paid rest break time.";
@@ -251,6 +336,12 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
   } else if (normalizedRuleCode === "spread_of_hours_premium") {
     title = "Spread-of-hours premium applies";
     detail = "This shift spans long enough from first start to last end to trigger a spread-of-hours premium obligation.";
+  } else if (normalizedRuleCode === "day_of_rest_in_seven" || normalizedRuleCode === "max_consecutive_work_days") {
+    title = "Consecutive-day limit exceeded";
+    detail = "Assigning this shift would leave the employee without a compliant day of rest inside the configured work pattern.";
+  } else if (normalizedRuleCode === "day_of_rest_workweek") {
+    title = "Workweek rest-day requirement violated";
+    detail = "Assigning this shift would leave the employee without a required day of rest inside the current workweek.";
   } else if (normalizedRuleCode === "overtime_projection") {
     title = "Overtime exposure increases";
     detail = "Assigning this employee pushes projected labor cost up through overtime.";
@@ -260,6 +351,12 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
   } else if (normalizedRuleCode === "customer_policy_max_weekly_work_minutes") {
     title = "Weekly-hours policy limit exceeded";
     detail = "This assignment would exceed the business or location’s configured maximum weekly work limit.";
+  } else if (normalizedRuleCode === "customer_policy_max_consecutive_work_days") {
+    title = "Consecutive-day policy limit exceeded";
+    detail = "This assignment would push the employee past the business or location’s configured maximum consecutive workday limit.";
+  } else if (normalizedRuleCode === "customer_policy_required_rest_days_per_workweek") {
+    title = "Workweek rest-day policy violated";
+    detail = "This assignment would remove the required day of rest from the current workweek under the business or location policy.";
   } else if (normalizedRuleCode === "customer_policy_structured_break_plan") {
     title = "Structured break plan required";
     detail = "This business requires explicit shift segments and breaks before schedules can be assigned or published.";
@@ -327,6 +424,16 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
     detail = "This shift begins earlier than the configured start time allowed for minor employees.";
   } else if (reasonCodes.has("minor_shift_ends_too_late")) {
     detail = "This shift ends later than the configured end time allowed for minor employees.";
+  } else if (reasonCodes.has("seven_consecutive_workdays_projected")) {
+    detail = "This assignment would create seven consecutive local workdays without a day of rest.";
+  } else if (reasonCodes.has("seven_workdays_in_workweek_projected")) {
+    detail = "This assignment would leave the employee scheduled on all seven local days in the current workweek.";
+  } else if (reasonCodes.has("consecutive_workday_limit_exceeded")) {
+    detail = "This assignment would push the employee past the maximum consecutive workday limit in the active rule pack.";
+  } else if (reasonCodes.has("workweek_rest_day_missing")) {
+    detail = "This assignment would exceed the allowed number of worked days in the current workweek.";
+  } else if (reasonCodes.has("workweek_rest_day_missing_by_policy")) {
+    detail = "This assignment would remove the required day of rest from the current workweek under company policy.";
   }
 
   let recommendedAction: string | null = null;
@@ -344,6 +451,10 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
     recommendedAction = "Add wage data or change policy if you want Backfill to permit unresolved premium cases.";
   } else if (normalizedRuleCode === "customer_policy_structured_break_plan") {
     recommendedAction = "Add explicit segments and breaks before retrying.";
+  } else if (normalizedRuleCode === "customer_policy_max_consecutive_work_days") {
+    recommendedAction = "Move the shift, assign another employee, or relax the policy if this work pattern is intentional.";
+  } else if (normalizedRuleCode === "customer_policy_required_rest_days_per_workweek") {
+    recommendedAction = "Move the shift into another workweek, assign another employee, or relax the policy if this weekly pattern is intentional.";
   }
 
   let premiumLabel: string | null = null;

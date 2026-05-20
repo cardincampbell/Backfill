@@ -170,6 +170,8 @@ export type CompliancePolicySettings = {
   block_unresolved_premiums: boolean;
   max_daily_minutes?: number | null;
   max_weekly_minutes?: number | null;
+  max_consecutive_work_days?: number | null;
+  required_rest_days_per_workweek?: number | null;
   school_day_weekdays?: string[] | null;
   school_dates?: string[] | null;
   non_school_dates?: string[] | null;
@@ -181,12 +183,19 @@ export type CompliancePayrollIdentifierField =
   | "employee_number"
   | "external_ref";
 
+export type CompliancePayrollProviderProfile =
+  | "generic_csv_v1"
+  | "gusto_csv_v1"
+  | "quickbooks_csv_v1"
+  | "adp_csv_v1";
+
 export type CompliancePayrollExportRuleCodeConfig = {
   code: string;
   label?: string | null;
 };
 
 export type CompliancePayrollExportSettings = {
+  provider_profile: CompliancePayrollProviderProfile;
   employee_identifier_priority: CompliancePayrollIdentifierField[];
   allow_internal_employee_id_fallback: boolean;
   default_earning_code: string;
@@ -200,6 +209,7 @@ export type CompliancePayrollExportRuleCodeConfigUpdate = {
 };
 
 export type CompliancePayrollExportSettingsUpdate = {
+  provider_profile?: CompliancePayrollProviderProfile | null;
   employee_identifier_priority?: CompliancePayrollIdentifierField[] | null;
   allow_internal_employee_id_fallback?: boolean | null;
   default_earning_code?: string | null;
@@ -408,6 +418,21 @@ export type ScheduleWeekPublishPayload = {
   note?: string;
 };
 
+export type ComplianceRuleSourceReference = {
+  rule_code: string;
+  source_kind: string;
+  source_code?: string | null;
+  source_label?: string | null;
+  jurisdiction_code?: string | null;
+  source_document_title?: string | null;
+  source_urls: string[];
+  source_version?: string | null;
+  source_hash?: string | null;
+  version_id?: string | null;
+  payload_hash?: string | null;
+  effective_at?: string | null;
+};
+
 export type ScheduleWeekPublishResponse = {
   business_id: string;
   location_id: string;
@@ -464,6 +489,7 @@ export type ScheduleWeekPublishResponse = {
       artifact_type_allowed?: "written_consent" | "meal_waiver" | null;
       override_applied: boolean;
       override_artifact_id?: string | null;
+      rule_source_references: ComplianceRuleSourceReference[];
     }>;
   }>;
 };
@@ -517,6 +543,7 @@ export type ShiftComplianceDecisionHistoryItem = {
   unresolved_premium_rule_codes: string[];
   override_applied: boolean;
   override_artifact_id?: string | null;
+  rule_source_references: ComplianceRuleSourceReference[];
   evaluation: Record<string, unknown>;
 };
 
@@ -675,6 +702,7 @@ export type PredictiveScheduleRun = {
       artifact_type_allowed?: "written_consent" | "meal_waiver" | null;
       override_applied: boolean;
       override_artifact_id?: string | null;
+      rule_source_references: ComplianceRuleSourceReference[];
     }>;
   }> | null;
   applies: Array<{

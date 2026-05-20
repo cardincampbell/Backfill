@@ -1481,6 +1481,14 @@ export function EmployeeEditorDrawer({
                           {selectedPermitTemplate.description}
                         </p>
                       ) : null}
+                      {selectedPermitTemplate.source_version ? (
+                        <p className={`mt-2 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
+                          Rule pack {selectedPermitTemplate.source_version}
+                          {selectedPermitTemplate.effective_start_date
+                            ? ` · effective ${selectedPermitTemplate.effective_start_date}`
+                            : ""}
+                        </p>
+                      ) : null}
                     </div>
                     {selectedPermitTemplate.source_url ? (
                       <a
@@ -1494,6 +1502,11 @@ export function EmployeeEditorDrawer({
                       </a>
                     ) : null}
                   </div>
+                  {selectedPermitTemplate.source_document_title ? (
+                    <p className={`mt-2 text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 430 }}>
+                      {selectedPermitTemplate.source_document_title}
+                    </p>
+                  ) : null}
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {selectedPermitTemplate.rule_profile.daily_max_minutes_school_day ? (
                       <div>

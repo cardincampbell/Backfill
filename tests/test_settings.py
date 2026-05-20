@@ -193,6 +193,8 @@ def test_get_location_settings_returns_defaults():
                 "second_meal_waiver_allowed": None,
                 "require_structured_break_plans": False,
                 "block_unresolved_premiums": False,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
                 "max_daily_minutes": None,
                 "max_weekly_minutes": None,
                 "school_day_weekdays": [],
@@ -212,6 +214,7 @@ def test_get_location_settings_returns_defaults():
 def test_merge_compliance_payroll_export_update_normalizes_priority_and_codes():
     merged = settings_service.merge_compliance_payroll_export_update(
         {
+            "provider_profile": "generic_csv_v1",
             "employee_identifier_priority": ["employee_number", "external_ref"],
             "allow_internal_employee_id_fallback": False,
             "default_earning_code": "COMPLIANCE",
@@ -235,6 +238,7 @@ def test_merge_compliance_payroll_export_update_normalizes_priority_and_codes():
         ),
     )
 
+    assert merged["provider_profile"] == "generic_csv_v1"
     assert merged["employee_identifier_priority"] == ["external_ref"]
     assert merged["allow_internal_employee_id_fallback"] is True
     assert merged["default_earning_code"] == "COMPPREM"
@@ -475,14 +479,16 @@ def test_patch_location_settings_updates_location_and_audits():
                 "integration_status": "connected",
                 "compliance": {
                     "minimum_rest_hours": 12,
-                    "written_consent_allowed": False,
-                    "require_structured_break_plans": True,
-                    "block_unresolved_premiums": True,
-                    "max_daily_minutes": 480,
-                    "max_weekly_minutes": 2400,
-                    "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-                    "school_dates": ["2026-04-18"],
-                    "non_school_dates": ["2026-04-21"],
+                "written_consent_allowed": False,
+                "require_structured_break_plans": True,
+                "block_unresolved_premiums": True,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
+                "max_daily_minutes": 480,
+                "max_weekly_minutes": 2400,
+                "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "school_dates": ["2026-04-18"],
+                "non_school_dates": ["2026-04-21"],
                 },
             },
         )
@@ -517,6 +523,8 @@ def test_patch_location_settings_updates_location_and_audits():
                 "second_meal_waiver_allowed": None,
                 "require_structured_break_plans": True,
                 "block_unresolved_premiums": True,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
                 "max_daily_minutes": 480,
                 "max_weekly_minutes": 2400,
                 "school_day_weekdays": ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -630,6 +638,8 @@ def test_list_business_compliance_policy_versions_route_returns_rows(monkeypatch
                     "second_meal_waiver_allowed": None,
                     "require_structured_break_plans": True,
                     "block_unresolved_premiums": False,
+                    "max_consecutive_work_days": None,
+                    "required_rest_days_per_workweek": None,
                     "max_daily_minutes": None,
                     "max_weekly_minutes": None,
                 },
@@ -692,6 +702,8 @@ def test_list_location_compliance_policy_versions_route_returns_rows(monkeypatch
                     "second_meal_waiver_allowed": None,
                     "require_structured_break_plans": False,
                     "block_unresolved_premiums": False,
+                    "max_consecutive_work_days": None,
+                    "required_rest_days_per_workweek": None,
                     "max_daily_minutes": None,
                     "max_weekly_minutes": None,
                 },
@@ -763,6 +775,8 @@ def test_restore_location_compliance_policy_version_route_creates_new_version(mo
                 "second_meal_waiver_allowed": None,
                 "require_structured_break_plans": True,
                 "block_unresolved_premiums": False,
+                "max_consecutive_work_days": None,
+                "required_rest_days_per_workweek": None,
                 "max_daily_minutes": None,
                 "max_weekly_minutes": None,
             },

@@ -16,7 +16,9 @@ import {
   complianceArtifactActionLabel,
   complianceArtifactRecordedLabel,
   complianceReasonLabel,
+  dedupeComplianceSourceReferences,
   describeComplianceIssue,
+  describeComplianceSourceReference,
   summarizeComplianceReviewItems,
   type ComplianceArtifactType,
   type ComplianceReviewIssue,
@@ -90,6 +92,59 @@ function formatPolicyEffectiveAtLabel(value?: string | null) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function PublishComplianceSourceReferenceList({
+  references,
+  dark = false,
+}: {
+  references: NonNullable<PublishComplianceIssue["rule_source_references"]> | null | undefined;
+  dark?: boolean;
+}) {
+  const items = dedupeComplianceSourceReferences(references ?? []);
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {items.map((reference, index) => {
+        const presentation = describeComplianceSourceReference(reference);
+        const title = presentation.secondaryLabel
+          ? `${presentation.pillLabel} · ${presentation.secondaryLabel}`
+          : presentation.pillLabel;
+        const content = (
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? "bg-white/[0.05] text-[#C1CED8]" : "bg-[#F7F8FA] text-[#5E6D7A]"}`}
+            style={{ fontWeight: 500 }}
+            title={title}
+          >
+            {presentation.pillLabel}
+          </span>
+        );
+        if (presentation.href) {
+          return (
+            <a
+              key={`${reference.rule_code}:${reference.source_kind}:${reference.source_code ?? ""}:${index}`}
+              href={presentation.href}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex"
+              title={title}
+            >
+              {content}
+            </a>
+          );
+        }
+        return (
+          <span
+            key={`${reference.rule_code}:${reference.source_kind}:${reference.source_code ?? ""}:${index}`}
+          >
+            {content}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 
@@ -287,6 +342,10 @@ export function PublishWeekModal({
                             {issue.reason_codes.map((value) => complianceReasonLabel(value)).join(" · ")}
                           </p>
                         ) : null}
+                        <PublishComplianceSourceReferenceList
+                          references={issue.rule_source_references}
+                          dark={dark}
+                        />
                         <p className={`mt-1.5 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
                           {guidance.detail}
                         </p>

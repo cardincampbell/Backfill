@@ -176,6 +176,37 @@ def _california_break_profile() -> labor_rules.LaborRuleProfileSnapshot:
     )
 
 
+def _new_york_hospitality_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="us_ny_hospitality_nonexempt",
+        jurisdiction_code="US-NY",
+        display_name="New York Hospitality Nonexempt",
+        overtime_mode="weekly_only",
+        daily_ot_threshold_hours=None,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code="hospitality",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_non_factory_v1",
+            "spread_of_hours_ruleset": "ny_v1",
+            "day_of_rest_workweek_required": True,
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:ny_hospitality_break_rules",
+        payload_json={},
+    )
+
+
 def _reliability_payload_for(employee_id) -> ReliabilitySnapshotPayload:
     return ReliabilitySnapshotPayload(
         generated_at=datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc),
@@ -1858,6 +1889,41 @@ async def test_attach_generated_demand_break_plans_to_inputs_plans_segments(monk
     assert generation_payload["compliance_break_plan_version"] == "deterministic_break_plan_v1"
     assert len(generation_payload["planned_segments"]) == 1
     assert len(generation_payload["planned_segments"][0]["breaks"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_new_york_windowed_meals(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    location.timezone = "America/New_York"
+    location.region = "NY"
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].timezone = "America/New_York"
+    generated_demand.proposed_shifts[0].starts_at = datetime(2026, 4, 22, 14, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].ends_at = datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].demand_key = f"{location.id}:{role.id}:2026-04-22T14:00:00+00:00"
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _new_york_hospitality_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    notes = [item["notes"] for item in generation_payload["planned_segments"][0]["breaks"]]
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert "planned_midday_meal_break" in notes
+    assert "planned_evening_meal_break" in notes
 
 
 @pytest.mark.asyncio

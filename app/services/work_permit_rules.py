@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from app.schemas.workforce import EmployeeWorkPermitRuleProfile
@@ -15,6 +17,8 @@ WORK_PERMIT_WEEKDAY_ORDER = {
 }
 
 CALIFORNIA_MINOR_TEMPLATE_SOURCE_URL = "https://www.dir.ca.gov/dlse/MinorsSummaryCharts.pdf"
+CALIFORNIA_MINOR_TEMPLATE_SOURCE_TITLE = "California Department of Industrial Relations minors summary charts"
+CALIFORNIA_MINOR_TEMPLATE_SOURCE_VERSION = "dir_minors_summary_charts_v1"
 
 WORK_PERMIT_RULE_TEMPLATES: dict[str, dict[str, Any]] = {
     "ca_14_15_school_enrolled_v1": {
@@ -23,6 +27,8 @@ WORK_PERMIT_RULE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "3 hours on schooldays, 8 hours on non-schooldays, 18 hours on school weeks, and later summer limits.",
         "jurisdiction_code": "US-CA",
         "source_url": CALIFORNIA_MINOR_TEMPLATE_SOURCE_URL,
+        "source_document_title": CALIFORNIA_MINOR_TEMPLATE_SOURCE_TITLE,
+        "source_version": CALIFORNIA_MINOR_TEMPLATE_SOURCE_VERSION,
         "daily_max_minutes_school_day": 180,
         "daily_max_minutes_non_school_day": 480,
         "daily_max_minutes_summer_break": 480,
@@ -39,6 +45,8 @@ WORK_PERMIT_RULE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "4 hours on schooldays, 8 hours on non-schooldays, up to 48 hours weekly, with later end time before non-schooldays.",
         "jurisdiction_code": "US-CA",
         "source_url": CALIFORNIA_MINOR_TEMPLATE_SOURCE_URL,
+        "source_document_title": CALIFORNIA_MINOR_TEMPLATE_SOURCE_TITLE,
+        "source_version": CALIFORNIA_MINOR_TEMPLATE_SOURCE_VERSION,
         "daily_max_minutes_school_day": 240,
         "daily_max_minutes_non_school_day": 480,
         "daily_max_minutes_preceding_non_school_day": 480,
@@ -50,6 +58,41 @@ WORK_PERMIT_RULE_TEMPLATES: dict[str, dict[str, Any]] = {
         "latest_end_local_time_preceding_non_school_day": "00:30",
     },
 }
+
+
+def _payload_hash(payload: dict[str, object]) -> str:
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}"
+
+
+def _template_rule_families(
+    template_code: str,
+    rule_profile: dict[str, object],
+) -> list[str]:
+    families = {"minor_labor", "work_permit"}
+    if any(
+        key in rule_profile
+        for key in (
+            "daily_max_minutes_school_day",
+            "daily_max_minutes_non_school_day",
+            "weekly_max_minutes_school_week",
+            "weekly_max_minutes_non_school_week",
+        )
+    ):
+        families.add("school_session_limits")
+    if any(
+        key in rule_profile
+        for key in (
+            "latest_end_local_time",
+            "latest_end_local_time_school_day",
+            "latest_end_local_time_preceding_non_school_day",
+            "earliest_start_local_time",
+        )
+    ):
+        families.add("time_window_limits")
+    if template_code.startswith("ca_"):
+        families.add("jurisdiction_template")
+    return sorted(families)
 
 
 def resolve_work_permit_rule_profile_payload(
@@ -108,7 +151,21 @@ def list_work_permit_templates() -> list[dict[str, object]]:
                 "description": str(payload.get("description") or "").strip() or None,
                 "jurisdiction_code": str(payload.get("jurisdiction_code") or "").strip() or None,
                 "source_url": str(payload.get("source_url") or "").strip() or None,
+                "source_document_title": str(payload.get("source_document_title") or "").strip() or None,
+                "source_version": str(payload.get("source_version") or "").strip() or None,
+                "source_hash": str(payload.get("source_hash") or "").strip() or None,
+                "effective_start_date": str(payload.get("effective_start_date") or "").strip() or None,
+                "effective_end_date": str(payload.get("effective_end_date") or "").strip() or None,
+                "payload_hash": _payload_hash(resolved_rule_profile),
+                "rule_families": _template_rule_families(code, resolved_rule_profile),
                 "rule_profile": resolved_rule_profile,
             }
         )
     return templates
+
+
+def rule_profile_payload_hash(value: object | None) -> str | None:
+    resolved_payload = resolve_work_permit_rule_profile_payload(value)
+    if not resolved_payload:
+        return None
+    return _payload_hash(resolved_payload)

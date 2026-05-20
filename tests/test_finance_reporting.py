@@ -551,6 +551,7 @@ async def test_location_compliance_payroll_export_builds_payroll_rows_from_week_
     )
 
     assert export.location_id == location_id
+    assert export.provider_profile == "generic_csv_v1"
     assert export.row_count == 2
     assert export.premium_payment_row_count == 1
     assert export.manual_review_row_count == 1
@@ -559,6 +560,8 @@ async def test_location_compliance_payroll_export_builds_payroll_rows_from_week_
     assert export.artifact_record_row_count == 0
     assert export.total_premium_cents == 2250
     assert export.rows[0].employee_name == "Taylor Server"
+    assert export.rows[0].employee_number == "EMP-42"
+    assert export.rows[0].external_ref == "toast-42"
     assert export.rows[0].employee_identifier == "EMP-42"
     assert export.rows[0].employee_identifier_type == "employee_number"
     assert export.rows[0].earning_code == "MEALPREM"
@@ -566,8 +569,255 @@ async def test_location_compliance_payroll_export_builds_payroll_rows_from_week_
     assert export.rows[0].manual_review_required is False
     assert export.rows[0].override_artifact_type == "meal_waiver"
     assert export.rows[0].override_artifact_note == "Signed waiver on file"
+    assert export.rows[0].rule_source_references[0]["rule_code"] == "meal_break_first_window"
+    assert export.rows[0].rule_source_references[0]["source_kind"] == "labor_rule_profile"
     assert export.rows[1].payroll_row_kind == "manual_review"
     assert export.rows[1].unresolved_premium_rule_codes == ["split_shift_premium"]
+
+
+@pytest.mark.asyncio
+async def test_location_compliance_payroll_export_enforces_gusto_employee_number_requirement(monkeypatch):
+    location_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+    week_start_date = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc).date()
+    business_id = uuid4()
+
+    fake_snapshot = finance_reporting.LocationComplianceWeekSnapshot(
+        location_id=location_id,
+        week_start_date=week_start_date,
+        week_end_date=week_start_date,
+        shift_count=1,
+        assigned_shift_count=1,
+        employee_count=1,
+        warning_assignment_count=1,
+        blocked_assignment_count=0,
+        unresolved_premium_assignment_count=0,
+        premium_total_cents=2250,
+        override_applied_count=0,
+        warning_rule_codes=["meal_break_first_window"],
+        premium_rule_codes=["meal_break_first_window"],
+        unresolved_premium_rule_codes=[],
+        artifact_type_counts=[],
+        shifts=[
+            finance_reporting.ComplianceWeekShiftRow(
+                shift_id=shift_id,
+                employee_id=employee_id,
+                employee_name="Taylor Server",
+                role_id=uuid4(),
+                role_name="Server",
+                starts_at=datetime(2026, 4, 7, 16, 0, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 4, 7, 23, 0, tzinfo=timezone.utc),
+                compliance_status="warning",
+                profile_code="ca_restaurant_v1",
+                blocking_rule_codes=[],
+                warning_rule_codes=["meal_break_first_window"],
+                premium_rule_codes=["meal_break_first_window"],
+                premium_total_cents=2250,
+                unresolved_premium_rule_codes=[],
+                override_applied=False,
+                override_artifact_id=None,
+                premium_components=[
+                    {
+                        "rule_code": "meal_break_first_window",
+                        "premium_type": "fixed_cents",
+                        "premium_cents": 2250,
+                        "reason_codes": ["first_meal_break_missing"],
+                    }
+                ],
+            ),
+        ],
+        employees=[],
+        override_artifacts=[],
+    )
+
+    async def fake_location_compliance_week_snapshot(_session, *, location, week_start_date: date):
+        assert location.id == location_id
+        assert week_start_date == expected_week_start_date
+        return fake_snapshot
+
+    expected_week_start_date = week_start_date
+
+    monkeypatch.setattr(
+        finance_reporting,
+        "location_compliance_week_snapshot",
+        fake_location_compliance_week_snapshot,
+    )
+
+    class FakeLocation:
+        pass
+
+    FakeLocation.id = location_id
+    FakeLocation.business_id = business_id
+
+    session = FakeFinanceSession()
+    session.get_map[(Business, business_id)] = Business(
+        id=business_id,
+        name="Backfill Foods",
+        display_name="Backfill Foods",
+        slug="backfill-foods",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={
+            "compliance_payroll_export": {
+                "provider_profile": "gusto_csv_v1",
+                "employee_identifier_priority": ["external_ref", "employee_number"],
+                "allow_internal_employee_id_fallback": True,
+            }
+        },
+        place_metadata={},
+        created_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+    )
+    session.get_map[(Employee, employee_id)] = Employee(
+        id=employee_id,
+        business_id=business_id,
+        employee_number=None,
+        external_ref="toast-42",
+        full_name="Taylor Server",
+        status="active",
+        created_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+    )
+
+    export = await finance_reporting.location_compliance_payroll_export(
+        session,
+        location=FakeLocation(),
+        week_start_date=week_start_date,
+    )
+
+    assert export.provider_profile == "gusto_csv_v1"
+    assert export.premium_payment_row_count == 0
+    assert export.ready_adjustment_row_count == 0
+    assert export.manual_review_row_count == 1
+    assert export.missing_employee_identifier_row_count == 1
+    assert export.rows[0].payroll_row_kind == "manual_review"
+    assert export.rows[0].source_reason_codes == [
+        "first_meal_break_missing",
+        "missing_employee_number",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_location_compliance_payroll_export_allows_quickbooks_external_reference(monkeypatch):
+    location_id = uuid4()
+    employee_id = uuid4()
+    shift_id = uuid4()
+    week_start_date = datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc).date()
+    business_id = uuid4()
+
+    fake_snapshot = finance_reporting.LocationComplianceWeekSnapshot(
+        location_id=location_id,
+        week_start_date=week_start_date,
+        week_end_date=week_start_date,
+        shift_count=1,
+        assigned_shift_count=1,
+        employee_count=1,
+        warning_assignment_count=1,
+        blocked_assignment_count=0,
+        unresolved_premium_assignment_count=0,
+        premium_total_cents=2250,
+        override_applied_count=0,
+        warning_rule_codes=["meal_break_first_window"],
+        premium_rule_codes=["meal_break_first_window"],
+        unresolved_premium_rule_codes=[],
+        artifact_type_counts=[],
+        shifts=[
+            finance_reporting.ComplianceWeekShiftRow(
+                shift_id=shift_id,
+                employee_id=employee_id,
+                employee_name="Taylor Server",
+                role_id=uuid4(),
+                role_name="Server",
+                starts_at=datetime(2026, 4, 7, 16, 0, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 4, 7, 23, 0, tzinfo=timezone.utc),
+                compliance_status="warning",
+                profile_code="ca_restaurant_v1",
+                blocking_rule_codes=[],
+                warning_rule_codes=["meal_break_first_window"],
+                premium_rule_codes=["meal_break_first_window"],
+                premium_total_cents=2250,
+                unresolved_premium_rule_codes=[],
+                override_applied=False,
+                override_artifact_id=None,
+                premium_components=[
+                    {
+                        "rule_code": "meal_break_first_window",
+                        "premium_type": "fixed_cents",
+                        "premium_cents": 2250,
+                        "reason_codes": ["first_meal_break_missing"],
+                    }
+                ],
+            ),
+        ],
+        employees=[],
+        override_artifacts=[],
+    )
+
+    async def fake_location_compliance_week_snapshot(_session, *, location, week_start_date: date):
+        assert location.id == location_id
+        assert week_start_date == expected_week_start_date
+        return fake_snapshot
+
+    expected_week_start_date = week_start_date
+
+    monkeypatch.setattr(
+        finance_reporting,
+        "location_compliance_week_snapshot",
+        fake_location_compliance_week_snapshot,
+    )
+
+    class FakeLocation:
+        pass
+
+    FakeLocation.id = location_id
+    FakeLocation.business_id = business_id
+
+    session = FakeFinanceSession()
+    session.get_map[(Business, business_id)] = Business(
+        id=business_id,
+        name="Backfill Foods",
+        display_name="Backfill Foods",
+        slug="backfill-foods",
+        timezone="America/Los_Angeles",
+        status="active",
+        settings={
+            "compliance_payroll_export": {
+                "provider_profile": "quickbooks_csv_v1",
+                "employee_identifier_priority": ["employee_number", "external_ref"],
+                "allow_internal_employee_id_fallback": False,
+            }
+        },
+        place_metadata={},
+        created_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+    )
+    session.get_map[(Employee, employee_id)] = Employee(
+        id=employee_id,
+        business_id=business_id,
+        employee_number=None,
+        external_ref="toast-42",
+        full_name="Taylor Server",
+        status="active",
+        created_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+    )
+
+    export = await finance_reporting.location_compliance_payroll_export(
+        session,
+        location=FakeLocation(),
+        week_start_date=week_start_date,
+    )
+
+    assert export.provider_profile == "quickbooks_csv_v1"
+    assert export.premium_payment_row_count == 1
+    assert export.ready_adjustment_row_count == 1
+    assert export.manual_review_row_count == 0
+    assert export.missing_employee_identifier_row_count == 0
+    assert export.rows[0].payroll_row_kind == "premium_payment"
+    assert export.rows[0].employee_number is None
+    assert export.rows[0].external_ref == "toast-42"
+    assert export.rows[0].rule_source_references[0]["rule_code"] == "meal_break_first_window"
 
 
 @pytest.mark.asyncio

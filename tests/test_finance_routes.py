@@ -16,6 +16,7 @@ from app.models.finance import BillingLedgerEntry, CostLedgerEntry
 from app.schemas.finance import (
     BusinessComplianceScheduledPolicyDriftRead,
     BusinessCompliancePolicySimulationRead,
+    LocationComplianceRuleCatalogRead,
     LocationComplianceScheduledPolicyDriftRead,
     LocationCompliancePayrollExportRead,
     LocationCompliancePolicySimulationRead,
@@ -419,6 +420,7 @@ def test_get_location_compliance_payroll_export_returns_snapshot(monkeypatch):
             location_id=location_id,
             week_start_date=week_start_date,
             week_end_date=week_start_date,
+            provider_profile="gusto_csv_v1",
             row_count=1,
             premium_payment_row_count=1,
             ready_adjustment_row_count=1,
@@ -445,6 +447,8 @@ def test_get_location_compliance_payroll_export_returns_snapshot(monkeypatch):
                     override_artifact_id=uuid4(),
                     override_artifact_type="meal_waiver",
                     override_artifact_note="Signed waiver on file",
+                    employee_number="EMP-42",
+                    external_ref="toast-42",
                     employee_identifier="EMP-42",
                     employee_identifier_type="employee_number",
                     earning_code="MEALPREM",
@@ -471,12 +475,103 @@ def test_get_location_compliance_payroll_export_returns_snapshot(monkeypatch):
         assert response.status_code == 200
         payload = LocationCompliancePayrollExportRead.model_validate(response.json())
         assert payload.location_id == location_id
+        assert payload.provider_profile == "gusto_csv_v1"
         assert payload.row_count == 1
         assert payload.total_premium_cents == 1845
         assert payload.rows[0].employee_name == "Taylor Server"
+        assert payload.rows[0].employee_number == "EMP-42"
+        assert payload.rows[0].external_ref == "toast-42"
         assert payload.rows[0].premium_payment_required is True
         assert payload.rows[0].manual_review_required is True
         assert payload.rows[0].override_artifact_type == "meal_waiver"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_location_compliance_rule_catalog_returns_snapshot(monkeypatch):
+    fake_session = FakeFinanceRouteSession()
+    business_id = uuid4()
+    location_id = uuid4()
+    fake_session.get_map[(Location, location_id)] = _make_location(
+        business_id=business_id,
+        location_id=location_id,
+    )
+
+    async def override_db():
+        yield fake_session
+
+    async def override_auth():
+        return _make_auth_context(business_id=business_id, location_id=location_id)
+
+    async def fake_rule_catalog(_session, *, location, as_of):
+        assert location.id == location_id
+        assert as_of is None
+        return {
+            "location_id": location_id,
+            "jurisdiction_code": "US-CA",
+            "as_of": datetime(2026, 4, 28, 18, 0, tzinfo=timezone.utc),
+            "labor_rule_profiles": [
+                {
+                    "catalog_kind": "labor_rule_profile",
+                    "code": "ca_restaurant_v1",
+                    "label": "California restaurant baseline",
+                    "description": None,
+                    "jurisdiction_code": "US-CA",
+                    "source_document_title": None,
+                    "source_urls": ["https://example.com/ca-rule-pack"],
+                    "source_version": "ca_rule_pack_v3",
+                    "source_hash": "sha256:ca-pack",
+                    "effective_start_date": None,
+                    "effective_end_date": None,
+                    "payload_hash": "sha256:profile-payload",
+                    "rule_families": ["meal_break", "rest_break", "rest_window"],
+                    "version_id": uuid4(),
+                    "version_no": 3,
+                    "rule_payload": {"code": "ca_restaurant_v1"},
+                }
+            ],
+            "work_permit_templates": [
+                {
+                    "catalog_kind": "work_permit_template",
+                    "code": "ca_16_17_school_required_v1",
+                    "label": "California ages 16-17 while school required",
+                    "description": "4 hours on schooldays, 8 hours on non-schooldays.",
+                    "jurisdiction_code": "US-CA",
+                    "source_document_title": "California Department of Industrial Relations minors summary charts",
+                    "source_urls": ["https://www.dir.ca.gov/dlse/MinorsSummaryCharts.pdf"],
+                    "source_version": "dir_minors_summary_charts_v1",
+                    "source_hash": None,
+                    "effective_start_date": None,
+                    "effective_end_date": None,
+                    "payload_hash": "sha256:permit-payload",
+                    "rule_families": ["minor_labor", "work_permit"],
+                    "version_id": None,
+                    "version_no": None,
+                    "rule_payload": {"template_code": "ca_16_17_school_required_v1"},
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.finance.compliance_rule_catalog.location_compliance_rule_catalog",
+        fake_rule_catalog,
+    )
+
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[get_auth_context] = override_auth
+    client = TestClient(app)
+
+    try:
+        response = client.get(
+            f"/api/businesses/{business_id}/locations/{location_id}/finance/compliance-rule-catalog"
+        )
+        assert response.status_code == 200
+        payload = LocationComplianceRuleCatalogRead.model_validate(response.json())
+        assert payload.jurisdiction_code == "US-CA"
+        assert payload.labor_rule_profiles[0].code == "ca_restaurant_v1"
+        assert payload.labor_rule_profiles[0].source_version == "ca_rule_pack_v3"
+        assert payload.work_permit_templates[0].code == "ca_16_17_school_required_v1"
+        assert payload.work_permit_templates[0].source_version == "dir_minors_summary_charts_v1"
     finally:
         app.dependency_overrides.clear()
 

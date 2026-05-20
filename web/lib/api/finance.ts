@@ -1,9 +1,40 @@
 import { apiFetchApp, fetchAppJson, API_PREFIX } from "./backend-client";
-import { getBusinessProfile } from "./workspace";
+import {
+  getBusinessProfile,
+  type CompliancePayrollProviderProfile,
+  type ComplianceRuleSourceReference,
+} from "./workspace";
 
 export type ComplianceArtifactTypeCount = {
   artifact_type: string;
   count: number;
+};
+
+export type ComplianceRuleCatalogEntry = {
+  catalog_kind: string;
+  code: string;
+  label: string;
+  description?: string | null;
+  jurisdiction_code?: string | null;
+  source_document_title?: string | null;
+  source_urls: string[];
+  source_version?: string | null;
+  source_hash?: string | null;
+  effective_start_date?: string | null;
+  effective_end_date?: string | null;
+  payload_hash?: string | null;
+  rule_families: string[];
+  version_id?: string | null;
+  version_no?: number | null;
+  rule_payload: Record<string, unknown>;
+};
+
+export type LocationComplianceRuleCatalog = {
+  location_id: string;
+  jurisdiction_code: string;
+  as_of: string;
+  labor_rule_profiles: ComplianceRuleCatalogEntry[];
+  work_permit_templates: ComplianceRuleCatalogEntry[];
 };
 
 export type ComplianceWeekShift = {
@@ -23,6 +54,7 @@ export type ComplianceWeekShift = {
   unresolved_premium_rule_codes: string[];
   override_applied: boolean;
   override_artifact_id?: string | null;
+  rule_source_references?: ComplianceRuleSourceReference[];
 };
 
 export type ComplianceWeekEmployee = {
@@ -90,18 +122,22 @@ export type CompliancePayrollAdjustment = {
   override_artifact_note?: string | null;
   payroll_row_kind?: string;
   payroll_status?: string;
+  employee_number?: string | null;
+  external_ref?: string | null;
   employee_identifier?: string | null;
   employee_identifier_type?: string | null;
   earning_code?: string | null;
   earning_label?: string | null;
   source_rule_code?: string | null;
   source_reason_codes?: string[];
+  rule_source_references?: ComplianceRuleSourceReference[];
 };
 
 export type LocationCompliancePayrollExport = {
   location_id: string;
   week_start_date: string;
   week_end_date: string;
+  provider_profile: CompliancePayrollProviderProfile;
   row_count: number;
   premium_payment_row_count: number;
   ready_adjustment_row_count?: number;
@@ -138,6 +174,8 @@ export type CompliancePolicySettingsSnapshot = {
   block_unresolved_premiums: boolean;
   max_daily_minutes?: number | null;
   max_weekly_minutes?: number | null;
+  max_consecutive_work_days?: number | null;
+  required_rest_days_per_workweek?: number | null;
   school_day_weekdays?: string[] | null;
   school_dates?: string[] | null;
   non_school_dates?: string[] | null;
@@ -428,6 +466,15 @@ export async function getLocationCompliancePayrollExport(
 ): Promise<LocationCompliancePayrollExport | null> {
   return fetchAppJson<LocationCompliancePayrollExport>(
     `/businesses/${businessId}/locations/${locationId}/finance/compliance-weeks/${weekStartDate}/payroll-export`,
+  );
+}
+
+export async function getLocationComplianceRuleCatalog(
+  businessId: string,
+  locationId: string,
+): Promise<LocationComplianceRuleCatalog | null> {
+  return fetchAppJson<LocationComplianceRuleCatalog>(
+    `/businesses/${businessId}/locations/${locationId}/finance/compliance-rule-catalog`,
   );
 }
 

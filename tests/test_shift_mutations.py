@@ -4550,6 +4550,11 @@ async def test_publish_schedule_week_raises_compliance_review_for_blocked_assign
 
     blocked_evaluation = {
         "status": "block",
+        "profile_code": "ca_restaurant_v1",
+        "profile_display_name": "California restaurant baseline",
+        "profile_source_version": "ca_rule_pack_v3",
+        "profile_source_hash": "sha256:ca-pack",
+        "profile_source_urls": ["https://example.com/ca-rule-pack"],
         "blocking_rule_codes": ["meal_break_first_window"],
         "warning_rule_codes": [],
         "premium_rule_codes": ["meal_break_first_window"],
@@ -4604,6 +4609,22 @@ async def test_publish_schedule_week_raises_compliance_review_for_blocked_assign
     assert exc_info.value.review_items[0]["shift_id"] == draft_shift.id
     assert exc_info.value.review_items[0]["employee_id"] == employee_id
     assert exc_info.value.review_items[0]["issues"][0]["rule_code"] == "meal_break_first_window"
+    assert exc_info.value.review_items[0]["issues"][0]["rule_source_references"] == [
+        {
+            "rule_code": "meal_break_first_window",
+            "source_kind": "labor_rule_profile",
+            "source_code": "ca_restaurant_v1",
+            "source_label": "California restaurant baseline",
+            "jurisdiction_code": None,
+            "source_document_title": None,
+            "source_urls": ["https://example.com/ca-rule-pack"],
+            "source_version": "ca_rule_pack_v3",
+            "source_hash": "sha256:ca-pack",
+            "version_id": None,
+            "payload_hash": None,
+            "effective_at": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio

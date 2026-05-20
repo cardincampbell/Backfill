@@ -8,6 +8,7 @@ import {
   applySimulatedBusinessCompliancePolicy,
   applySimulatedLocationCompliancePolicy,
   getBusinessComplianceScheduledPolicyDrift,
+  getLocationComplianceRuleCatalog,
   getLocationComplianceScheduledPolicyDrift,
   simulateBusinessCompliancePolicy,
   getLocationComplianceTrend,
@@ -17,17 +18,27 @@ import {
   type BusinessComplianceScheduledPolicyDrift,
   type BusinessCompliancePolicySimulation,
   type CompliancePolicyActivation,
+  type ComplianceRuleCatalogEntry,
   type ComplianceOverrideArtifactSummary,
   type ComplianceTrendRuleCount,
   type ComplianceWeekEmployee,
   type ComplianceWeekShift,
+  type LocationComplianceRuleCatalog,
+  type LocationCompliancePayrollExport,
   type LocationComplianceScheduledPolicyDrift,
   type LocationCompliancePolicySimulation,
   type LocationComplianceTrend,
   type LocationComplianceWeek,
 } from "@/lib/api/finance";
-import { exportCompliancePayrollCsv } from "@/lib/export-compliance-payroll";
-import { humanizeComplianceCode } from "./compliance-review";
+import {
+  describeCompliancePayrollProviderProfile,
+  exportCompliancePayrollCsv,
+} from "@/lib/export-compliance-payroll";
+import {
+  dedupeComplianceSourceReferences,
+  describeComplianceSourceReference,
+  humanizeComplianceCode,
+} from "./compliance-review";
 
 interface Props {
   businessId: string;
@@ -99,6 +110,116 @@ function formatPolicyActivationLabel(activation: CompliancePolicyActivation) {
   return `${scopeLabel} · ${timeLabel}`;
 }
 
+function formatCatalogDateRange(
+  effectiveStartDate?: string | null,
+  effectiveEndDate?: string | null,
+) {
+  if (effectiveStartDate && effectiveEndDate) {
+    return `${effectiveStartDate} to ${effectiveEndDate}`;
+  }
+  if (effectiveStartDate) {
+    return `Effective ${effectiveStartDate}`;
+  }
+  if (effectiveEndDate) {
+    return `Until ${effectiveEndDate}`;
+  }
+  return "No effective-date window";
+}
+
+function formatRuleFamilies(ruleFamilies: string[]) {
+  if (!ruleFamilies.length) {
+    return "General";
+  }
+  return ruleFamilies
+    .map((family) => family.split("_").join(" "))
+    .map((family) => family.charAt(0).toUpperCase() + family.slice(1))
+    .join(", ");
+}
+
+function formatCatalogSource(entry: ComplianceRuleCatalogEntry) {
+  if (entry.source_document_title && entry.source_version) {
+    return `${entry.source_document_title} · ${entry.source_version}`;
+  }
+  if (entry.source_document_title) {
+    return entry.source_document_title;
+  }
+  if (entry.source_version) {
+    return entry.source_version;
+  }
+  if (entry.source_urls.length) {
+    return entry.source_urls[0];
+  }
+  return "No legal source metadata attached";
+}
+
+function payrollExportActionLabel(
+  profile: LocationCompliancePayrollExport["provider_profile"] | undefined,
+) {
+  switch (profile) {
+    case "gusto_csv_v1":
+      return "Export Gusto CSV";
+    case "quickbooks_csv_v1":
+      return "Export QuickBooks CSV";
+    case "adp_csv_v1":
+      return "Export ADP CSV";
+    default:
+      return "Export Payroll CSV";
+  }
+}
+
+function ComplianceSourceReferenceList({
+  references,
+  dark = false,
+}: {
+  references: ComplianceWeekShift["rule_source_references"] | null | undefined;
+  dark?: boolean;
+}) {
+  const items = dedupeComplianceSourceReferences(references ?? []);
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {items.map((reference, index) => {
+        const presentation = describeComplianceSourceReference(reference);
+        const title = presentation.secondaryLabel
+          ? `${presentation.pillLabel} · ${presentation.secondaryLabel}`
+          : presentation.pillLabel;
+        const content = (
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] ${dark ? "bg-white/[0.06] text-[#C1CED8]" : "bg-[#F7F8FA] text-[#5E6D7A]"}`}
+            style={{ fontWeight: 500 }}
+            title={title}
+          >
+            {presentation.pillLabel}
+          </span>
+        );
+        if (presentation.href) {
+          return (
+            <a
+              key={`${reference.rule_code}:${reference.source_kind}:${reference.source_code ?? ""}:${index}`}
+              href={presentation.href}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex"
+              title={title}
+            >
+              {content}
+            </a>
+          );
+        }
+        return (
+          <span
+            key={`${reference.rule_code}:${reference.source_kind}:${reference.source_code ?? ""}:${index}`}
+          >
+            {content}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function employeeExposureRank(employee: ComplianceWeekEmployee) {
   return (
     employee.premium_total_cents * 100
@@ -128,12 +249,14 @@ export function ComplianceFinanceModal({
 }: Props) {
   const [report, setReport] = useState<LocationComplianceWeek | null>(null);
   const [trendReport, setTrendReport] = useState<LocationComplianceTrend | null>(null);
+  const [ruleCatalog, setRuleCatalog] = useState<LocationComplianceRuleCatalog | null>(null);
   const [locationDrift, setLocationDrift] = useState<LocationComplianceScheduledPolicyDrift | null>(null);
   const [businessDrift, setBusinessDrift] = useState<BusinessComplianceScheduledPolicyDrift | null>(null);
   const [locationSimulation, setLocationSimulation] = useState<LocationCompliancePolicySimulation | null>(null);
   const [businessSimulation, setBusinessSimulation] = useState<BusinessCompliancePolicySimulation | null>(null);
   const [loading, setLoading] = useState(true);
   const [exportingPayroll, setExportingPayroll] = useState(false);
+  const [payrollProviderProfile, setPayrollProviderProfile] = useState<LocationCompliancePayrollExport["provider_profile"] | undefined>(undefined);
   const [simulatingPolicy, setSimulatingPolicy] = useState(false);
   const [applyingSimulation, setApplyingSimulation] = useState(false);
   const [simulationMessage, setSimulationMessage] = useState<string | null>(null);
@@ -150,6 +273,8 @@ export function ComplianceFinanceModal({
     minimumRestHours: "",
     maxDailyMinutes: "",
     maxWeeklyMinutes: "",
+    maxConsecutiveWorkDays: "",
+    requiredRestDaysPerWorkweek: "",
     requireStructuredBreakPlans: false,
     blockUnresolvedPremiums: false,
     disableWrittenConsent: false,
@@ -162,7 +287,7 @@ export function ComplianceFinanceModal({
       setLocationSimulation(null);
       setBusinessSimulation(null);
     }
-    const [payload, trendPayload, locationDriftPayload, businessDriftPayload] = await Promise.all([
+    const [payload, trendPayload, ruleCatalogPayload, locationDriftPayload, businessDriftPayload, payrollExportPayload] = await Promise.all([
       getLocationComplianceWeek(
         businessId,
         locationId,
@@ -173,6 +298,10 @@ export function ComplianceFinanceModal({
         locationId,
         weekStartDateKey,
         6,
+      ),
+      getLocationComplianceRuleCatalog(
+        businessId,
+        locationId,
       ),
       getLocationComplianceScheduledPolicyDrift(
         businessId,
@@ -185,11 +314,18 @@ export function ComplianceFinanceModal({
         weekStartDateKey,
         6,
       ),
+      getLocationCompliancePayrollExport(
+        businessId,
+        locationId,
+        weekStartDateKey,
+      ),
     ]);
     setReport(payload);
     setTrendReport(trendPayload);
+    setRuleCatalog(ruleCatalogPayload);
     setLocationDrift(locationDriftPayload);
     setBusinessDrift(businessDriftPayload);
+    setPayrollProviderProfile(payrollExportPayload?.provider_profile);
     setLoading(false);
   }
 
@@ -199,7 +335,7 @@ export function ComplianceFinanceModal({
       setLoading(true);
       setLocationSimulation(null);
       setBusinessSimulation(null);
-      const [payload, trendPayload, locationDriftPayload, businessDriftPayload] = await Promise.all([
+      const [payload, trendPayload, ruleCatalogPayload, locationDriftPayload, businessDriftPayload, payrollExportPayload] = await Promise.all([
         getLocationComplianceWeek(
           businessId,
           locationId,
@@ -210,6 +346,10 @@ export function ComplianceFinanceModal({
           locationId,
           weekStartDateKey,
           6,
+        ),
+        getLocationComplianceRuleCatalog(
+          businessId,
+          locationId,
         ),
         getLocationComplianceScheduledPolicyDrift(
           businessId,
@@ -222,12 +362,19 @@ export function ComplianceFinanceModal({
           weekStartDateKey,
           6,
         ),
+        getLocationCompliancePayrollExport(
+          businessId,
+          locationId,
+          weekStartDateKey,
+        ),
       ]);
       if (!cancelled) {
         setReport(payload);
         setTrendReport(trendPayload);
+        setRuleCatalog(ruleCatalogPayload);
         setLocationDrift(locationDriftPayload);
         setBusinessDrift(businessDriftPayload);
+        setPayrollProviderProfile(payrollExportPayload?.provider_profile);
         setLoading(false);
       }
     };
@@ -308,6 +455,8 @@ export function ComplianceFinanceModal({
     policyDraft.minimumRestHours.trim()
     || policyDraft.maxDailyMinutes.trim()
     || policyDraft.maxWeeklyMinutes.trim()
+    || policyDraft.maxConsecutiveWorkDays.trim()
+    || policyDraft.requiredRestDaysPerWorkweek.trim()
     || policyDraft.requireStructuredBreakPlans
     || policyDraft.blockUnresolvedPremiums
     || policyDraft.disableWrittenConsent
@@ -324,6 +473,12 @@ export function ComplianceFinanceModal({
     }
     if (policyDraft.maxWeeklyMinutes.trim()) {
       compliance.max_weekly_minutes = Number(policyDraft.maxWeeklyMinutes);
+    }
+    if (policyDraft.maxConsecutiveWorkDays.trim()) {
+      compliance.max_consecutive_work_days = Number(policyDraft.maxConsecutiveWorkDays);
+    }
+    if (policyDraft.requiredRestDaysPerWorkweek.trim()) {
+      compliance.required_rest_days_per_workweek = Number(policyDraft.requiredRestDaysPerWorkweek);
     }
     if (policyDraft.requireStructuredBreakPlans) {
       compliance.require_structured_break_plans = true;
@@ -537,6 +692,117 @@ export function ComplianceFinanceModal({
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {ruleCatalog ? (
+                <div className={`rounded-2xl px-4 py-4 ${surfaceClass}`}>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                    <div>
+                      <p className={`text-[12px] ${textPrimary}`} style={{ fontWeight: 580 }}>
+                        Rule Sources
+                      </p>
+                      <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                        Active legal rule packs and permit templates for {ruleCatalog.jurisdiction_code}. This is the provenance surface for what Backfill is enforcing today.
+                      </p>
+                    </div>
+                    <div className={`rounded-xl px-3 py-2 ${dark ? "bg-white/[0.04]" : "bg-white"}`}>
+                      <p className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+                        Jurisdiction
+                      </p>
+                      <p className={`mt-1 text-[14px] ${textPrimary}`} style={{ fontWeight: 620 }}>
+                        {ruleCatalog.jurisdiction_code}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    <div className={`rounded-xl px-3 py-3 ${dark ? "bg-white/[0.04]" : "bg-white"}`}>
+                      <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                        Active Labor Profiles
+                      </p>
+                      <div className="mt-3 space-y-3">
+                        {ruleCatalog.labor_rule_profiles.length ? ruleCatalog.labor_rule_profiles.map((entry) => (
+                          <div key={`labor-${entry.code}-${entry.version_id ?? entry.payload_hash ?? entry.label}`} className={`rounded-lg border px-3 py-3 ${borderClass}`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                                  {entry.label}
+                                </p>
+                                <p className={`mt-1 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                  {entry.code} · {formatRuleFamilies(entry.rule_families)}
+                                </p>
+                              </div>
+                              {entry.source_urls[0] ? (
+                                <a
+                                  className="shrink-0 text-[10px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                                  href={entry.source_urls[0]}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                  style={{ fontWeight: 520 }}
+                                >
+                                  Source
+                                </a>
+                              ) : null}
+                            </div>
+                            <p className={`mt-2 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                              {formatCatalogSource(entry)}
+                            </p>
+                            <p className={`mt-1 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                              {formatCatalogDateRange(entry.effective_start_date, entry.effective_end_date)}
+                              {entry.version_no ? ` · version ${entry.version_no}` : ""}
+                            </p>
+                          </div>
+                        )) : (
+                          <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                            No active labor rule profiles were resolved for this jurisdiction.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className={`rounded-xl px-3 py-3 ${dark ? "bg-white/[0.04]" : "bg-white"}`}>
+                      <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 560 }}>
+                        Permit Template Catalog
+                      </p>
+                      <div className="mt-3 space-y-3">
+                        {ruleCatalog.work_permit_templates.length ? ruleCatalog.work_permit_templates.map((entry) => (
+                          <div key={`permit-${entry.code}-${entry.payload_hash ?? entry.label}`} className={`rounded-lg border px-3 py-3 ${borderClass}`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className={`text-[11px] ${textPrimary}`} style={{ fontWeight: 600 }}>
+                                  {entry.label}
+                                </p>
+                                <p className={`mt-1 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                  {entry.code} · {formatRuleFamilies(entry.rule_families)}
+                                </p>
+                              </div>
+                              {entry.source_urls[0] ? (
+                                <a
+                                  className="shrink-0 text-[10px] text-[#635BFF] transition-colors hover:text-[#4B3FD9]"
+                                  href={entry.source_urls[0]}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                  style={{ fontWeight: 520 }}
+                                >
+                                  Source
+                                </a>
+                              ) : null}
+                            </div>
+                            <p className={`mt-2 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                              {formatCatalogSource(entry)}
+                            </p>
+                            <p className={`mt-1 text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                              {formatCatalogDateRange(entry.effective_start_date, entry.effective_end_date)}
+                            </p>
+                          </div>
+                        )) : (
+                          <p className={`text-[10px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                            No permit templates were cataloged for this jurisdiction.
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -812,6 +1078,8 @@ export function ComplianceFinanceModal({
                           minimumRestHours: "",
                           maxDailyMinutes: "",
                           maxWeeklyMinutes: "",
+                          maxConsecutiveWorkDays: "",
+                          requiredRestDaysPerWorkweek: "",
                           requireStructuredBreakPlans: false,
                           blockUnresolvedPremiums: false,
                           disableWrittenConsent: false,
@@ -880,7 +1148,7 @@ export function ComplianceFinanceModal({
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <div className="mt-4 grid gap-3 lg:grid-cols-5">
                   <label className="space-y-1">
                     <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
                       Minimum Rest Hours
@@ -927,6 +1195,39 @@ export function ComplianceFinanceModal({
                       }
                       className={`w-full rounded-xl border px-3 py-2 text-[12px] outline-none ${dark ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8FA3B5]" : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#9CA3AF]"}`}
                       placeholder="e.g. 2400"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+                      Max Consecutive Days
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="1"
+                      value={policyDraft.maxConsecutiveWorkDays}
+                      onChange={(event) =>
+                        setPolicyDraft((current) => ({ ...current, maxConsecutiveWorkDays: event.target.value }))
+                      }
+                      className={`w-full rounded-xl border px-3 py-2 text-[12px] outline-none ${dark ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8FA3B5]" : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#9CA3AF]"}`}
+                      placeholder="e.g. 6"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className={`text-[10px] uppercase tracking-[0.04em] ${textSecondary}`} style={{ fontWeight: 520 }}>
+                      Rest Days / Week
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={7}
+                      step="1"
+                      value={policyDraft.requiredRestDaysPerWorkweek}
+                      onChange={(event) =>
+                        setPolicyDraft((current) => ({ ...current, requiredRestDaysPerWorkweek: event.target.value }))
+                      }
+                      className={`w-full rounded-xl border px-3 py-2 text-[12px] outline-none ${dark ? "border-white/[0.08] bg-white/[0.04] text-white placeholder:text-[#8FA3B5]" : "border-[#E5E7EB] bg-white text-[#0A2540] placeholder:text-[#9CA3AF]"}`}
+                      placeholder="e.g. 1"
                     />
                   </label>
                 </div>
@@ -1134,6 +1435,8 @@ export function ComplianceFinanceModal({
                                   minimumRestHours: "",
                                   maxDailyMinutes: "",
                                   maxWeeklyMinutes: "",
+                                  maxConsecutiveWorkDays: "",
+                                  requiredRestDaysPerWorkweek: "",
                                   requireStructuredBreakPlans: false,
                                   blockUnresolvedPremiums: false,
                                   disableWrittenConsent: false,
@@ -1302,6 +1605,8 @@ export function ComplianceFinanceModal({
                                   minimumRestHours: "",
                                   maxDailyMinutes: "",
                                   maxWeeklyMinutes: "",
+                                  maxConsecutiveWorkDays: "",
+                                  requiredRestDaysPerWorkweek: "",
                                   requireStructuredBreakPlans: false,
                                   blockUnresolvedPremiums: false,
                                   disableWrittenConsent: false,
@@ -1425,6 +1730,10 @@ export function ComplianceFinanceModal({
                             Unresolved: {formatRuleCodes(shift.unresolved_premium_rule_codes)}
                           </p>
                         ) : null}
+                        <ComplianceSourceReferenceList
+                          references={shift.rule_source_references}
+                          dark={dark}
+                        />
                       </div>
                     )) : (
                       <p className={`text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
@@ -1500,6 +1809,7 @@ export function ComplianceFinanceModal({
                   if (!payrollExport) {
                     return;
                   }
+                  setPayrollProviderProfile(payrollExport.provider_profile);
                   exportCompliancePayrollCsv(payrollExport, {
                     locationName,
                     weekLabel,
@@ -1509,12 +1819,13 @@ export function ComplianceFinanceModal({
                 }
               })();
             }}
+            title={`Exports ${describeCompliancePayrollProviderProfile(payrollProviderProfile)}`}
             className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-[12px] transition-all ${dark ? "bg-white/[0.06] text-white hover:bg-white/[0.1]" : "bg-[#0A2540] text-white hover:bg-[#163A5B]"}`}
             style={{ fontWeight: 540 }}
             type="button"
           >
             <ReceiptText size={13} />
-            {exportingPayroll ? "Preparing Payroll CSV" : "Export Payroll CSV"}
+            {exportingPayroll ? "Preparing Payroll CSV" : payrollExportActionLabel(payrollProviderProfile)}
           </button>
           <button
             onClick={onOpenExport}

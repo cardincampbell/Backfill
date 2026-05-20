@@ -616,6 +616,101 @@ async def test_build_outreach_guardrail_snapshots_applies_written_consent_overri
 
 
 @pytest.mark.asyncio
+async def test_build_outreach_guardrail_snapshots_passes_merged_policy_settings_to_hours_snapshots(
+    monkeypatch,
+):
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    employee = Employee(
+        id=uuid4(),
+        business_id=business_id,
+        full_name="Consecutive Policy",
+    )
+    shift = Shift(
+        id=uuid4(),
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        timezone="America/Los_Angeles",
+        starts_at=now + timedelta(hours=2),
+        ends_at=now + timedelta(hours=8),
+        status=ShiftStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+    )
+    shift.location = Location(
+        id=shift.location_id,
+        business_id=business_id,
+        name="Downtown",
+        display_name="Downtown",
+        slug="downtown",
+        region="CA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    session = FakeProjectionSession()
+    session.execute_queue = [
+        [],
+        [],
+    ]
+
+    profile = _make_profile()
+    seen_compliance_settings: list[dict[str, object]] = []
+
+    async def fake_profile_loader(*_args, **_kwargs):
+        return profile
+
+    async def fake_resolved_inputs(*_args, **_kwargs):
+        return (
+            {"compliance": {"max_consecutive_work_days": 6}},
+            {},
+        )
+
+    async def fake_build_hours_snapshots(*_args, **kwargs):
+        seen_compliance_settings.append(dict(kwargs.get("compliance_settings") or {}))
+        return {
+            employee.id: labor_rules.HoursSnapshot(
+                employee_id=employee.id,
+                profile_version_id=profile.version_id,
+                workday_window={},
+                workweek_window={},
+                counted_intervals=(),
+                gross_hours_by_window={},
+            )
+        }
+
+    async def fake_active_override_artifacts(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(runtime_projections, "_load_labor_rule_profile_for_shift", fake_profile_loader)
+    monkeypatch.setattr(
+        runtime_projections.settings_service,
+        "resolved_compliance_settings_inputs",
+        fake_resolved_inputs,
+    )
+    monkeypatch.setattr(
+        runtime_projections.labor_rules,
+        "build_hours_snapshots",
+        fake_build_hours_snapshots,
+    )
+    monkeypatch.setattr(
+        runtime_projections.compliance_overrides,
+        "active_artifacts_for_shift_employees",
+        fake_active_override_artifacts,
+    )
+
+    await runtime_projections.build_outreach_guardrail_snapshots(
+        session,
+        [employee],
+        shift=shift,
+        now=now,
+    )
+
+    assert seen_compliance_settings == [{"max_consecutive_work_days": 6}]
+
+
+@pytest.mark.asyncio
 async def test_build_outreach_guardrail_snapshots_ignores_failed_attempts_for_cooldown():
     now = datetime.now(timezone.utc)
     business_id = uuid4()

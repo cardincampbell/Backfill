@@ -154,6 +154,13 @@ export type EmployeeWorkPermitTemplate = {
   description?: string | null;
   jurisdiction_code?: string | null;
   source_url?: string | null;
+  source_document_title?: string | null;
+  source_version?: string | null;
+  source_hash?: string | null;
+  effective_start_date?: string | null;
+  effective_end_date?: string | null;
+  payload_hash?: string | null;
+  rule_families?: string[];
   rule_profile: EmployeeWorkPermitRuleProfile;
 };
 

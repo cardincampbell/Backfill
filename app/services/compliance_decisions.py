@@ -10,7 +10,7 @@ from app.models.compliance import ComplianceOverrideArtifact
 from app.models.scheduling import Shift, ShiftAssignment
 from app.schemas.compliance import ShiftComplianceDecisionRead
 from app.models.workforce import Employee
-from app.services import feed_projections, platform_events
+from app.services import compliance_source_references, feed_projections, platform_events
 
 
 def build_compliance_decision_payload(
@@ -48,6 +48,9 @@ def build_compliance_decision_payload(
         "unresolved_premium_rule_codes": list(payload.get("unresolved_premium_rule_codes") or []),
         "override_applied": bool(payload.get("override_applied")),
         "override_artifact_id": str(override_artifact.id) if override_artifact is not None else None,
+        "rule_source_references": compliance_source_references.rule_source_references_from_evaluation(
+            payload
+        ),
         "evaluation": payload,
     }
 
@@ -100,6 +103,15 @@ async def record_shift_compliance_decision(
 
 def _shift_compliance_decision_read_from_event(event) -> ShiftComplianceDecisionRead:
     payload = dict(event.payload or {})
+    evaluation_payload = (
+        dict(payload.get("evaluation"))
+        if isinstance(payload.get("evaluation"), Mapping)
+        else {}
+    )
+    merged_source_payload = {
+        **payload,
+        **evaluation_payload,
+    }
     return ShiftComplianceDecisionRead.model_validate(
         {
             "id": event.id,
@@ -130,6 +142,9 @@ def _shift_compliance_decision_read_from_event(event) -> ShiftComplianceDecision
             "unresolved_premium_rule_codes": list(payload.get("unresolved_premium_rule_codes") or []),
             "override_applied": bool(payload.get("override_applied")),
             "override_artifact_id": payload.get("override_artifact_id"),
+            "rule_source_references": compliance_source_references.rule_source_references_from_evaluation(
+                merged_source_payload
+            ),
             "evaluation": dict(payload.get("evaluation") or {}),
         }
     )

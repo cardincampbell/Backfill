@@ -262,6 +262,124 @@ def test_evaluate_shift_assignment_compliance_warns_when_unstructured_meal_plan_
     assert "meal_break_first_window" in evaluation["warning_rule_codes"]
 
 
+def test_evaluate_shift_assignment_compliance_blocks_missing_midday_meal_for_new_york_structured_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_non_factory_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 1, 21, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 1, 21, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+    shift.timezone = "America/New_York"
+    shift.location.timezone = "America/New_York"
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["blocking_rule_codes"] == ["meal_break_midday_window"]
+    assert evaluation["status"] == "block"
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_evening_meal_for_new_york_long_day_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_non_factory_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 2, 0, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 2, 0, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 1, 16, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 1, 17, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+    shift.timezone = "America/New_York"
+    shift.location.timezone = "America/New_York"
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_evening_window" in evaluation["blocking_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_accepts_midshift_meal_for_new_york_evening_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_non_factory_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 2, 21, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 3, 4, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 2, 21, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 3, 4, 30, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 3, 0, 15, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 3, 1, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+    shift.timezone = "America/New_York"
+    shift.location.timezone = "America/New_York"
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 2, 18, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_midshift_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_midshift_window" not in evaluation["warning_rule_codes"]
+
+
 def test_evaluate_shift_assignment_compliance_uses_metadata_break_plan_when_rows_are_missing():
     profile = _profile(
         rules_json={
@@ -523,6 +641,150 @@ def test_evaluate_shift_assignment_compliance_flags_unresolved_spread_of_hours_p
     assert evaluation["unresolved_premium_rule_codes"] == ["spread_of_hours_premium"]
 
 
+def test_evaluate_shift_assignment_compliance_blocks_seven_consecutive_workdays_when_day_of_rest_rule_is_enabled():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_ruleset": "ca_v1",
+        }
+    )
+    shift = _shift(
+        starts_at=datetime(2026, 4, 20, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 21, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 17, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["status"] == "block"
+    assert evaluation["blocking_rule_codes"] == ["day_of_rest_in_seven"]
+    rule_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "day_of_rest_in_seven"
+    )
+    assert "seven_consecutive_workdays_projected" in rule_result["reason_codes"]
+    assert rule_result["projected_consecutive_work_days"] == 7
+    assert rule_result["streak_start_date"] == "2026-04-14"
+    assert rule_result["streak_end_date"] == "2026-04-20"
+
+
+def test_evaluate_shift_assignment_compliance_allows_candidate_when_rest_day_breaks_streak():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_ruleset": "ca_v1",
+        }
+    )
+    shift = _shift(
+        starts_at=datetime(2026, 4, 20, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 21, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "day_of_rest_in_seven" not in evaluation["blocking_rule_codes"]
+    rule_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "day_of_rest_in_seven"
+    )
+    assert rule_result["status"] == "clear"
+    assert rule_result["projected_consecutive_work_days"] == 3
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_workweek_rest_day_when_rule_is_enabled():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_workweek_required": True,
+        }
+    )
+    shift = _shift(
+        starts_at=datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 13, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 14, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 17, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["status"] == "block"
+    assert "day_of_rest_workweek" in evaluation["blocking_rule_codes"]
+    rule_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "day_of_rest_workweek"
+    )
+    assert "workweek_rest_day_missing" in rule_result["reason_codes"]
+    assert "seven_workdays_in_workweek_projected" in rule_result["reason_codes"]
+    assert rule_result["projected_workdays_in_workweek"] == 7
+    assert rule_result["required_rest_days_per_workweek"] == 1
+
+
+def test_evaluate_shift_assignment_compliance_clears_workweek_rest_day_rule_when_day_off_exists():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "day_of_rest_workweek_required": True,
+        }
+    )
+    shift = _shift(
+        starts_at=datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 13, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 14, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 17, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "day_of_rest_workweek" not in evaluation["blocking_rule_codes"]
+    rule_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "day_of_rest_workweek"
+    )
+    assert rule_result["status"] == "clear"
+    assert rule_result["projected_workdays_in_workweek"] == 6
+
+
 def test_evaluate_shift_assignment_compliance_applies_stricter_rest_policy_and_disables_consent():
     profile = _profile(
         rules_json={
@@ -639,6 +901,81 @@ def test_evaluate_shift_assignment_compliance_blocks_daily_minutes_when_policy_r
 
     assert evaluation["status"] == "block"
     assert "customer_policy_max_daily_work_minutes" in evaluation["blocking_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_consecutive_workdays_when_policy_requires():
+    profile = _profile()
+    shift = _shift(
+        starts_at=datetime(2026, 4, 20, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 21, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 17, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
+        business_settings={"compliance": {"max_consecutive_work_days": 6}},
+    )
+
+    assert evaluation["status"] == "block"
+    assert "customer_policy_max_consecutive_work_days" in evaluation["blocking_rule_codes"]
+    rule_result = next(
+        item
+        for item in evaluation["rule_results"]
+        if item["rule_code"] == "customer_policy_max_consecutive_work_days"
+    )
+    assert "max_consecutive_work_days_exceeded_by_policy" in rule_result["reason_codes"]
+    assert "seven_consecutive_workdays_projected" in rule_result["reason_codes"]
+    assert rule_result["configured_days"] == 6
+    assert rule_result["projected_consecutive_work_days"] == 7
+
+
+def test_evaluate_shift_assignment_compliance_blocks_workweek_rest_day_when_policy_requires():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+        }
+    )
+    shift = _shift(
+        starts_at=datetime(2026, 4, 19, 17, 0, tzinfo=timezone.utc),
+        ends_at=datetime(2026, 4, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(
+            _interval(datetime(2026, 4, 13, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 14, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 14, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 15, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 15, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 16, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 16, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 17, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 18, 1, 0, tzinfo=timezone.utc)),
+            _interval(datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc), datetime(2026, 4, 19, 1, 0, tzinfo=timezone.utc)),
+        ),
+        reference_time=datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc),
+        business_settings={"compliance": {"required_rest_days_per_workweek": 1}},
+    )
+
+    assert evaluation["status"] == "block"
+    assert "customer_policy_required_rest_days_per_workweek" in evaluation["blocking_rule_codes"]
+    rule_result = next(
+        item
+        for item in evaluation["rule_results"]
+        if item["rule_code"] == "customer_policy_required_rest_days_per_workweek"
+    )
+    assert "workweek_rest_day_missing_by_policy" in rule_result["reason_codes"]
+    assert "seven_workdays_in_workweek_projected" in rule_result["reason_codes"]
+    assert rule_result["required_rest_days_per_workweek"] == 1
+    assert rule_result["projected_workdays_in_workweek"] == 7
 
 
 def test_evaluate_shift_assignment_compliance_blocks_unresolved_premium_when_policy_requires():

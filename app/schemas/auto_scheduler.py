@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
+from app.schemas.compliance import ComplianceRuleSourceReferenceRead
 
 
 class ReliabilityComponentPayload(BaseSchema):
@@ -216,6 +217,7 @@ class ScheduleRunComplianceIssueRead(BaseSchema):
     artifact_type_allowed: Optional[str] = None
     override_applied: bool = False
     override_artifact_id: Optional[str] = None
+    rule_source_references: list[ComplianceRuleSourceReferenceRead] = Field(default_factory=list)
 
 
 class ScheduleRunComplianceReviewItemRead(BaseSchema):

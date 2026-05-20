@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 
 from app.models.common import ComplianceOverrideArtifactType
 from app.models.scheduling import Shift
-from app.services import compliance_shift_facts, labor_rules, work_permit_rules
+from app.services import (
+    compliance_shift_facts,
+    compliance_source_references,
+    labor_rules,
+    work_permit_rules,
+)
 
 COMPLIANCE_ENGINE_VERSION = "deterministic_compliance_engine_v1"
 
@@ -37,6 +42,12 @@ def evaluate_shift_assignment_compliance(
         business_settings=business_settings,
         location_settings=location_settings,
     )
+    work_permit_source_payload = (
+        work_permit_rules.resolve_work_permit_rule_profile_payload(
+            employee_work_permit_rule_profile
+        )
+        or {}
+    )
     shift_facts = compliance_shift_facts.build_shift_structure_facts(candidate_shift)
     break_facts = compliance_shift_facts.list_break_facts(candidate_shift)
     if profile is None:
@@ -50,7 +61,37 @@ def evaluate_shift_assignment_compliance(
             "profile_code": None,
             "profile_version_id": None,
             "profile_payload_hash": None,
+            "profile_display_name": None,
+            "profile_source_version": None,
+            "profile_source_hash": None,
+            "profile_source_urls": [],
             "jurisdiction_code": None,
+            "work_permit_template_code": _normalized_optional_string(
+                work_permit_source_payload.get("template_code")
+            ),
+            "work_permit_template_label": _normalized_optional_string(
+                work_permit_source_payload.get("label")
+            ),
+            "work_permit_jurisdiction_code": _normalized_optional_string(
+                work_permit_source_payload.get("jurisdiction_code")
+            ),
+            "work_permit_source_document_title": _normalized_optional_string(
+                work_permit_source_payload.get("source_document_title")
+            ),
+            "work_permit_source_urls": _normalized_string_list(
+                [work_permit_source_payload.get("source_url")]
+                if work_permit_source_payload.get("source_url")
+                else []
+            ),
+            "work_permit_source_version": _normalized_optional_string(
+                work_permit_source_payload.get("source_version")
+            ),
+            "work_permit_source_hash": _normalized_optional_string(
+                work_permit_source_payload.get("source_hash")
+            ),
+            "work_permit_payload_hash": work_permit_rules.rule_profile_payload_hash(
+                work_permit_source_payload
+            ),
             "blocking_rule_codes": [],
             "warning_rule_codes": [],
             "premium_rule_codes": [],
@@ -66,6 +107,7 @@ def evaluate_shift_assignment_compliance(
             "policy_hash": policy_metadata.get("policy_hash"),
             "policy_effective_at": policy_metadata.get("policy_effective_at"),
             "policy_scope": policy_metadata.get("policy_scope"),
+            "rule_source_references": [],
             "shift_facts": shift_facts,
             "evaluation_reference_time": reference_time.isoformat(),
         }
@@ -144,6 +186,27 @@ def evaluate_shift_assignment_compliance(
             )
         )
 
+    day_of_rest_rule = _day_of_rest_rule(profile)
+    if day_of_rest_rule is not None:
+        rule_results.append(
+            _day_of_rest_rule_result(
+                day_of_rest_rule,
+                candidate_shift=candidate_shift,
+                counted_intervals=counted_intervals,
+            )
+        )
+
+    day_of_rest_workweek_rule = _day_of_rest_workweek_rule(profile)
+    if day_of_rest_workweek_rule is not None:
+        rule_results.append(
+            _day_of_rest_workweek_rule_result(
+                profile,
+                day_of_rest_workweek_rule,
+                candidate_shift=candidate_shift,
+                counted_intervals=counted_intervals,
+            )
+        )
+
     minor_labor_rule = _minor_labor_rule(profile)
     if minor_labor_rule is not None:
         rule_results.extend(
@@ -169,8 +232,11 @@ def evaluate_shift_assignment_compliance(
 
     rule_results.extend(
         _customer_policy_rule_results(
+            profile=profile,
             compliance_settings=compliance_settings,
             shift_facts=shift_facts,
+            candidate_shift=candidate_shift,
+            counted_intervals=counted_intervals,
             overtime_projection=projection,
             existing_rule_results=rule_results,
             meal_rule=meal_rule,
@@ -209,6 +275,14 @@ def evaluate_shift_assignment_compliance(
         business_settings=business_settings,
         location_settings=location_settings,
     )
+    relevant_rule_codes = sorted(
+        set(
+            blocking_rule_codes
+            + warning_rule_codes
+            + premium_rule_codes
+            + premium_summary["unresolved_premium_rule_codes"]
+        )
+    )
 
     return {
         "status": status,
@@ -216,7 +290,37 @@ def evaluate_shift_assignment_compliance(
         "profile_code": profile.code,
         "profile_version_id": str(profile.version_id),
         "profile_payload_hash": profile.payload_hash,
+        "profile_display_name": profile.display_name,
+        "profile_source_version": profile.source_version,
+        "profile_source_hash": profile.source_hash,
+        "profile_source_urls": list(profile.source_urls),
         "jurisdiction_code": profile.jurisdiction_code,
+        "work_permit_template_code": _normalized_optional_string(
+            work_permit_source_payload.get("template_code")
+        ),
+        "work_permit_template_label": _normalized_optional_string(
+            work_permit_source_payload.get("label")
+        ),
+        "work_permit_jurisdiction_code": _normalized_optional_string(
+            work_permit_source_payload.get("jurisdiction_code")
+        ),
+        "work_permit_source_document_title": _normalized_optional_string(
+            work_permit_source_payload.get("source_document_title")
+        ),
+        "work_permit_source_urls": _normalized_string_list(
+            [work_permit_source_payload.get("source_url")]
+            if work_permit_source_payload.get("source_url")
+            else []
+        ),
+        "work_permit_source_version": _normalized_optional_string(
+            work_permit_source_payload.get("source_version")
+        ),
+        "work_permit_source_hash": _normalized_optional_string(
+            work_permit_source_payload.get("source_hash")
+        ),
+        "work_permit_payload_hash": work_permit_rules.rule_profile_payload_hash(
+            work_permit_source_payload
+        ),
         "blocking_rule_codes": blocking_rule_codes,
         "warning_rule_codes": warning_rule_codes,
         "premium_rule_codes": premium_rule_codes,
@@ -232,6 +336,35 @@ def evaluate_shift_assignment_compliance(
         "policy_hash": policy_metadata.get("policy_hash"),
         "policy_effective_at": policy_metadata.get("policy_effective_at"),
         "policy_scope": policy_metadata.get("policy_scope"),
+        "rule_source_references": compliance_source_references.build_rule_source_references(
+            rule_codes=relevant_rule_codes,
+            profile_code=profile.code,
+            profile_display_name=profile.display_name,
+            profile_version_id=str(profile.version_id),
+            profile_payload_hash=profile.payload_hash,
+            profile_source_version=profile.source_version,
+            profile_source_hash=profile.source_hash,
+            profile_source_urls=list(profile.source_urls),
+            jurisdiction_code=profile.jurisdiction_code,
+            policy_version_id=policy_metadata.get("policy_version_id"),
+            policy_hash=policy_metadata.get("policy_hash"),
+            policy_effective_at=policy_metadata.get("policy_effective_at"),
+            policy_scope=policy_metadata.get("policy_scope"),
+            work_permit_template_code=work_permit_source_payload.get("template_code"),
+            work_permit_template_label=work_permit_source_payload.get("label"),
+            work_permit_jurisdiction_code=work_permit_source_payload.get("jurisdiction_code"),
+            work_permit_source_document_title=work_permit_source_payload.get("source_document_title"),
+            work_permit_source_urls=(
+                [work_permit_source_payload.get("source_url")]
+                if work_permit_source_payload.get("source_url")
+                else []
+            ),
+            work_permit_source_version=work_permit_source_payload.get("source_version"),
+            work_permit_source_hash=work_permit_source_payload.get("source_hash"),
+            work_permit_payload_hash=work_permit_rules.rule_profile_payload_hash(
+                work_permit_source_payload
+            ),
+        ),
         "shift_facts": shift_facts,
         "evaluation_reference_time": reference_time.isoformat(),
     }
@@ -256,6 +389,23 @@ def compliance_rank(evaluation: Mapping[str, object] | None) -> tuple[int, int, 
             _as_float(result.get("missing_rest_hours")) or 0.0,
         )
     return status_rank, blocking_count, rest_shortfall_hours
+
+
+def _normalized_optional_string(value: object | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _normalized_string_list(value: object | None) -> list[str]:
+    normalized = []
+    seen: set[str] = set()
+    for item in value or []:
+        text = _normalized_optional_string(item)
+        if text is None or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
 
 
 def coverage_multiplier_for_evaluation(evaluation: Mapping[str, object] | None) -> float:
@@ -346,11 +496,51 @@ def _meal_break_rule(
     enabled = _as_bool(rules_json.get("meal_breaks_required")) or raw_ruleset in {
         "ca_v1",
         "california_v1",
+        "ny_non_factory_v1",
+        "new_york_non_factory_v1",
+        "ny_hospitality_v1",
     }
     if not enabled:
         return None
 
+    if raw_ruleset in {
+        "ny_non_factory_v1",
+        "new_york_non_factory_v1",
+        "ny_hospitality_v1",
+    }:
+        return {
+            "mode": "ny_non_factory_windowed",
+            "midday_rule_code": str(rules_json.get("midday_meal_rule_code") or "meal_break_midday_window"),
+            "midday_trigger_minutes": _as_int(rules_json.get("midday_meal_trigger_minutes")) or 360,
+            "midday_window_start_local": str(rules_json.get("midday_meal_window_start_local") or "11:00"),
+            "midday_window_end_local": str(rules_json.get("midday_meal_window_end_local") or "14:00"),
+            "midday_min_break_minutes": _as_int(rules_json.get("midday_meal_min_break_minutes")) or 30,
+            "evening_rule_code": str(rules_json.get("evening_meal_rule_code") or "meal_break_evening_window"),
+            "evening_required_if_starts_before_local": str(
+                rules_json.get("evening_meal_required_if_starts_before_local") or "11:00"
+            ),
+            "evening_required_if_ends_after_local": str(
+                rules_json.get("evening_meal_required_if_ends_after_local") or "19:00"
+            ),
+            "evening_window_start_local": str(rules_json.get("evening_meal_window_start_local") or "17:00"),
+            "evening_window_end_local": str(rules_json.get("evening_meal_window_end_local") or "19:00"),
+            "evening_min_break_minutes": _as_int(rules_json.get("evening_meal_min_break_minutes")) or 20,
+            "midshift_rule_code": str(rules_json.get("midshift_meal_rule_code") or "meal_break_midshift_window"),
+            "midshift_trigger_minutes": _as_int(rules_json.get("midshift_meal_trigger_minutes")) or 360,
+            "midshift_start_window_local": str(
+                rules_json.get("midshift_meal_start_window_local") or "13:00"
+            ),
+            "midshift_end_window_local": str(
+                rules_json.get("midshift_meal_end_window_local") or "06:00"
+            ),
+            "midshift_min_break_minutes": _as_int(rules_json.get("midshift_meal_min_break_minutes")) or 45,
+            "midshift_midpoint_tolerance_minutes": _as_int(
+                rules_json.get("midshift_meal_midpoint_tolerance_minutes")
+            ) or 120,
+        }
+
     return {
+        "mode": "relative_windowed",
         "first_rule_code": str(rules_json.get("first_meal_rule_code") or "meal_break_first_window"),
         "second_rule_code": str(rules_json.get("second_meal_rule_code") or "meal_break_second_window"),
         "first_trigger_minutes": _as_int(rules_json.get("first_meal_trigger_minutes")) or 300,
@@ -436,6 +626,40 @@ def _spread_of_hours_rule(
     }
 
 
+def _day_of_rest_rule(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+) -> dict[str, object] | None:
+    rules_json = profile.rules_json if isinstance(profile.rules_json, Mapping) else {}
+    max_consecutive_work_days = labor_rules.max_consecutive_work_days(profile)
+    if max_consecutive_work_days <= 0:
+        return None
+    raw_ruleset = str(rules_json.get("day_of_rest_ruleset") or "").strip().lower()
+    default_rule_code = (
+        "day_of_rest_in_seven"
+        if _as_bool(rules_json.get("day_of_rest_required"))
+        or raw_ruleset in {"ca_v1", "california_v1"}
+        else "max_consecutive_work_days"
+    )
+    return {
+        "rule_code": str(rules_json.get("day_of_rest_rule_code") or default_rule_code),
+        "max_consecutive_work_days": max_consecutive_work_days,
+    }
+
+
+def _day_of_rest_workweek_rule(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+) -> dict[str, object] | None:
+    rules_json = profile.rules_json if isinstance(profile.rules_json, Mapping) else {}
+    required_rest_days = labor_rules.required_rest_days_per_workweek(profile)
+    if required_rest_days <= 0:
+        return None
+    return {
+        "rule_code": str(rules_json.get("day_of_rest_workweek_rule_code") or "day_of_rest_workweek"),
+        "required_rest_days_per_workweek": required_rest_days,
+        "max_workdays_per_workweek": max(0, 7 - required_rest_days),
+    }
+
+
 def _rest_window_rule_result(
     rest_rule: Mapping[str, object],
     *,
@@ -501,6 +725,31 @@ def _rest_window_rule_result(
 
 
 def _meal_break_rule_results(
+    meal_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+    employee_base_hourly_rate_cents: int | None,
+) -> list[dict[str, object]]:
+    mode = str(meal_rule.get("mode") or "relative_windowed").strip().lower()
+    if mode == "ny_non_factory_windowed":
+        return _meal_break_rule_results_new_york_non_factory(
+            meal_rule,
+            candidate_shift=candidate_shift,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+        )
+    return _meal_break_rule_results_relative_windowed(
+        meal_rule,
+        candidate_shift=candidate_shift,
+        shift_facts=shift_facts,
+        break_facts=break_facts,
+        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
+    )
+
+
+def _meal_break_rule_results_relative_windowed(
     meal_rule: Mapping[str, object],
     *,
     candidate_shift: Shift,
@@ -664,6 +913,166 @@ def _meal_break_rule_results(
     return results
 
 
+def _meal_break_rule_results_new_york_non_factory(
+    meal_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    shift_timezone = _shift_timezone(candidate_shift)
+    shift_local_start = candidate_shift.starts_at.astimezone(shift_timezone)
+    shift_local_end = candidate_shift.ends_at.astimezone(shift_timezone)
+    shift_local_date = shift_local_start.date()
+
+    qualifying_meal_breaks = [
+        break_fact
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "meal" and not _as_bool(break_fact.get("is_paid"))
+    ]
+
+    results: list[dict[str, object]] = []
+
+    midday_trigger_minutes = _as_int(meal_rule.get("midday_trigger_minutes")) or 360
+    midday_window_start = _parse_local_time(meal_rule.get("midday_window_start_local")) or time(11, 0)
+    midday_window_end = _parse_local_time(meal_rule.get("midday_window_end_local")) or time(14, 0)
+    midday_min_break_minutes = _as_int(meal_rule.get("midday_min_break_minutes")) or 30
+    midday_rule_code = str(meal_rule.get("midday_rule_code") or "meal_break_midday_window")
+
+    midday_window_start_at, midday_window_end_at = _local_window_bounds_for_date(
+        shift_local_date,
+        timezone=shift_timezone,
+        window_start_local=midday_window_start,
+        window_end_local=midday_window_end,
+    )
+    midday_required = (
+        scheduled_span_minutes > midday_trigger_minutes
+        and candidate_shift.starts_at < midday_window_end_at
+        and candidate_shift.ends_at > midday_window_start_at
+    )
+    if midday_required:
+        qualifying_midday = next(
+            (
+                break_fact
+                for break_fact in qualifying_meal_breaks
+                if _meal_break_within_local_window(
+                    break_fact,
+                    timezone=shift_timezone,
+                    window_start_at=midday_window_start_at,
+                    window_end_at=midday_window_end_at,
+                    min_break_minutes=midday_min_break_minutes,
+                )
+            ),
+            None,
+        )
+        results.append(
+            _windowed_meal_rule_result(
+                rule_code=midday_rule_code,
+                has_structured_segments=has_structured_segments,
+                qualifying_break=qualifying_midday,
+                required_break_minutes=midday_min_break_minutes,
+                window_start_at=midday_window_start_at,
+                window_end_at=midday_window_end_at,
+                missing_reason_code="midday_meal_break_missing",
+                satisfied_reason_code="midday_meal_break_scheduled",
+            )
+        )
+
+    evening_rule_code = str(meal_rule.get("evening_rule_code") or "meal_break_evening_window")
+    evening_starts_before = _parse_local_time(
+        meal_rule.get("evening_required_if_starts_before_local")
+    ) or time(11, 0)
+    evening_ends_after = _parse_local_time(
+        meal_rule.get("evening_required_if_ends_after_local")
+    ) or time(19, 0)
+    evening_window_start = _parse_local_time(meal_rule.get("evening_window_start_local")) or time(17, 0)
+    evening_window_end = _parse_local_time(meal_rule.get("evening_window_end_local")) or time(19, 0)
+    evening_min_break_minutes = _as_int(meal_rule.get("evening_min_break_minutes")) or 20
+    evening_window_start_at, evening_window_end_at = _local_window_bounds_for_date(
+        shift_local_date,
+        timezone=shift_timezone,
+        window_start_local=evening_window_start,
+        window_end_local=evening_window_end,
+    )
+    evening_required = (
+        shift_local_start.timetz().replace(tzinfo=None) < evening_starts_before
+        and candidate_shift.ends_at > evening_window_end_at.astimezone(candidate_shift.ends_at.tzinfo)
+    )
+    if evening_required:
+        qualifying_evening = next(
+            (
+                break_fact
+                for break_fact in qualifying_meal_breaks
+                if _meal_break_within_local_window(
+                    break_fact,
+                    timezone=shift_timezone,
+                    window_start_at=evening_window_start_at,
+                    window_end_at=evening_window_end_at,
+                    min_break_minutes=evening_min_break_minutes,
+                )
+            ),
+            None,
+        )
+        results.append(
+            _windowed_meal_rule_result(
+                rule_code=evening_rule_code,
+                has_structured_segments=has_structured_segments,
+                qualifying_break=qualifying_evening,
+                required_break_minutes=evening_min_break_minutes,
+                window_start_at=evening_window_start_at,
+                window_end_at=evening_window_end_at,
+                missing_reason_code="evening_meal_break_missing",
+                satisfied_reason_code="evening_meal_break_scheduled",
+            )
+        )
+
+    midshift_rule_code = str(meal_rule.get("midshift_rule_code") or "meal_break_midshift_window")
+    midshift_trigger_minutes = _as_int(meal_rule.get("midshift_trigger_minutes")) or 360
+    midshift_start_window = _parse_local_time(meal_rule.get("midshift_start_window_local")) or time(13, 0)
+    midshift_end_window = _parse_local_time(meal_rule.get("midshift_end_window_local")) or time(6, 0)
+    midshift_min_break_minutes = _as_int(meal_rule.get("midshift_min_break_minutes")) or 45
+    midshift_tolerance_minutes = _as_int(meal_rule.get("midshift_midpoint_tolerance_minutes")) or 120
+    midshift_required = (
+        scheduled_span_minutes > midshift_trigger_minutes
+        and _local_time_in_wrapped_window(
+            shift_local_start.timetz().replace(tzinfo=None),
+            window_start=midshift_start_window,
+            window_end=midshift_end_window,
+        )
+    )
+    if midshift_required:
+        qualifying_midshift = next(
+            (
+                break_fact
+                for break_fact in qualifying_meal_breaks
+                if _meal_break_near_shift_midpoint(
+                    break_fact,
+                    shift=candidate_shift,
+                    min_break_minutes=midshift_min_break_minutes,
+                    midpoint_tolerance_minutes=midshift_tolerance_minutes,
+                )
+            ),
+            None,
+        )
+        midpoint_at = candidate_shift.starts_at + (
+            candidate_shift.ends_at - candidate_shift.starts_at
+        ) / 2
+        results.append(
+            _midshift_meal_rule_result(
+                rule_code=midshift_rule_code,
+                has_structured_segments=has_structured_segments,
+                qualifying_break=qualifying_midshift,
+                required_break_minutes=midshift_min_break_minutes,
+                shift_midpoint_at=midpoint_at,
+                midpoint_tolerance_minutes=midshift_tolerance_minutes,
+            )
+        )
+
+    return results
+
+
 def _paid_rest_break_rule_result(
     paid_rest_rule: Mapping[str, object],
     *,
@@ -812,6 +1221,105 @@ def _spread_of_hours_rule_result(
         "scheduled_span_minutes": scheduled_span_minutes,
         "threshold_minutes": threshold_minutes,
         "excess_minutes": max(0, scheduled_span_minutes - threshold_minutes),
+    }
+
+
+def _day_of_rest_rule_result(
+    day_of_rest_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object]:
+    rule_code = str(day_of_rest_rule.get("rule_code") or "day_of_rest_in_seven")
+    max_consecutive_work_days = _as_int(day_of_rest_rule.get("max_consecutive_work_days")) or 0
+    projected_streak = _projected_consecutive_workday_streak(
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    if projected_streak["projected_consecutive_work_days"] <= max_consecutive_work_days:
+        return {
+            "rule_code": rule_code,
+            "status": "clear",
+            "reason_codes": ["consecutive_workday_limit_satisfied"],
+            "premium_required": False,
+            "would_block": False,
+            "projected_consecutive_work_days": projected_streak["projected_consecutive_work_days"],
+            "max_consecutive_work_days": max_consecutive_work_days,
+            "streak_start_date": projected_streak["streak_start_date"],
+            "streak_end_date": projected_streak["streak_end_date"],
+            "candidate_worked_dates_local": projected_streak["candidate_worked_dates_local"],
+        }
+
+    reason_codes = ["consecutive_workday_limit_exceeded"]
+    if max_consecutive_work_days == 6:
+        reason_codes.append("seven_consecutive_workdays_projected")
+    return {
+        "rule_code": rule_code,
+        "status": "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": True,
+        "projected_consecutive_work_days": projected_streak["projected_consecutive_work_days"],
+        "max_consecutive_work_days": max_consecutive_work_days,
+        "excess_consecutive_work_days": max(
+            0,
+            projected_streak["projected_consecutive_work_days"] - max_consecutive_work_days,
+        ),
+        "streak_start_date": projected_streak["streak_start_date"],
+        "streak_end_date": projected_streak["streak_end_date"],
+        "candidate_worked_dates_local": projected_streak["candidate_worked_dates_local"],
+    }
+
+
+def _day_of_rest_workweek_rule_result(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    day_of_rest_workweek_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object]:
+    rule_code = str(day_of_rest_workweek_rule.get("rule_code") or "day_of_rest_workweek")
+    required_rest_days = _as_int(day_of_rest_workweek_rule.get("required_rest_days_per_workweek")) or 0
+    max_workdays = _as_int(day_of_rest_workweek_rule.get("max_workdays_per_workweek")) or max(0, 7 - required_rest_days)
+    projected_workweek = _projected_worked_days_in_workweek(
+        profile,
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    projected_days = int(projected_workweek["projected_workdays_in_workweek"])
+    if projected_days <= max_workdays:
+        return {
+            "rule_code": rule_code,
+            "status": "clear",
+            "reason_codes": ["workweek_rest_day_satisfied"],
+            "premium_required": False,
+            "would_block": False,
+            "required_rest_days_per_workweek": required_rest_days,
+            "max_workdays_per_workweek": max_workdays,
+            "projected_workdays_in_workweek": projected_days,
+            "workweek_start_date": projected_workweek["workweek_start_date"],
+            "workweek_end_date": projected_workweek["workweek_end_date"],
+            "candidate_worked_dates_local": projected_workweek["candidate_worked_dates_local"],
+            "projected_worked_dates_local": projected_workweek["projected_worked_dates_local"],
+        }
+
+    reason_codes = ["workweek_rest_day_missing"]
+    if max_workdays == 6:
+        reason_codes.append("seven_workdays_in_workweek_projected")
+    return {
+        "rule_code": rule_code,
+        "status": "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": True,
+        "required_rest_days_per_workweek": required_rest_days,
+        "max_workdays_per_workweek": max_workdays,
+        "projected_workdays_in_workweek": projected_days,
+        "excess_workdays_in_workweek": max(0, projected_days - max_workdays),
+        "workweek_start_date": projected_workweek["workweek_start_date"],
+        "workweek_end_date": projected_workweek["workweek_end_date"],
+        "candidate_worked_dates_local": projected_workweek["candidate_worked_dates_local"],
+        "projected_worked_dates_local": projected_workweek["projected_worked_dates_local"],
     }
 
 
@@ -1776,8 +2284,11 @@ def _resolved_premium_cents(
 
 def _customer_policy_rule_results(
     *,
+    profile: labor_rules.LaborRuleProfileSnapshot,
     compliance_settings: Mapping[str, object],
     shift_facts: Mapping[str, object],
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
     overtime_projection: Mapping[str, object],
     existing_rule_results: Sequence[Mapping[str, object]],
     meal_rule: Mapping[str, object] | None,
@@ -1811,6 +2322,23 @@ def _customer_policy_rule_results(
     )
     if max_week_result is not None:
         rule_results.append(max_week_result)
+
+    max_consecutive_workdays_result = _maximum_consecutive_workdays_policy_rule_result(
+        configured_days=_as_int(compliance_settings.get("max_consecutive_work_days")),
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    if max_consecutive_workdays_result is not None:
+        rule_results.append(max_consecutive_workdays_result)
+
+    required_rest_days_per_workweek_result = _required_rest_days_per_workweek_policy_rule_result(
+        profile,
+        configured_days=_as_int(compliance_settings.get("required_rest_days_per_workweek")),
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    if required_rest_days_per_workweek_result is not None:
+        rule_results.append(required_rest_days_per_workweek_result)
 
     unresolved_premium_result = _unresolved_premium_policy_rule_result(
         compliance_settings=compliance_settings,
@@ -1865,6 +2393,101 @@ def _maximum_minutes_policy_rule_result(
     }
 
 
+def _maximum_consecutive_workdays_policy_rule_result(
+    *,
+    configured_days: int,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object] | None:
+    if configured_days <= 0:
+        return None
+    projected_streak = _projected_consecutive_workday_streak(
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    projected_days = int(projected_streak["projected_consecutive_work_days"])
+    if projected_days <= configured_days:
+        return {
+            "rule_code": "customer_policy_max_consecutive_work_days",
+            "status": "clear",
+            "reason_codes": ["max_consecutive_work_days_satisfied_by_policy"],
+            "premium_required": False,
+            "would_block": False,
+            "configured_days": configured_days,
+            "projected_consecutive_work_days": projected_days,
+            "streak_start_date": projected_streak["streak_start_date"],
+            "streak_end_date": projected_streak["streak_end_date"],
+            "candidate_worked_dates_local": projected_streak["candidate_worked_dates_local"],
+        }
+    reason_codes = ["max_consecutive_work_days_exceeded_by_policy"]
+    if configured_days == 6:
+        reason_codes.append("seven_consecutive_workdays_projected")
+    return {
+        "rule_code": "customer_policy_max_consecutive_work_days",
+        "status": "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": True,
+        "configured_days": configured_days,
+        "projected_consecutive_work_days": projected_days,
+        "excess_consecutive_work_days": max(0, projected_days - configured_days),
+        "streak_start_date": projected_streak["streak_start_date"],
+        "streak_end_date": projected_streak["streak_end_date"],
+        "candidate_worked_dates_local": projected_streak["candidate_worked_dates_local"],
+    }
+
+
+def _required_rest_days_per_workweek_policy_rule_result(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    *,
+    configured_days: int,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object] | None:
+    if configured_days <= 0:
+        return None
+    projected_workweek = _projected_worked_days_in_workweek(
+        profile,
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    max_workdays = max(0, 7 - configured_days)
+    projected_days = int(projected_workweek["projected_workdays_in_workweek"])
+    if projected_days <= max_workdays:
+        return {
+            "rule_code": "customer_policy_required_rest_days_per_workweek",
+            "status": "clear",
+            "reason_codes": ["workweek_rest_day_satisfied_by_policy"],
+            "premium_required": False,
+            "would_block": False,
+            "required_rest_days_per_workweek": configured_days,
+            "max_workdays_per_workweek": max_workdays,
+            "projected_workdays_in_workweek": projected_days,
+            "workweek_start_date": projected_workweek["workweek_start_date"],
+            "workweek_end_date": projected_workweek["workweek_end_date"],
+            "candidate_worked_dates_local": projected_workweek["candidate_worked_dates_local"],
+            "projected_worked_dates_local": projected_workweek["projected_worked_dates_local"],
+        }
+    reason_codes = ["workweek_rest_day_missing_by_policy"]
+    if max_workdays == 6:
+        reason_codes.append("seven_workdays_in_workweek_projected")
+    return {
+        "rule_code": "customer_policy_required_rest_days_per_workweek",
+        "status": "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": True,
+        "required_rest_days_per_workweek": configured_days,
+        "max_workdays_per_workweek": max_workdays,
+        "projected_workdays_in_workweek": projected_days,
+        "excess_workdays_in_workweek": max(0, projected_days - max_workdays),
+        "workweek_start_date": projected_workweek["workweek_start_date"],
+        "workweek_end_date": projected_workweek["workweek_end_date"],
+        "candidate_worked_dates_local": projected_workweek["candidate_worked_dates_local"],
+        "projected_worked_dates_local": projected_workweek["projected_worked_dates_local"],
+    }
+
+
 def _unresolved_premium_policy_rule_result(
     *,
     compliance_settings: Mapping[str, object],
@@ -1904,6 +2527,187 @@ def _latest_interval_before_shift(
     return latest
 
 
+def _projected_consecutive_workday_streak(
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object]:
+    timezone_name = candidate_shift.timezone or "UTC"
+    worked_day_dates = _worked_local_day_dates(
+        timezone_name=timezone_name,
+        intervals=counted_intervals,
+    )
+    candidate_day_dates = _local_dates_for_interval(
+        timezone_name=timezone_name,
+        start_at=candidate_shift.starts_at,
+        end_at=candidate_shift.ends_at,
+    )
+    worked_day_dates.update(candidate_day_dates)
+
+    if not worked_day_dates:
+        return {
+            "projected_consecutive_work_days": 0,
+            "streak_start_date": None,
+            "streak_end_date": None,
+            "candidate_worked_dates_local": [],
+        }
+
+    streak_length = 0
+    streak_start: date | None = None
+    streak_end: date | None = None
+    ordered_dates = sorted(worked_day_dates)
+    current_start = ordered_dates[0]
+    current_end = ordered_dates[0]
+
+    def _streak_intersects_candidate_days(start_day: date, end_day: date) -> bool:
+        for candidate_day in candidate_day_dates:
+            if start_day <= candidate_day <= end_day:
+                return True
+        return False
+
+    def _consider_streak(start_day: date, end_day: date) -> tuple[int, date | None, date | None]:
+        length = (end_day - start_day).days + 1
+        if not _streak_intersects_candidate_days(start_day, end_day):
+            return streak_length, streak_start, streak_end
+        if length > streak_length:
+            return length, start_day, end_day
+        return streak_length, streak_start, streak_end
+
+    for worked_day in ordered_dates[1:]:
+        if worked_day == current_end + timedelta(days=1):
+            current_end = worked_day
+            continue
+        streak_length, streak_start, streak_end = _consider_streak(current_start, current_end)
+        current_start = worked_day
+        current_end = worked_day
+
+    streak_length, streak_start, streak_end = _consider_streak(current_start, current_end)
+    return {
+        "projected_consecutive_work_days": streak_length,
+        "streak_start_date": streak_start.isoformat() if streak_start is not None else None,
+        "streak_end_date": streak_end.isoformat() if streak_end is not None else None,
+        "candidate_worked_dates_local": [
+            worked_day.isoformat() for worked_day in sorted(candidate_day_dates)
+        ],
+    }
+
+
+def _projected_worked_days_in_workweek(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+) -> dict[str, object]:
+    timezone_name = candidate_shift.timezone or "UTC"
+    workweek_start, workweek_end = labor_rules.workweek_window_for_shift(profile, shift=candidate_shift)
+    worked_day_dates = _worked_local_day_dates_within_window(
+        timezone_name=timezone_name,
+        intervals=counted_intervals,
+        start_at=workweek_start,
+        end_at=workweek_end,
+    )
+    candidate_day_dates = _local_dates_for_interval_with_window(
+        timezone_name=timezone_name,
+        start_at=candidate_shift.starts_at,
+        end_at=candidate_shift.ends_at,
+        window_start=workweek_start,
+        window_end=workweek_end,
+    )
+    worked_day_dates.update(candidate_day_dates)
+    shift_timezone = ZoneInfo(timezone_name)
+    return {
+        "projected_workdays_in_workweek": len(worked_day_dates),
+        "workweek_start_date": workweek_start.astimezone(shift_timezone).date().isoformat(),
+        "workweek_end_date": (workweek_end - timedelta(minutes=1)).astimezone(shift_timezone).date().isoformat(),
+        "candidate_worked_dates_local": [
+            worked_day.isoformat() for worked_day in sorted(candidate_day_dates)
+        ],
+        "projected_worked_dates_local": [
+            worked_day.isoformat() for worked_day in sorted(worked_day_dates)
+        ],
+    }
+
+
+def _worked_local_day_dates(
+    *,
+    timezone_name: str,
+    intervals: Sequence[labor_rules.CountedInterval],
+) -> set[date]:
+    worked_dates: set[date] = set()
+    for interval in intervals:
+        worked_dates.update(
+            _local_dates_for_interval(
+                timezone_name=timezone_name,
+                start_at=interval.start_at,
+                end_at=interval.end_at,
+            )
+        )
+    return worked_dates
+
+
+def _worked_local_day_dates_within_window(
+    *,
+    timezone_name: str,
+    intervals: Sequence[labor_rules.CountedInterval],
+    start_at: datetime,
+    end_at: datetime,
+) -> set[date]:
+    worked_dates: set[date] = set()
+    for interval in intervals:
+        worked_dates.update(
+            _local_dates_for_interval_with_window(
+                timezone_name=timezone_name,
+                start_at=interval.start_at,
+                end_at=interval.end_at,
+                window_start=start_at,
+                window_end=end_at,
+            )
+        )
+    return worked_dates
+
+
+def _local_dates_for_interval(
+    *,
+    timezone_name: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> set[date]:
+    if end_at <= start_at:
+        return set()
+    tz = ZoneInfo(timezone_name)
+    current_local = start_at.astimezone(tz)
+    end_local = end_at.astimezone(tz)
+    local_dates: set[date] = set()
+    while current_local < end_local:
+        local_dates.add(current_local.date())
+        next_midnight = datetime.combine(
+            current_local.date() + timedelta(days=1),
+            time.min,
+            tzinfo=tz,
+        )
+        current_local = min(next_midnight, end_local)
+    return local_dates
+
+
+def _local_dates_for_interval_with_window(
+    *,
+    timezone_name: str,
+    start_at: datetime,
+    end_at: datetime,
+    window_start: datetime,
+    window_end: datetime,
+) -> set[date]:
+    clipped_start = max(start_at, window_start)
+    clipped_end = min(end_at, window_end)
+    if clipped_end <= clipped_start:
+        return set()
+    return _local_dates_for_interval(
+        timezone_name=timezone_name,
+        start_at=clipped_start,
+        end_at=clipped_end,
+    )
+
+
 def _meal_reason_codes(
     *,
     base_code: str,
@@ -1919,6 +2723,164 @@ def _meal_reason_codes(
     elif not waiver_allowed:
         reason_codes.append("waiver_disabled_by_policy")
     return reason_codes
+
+
+def _windowed_meal_rule_result(
+    *,
+    rule_code: str,
+    has_structured_segments: bool,
+    qualifying_break: Mapping[str, object] | None,
+    required_break_minutes: int,
+    window_start_at: datetime,
+    window_end_at: datetime,
+    missing_reason_code: str,
+    satisfied_reason_code: str,
+) -> dict[str, object]:
+    if qualifying_break is not None:
+        return {
+            "rule_code": rule_code,
+            "status": "clear",
+            "reason_codes": [satisfied_reason_code],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": required_break_minutes,
+            "scheduled_break_minutes": _as_int(qualifying_break.get("duration_minutes")),
+            "break_start_at": _iso_or_none(qualifying_break.get("starts_at")),
+            "break_end_at": _iso_or_none(qualifying_break.get("ends_at")),
+            "window_start_at": window_start_at.isoformat(),
+            "window_end_at": window_end_at.isoformat(),
+        }
+    return {
+        "rule_code": rule_code,
+        "status": "warning" if not has_structured_segments else "block",
+        "reason_codes": _meal_reason_codes(
+            base_code=missing_reason_code,
+            has_structured_segments=has_structured_segments,
+            waiver_possible=False,
+            waiver_allowed=True,
+        ),
+        "premium_required": False,
+        "would_block": has_structured_segments,
+        "required_break_minutes": required_break_minutes,
+        "window_start_at": window_start_at.isoformat(),
+        "window_end_at": window_end_at.isoformat(),
+    }
+
+
+def _midshift_meal_rule_result(
+    *,
+    rule_code: str,
+    has_structured_segments: bool,
+    qualifying_break: Mapping[str, object] | None,
+    required_break_minutes: int,
+    shift_midpoint_at: datetime,
+    midpoint_tolerance_minutes: int,
+) -> dict[str, object]:
+    if qualifying_break is not None:
+        return {
+            "rule_code": rule_code,
+            "status": "clear",
+            "reason_codes": ["midshift_meal_break_scheduled"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": required_break_minutes,
+            "scheduled_break_minutes": _as_int(qualifying_break.get("duration_minutes")),
+            "break_start_at": _iso_or_none(qualifying_break.get("starts_at")),
+            "break_end_at": _iso_or_none(qualifying_break.get("ends_at")),
+            "shift_midpoint_at": shift_midpoint_at.isoformat(),
+            "midpoint_tolerance_minutes": midpoint_tolerance_minutes,
+        }
+    return {
+        "rule_code": rule_code,
+        "status": "warning" if not has_structured_segments else "block",
+        "reason_codes": _meal_reason_codes(
+            base_code="midshift_meal_break_missing",
+            has_structured_segments=has_structured_segments,
+            waiver_possible=False,
+            waiver_allowed=True,
+        ),
+        "premium_required": False,
+        "would_block": has_structured_segments,
+        "required_break_minutes": required_break_minutes,
+        "shift_midpoint_at": shift_midpoint_at.isoformat(),
+        "midpoint_tolerance_minutes": midpoint_tolerance_minutes,
+    }
+
+
+def _meal_break_within_local_window(
+    break_fact: Mapping[str, object],
+    *,
+    timezone: ZoneInfo,
+    window_start_at: datetime,
+    window_end_at: datetime,
+    min_break_minutes: int,
+) -> bool:
+    break_start_at = _as_datetime(break_fact.get("starts_at"))
+    break_end_at = _as_datetime(break_fact.get("ends_at"))
+    break_minutes = _as_int(break_fact.get("duration_minutes")) or 0
+    if break_start_at is None or break_end_at is None or break_minutes < min_break_minutes:
+        return False
+    localized_start = break_start_at.astimezone(timezone)
+    localized_end = break_end_at.astimezone(timezone)
+    return localized_start >= window_start_at and localized_end <= window_end_at
+
+
+def _meal_break_near_shift_midpoint(
+    break_fact: Mapping[str, object],
+    *,
+    shift: Shift,
+    min_break_minutes: int,
+    midpoint_tolerance_minutes: int,
+) -> bool:
+    break_start_at = _as_datetime(break_fact.get("starts_at"))
+    break_end_at = _as_datetime(break_fact.get("ends_at"))
+    break_minutes = _as_int(break_fact.get("duration_minutes")) or 0
+    if break_start_at is None or break_end_at is None or break_minutes < min_break_minutes:
+        return False
+    break_midpoint_at = break_start_at + (break_end_at - break_start_at) / 2
+    shift_midpoint_at = shift.starts_at + (shift.ends_at - shift.starts_at) / 2
+    return abs((break_midpoint_at - shift_midpoint_at).total_seconds()) <= midpoint_tolerance_minutes * 60
+
+
+def _local_window_bounds_for_date(
+    shift_local_date: date,
+    *,
+    timezone: ZoneInfo,
+    window_start_local: time,
+    window_end_local: time,
+) -> tuple[datetime, datetime]:
+    start_at = datetime.combine(shift_local_date, window_start_local, tzinfo=timezone)
+    end_at = datetime.combine(shift_local_date, window_end_local, tzinfo=timezone)
+    if end_at <= start_at:
+        end_at += timedelta(days=1)
+    return start_at, end_at
+
+
+def _local_time_in_wrapped_window(
+    value: time,
+    *,
+    window_start: time,
+    window_end: time,
+) -> bool:
+    if window_start <= window_end:
+        return window_start <= value <= window_end
+    return value >= window_start or value <= window_end
+
+
+def _as_datetime(value: object | None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _iso_or_none(value: object | None) -> str | None:
+    resolved = _as_datetime(value)
+    return resolved.isoformat() if resolved is not None else None
 
 
 def _premium_liability_summary(

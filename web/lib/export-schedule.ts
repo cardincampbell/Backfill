@@ -5,7 +5,12 @@
  * Day cells: "9 AM – 5 PM" pipe-joined for multiple shifts, blank if none.
  */
 
-import type { LocationCompliancePayrollExport } from "./api/finance";
+import type {
+  ComplianceWeekShift,
+  LocationCompliancePayrollExport,
+  LocationComplianceWeek,
+} from "./api/finance";
+import type { ComplianceRuleSourceReference } from "./api/workspace";
 
 export interface ExportEmployee {
   id: string;
@@ -16,6 +21,7 @@ export interface ExportEmployee {
 }
 
 export interface ExportShift {
+  id?: string | null;
   employeeId: string | null;
   day: number; // 0=Mon … 6=Sun
   startHour: number;
@@ -40,6 +46,7 @@ export interface ExportOptions {
   weekStart: Date;
   employees: ExportEmployee[];
   shifts: ExportShift[];
+  complianceWeek?: LocationComplianceWeek | null;
   compliancePayrollExport?: LocationCompliancePayrollExport | null;
 }
 
@@ -95,7 +102,42 @@ function currencyFromCents(cents: number): string {
   }).format(cents / 100);
 }
 
+function formatRuleSourceReferences(
+  references: ComplianceRuleSourceReference[] | null | undefined,
+): string {
+  const items = references ?? [];
+  if (!items.length) {
+    return "";
+  }
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const reference of items) {
+    const key = [
+      reference.rule_code,
+      reference.source_kind,
+      reference.source_code ?? "",
+      reference.source_hash ?? "",
+      reference.version_id ?? "",
+    ].join(":");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const kind = reference.source_kind
+      .split("_")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+    const primary = reference.source_label ?? reference.source_document_title ?? reference.source_code ?? kind;
+    labels.push(primary === kind ? primary : `${kind} · ${primary}`);
+  }
+  return labels.join(" | ");
+}
+
 export function buildComplianceRows(opts: ExportOptions): { header: string[]; rows: string[][] } {
+  const complianceWeekByShiftId = new Map(
+    (opts.complianceWeek?.shifts ?? []).map((shift) => [shift.shift_id, shift]),
+  );
   const employeeNameById = new Map(opts.employees.map((employee) => [employee.id, employee.name]));
   const header = [
     'Employee',
@@ -107,6 +149,7 @@ export function buildComplianceRows(opts: ExportOptions): { header: string[]; ro
     'Artifact Applied',
     'Warning Rules',
     'Blocking Rules',
+    'Rule Sources',
   ];
   const rows = opts.shifts
     .filter(
@@ -123,6 +166,7 @@ export function buildComplianceRows(opts: ExportOptions): { header: string[]; ro
     )
     .map((shift) => {
       const premiumCents = Math.max(0, shift.compliancePremiumTotalCents ?? 0);
+      const complianceWeekShift = complianceWeekByShiftId.get(shift.id ?? "");
       return [
         employeeNameById.get(shift.employeeId!) ?? 'Assigned employee',
         shift.roleName ?? '',
@@ -133,6 +177,7 @@ export function buildComplianceRows(opts: ExportOptions): { header: string[]; ro
         shift.complianceOverrideApplied ? 'Yes' : '',
         (shift.complianceWarningRuleCodes ?? []).join(' | '),
         (shift.complianceBlockingRuleCodes ?? []).join(' | '),
+        formatRuleSourceReferences(complianceWeekShift?.rule_source_references),
       ];
     });
   return { header, rows };
@@ -160,6 +205,7 @@ export function buildCompliancePayrollRows(opts: ExportOptions): { header: strin
     'Artifact Type',
     'Artifact Note',
     'Source Reasons',
+    'Rule Sources',
   ];
   if (!report || report.rows.length === 0) {
     return { header, rows: [] };
@@ -184,6 +230,7 @@ export function buildCompliancePayrollRows(opts: ExportOptions): { header: strin
     row.override_artifact_type ?? '',
     row.override_artifact_note ?? '',
     (row.source_reason_codes ?? []).join(' | '),
+    formatRuleSourceReferences(row.rule_source_references),
   ]);
   return { header, rows };
 }

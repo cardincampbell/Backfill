@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import hashlib
 import json
-from typing import Literal
+from typing import Literal, Mapping
 from uuid import UUID
 
 from sqlalchemy import select
@@ -53,6 +53,13 @@ _WEEKDAY_ORDER = {
     "friday": 5,
     "saturday": 6,
 }
+_COMPLIANCE_PAYROLL_PROVIDER_PROFILES = {
+    "generic_csv_v1",
+    "gusto_csv_v1",
+    "quickbooks_csv_v1",
+    "adp_csv_v1",
+}
+_DEFAULT_COMPLIANCE_PAYROLL_PROVIDER_PROFILE = "generic_csv_v1"
 _DEFAULT_COMPLIANCE_PAYROLL_IDENTIFIER_PRIORITY = ("employee_number", "external_ref")
 _DEFAULT_COMPLIANCE_PAYROLL_EARNING_CODES = {
     "meal_break_first_window": ("MEALPREM", "Meal Break Premium"),
@@ -154,6 +161,16 @@ def _read_compliance_settings(payload: object) -> CompliancePolicySettingsRead:
             if raw.get("max_weekly_minutes") is not None
             else None
         ),
+        max_consecutive_work_days=(
+            int(raw["max_consecutive_work_days"])
+            if raw.get("max_consecutive_work_days") is not None
+            else None
+        ),
+        required_rest_days_per_workweek=(
+            int(raw["required_rest_days_per_workweek"])
+            if raw.get("required_rest_days_per_workweek") is not None
+            else None
+        ),
         school_day_weekdays=_normalized_school_day_weekdays(
             raw.get("school_day_weekdays")
         ),
@@ -170,6 +187,11 @@ def _read_compliance_payroll_export_settings(
     payload: object,
 ) -> CompliancePayrollExportSettingsRead:
     raw = dict(payload) if isinstance(payload, dict) else {}
+    provider_profile = str(
+        raw.get("provider_profile") or _DEFAULT_COMPLIANCE_PAYROLL_PROVIDER_PROFILE
+    ).strip()
+    if provider_profile not in _COMPLIANCE_PAYROLL_PROVIDER_PROFILES:
+        provider_profile = _DEFAULT_COMPLIANCE_PAYROLL_PROVIDER_PROFILE
     priority: list[str] = []
     for value in raw.get("employee_identifier_priority") or _DEFAULT_COMPLIANCE_PAYROLL_IDENTIFIER_PRIORITY:
         normalized = str(value or "").strip()
@@ -207,6 +229,7 @@ def _read_compliance_payroll_export_settings(
             earning_codes[rule_code] = config
 
     return CompliancePayrollExportSettingsRead(
+        provider_profile=provider_profile,
         employee_identifier_priority=priority,
         allow_internal_employee_id_fallback=bool(
             raw.get("allow_internal_employee_id_fallback")
@@ -225,6 +248,25 @@ def _read_compliance_payroll_export_settings(
 
 def read_compliance_settings(payload: object) -> CompliancePolicySettingsRead:
     return _read_compliance_settings(payload)
+
+
+def merged_compliance_settings_from_inputs(
+    *,
+    business_settings: Mapping[str, object] | None,
+    location_settings: Mapping[str, object] | None,
+) -> dict[str, object]:
+    merged: dict[str, object] = {}
+    if isinstance(business_settings, Mapping):
+        business_compliance = business_settings.get("compliance")
+        if isinstance(business_compliance, Mapping):
+            merged.update(dict(business_compliance))
+    if isinstance(location_settings, Mapping):
+        if bool(location_settings.get("compliance_policy_clears_parent")):
+            merged = {}
+        location_compliance = location_settings.get("compliance")
+        if isinstance(location_compliance, Mapping):
+            merged.update(dict(location_compliance))
+    return merged
 
 
 def read_compliance_payroll_export_settings(
@@ -250,6 +292,8 @@ def merge_compliance_payroll_export_update(
     current_settings = _read_compliance_payroll_export_settings(current_payload).model_dump()
     updates = update.model_dump(exclude_unset=True)
 
+    if "provider_profile" in updates and updates["provider_profile"] is not None:
+        current_settings["provider_profile"] = str(updates["provider_profile"]).strip()
     if "employee_identifier_priority" in updates and updates["employee_identifier_priority"] is not None:
         current_settings["employee_identifier_priority"] = list(
             updates["employee_identifier_priority"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.models.scheduling import Shift
 from app.services import compliance_engine, compliance_shift_facts, labor_rules
@@ -80,6 +81,17 @@ def _plan_meal_breaks(
     shift: Shift,
     meal_rule: Mapping[str, object],
 ) -> list[dict[str, object]]:
+    mode = str(meal_rule.get("mode") or "relative_windowed").strip().lower()
+    if mode == "ny_non_factory_windowed":
+        return _plan_new_york_non_factory_meal_breaks(shift=shift, meal_rule=meal_rule)
+    return _plan_relative_windowed_meal_breaks(shift=shift, meal_rule=meal_rule)
+
+
+def _plan_relative_windowed_meal_breaks(
+    *,
+    shift: Shift,
+    meal_rule: Mapping[str, object],
+) -> list[dict[str, object]]:
     planned: list[dict[str, object]] = []
     scheduled_span_minutes = _duration_minutes(shift.starts_at, shift.ends_at)
     first_trigger_minutes = int(meal_rule.get("first_trigger_minutes") or 300)
@@ -107,6 +119,112 @@ def _plan_meal_breaks(
                 duration_minutes=second_min_break_minutes,
                 start_offset_minutes=max(360, int(meal_rule.get("second_deadline_minutes") or 600) - 60),
                 notes="planned_second_meal_break",
+            )
+        )
+
+    return planned
+
+
+def _plan_new_york_non_factory_meal_breaks(
+    *,
+    shift: Shift,
+    meal_rule: Mapping[str, object],
+) -> list[dict[str, object]]:
+    planned: list[dict[str, object]] = []
+    scheduled_span_minutes = _duration_minutes(shift.starts_at, shift.ends_at)
+    shift_timezone = _shift_timezone(shift)
+    shift_local_start = shift.starts_at.astimezone(shift_timezone)
+    shift_local_end = shift.ends_at.astimezone(shift_timezone)
+    shift_local_date = shift_local_start.date()
+
+    midday_trigger_minutes = int(meal_rule.get("midday_trigger_minutes") or 360)
+    midday_window_start = compliance_engine._parse_local_time(
+        meal_rule.get("midday_window_start_local")
+    ) or datetime.min.time().replace(hour=11)
+    midday_window_end = compliance_engine._parse_local_time(
+        meal_rule.get("midday_window_end_local")
+    ) or datetime.min.time().replace(hour=14)
+    midday_min_break_minutes = int(meal_rule.get("midday_min_break_minutes") or 30)
+    midday_window_start_at, midday_window_end_at = _local_window_bounds_for_date(
+        shift_local_date,
+        timezone=shift_timezone,
+        window_start_local=midday_window_start,
+        window_end_local=midday_window_end,
+    )
+    if (
+        scheduled_span_minutes > midday_trigger_minutes
+        and shift.starts_at < midday_window_end_at.astimezone(shift.starts_at.tzinfo)
+        and shift.ends_at > midday_window_start_at.astimezone(shift.starts_at.tzinfo)
+    ):
+        planned_break = _planned_break_in_local_window(
+            shift=shift,
+            timezone=shift_timezone,
+            window_start_at=midday_window_start_at,
+            window_end_at=midday_window_end_at,
+            duration_minutes=midday_min_break_minutes,
+            notes="planned_midday_meal_break",
+        )
+        if planned_break is not None:
+            planned.append(planned_break)
+
+    evening_required_if_starts_before = compliance_engine._parse_local_time(
+        meal_rule.get("evening_required_if_starts_before_local")
+    ) or datetime.min.time().replace(hour=11)
+    evening_required_if_ends_after = compliance_engine._parse_local_time(
+        meal_rule.get("evening_required_if_ends_after_local")
+    ) or datetime.min.time().replace(hour=19)
+    evening_window_start = compliance_engine._parse_local_time(
+        meal_rule.get("evening_window_start_local")
+    ) or datetime.min.time().replace(hour=17)
+    evening_window_end = compliance_engine._parse_local_time(
+        meal_rule.get("evening_window_end_local")
+    ) or datetime.min.time().replace(hour=19)
+    evening_min_break_minutes = int(meal_rule.get("evening_min_break_minutes") or 20)
+    evening_window_start_at, evening_window_end_at = _local_window_bounds_for_date(
+        shift_local_date,
+        timezone=shift_timezone,
+        window_start_local=evening_window_start,
+        window_end_local=evening_window_end,
+    )
+    if (
+        shift_local_start.timetz().replace(tzinfo=None) < evening_required_if_starts_before
+        and shift.ends_at > evening_window_end_at.astimezone(shift.ends_at.tzinfo)
+    ):
+        planned_break = _planned_break_in_local_window(
+            shift=shift,
+            timezone=shift_timezone,
+            window_start_at=evening_window_start_at,
+            window_end_at=evening_window_end_at,
+            duration_minutes=evening_min_break_minutes,
+            notes="planned_evening_meal_break",
+        )
+        if planned_break is not None:
+            planned.append(planned_break)
+
+    midshift_trigger_minutes = int(meal_rule.get("midshift_trigger_minutes") or 360)
+    midshift_start_window = compliance_engine._parse_local_time(
+        meal_rule.get("midshift_start_window_local")
+    ) or datetime.min.time().replace(hour=13)
+    midshift_end_window = compliance_engine._parse_local_time(
+        meal_rule.get("midshift_end_window_local")
+    ) or datetime.min.time().replace(hour=6)
+    midshift_min_break_minutes = int(meal_rule.get("midshift_min_break_minutes") or 45)
+    if (
+        scheduled_span_minutes > midshift_trigger_minutes
+        and compliance_engine._local_time_in_wrapped_window(
+            shift_local_start.timetz().replace(tzinfo=None),
+            window_start=midshift_start_window,
+            window_end=midshift_end_window,
+        )
+    ):
+        planned.append(
+            _planned_break(
+                shift=shift,
+                break_type="meal",
+                is_paid=False,
+                duration_minutes=midshift_min_break_minutes,
+                start_offset_minutes=max(0, (scheduled_span_minutes // 2) - (midshift_min_break_minutes // 2)),
+                notes="planned_midshift_meal_break",
             )
         )
 
@@ -268,3 +386,53 @@ def _required_paid_rest_break_count(net_active_work_minutes: int) -> int:
 
 def _duration_minutes(start_at: datetime, end_at: datetime) -> int:
     return max(0, int(round((end_at - start_at).total_seconds() / 60.0)))
+
+
+def _planned_break_in_local_window(
+    *,
+    shift: Shift,
+    timezone: ZoneInfo,
+    window_start_at: datetime,
+    window_end_at: datetime,
+    duration_minutes: int,
+    notes: str,
+) -> dict[str, object] | None:
+    overlap_start = max(shift.starts_at, window_start_at.astimezone(shift.starts_at.tzinfo))
+    overlap_end = min(shift.ends_at, window_end_at.astimezone(shift.starts_at.tzinfo))
+    if overlap_end <= overlap_start or _duration_minutes(overlap_start, overlap_end) < duration_minutes:
+        return None
+    target_midpoint = overlap_start + (overlap_end - overlap_start) / 2
+    start_at = target_midpoint - timedelta(minutes=duration_minutes / 2)
+    if start_at < overlap_start:
+        start_at = overlap_start
+    if start_at + timedelta(minutes=duration_minutes) > overlap_end:
+        start_at = overlap_end - timedelta(minutes=duration_minutes)
+    return {
+        "break_type": "meal",
+        "is_paid": False,
+        "starts_at": start_at,
+        "ends_at": start_at + timedelta(minutes=duration_minutes),
+        "notes": notes,
+    }
+
+
+def _local_window_bounds_for_date(
+    shift_local_date,
+    *,
+    timezone: ZoneInfo,
+    window_start_local,
+    window_end_local,
+):
+    start_at = datetime.combine(shift_local_date, window_start_local, tzinfo=timezone)
+    end_at = datetime.combine(shift_local_date, window_end_local, tzinfo=timezone)
+    if end_at <= start_at:
+        end_at += timedelta(days=1)
+    return start_at, end_at
+
+
+def _shift_timezone(shift: Shift) -> ZoneInfo:
+    timezone_name = str(getattr(shift, "timezone", "") or "").strip() or "UTC"
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:
+        return ZoneInfo("UTC")

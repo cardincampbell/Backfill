@@ -180,6 +180,7 @@ describe('ExportScheduleModal — export trigger', () => {
       location_id: 'loc_1',
       week_start_date: '2025-04-14',
       week_end_date: '2025-04-20',
+      provider_profile: 'gusto_csv_v1',
       row_count: 1,
       premium_payment_row_count: 1,
       ready_adjustment_row_count: 1,
@@ -206,12 +207,18 @@ describe('ExportScheduleModal — export trigger', () => {
     expect(opts.weekLabel).toBe('Apr 14 – 20');
     expect(opts.employees).toHaveLength(1);
     expect(opts.shifts).toHaveLength(1);
+    expect(opts.complianceWeek).toMatchObject({
+      location_id: 'loc_1',
+      premium_total_cents: 1800,
+    });
     expect(opts.compliancePayrollExport).toMatchObject({
       location_id: 'loc_1',
+      provider_profile: 'gusto_csv_v1',
       premium_payment_row_count: 1,
       ready_adjustment_row_count: 1,
       manual_review_row_count: 1,
     });
+    expect(screen.getByText(/payroll adapter: gusto-aligned csv/i)).toBeInTheDocument();
     expect(screen.getByText('Missing IDs')).toBeInTheDocument();
     expect(
       screen.getByText(/some payroll consequence rows still require manual handling/i),

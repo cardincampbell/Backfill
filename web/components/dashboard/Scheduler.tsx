@@ -59,6 +59,7 @@ import {
   assignShift as assignWorkspaceShift,
   type ComplianceReviewItem,
   type ComplianceReviewSummary,
+  type ComplianceRuleSourceReference,
   createShiftComplianceOverride,
   createShift as createWorkspaceShift,
   deleteLocation as deleteWorkspaceLocation,
@@ -134,7 +135,9 @@ import {
   complianceArtifactActionLabel,
   complianceArtifactRecordedLabel,
   complianceReasonLabel,
+  dedupeComplianceSourceReferences,
   describeComplianceIssue,
+  describeComplianceSourceReference,
   humanizeComplianceCode,
   summarizeComplianceReviewItems,
   type ComplianceArtifactType,
@@ -392,6 +395,72 @@ function formatPublishedDate(value: string | null | undefined) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function ComplianceSourceReferenceList({
+  references,
+  dark = false,
+  label = 'Rule source',
+}: {
+  references: ComplianceRuleSourceReference[] | null | undefined;
+  dark?: boolean;
+  label?: string;
+}) {
+  const items = dedupeComplianceSourceReferences(references);
+  if (!items.length) {
+    return null;
+  }
+  const mutedText = dark ? 'text-[#8898AA]' : 'text-[#8898AA]';
+  const badgeClass = dark
+    ? 'bg-white/[0.05] text-[#C1CED8] hover:bg-white/[0.08]'
+    : 'bg-[#F7F8FA] text-[#5E6D7A] hover:bg-white';
+
+  return (
+    <div className="mt-2.5">
+      <p className={`text-[10px] uppercase tracking-[0.04em] ${mutedText}`} style={{ fontWeight: 500 }}>
+        {label}
+      </p>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {items.map((reference, index) => {
+          const presentation = describeComplianceSourceReference(reference);
+          const title = presentation.secondaryLabel
+            ? `${presentation.pillLabel} · ${presentation.secondaryLabel}`
+            : presentation.pillLabel;
+          const key = [
+            reference.rule_code,
+            reference.source_kind,
+            reference.source_code ?? '',
+            reference.source_hash ?? '',
+            String(index),
+          ].join(':');
+          const content = (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] transition-colors ${badgeClass}`}
+              style={{ fontWeight: 520 }}
+              title={title}
+            >
+              {presentation.pillLabel}
+            </span>
+          );
+          if (presentation.href) {
+            return (
+              <a
+                key={key}
+                href={presentation.href}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex"
+                title={title}
+              >
+                {content}
+              </a>
+            );
+          }
+          return <span key={key}>{content}</span>;
+        })}
+      </div>
+    </div>
+  );
 }
 
 function formatPredictiveGeneratedDate(value: string | null | undefined) {
@@ -4907,6 +4976,7 @@ function SchedulerContent({
                 ) ?? '#635BFF',
               }))}
               shifts={displayShifts.map((s) => ({
+                id: s.id,
                 employeeId: s.employeeId,
                 day: s.day,
                 startHour: s.startHour,
@@ -5749,6 +5819,10 @@ function PredictiveComplianceReviewModal({
                                   </span>
                                 ))}
                               </div>
+                              <ComplianceSourceReferenceList
+                                references={issue.rule_source_references}
+                                dark={dark}
+                              />
                             </div>
                             <div className="flex flex-col items-start gap-2 md:items-end">
                               {issue.premium_required ? (
@@ -5995,6 +6069,11 @@ function ComplianceDecisionHistoryModal({
                           </div>
                         </div>
                       ) : null}
+                      <ComplianceSourceReferenceList
+                        references={item.rule_source_references}
+                        dark={dark}
+                        label="Source references"
+                      />
                     </div>
                   </div>
                 );
@@ -6261,6 +6340,10 @@ function ManualComplianceReviewModal({
                                   </span>
                                 ))}
                               </div>
+                              <ComplianceSourceReferenceList
+                                references={issue.rule_source_references}
+                                dark={dark}
+                              />
                               <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
                                 {guidance.detail}
                               </p>
