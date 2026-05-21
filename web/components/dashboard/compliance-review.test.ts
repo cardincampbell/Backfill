@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  complianceReasonLabel,
   dedupeComplianceSourceReferences,
+  describeComplianceIssue,
+  describeCompliancePremiumRateBasis,
   describeComplianceSourceReference,
 } from "./compliance-review";
 
@@ -64,5 +67,51 @@ describe("compliance-review source references", () => {
       href: null,
       pillLabel: "Policy overlay · Customer policy overlay",
     });
+  });
+
+  it("labels Washington rest-break timing gaps clearly", () => {
+    expect(complianceReasonLabel("rest_break_timing_gap_exceeded")).toBe(
+      "Rest break timing gap exceeded",
+    );
+    expect(
+      describeComplianceIssue({
+        rule_code: "paid_rest_break_quota",
+        status: "block",
+        reason_codes: ["rest_break_quota_missing", "rest_break_timing_gap_exceeded"],
+        premium_required: false,
+        premium_cents: 0,
+        premium_type: null,
+        premium_unresolved: false,
+        would_block: true,
+        artifact_type_allowed: null,
+        override_applied: false,
+        override_artifact_id: null,
+        rule_source_references: [],
+      }).detail,
+    ).toContain("too much continuous work time");
+  });
+
+  it("labels Colorado missed-rest wage reasons clearly", () => {
+    expect(complianceReasonLabel("rest_break_wages_due")).toBe(
+      "Missed rest-break wages are due",
+    );
+    expect(complianceReasonLabel("rest_break_wages_include_overtime")).toBe(
+      "Missed rest-break wages include overtime",
+    );
+    expect(complianceReasonLabel("meal_break_wages_due")).toBe(
+      "Missed meal-break wages are due",
+    );
+    expect(complianceReasonLabel("meal_break_wages_include_overtime")).toBe(
+      "Missed meal-break wages include overtime",
+    );
+  });
+
+  it("describes premium rate basis clearly", () => {
+    expect(
+      describeCompliancePremiumRateBasis("employee_compliance_regular_rate", 2675),
+    ).toBe("Using saved compliance premium rate ($26.75/hr).");
+    expect(
+      describeCompliancePremiumRateBasis("configured_fixed_cents", null),
+    ).toBe("Using configured fixed premium amount.");
   });
 });

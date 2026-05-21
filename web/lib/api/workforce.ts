@@ -23,6 +23,7 @@ export type EmployeeSummary = {
   phone_e164?: string | null;
   email?: string | null;
   base_hourly_rate_cents?: number | null;
+  compliance_regular_rate_cents?: number | null;
   date_of_birth?: string | null;
   minor_school_status?: string | null;
   work_permit_number?: string | null;
@@ -232,6 +233,7 @@ export type EmployeeUpdatePayload = {
   external_ref?: string | null;
   employee_number?: string | null;
   base_hourly_rate_cents?: number | null;
+  compliance_regular_rate_cents?: number | null;
   date_of_birth?: string | null;
   minor_school_status?: string | null;
   work_permit_number?: string | null;
@@ -261,6 +263,7 @@ export type EmployeeCreatePayload = {
   external_ref?: string | null;
   employee_number?: string | null;
   base_hourly_rate_cents?: number | null;
+  compliance_regular_rate_cents?: number | null;
   date_of_birth?: string | null;
   minor_school_status?: string | null;
   work_permit_number?: string | null;

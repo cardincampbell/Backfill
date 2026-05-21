@@ -465,6 +465,8 @@ async def test_location_compliance_payroll_export_builds_payroll_rows_from_week_
                         "rule_code": "meal_break_first_window",
                         "premium_type": "fixed_cents",
                         "premium_cents": 2250,
+                        "premium_rate_basis": "employee_compliance_regular_rate",
+                        "premium_rate_hourly_cents": 2250,
                         "reason_codes": ["first_meal_break_missing"],
                     }
                 ],
@@ -567,6 +569,8 @@ async def test_location_compliance_payroll_export_builds_payroll_rows_from_week_
     assert export.rows[0].earning_code == "MEALPREM"
     assert export.rows[0].premium_payment_required is True
     assert export.rows[0].manual_review_required is False
+    assert export.rows[0].premium_rate_basis == "employee_compliance_regular_rate"
+    assert export.rows[0].premium_rate_hourly_cents == 2250
     assert export.rows[0].override_artifact_type == "meal_waiver"
     assert export.rows[0].override_artifact_note == "Signed waiver on file"
     assert export.rows[0].rule_source_references[0]["rule_code"] == "meal_break_first_window"

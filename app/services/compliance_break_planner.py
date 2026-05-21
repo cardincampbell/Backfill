@@ -42,7 +42,9 @@ def plan_shift_segments(
                 shift=shift,
                 existing_breaks=planned_breaks,
                 required_break_count=_required_paid_rest_break_count(
-                    int(provisional_facts.get("net_active_work_minutes") or 0)
+                    rest_rule,
+                    scheduled_span_minutes=_duration_minutes(shift.starts_at, shift.ends_at),
+                    net_active_work_minutes=int(provisional_facts.get("net_active_work_minutes") or 0),
                 ),
                 min_break_minutes=int(rest_rule.get("min_break_minutes") or 10),
             )
@@ -82,8 +84,14 @@ def _plan_meal_breaks(
     meal_rule: Mapping[str, object],
 ) -> list[dict[str, object]]:
     mode = str(meal_rule.get("mode") or "relative_windowed").strip().lower()
+    if mode == "co_windowed":
+        return _plan_colorado_meal_breaks(shift=shift, meal_rule=meal_rule)
     if mode == "ny_non_factory_windowed":
         return _plan_new_york_non_factory_meal_breaks(shift=shift, meal_rule=meal_rule)
+    if mode == "or_windowed":
+        return _plan_oregon_meal_breaks(shift=shift, meal_rule=meal_rule)
+    if mode == "wa_windowed":
+        return _plan_washington_meal_breaks(shift=shift, meal_rule=meal_rule)
     return _plan_relative_windowed_meal_breaks(shift=shift, meal_rule=meal_rule)
 
 
@@ -231,6 +239,144 @@ def _plan_new_york_non_factory_meal_breaks(
     return planned
 
 
+def _plan_washington_meal_breaks(
+    *,
+    shift: Shift,
+    meal_rule: Mapping[str, object],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _duration_minutes(shift.starts_at, shift.ends_at)
+    first_trigger_minutes = int(meal_rule.get("first_trigger_minutes") or 300)
+    if scheduled_span_minutes <= first_trigger_minutes:
+        return []
+    first_min_break_minutes = int(meal_rule.get("first_min_break_minutes") or 30)
+    window_start_minutes = int(meal_rule.get("first_window_start_minutes") or 120)
+    window_end_minutes = int(meal_rule.get("first_window_end_minutes") or 300)
+    normal_workday_minutes = compliance_engine._washington_normal_workday_minutes(
+        candidate_shift=shift,
+        scheduled_span_minutes=scheduled_span_minutes,
+    )
+    required_meal_count = compliance_engine._required_washington_meal_break_count(
+        scheduled_span_minutes=scheduled_span_minutes,
+        normal_workday_minutes=normal_workday_minutes,
+        additional_trigger_beyond_normal_minutes=(
+            int(meal_rule.get("additional_trigger_beyond_normal_minutes") or 180)
+        ),
+    )
+    planned = [
+        _planned_break_within_offset_window(
+            shift=shift,
+            break_type="meal",
+            is_paid=False,
+            duration_minutes=first_min_break_minutes,
+            window_start_minutes=window_start_minutes,
+            window_end_minutes=window_end_minutes,
+            notes="planned_first_meal_break",
+        )
+    ]
+    previous_break = planned[0]
+    additional_interval_minutes = int(meal_rule.get("additional_interval_minutes") or 300)
+    additional_min_break_minutes = int(meal_rule.get("additional_min_break_minutes") or 30)
+    overtime_extension_required = scheduled_span_minutes >= (
+        normal_workday_minutes + int(meal_rule.get("additional_trigger_beyond_normal_minutes") or 180)
+    )
+    for meal_index in range(2, required_meal_count + 1):
+        previous_break_end_minutes = _duration_minutes(shift.starts_at, previous_break["ends_at"])
+        next_window_start_minutes = previous_break_end_minutes
+        if meal_index == 2 and overtime_extension_required:
+            next_window_start_minutes = max(next_window_start_minutes, normal_workday_minutes)
+        next_window_end_minutes = min(
+            scheduled_span_minutes,
+            previous_break_end_minutes + additional_interval_minutes,
+        )
+        previous_break = _planned_break_within_offset_window(
+            shift=shift,
+            break_type="meal",
+            is_paid=False,
+            duration_minutes=additional_min_break_minutes,
+            window_start_minutes=next_window_start_minutes,
+            window_end_minutes=next_window_end_minutes,
+            notes="planned_additional_meal_break",
+        )
+        planned.append(previous_break)
+    return planned
+
+
+def _plan_colorado_meal_breaks(
+    *,
+    shift: Shift,
+    meal_rule: Mapping[str, object],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _duration_minutes(shift.starts_at, shift.ends_at)
+    first_trigger_minutes = int(meal_rule.get("first_trigger_minutes") or 300)
+    if scheduled_span_minutes <= first_trigger_minutes:
+        return []
+
+    first_min_break_minutes = int(meal_rule.get("first_min_break_minutes") or 30)
+    first_window_start_minutes = int(meal_rule.get("first_window_start_minutes") or 60)
+    first_window_end_minutes = max(
+        first_window_start_minutes,
+        scheduled_span_minutes - int(meal_rule.get("first_window_end_offset_minutes") or 60),
+    )
+    return [
+        _planned_break_within_offset_window(
+            shift=shift,
+            break_type="meal",
+            is_paid=False,
+            duration_minutes=first_min_break_minutes,
+            window_start_minutes=first_window_start_minutes,
+            window_end_minutes=first_window_end_minutes,
+            notes="planned_first_meal_break",
+        )
+    ]
+
+
+def _plan_oregon_meal_breaks(
+    *,
+    shift: Shift,
+    meal_rule: Mapping[str, object],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _duration_minutes(shift.starts_at, shift.ends_at)
+    required_meal_count = compliance_engine._required_oregon_meal_break_count(scheduled_span_minutes)
+    if required_meal_count <= 0:
+        return []
+
+    first_min_break_minutes = int(meal_rule.get("first_min_break_minutes") or 30)
+    if scheduled_span_minutes <= int(meal_rule.get("first_short_shift_max_minutes") or 420):
+        first_window_start_minutes = int(meal_rule.get("first_short_window_start_minutes") or 120)
+        first_window_end_minutes = int(meal_rule.get("first_short_window_end_minutes") or 300)
+    else:
+        first_window_start_minutes = int(meal_rule.get("first_long_window_start_minutes") or 180)
+        first_window_end_minutes = int(meal_rule.get("first_long_window_end_minutes") or 360)
+
+    planned = [
+        _planned_break_within_offset_window(
+            shift=shift,
+            break_type="meal",
+            is_paid=False,
+            duration_minutes=first_min_break_minutes,
+            window_start_minutes=first_window_start_minutes,
+            window_end_minutes=first_window_end_minutes,
+            notes="planned_first_meal_break",
+        )
+    ]
+    previous_break = planned[0]
+    for _ in range(2, required_meal_count + 1):
+        previous_break_end_minutes = _duration_minutes(shift.starts_at, previous_break["ends_at"])
+        window_start_minutes = previous_break_end_minutes + 120
+        window_end_minutes = scheduled_span_minutes - first_min_break_minutes
+        previous_break = _planned_break_within_offset_window(
+            shift=shift,
+            break_type="meal",
+            is_paid=False,
+            duration_minutes=first_min_break_minutes,
+            window_start_minutes=min(window_start_minutes, window_end_minutes),
+            window_end_minutes=max(window_start_minutes, window_end_minutes),
+            notes="planned_additional_meal_break",
+        )
+        planned.append(previous_break)
+    return planned
+
+
 def _plan_rest_breaks(
     *,
     shift: Shift,
@@ -322,6 +468,29 @@ def _planned_break(
     }
 
 
+def _planned_break_within_offset_window(
+    *,
+    shift: Shift,
+    break_type: str,
+    is_paid: bool,
+    duration_minutes: int,
+    window_start_minutes: int,
+    window_end_minutes: int,
+    notes: str,
+) -> dict[str, object]:
+    latest_start_minutes = max(window_start_minutes, window_end_minutes - duration_minutes)
+    available_window_minutes = max(0, latest_start_minutes - window_start_minutes)
+    start_offset_minutes = window_start_minutes + (available_window_minutes // 2)
+    return _planned_break(
+        shift=shift,
+        break_type=break_type,
+        is_paid=is_paid,
+        duration_minutes=duration_minutes,
+        start_offset_minutes=start_offset_minutes,
+        notes=notes,
+    )
+
+
 def _synthetic_shift_with_breaks(shift: Shift, breaks: list[dict[str, object]]) -> Shift:
     synthetic = Shift(
         id=shift.id,
@@ -376,11 +545,47 @@ def _synthetic_segment_for_breaks(
     return segment
 
 
-def _required_paid_rest_break_count(net_active_work_minutes: int) -> int:
+def _required_paid_rest_break_count(
+    rest_rule: Mapping[str, object],
+    *,
+    scheduled_span_minutes: int,
+    net_active_work_minutes: int,
+) -> int:
+    mode = str(rest_rule.get("mode") or "ca_count_only").strip().lower()
+    if mode == "co_timed":
+        return _required_colorado_paid_rest_break_count(scheduled_span_minutes)
+    if mode == "or_timed":
+        return _required_oregon_paid_rest_break_count(scheduled_span_minutes)
+    if mode == "wa_timed":
+        return _required_washington_paid_rest_break_count(net_active_work_minutes)
     if net_active_work_minutes < 210:
         return 0
     full_blocks = net_active_work_minutes // 240
     remainder = net_active_work_minutes % 240
+    return full_blocks + (1 if remainder > 120 else 0)
+
+
+def _required_washington_paid_rest_break_count(net_active_work_minutes: int) -> int:
+    if net_active_work_minutes <= 180:
+        return 0
+    full_blocks = net_active_work_minutes // 240
+    remainder = net_active_work_minutes % 240
+    return full_blocks + (1 if remainder > 180 else 0)
+
+
+def _required_oregon_paid_rest_break_count(scheduled_span_minutes: int) -> int:
+    if scheduled_span_minutes <= 120:
+        return 0
+    full_blocks = scheduled_span_minutes // 240
+    remainder = scheduled_span_minutes % 240
+    return full_blocks + (1 if remainder > 120 else 0)
+
+
+def _required_colorado_paid_rest_break_count(scheduled_span_minutes: int) -> int:
+    if scheduled_span_minutes <= 120:
+        return 0
+    full_blocks = scheduled_span_minutes // 240
+    remainder = scheduled_span_minutes % 240
     return full_blocks + (1 if remainder > 120 else 0)
 
 

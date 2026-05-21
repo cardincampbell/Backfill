@@ -112,6 +112,8 @@ export type CompliancePayrollAdjustment = {
   compliance_status: string;
   profile_code?: string | null;
   premium_cents: number;
+  premium_rate_basis?: string | null;
+  premium_rate_hourly_cents?: number | null;
   premium_rule_codes: string[];
   unresolved_premium_rule_codes: string[];
   premium_payment_required: boolean;

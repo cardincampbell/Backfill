@@ -111,6 +111,11 @@ EMPLOYEE_IMPORT_HEADER_ALIASES = {
     "pay_rate": "base_hourly_rate_cents",
     "hourly_rate": "base_hourly_rate_cents",
     "base_hourly_rate": "base_hourly_rate_cents",
+    "regular_rate": "compliance_regular_rate_cents",
+    "regular_rate_of_pay": "compliance_regular_rate_cents",
+    "compliance_regular_rate": "compliance_regular_rate_cents",
+    "compliance_regular_rate_of_pay": "compliance_regular_rate_cents",
+    "meal_rest_premium_rate": "compliance_regular_rate_cents",
     "date_of_birth": "date_of_birth",
     "birth_date": "date_of_birth",
     "dob": "date_of_birth",
@@ -893,7 +898,7 @@ def _parse_optional_date(raw: object, *, error_code: str) -> date | None:
     raise ValueError(error_code)
 
 
-def _parse_base_hourly_rate_cents(raw: object) -> int | None:
+def _parse_hourly_rate_cents(raw: object, *, error_code: str) -> int | None:
     if raw in (None, ""):
         return None
     if isinstance(raw, int):
@@ -906,7 +911,15 @@ def _parse_base_hourly_rate_cents(raw: object) -> int | None:
     try:
         return max(0, int(round(float(normalized) * 100)))
     except ValueError as exc:
-        raise ValueError("invalid_base_hourly_rate") from exc
+        raise ValueError(error_code) from exc
+
+
+def _parse_base_hourly_rate_cents(raw: object) -> int | None:
+    return _parse_hourly_rate_cents(raw, error_code="invalid_base_hourly_rate")
+
+
+def _parse_compliance_regular_rate_cents(raw: object) -> int | None:
+    return _parse_hourly_rate_cents(raw, error_code="invalid_compliance_regular_rate")
 
 
 def _canonicalize_import_row(raw_row: dict[object, object]) -> dict[str, object]:
@@ -1003,6 +1016,9 @@ def parse_employee_import_file(
                 external_ref=str(canonical.get("external_ref") or "").strip() or None,
                 base_hourly_rate_cents=_parse_base_hourly_rate_cents(
                     canonical.get("base_hourly_rate_cents")
+                ),
+                compliance_regular_rate_cents=_parse_compliance_regular_rate_cents(
+                    canonical.get("compliance_regular_rate_cents")
                 ),
                 date_of_birth=_parse_date_of_birth(canonical.get("date_of_birth")),
                 minor_school_status=_normalize_minor_school_status(canonical.get("minor_school_status")),
@@ -1332,6 +1348,7 @@ async def create_employee(
         phone_e164=normalized_phone,
         email=normalized_email,
         base_hourly_rate_cents=payload.base_hourly_rate_cents,
+        compliance_regular_rate_cents=payload.compliance_regular_rate_cents,
         date_of_birth=payload.date_of_birth,
         minor_school_status=_normalize_minor_school_status(payload.minor_school_status),
         work_permit_number=str(payload.work_permit_number or "").strip() or None,
@@ -1475,6 +1492,7 @@ async def enroll_employee_at_location(
         phone_e164=payload.phone_e164,
         email=payload.email,
         base_hourly_rate_cents=payload.base_hourly_rate_cents,
+        compliance_regular_rate_cents=payload.compliance_regular_rate_cents,
         date_of_birth=payload.date_of_birth,
         minor_school_status=_normalize_minor_school_status(payload.minor_school_status),
         work_permit_number=str(payload.work_permit_number or "").strip() or None,
@@ -1665,6 +1683,7 @@ async def update_employee(
         "external_ref": normalized_external_ref,
         "employee_number": payload.employee_number,
         "base_hourly_rate_cents": payload.base_hourly_rate_cents,
+        "compliance_regular_rate_cents": payload.compliance_regular_rate_cents,
         "date_of_birth": payload.date_of_birth,
         "minor_school_status": (
             _normalize_minor_school_status(payload.minor_school_status)

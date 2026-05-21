@@ -85,6 +85,7 @@ type EmployeeComplianceState = {
   permitEffectiveStartDate: string;
   permitEffectiveEndDate: string;
   permitTemplateCode: string;
+  complianceRegularRate: string;
 };
 
 type PermitTemplateStatus = "loading" | "ready" | "error";
@@ -194,6 +195,7 @@ function buildComplianceStateFromProfile(
     permitEffectiveEndDate:
       permit?.effective_end_date ?? profile?.work_permit_expires_on ?? "",
     permitTemplateCode: permit?.rule_profile?.template_code ?? "",
+    complianceRegularRate: formatHourlyRateInput(profile?.compliance_regular_rate_cents),
   };
 }
 
@@ -205,6 +207,7 @@ function buildEmptyComplianceState(): EmployeeComplianceState {
     permitEffectiveStartDate: "",
     permitEffectiveEndDate: "",
     permitTemplateCode: "",
+    complianceRegularRate: "",
   };
 }
 
@@ -231,7 +234,29 @@ function countComplianceChanges(
   if (baseline.permitTemplateCode !== current.permitTemplateCode) {
     count += 1;
   }
+  if (baseline.complianceRegularRate !== current.complianceRegularRate) {
+    count += 1;
+  }
   return count;
+}
+
+function formatHourlyRateInput(value: number | null | undefined) {
+  if (value == null || value <= 0) {
+    return "";
+  }
+  return (value / 100).toFixed(2);
+}
+
+function parseHourlyRateCentsInput(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return Math.round(parsed * 100);
 }
 
 function isPermitConfigurationIncomplete(
@@ -987,6 +1012,9 @@ export function EmployeeEditorDrawer({
           full_name: fullName.trim(),
           email: email.trim() || null,
           phone_e164: phone.trim() || null,
+          compliance_regular_rate_cents: parseHourlyRateCentsInput(
+            complianceState.complianceRegularRate,
+          ),
           date_of_birth: complianceState.dateOfBirth || null,
           minor_school_status: complianceState.minorSchoolStatus || null,
           work_permits: buildUpdatedWorkPermits(profile, complianceState),
@@ -1319,11 +1347,32 @@ export function EmployeeEditorDrawer({
               <span className={`text-[11px] ${theme.textSecondary}`} style={{ fontWeight: 440 }}>
                 {complianceDirtyCount > 0
                   ? `${complianceDirtyCount} change${complianceDirtyCount === 1 ? "" : "s"}`
-                  : "DOB, school status, permits"}
+                  : "DOB, premium rate, school status, permits"}
               </span>
             </div>
             <div className={`rounded-2xl border p-4 ${theme.subtleBorderClass} ${theme.subtleSurfaceClass}`}>
               <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
+                    Compliance premium rate
+                  </span>
+                  <input
+                    className={`w-full rounded-lg border px-3 py-2.5 text-[13px] transition-all focus:border-[#635BFF]/40 focus:outline-none focus:shadow-[0_0_0_3px_rgba(99,91,255,0.08)] ${theme.inputClass}`}
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setComplianceState((current) => ({
+                        ...current,
+                        complianceRegularRate: event.target.value,
+                      }))
+                    }
+                    placeholder="22.50"
+                    type="text"
+                    value={complianceState.complianceRegularRate}
+                  />
+                  <span className={`mt-1.5 block text-[11px] ${theme.textSecondary}`}>
+                    Used for meal and rest premium pay when the regular rate differs from base hourly wage.
+                  </span>
+                </label>
                 <label className="block">
                   <span className={`mb-1.5 block text-[12px] ${theme.textSecondary}`} style={{ fontWeight: 500 }}>
                     Date of birth

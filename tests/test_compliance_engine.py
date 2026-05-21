@@ -9,17 +9,26 @@ from app.models.scheduling import Shift, ShiftBreak, ShiftSegment
 from app.services import compliance_engine, labor_rules
 
 
-def _profile(*, rules_json: dict[str, object] | None = None) -> labor_rules.LaborRuleProfileSnapshot:
+def _profile(
+    *,
+    rules_json: dict[str, object] | None = None,
+    jurisdiction_code: str = "US-CA",
+    overtime_mode: str = "daily_8_plus_weekly_plus_7th_day",
+    daily_ot_threshold_hours: float | None = 8.0,
+    weekly_ot_threshold_hours: float | None = 40.0,
+    double_time_threshold_hours: float | None = 12.0,
+    consecutive_hours_threshold_hours: float | None = None,
+) -> labor_rules.LaborRuleProfileSnapshot:
     return labor_rules.LaborRuleProfileSnapshot(
         profile_id=uuid4(),
         code="us_test_profile",
-        jurisdiction_code="US-CA",
+        jurisdiction_code=jurisdiction_code,
         display_name="Test Profile",
-        overtime_mode="daily_8_plus_weekly_plus_7th_day",
-        daily_ot_threshold_hours=8.0,
-        weekly_ot_threshold_hours=40.0,
-        double_time_threshold_hours=12.0,
-        consecutive_hours_threshold_hours=None,
+        overtime_mode=overtime_mode,
+        daily_ot_threshold_hours=daily_ot_threshold_hours,
+        weekly_ot_threshold_hours=weekly_ot_threshold_hours,
+        double_time_threshold_hours=double_time_threshold_hours,
+        consecutive_hours_threshold_hours=consecutive_hours_threshold_hours,
         industry_profile_code=None,
         rules_json=rules_json or {"workweek_start_day_local": "monday", "workweek_start_time_local": "00:00"},
         effective_start_date=None,
@@ -31,6 +40,24 @@ def _profile(*, rules_json: dict[str, object] | None = None) -> labor_rules.Labo
         version_no=1,
         payload_hash="sha256:test",
         payload_json={},
+    )
+
+
+def _colorado_profile(
+    *,
+    rules_json: dict[str, object] | None = None,
+) -> labor_rules.LaborRuleProfileSnapshot:
+    resolved_rules = {"workweek_start_day_local": "monday", "workweek_start_time_local": "00:00"}
+    if rules_json:
+        resolved_rules.update(rules_json)
+    return _profile(
+        rules_json=resolved_rules,
+        jurisdiction_code="US-CO",
+        overtime_mode="daily_12_or_consecutive_plus_weekly",
+        daily_ot_threshold_hours=12.0,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=12.0,
     )
 
 
@@ -195,6 +222,8 @@ def test_evaluate_shift_assignment_compliance_blocks_missing_first_meal_for_stru
     assert evaluation["premium_total_cents"] == 2200
     assert evaluation["premium_components"][0]["rule_code"] == "meal_break_first_window"
     assert evaluation["premium_components"][0]["premium_cents"] == 2200
+    assert evaluation["premium_components"][0]["premium_rate_basis"] == "configured_fixed_cents"
+    assert evaluation["premium_components"][0]["premium_rate_hourly_cents"] is None
 
 
 def test_evaluate_shift_assignment_compliance_accepts_structured_first_meal_break():
@@ -235,6 +264,764 @@ def test_evaluate_shift_assignment_compliance_accepts_structured_first_meal_brea
 
     assert "meal_break_first_window" not in evaluation["blocking_rule_codes"]
     assert "meal_break_first_window" not in evaluation["warning_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_first_meal_for_structured_washington_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["status"] == "block"
+    assert evaluation["would_block"] is True
+    assert evaluation["blocking_rule_codes"] == ["meal_break_first_window"]
+    assert evaluation["premium_total_cents"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_accepts_first_meal_break_in_washington_window():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 18, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 19, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_first_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_first_window" not in evaluation["warning_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_additional_washington_meal_for_live_extension():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 19, 15, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 19, 45, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+    shift.shift_metadata = {
+        "compliance_normal_workday_minutes": 420,
+        "compliance_normal_shift_starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_shift_ends_at": datetime(2026, 5, 6, 23, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_workday_source": "preserved_live_extension",
+    }
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_additional_window" in evaluation["blocking_rule_codes"]
+    additional_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "meal_break_additional_window"
+    )
+    assert additional_result["required_meal_index"] == 2
+    assert additional_result["overtime_extension_required"] is True
+
+
+def test_evaluate_shift_assignment_compliance_accepts_additional_washington_meal_during_overtime_period():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 19, 15, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 19, 45, tzinfo=timezone.utc),
+                    },
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 23, 45, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 7, 0, 15, tzinfo=timezone.utc),
+                    },
+                ],
+            }
+        ],
+    )
+    shift.shift_metadata = {
+        "compliance_normal_workday_minutes": 420,
+        "compliance_normal_shift_starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_shift_ends_at": datetime(2026, 5, 6, 23, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_workday_source": "preserved_live_extension",
+    }
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_additional_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_additional_window" not in evaluation["warning_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_first_meal_for_structured_colorado_shift():
+    profile = _colorado_profile(
+        rules_json={
+            "meal_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["blocking_rule_codes"] == ["meal_break_first_window"]
+    assert evaluation["status"] == "block"
+
+
+def test_evaluate_shift_assignment_compliance_resolves_colorado_meal_wages_from_employee_hourly_rate():
+    profile = _colorado_profile(
+        rules_json={
+            "meal_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        employee_base_hourly_rate_cents=1500,
+    )
+
+    assert evaluation["premium_total_cents"] == 750
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "meal_break_first_window"
+    )
+    assert component["premium_type"] == "fixed_cents"
+    assert component["premium_cents"] == 750
+    assert "meal_break_wages_due" in component["reason_codes"]
+    result = next(item for item in evaluation["rule_results"] if item["rule_code"] == "meal_break_first_window")
+    assert result["uncompensated_missing_meal_minutes"] == 30
+    assert result["premium_regular_minutes"] == 30
+    assert result["premium_ot_minutes"] == 0
+    assert result["premium_dt_minutes"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_marks_colorado_meal_wages_unresolved_without_hourly_rate():
+    profile = _colorado_profile(
+        rules_json={
+            "meal_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["premium_total_cents"] == 0
+    assert evaluation["unresolved_premium_rule_codes"] == ["meal_break_first_window"]
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "meal_break_first_window"
+    )
+    assert component["premium_type"] == "wage_dependent_unresolved"
+
+
+def test_evaluate_shift_assignment_compliance_does_not_charge_colorado_meal_wages_when_paid_meal_minutes_exist():
+    profile = _colorado_profile(
+        rules_json={
+            "meal_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 21, 30, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 20, 45, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 21, 15, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        employee_base_hourly_rate_cents=1500,
+    )
+
+    assert evaluation["premium_total_cents"] == 0
+    assert evaluation["unresolved_premium_rule_codes"] == []
+    result = next(item for item in evaluation["rule_results"] if item["rule_code"] == "meal_break_first_window")
+    assert result["status"] == "block"
+    assert result["provided_meal_minutes"] == 30
+    assert result["uncompensated_missing_meal_minutes"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_accepts_paid_on_duty_meal_for_structured_colorado_shift():
+    profile = _colorado_profile(
+        rules_json={
+            "meal_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 23, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 23, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 18, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 18, 30, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_first_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_first_window" not in evaluation["warning_rule_codes"]
+    result = next(item for item in evaluation["rule_results"] if item["rule_code"] == "meal_break_first_window")
+    assert result["meal_break_is_paid"] is True
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_colorado_rest_break_quota_for_structured_shift():
+    profile = _colorado_profile(
+        rules_json={
+            "rest_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 17, 10, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "paid_rest_break_quota" in evaluation["blocking_rule_codes"]
+    assert evaluation["status"] == "block"
+
+
+def test_evaluate_shift_assignment_compliance_resolves_colorado_rest_wages_from_employee_hourly_rate():
+    profile = _colorado_profile(
+        rules_json={
+            "rest_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 17, 10, tzinfo=timezone.utc),
+                    },
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 21, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 21, 10, tzinfo=timezone.utc),
+                    },
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        employee_base_hourly_rate_cents=1500,
+    )
+
+    assert evaluation["premium_total_cents"] == 250
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "paid_rest_break_quota"
+    )
+    assert component["premium_type"] == "fixed_cents"
+    assert component["premium_cents"] == 250
+    assert component["premium_rate_basis"] == "employee_base_hourly_rate_fallback"
+    assert component["premium_rate_hourly_cents"] == 1500
+    assert component["reason_codes"] == ["rest_break_quota_missing", "rest_break_wages_due"]
+    result = next(item for item in evaluation["rule_results"] if item["rule_code"] == "paid_rest_break_quota")
+    assert result["missing_paid_rest_minutes"] == 10
+    assert result["premium_regular_minutes"] == 10
+    assert result["premium_ot_minutes"] == 0
+    assert result["premium_dt_minutes"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_resolves_colorado_rest_wages_with_daily_overtime():
+    profile = _colorado_profile(
+        rules_json={
+            "rest_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 3, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 3, 0, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        employee_base_hourly_rate_cents=2000,
+    )
+
+    assert evaluation["premium_total_cents"] == 1500
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "paid_rest_break_quota"
+    )
+    assert component["premium_type"] == "fixed_cents"
+    assert component["premium_cents"] == 1500
+    assert component["premium_rate_basis"] == "employee_base_hourly_rate_fallback"
+    assert component["premium_rate_hourly_cents"] == 2000
+    assert "rest_break_wages_include_overtime" in component["reason_codes"]
+    result = next(item for item in evaluation["rule_results"] if item["rule_code"] == "paid_rest_break_quota")
+    assert result["missing_paid_rest_minutes"] == 30
+    assert result["premium_regular_minutes"] == 0
+    assert result["premium_ot_minutes"] == 30
+    assert result["premium_dt_minutes"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_marks_colorado_rest_wages_unresolved_without_hourly_rate():
+    profile = _colorado_profile(
+        rules_json={
+            "rest_break_ruleset": "co_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 15, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 1, 1, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 17, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 17, 10, tzinfo=timezone.utc),
+                    },
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 21, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 21, 10, tzinfo=timezone.utc),
+                    },
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["premium_total_cents"] == 0
+    assert evaluation["unresolved_premium_rule_codes"] == ["paid_rest_break_quota"]
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "paid_rest_break_quota"
+    )
+    assert component["premium_type"] == "wage_dependent_unresolved"
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_first_meal_for_structured_oregon_six_hour_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["blocking_rule_codes"] == ["meal_break_first_window"]
+    assert evaluation["status"] == "block"
+
+
+def test_evaluate_shift_assignment_compliance_accepts_first_meal_for_structured_oregon_long_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 0, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 0, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 19, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 20, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_first_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_first_window" not in evaluation["warning_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_additional_oregon_meal_for_fourteen_hour_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 6, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 6, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 19, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 20, 0, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_additional_window" in evaluation["blocking_rule_codes"]
+    additional_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "meal_break_additional_window"
+    )
+    assert additional_result["required_meal_count"] == 2
+    assert additional_result["actual_meal_count"] == 1
+
+
+def test_evaluate_shift_assignment_compliance_accepts_additional_oregon_meal_for_fourteen_hour_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 6, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 6, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 6, 19, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 20, 0, tzinfo=timezone.utc),
+                    },
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 7, 0, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 7, 1, 0, tzinfo=timezone.utc),
+                    },
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_additional_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_additional_window" not in evaluation["warning_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_blocks_missing_oregon_rest_break_quota_for_structured_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "rest_break_ruleset": "or_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 7, 2, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 18, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 18, 10, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "paid_rest_break_quota" in evaluation["blocking_rule_codes"]
+    assert evaluation["status"] == "block"
 
 
 def test_evaluate_shift_assignment_compliance_warns_when_unstructured_meal_plan_is_missing():
@@ -380,6 +1167,82 @@ def test_evaluate_shift_assignment_compliance_accepts_midshift_meal_for_new_york
     assert "meal_break_midshift_window" not in evaluation["warning_rule_codes"]
 
 
+def test_evaluate_shift_assignment_compliance_blocks_missing_factory_midday_meal_for_new_york_shift():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_factory_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 1, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 1, 22, 0, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+    shift.timezone = "America/New_York"
+    shift.location.timezone = "America/New_York"
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_midday_window" in evaluation["blocking_rule_codes"]
+
+
+def test_evaluate_shift_assignment_compliance_accepts_factory_midday_meal_when_full_hour_is_present():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_factory_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 1, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 1, 22, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.meal,
+                        "is_paid": False,
+                        "starts_at": datetime(2026, 5, 1, 15, 30, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 1, 16, 30, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+    shift.timezone = "America/New_York"
+    shift.location.timezone = "America/New_York"
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "meal_break_midday_window" not in evaluation["blocking_rule_codes"]
+    assert "meal_break_midday_window" not in evaluation["warning_rule_codes"]
+
+
 def test_evaluate_shift_assignment_compliance_uses_metadata_break_plan_when_rows_are_missing():
     profile = _profile(
         rules_json={
@@ -507,6 +1370,85 @@ def test_evaluate_shift_assignment_compliance_accepts_rest_break_quota_when_pres
     assert "paid_rest_break_quota" not in evaluation["warning_rule_codes"]
 
 
+def test_evaluate_shift_assignment_compliance_blocks_washington_rest_breaks_when_timing_gap_exceeds_limit():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "rest_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 22, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 22, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert evaluation["status"] == "block"
+    assert evaluation["would_block"] is True
+    assert evaluation["blocking_rule_codes"] == ["paid_rest_break_quota"]
+    rest_result = next(
+        item for item in evaluation["rule_results"] if item["rule_code"] == "paid_rest_break_quota"
+    )
+    assert "rest_break_timing_gap_exceeded" in rest_result["reason_codes"]
+    assert evaluation["premium_total_cents"] == 0
+
+
+def test_evaluate_shift_assignment_compliance_accepts_washington_rest_breaks_when_spacing_is_compliant():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "rest_break_ruleset": "wa_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 5, 6, 22, 0, tzinfo=timezone.utc),
+                "breaks": [
+                    {
+                        "break_type": ShiftBreakType.rest,
+                        "is_paid": True,
+                        "starts_at": datetime(2026, 5, 6, 19, 0, tzinfo=timezone.utc),
+                        "ends_at": datetime(2026, 5, 6, 19, 10, tzinfo=timezone.utc),
+                    }
+                ],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert "paid_rest_break_quota" not in evaluation["blocking_rule_codes"]
+    assert "paid_rest_break_quota" not in evaluation["warning_rule_codes"]
+
+
 def test_evaluate_shift_assignment_compliance_summarizes_split_shift_premium_when_configured():
     profile = _profile(
         rules_json={
@@ -615,6 +1557,8 @@ def test_evaluate_shift_assignment_compliance_summarizes_spread_of_hours_premium
     )
     assert component["premium_type"] == "fixed_cents"
     assert component["premium_cents"] == 1650
+    assert component["premium_rate_basis"] == "minimum_wage_floor"
+    assert component["premium_rate_hourly_cents"] == 1650
 
 
 def test_evaluate_shift_assignment_compliance_flags_unresolved_spread_of_hours_premium_without_wage_floor():
@@ -1050,6 +1994,49 @@ def test_evaluate_shift_assignment_compliance_resolves_meal_premium_from_employe
     )
     assert component["premium_type"] == "fixed_cents"
     assert component["premium_cents"] == 2250
+    assert component["premium_rate_basis"] == "employee_base_hourly_rate_fallback"
+    assert component["premium_rate_hourly_cents"] == 2250
+
+
+def test_evaluate_shift_assignment_compliance_prefers_employee_premium_rate_for_meal_premium():
+    profile = _profile(
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ca_v1",
+        }
+    )
+    shift = _apply_segments(
+        _shift(
+            starts_at=datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 4, 18, 22, 30, tzinfo=timezone.utc),
+        ),
+        [
+            {
+                "starts_at": datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc),
+                "ends_at": datetime(2026, 4, 18, 22, 30, tzinfo=timezone.utc),
+                "breaks": [],
+            }
+        ],
+    )
+
+    evaluation = compliance_engine.evaluate_shift_assignment_compliance(
+        profile,
+        candidate_shift=shift,
+        counted_intervals=(),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        employee_base_hourly_rate_cents=2250,
+        employee_premium_hourly_rate_cents=2675,
+    )
+
+    assert evaluation["premium_total_cents"] == 2675
+    component = next(
+        item for item in evaluation["premium_components"] if item["rule_code"] == "meal_break_first_window"
+    )
+    assert component["premium_type"] == "fixed_cents"
+    assert component["premium_cents"] == 2675
+    assert component["premium_rate_basis"] == "employee_compliance_regular_rate"
+    assert component["premium_rate_hourly_cents"] == 2675
 
 
 def test_evaluate_shift_assignment_compliance_resolves_rest_premium_from_employee_hourly_rate():
@@ -1089,6 +2076,8 @@ def test_evaluate_shift_assignment_compliance_resolves_rest_premium_from_employe
     )
     assert component["premium_type"] == "fixed_cents"
     assert component["premium_cents"] == 1850
+    assert component["premium_rate_basis"] == "employee_base_hourly_rate_fallback"
+    assert component["premium_rate_hourly_cents"] == 1850
 
 
 def test_evaluate_shift_assignment_compliance_blocks_minor_without_work_permit():

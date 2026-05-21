@@ -72,6 +72,7 @@ function buildEmployeeProfile(overrides: Record<string, unknown> = {}) {
     phone_e164: "+15555550123",
     email: "jamie@example.com",
     base_hourly_rate_cents: 1800,
+    compliance_regular_rate_cents: 2050,
     date_of_birth: "2010-02-01",
     minor_school_status: "in_session",
     work_permit_number: "WP-123",
@@ -272,6 +273,7 @@ describe("EmployeeEditorDrawer", () => {
 
   it("sends youth compliance updates through updateEmployee", async () => {
     const updatedProfile = buildEmployeeProfile({
+      compliance_regular_rate_cents: 2450,
       minor_school_status: "summer_break",
       work_permits: [
         {
@@ -305,17 +307,21 @@ describe("EmployeeEditorDrawer", () => {
     fireEvent.change(screen.getByLabelText(/school status/i), {
       target: { value: "summer_break" },
     });
+    fireEvent.change(screen.getByLabelText(/compliance premium rate/i), {
+      target: { value: "24.50" },
+    });
     fireEvent.change(screen.getByLabelText(/permit template/i), {
       target: { value: "ca_16_17_school_required_v1" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /save 2 changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save 3 changes/i }));
 
     await waitFor(() => expect(mockUpdateEmployee).toHaveBeenCalledOnce());
     expect(mockUpdateEmployee).toHaveBeenCalledWith(
       "biz_123",
       "emp_123",
       expect.objectContaining({
+        compliance_regular_rate_cents: 2450,
         date_of_birth: "2010-02-01",
         minor_school_status: "summer_break",
         work_permits: [

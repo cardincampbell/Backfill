@@ -484,6 +484,8 @@ export type ScheduleWeekPublishResponse = {
       premium_required: boolean;
       premium_type?: string | null;
       premium_cents: number;
+      premium_rate_basis?: string | null;
+      premium_rate_hourly_cents?: number | null;
       unresolved_premium: boolean;
       would_block: boolean;
       artifact_type_allowed?: "written_consent" | "meal_waiver" | null;
@@ -697,6 +699,8 @@ export type PredictiveScheduleRun = {
       premium_required: boolean;
       premium_type?: string | null;
       premium_cents: number;
+      premium_rate_basis?: string | null;
+      premium_rate_hourly_cents?: number | null;
       unresolved_premium: boolean;
       would_block: boolean;
       artifact_type_allowed?: "written_consent" | "meal_waiver" | null;

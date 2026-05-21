@@ -560,6 +560,7 @@ async def build_outreach_guardrail_snapshots(
             reference_time=reference_time,
             overtime_projection=overtime_projection,
             employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+            employee_premium_hourly_rate_cents=getattr(employee, "compliance_regular_rate_cents", None),
             employee_date_of_birth=getattr(employee, "date_of_birth", None),
             employee_minor_school_status=getattr(employee, "minor_school_status", None),
             employee_work_permit_number=work_permit_context.get("permit_number"),

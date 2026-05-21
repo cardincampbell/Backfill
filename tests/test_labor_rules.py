@@ -287,6 +287,73 @@ def test_california_seed_profile_defaults_enable_break_and_rest_day_rules():
     assert labor_rules.required_rest_days_per_workweek(profile) == 1
 
 
+def test_colorado_seed_profile_defaults_enable_meal_and_rest_break_rules():
+    profile = _profile(
+        code="us_co_general_nonexempt",
+        jurisdiction_code="US-CO",
+        overtime_mode="daily_12_or_consecutive_plus_weekly",
+        daily=12.0,
+        weekly=40.0,
+        consecutive=12.0,
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "co_v1",
+            "rest_break_ruleset": "co_v1",
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 0
+
+
+def test_new_york_factory_profile_defaults_enable_factory_meal_windows():
+    profile = _profile(
+        code="us_ny_factory_nonexempt",
+        jurisdiction_code="US-NY",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_factory_v1",
+            "day_of_rest_workweek_required": True,
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 1
+
+
+def test_washington_seed_profile_defaults_enable_meal_and_rest_break_rules():
+    profile = _profile(
+        code="us_wa_general_nonexempt",
+        jurisdiction_code="US-WA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+            "rest_break_ruleset": "wa_v1",
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 0
+
+
+def test_oregon_seed_profile_defaults_enable_meal_and_rest_break_rules():
+    profile = _profile(
+        code="us_or_general_nonexempt",
+        jurisdiction_code="US-OR",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+            "rest_break_ruleset": "or_v1",
+        },
+    )
+
+    assert labor_rules.required_rest_days_per_workweek(profile) == 0
+
+
 @pytest.mark.asyncio
 async def test_build_hours_snapshots_deduplicates_overlaps_and_clips_in_progress():
     employee = Employee(id=uuid4(), business_id=uuid4(), full_name="Worker")
@@ -385,3 +452,143 @@ async def test_runtime_resolved_profile_prefers_seeded_hospitality_profile_for_m
 
     assert resolved is not None
     assert resolved.code == "us_ny_hospitality_nonexempt"
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolved_profile_prefers_seeded_factory_profile_for_matching_location(monkeypatch):
+    location = Location(
+        id=uuid4(),
+        business_id=uuid4(),
+        name="Plant",
+        display_name="Plant",
+        slug="plant",
+        region="NY",
+        country_code="US",
+        timezone="America/New_York",
+        settings={"labor_industry_profile_code": "manufacturing"},
+    )
+    generic = _profile(
+        code="us_flsa_general",
+        jurisdiction_code="US",
+        overtime_mode="weekly_only",
+    )
+    factory = _profile(
+        code="us_ny_factory_nonexempt",
+        jurisdiction_code="US-NY",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_factory_v1",
+            "day_of_rest_workweek_required": True,
+        },
+    )
+    object.__setattr__(factory, "industry_profile_code", "manufacturing")
+
+    async def fake_existing(*args, **kwargs):
+        return None
+
+    async def fake_profiles(*args, **kwargs):
+        return [generic, factory]
+
+    monkeypatch.setattr(labor_rules, "load_authoritative_location_resolution", fake_existing)
+    monkeypatch.setattr(labor_rules, "active_profiles_for_jurisdiction", fake_profiles)
+
+    resolved = await labor_rules.runtime_resolved_profile(
+        None,  # type: ignore[arg-type]
+        location=location,
+    )
+
+    assert resolved is not None
+    assert resolved.code == "us_ny_factory_nonexempt"
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolved_profile_returns_seeded_washington_general_profile(monkeypatch):
+    location = Location(
+        id=uuid4(),
+        business_id=uuid4(),
+        name="Store",
+        display_name="Store",
+        slug="store",
+        region="WA",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    washington = _profile(
+        code="us_wa_general_nonexempt",
+        jurisdiction_code="US-WA",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+            "rest_break_ruleset": "wa_v1",
+        },
+    )
+
+    async def fake_existing(*args, **kwargs):
+        return None
+
+    async def fake_profiles(*args, **kwargs):
+        return [washington]
+
+    monkeypatch.setattr(labor_rules, "load_authoritative_location_resolution", fake_existing)
+    monkeypatch.setattr(labor_rules, "active_profiles_for_jurisdiction", fake_profiles)
+
+    resolved = await labor_rules.runtime_resolved_profile(
+        None,  # type: ignore[arg-type]
+        location=location,
+    )
+
+    assert resolved is not None
+    assert resolved.code == "us_wa_general_nonexempt"
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolved_profile_prefers_state_specific_generic_over_federal_fallback(monkeypatch):
+    location = Location(
+        id=uuid4(),
+        business_id=uuid4(),
+        name="Portland",
+        display_name="Portland",
+        slug="portland",
+        region="OR",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+    )
+    federal = _profile(
+        code="us_flsa_general",
+        jurisdiction_code="US",
+        overtime_mode="weekly_only",
+    )
+    oregon = _profile(
+        code="us_or_general_nonexempt",
+        jurisdiction_code="US-OR",
+        overtime_mode="weekly_only",
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+            "rest_break_ruleset": "or_v1",
+        },
+    )
+
+    async def fake_existing(*args, **kwargs):
+        return None
+
+    async def fake_profiles(*args, **kwargs):
+        return [oregon, federal]
+
+    monkeypatch.setattr(labor_rules, "load_authoritative_location_resolution", fake_existing)
+    monkeypatch.setattr(labor_rules, "active_profiles_for_jurisdiction", fake_profiles)
+
+    resolved = await labor_rules.runtime_resolved_profile(
+        None,  # type: ignore[arg-type]
+        location=location,
+    )
+
+    assert resolved is not None
+    assert resolved.code == "us_or_general_nonexempt"

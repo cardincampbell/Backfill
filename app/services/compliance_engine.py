@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
+from types import SimpleNamespace
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,7 @@ def evaluate_shift_assignment_compliance(
     reference_time: datetime,
     overtime_projection: Mapping[str, object] | None = None,
     employee_base_hourly_rate_cents: int | None = None,
+    employee_premium_hourly_rate_cents: int | None = None,
     employee_date_of_birth: date | None = None,
     employee_minor_school_status: str | None = None,
     employee_work_permit_number: str | None = None,
@@ -50,6 +52,16 @@ def evaluate_shift_assignment_compliance(
     )
     shift_facts = compliance_shift_facts.build_shift_structure_facts(candidate_shift)
     break_facts = compliance_shift_facts.list_break_facts(candidate_shift)
+    resolved_premium_rate_context = _resolved_employee_premium_rate_context(
+        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
+        employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+    )
+    resolved_premium_hourly_rate_cents = _as_int(
+        resolved_premium_rate_context.get("premium_rate_hourly_cents")
+    )
+    resolved_premium_rate_basis = _normalized_optional_string(
+        resolved_premium_rate_context.get("premium_rate_basis")
+    )
     if profile is None:
         policy_metadata = _policy_metadata_snapshot(
             business_settings=business_settings,
@@ -149,11 +161,14 @@ def evaluate_shift_assignment_compliance(
     if meal_rule is not None:
         rule_results.extend(
             _meal_break_rule_results(
+                profile,
                 meal_rule,
                 candidate_shift=candidate_shift,
+                counted_intervals=counted_intervals,
                 shift_facts=shift_facts,
                 break_facts=break_facts,
-                employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
+                employee_premium_hourly_rate_cents=resolved_premium_hourly_rate_cents,
+                employee_premium_rate_basis=resolved_premium_rate_basis,
             )
         )
 
@@ -161,10 +176,14 @@ def evaluate_shift_assignment_compliance(
     if paid_rest_rule is not None:
         rule_results.append(
             _paid_rest_break_rule_result(
+                profile,
                 paid_rest_rule,
+                candidate_shift=candidate_shift,
+                counted_intervals=counted_intervals,
                 shift_facts=shift_facts,
                 break_facts=break_facts,
-                employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
+                employee_premium_hourly_rate_cents=resolved_premium_hourly_rate_cents,
+                employee_premium_rate_basis=resolved_premium_rate_basis,
             )
         )
 
@@ -428,6 +447,12 @@ def _overtime_rule_result(projection: Mapping[str, object]) -> dict[str, object]
         "reason_codes": list(projection.get("reason_codes") or []),
         "premium_required": projected_ot_hours > 0 or projected_dt_hours > 0,
         "premium_type": "cost_multiplier" if projected_ot_hours > 0 or projected_dt_hours > 0 else None,
+        "premium_rate_basis": (
+            "projected_cost_multiplier"
+            if projected_ot_hours > 0 or projected_dt_hours > 0
+            else None
+        ),
+        "premium_rate_hourly_cents": None,
         "projected_regular_hours": _as_float(projection.get("projected_regular_hours")) or 0.0,
         "projected_ot_hours": projected_ot_hours,
         "projected_dt_hours": projected_dt_hours,
@@ -496,25 +521,62 @@ def _meal_break_rule(
     enabled = _as_bool(rules_json.get("meal_breaks_required")) or raw_ruleset in {
         "ca_v1",
         "california_v1",
+        "co_v1",
+        "colorado_v1",
+        "or_v1",
+        "oregon_v1",
         "ny_non_factory_v1",
         "new_york_non_factory_v1",
         "ny_hospitality_v1",
+        "ny_factory_v1",
+        "new_york_factory_v1",
+        "wa_v1",
+        "washington_v1",
     }
     if not enabled:
         return None
+
+    if raw_ruleset in {"co_v1", "colorado_v1"}:
+        return {
+            "mode": "co_windowed",
+            "first_rule_code": str(rules_json.get("first_meal_rule_code") or "meal_break_first_window"),
+            "first_trigger_minutes": _as_int(rules_json.get("first_meal_trigger_minutes")) or 300,
+            "first_window_start_minutes": _as_int(rules_json.get("first_meal_window_start_minutes")) or 60,
+            "first_window_end_offset_minutes": _as_int(rules_json.get("first_meal_window_end_offset_minutes")) or 60,
+            "first_min_break_minutes": _as_int(rules_json.get("first_meal_min_break_minutes")) or 30,
+            "allows_on_duty_paid_meal": True,
+        }
+
+    if raw_ruleset in {"or_v1", "oregon_v1"}:
+        return {
+            "mode": "or_windowed",
+            "first_rule_code": str(rules_json.get("first_meal_rule_code") or "meal_break_first_window"),
+            "additional_rule_code": str(
+                rules_json.get("additional_meal_rule_code") or "meal_break_additional_window"
+            ),
+            "first_short_shift_max_minutes": _as_int(rules_json.get("first_meal_short_shift_max_minutes")) or 420,
+            "first_short_window_start_minutes": _as_int(rules_json.get("first_meal_short_window_start_minutes")) or 120,
+            "first_short_window_end_minutes": _as_int(rules_json.get("first_meal_short_window_end_minutes")) or 300,
+            "first_long_window_start_minutes": _as_int(rules_json.get("first_meal_long_window_start_minutes")) or 180,
+            "first_long_window_end_minutes": _as_int(rules_json.get("first_meal_long_window_end_minutes")) or 360,
+            "first_min_break_minutes": _as_int(rules_json.get("first_meal_min_break_minutes")) or 30,
+        }
 
     if raw_ruleset in {
         "ny_non_factory_v1",
         "new_york_non_factory_v1",
         "ny_hospitality_v1",
+        "ny_factory_v1",
+        "new_york_factory_v1",
     }:
+        is_factory = raw_ruleset in {"ny_factory_v1", "new_york_factory_v1"}
         return {
             "mode": "ny_non_factory_windowed",
             "midday_rule_code": str(rules_json.get("midday_meal_rule_code") or "meal_break_midday_window"),
             "midday_trigger_minutes": _as_int(rules_json.get("midday_meal_trigger_minutes")) or 360,
             "midday_window_start_local": str(rules_json.get("midday_meal_window_start_local") or "11:00"),
             "midday_window_end_local": str(rules_json.get("midday_meal_window_end_local") or "14:00"),
-            "midday_min_break_minutes": _as_int(rules_json.get("midday_meal_min_break_minutes")) or 30,
+            "midday_min_break_minutes": _as_int(rules_json.get("midday_meal_min_break_minutes")) or (60 if is_factory else 30),
             "evening_rule_code": str(rules_json.get("evening_meal_rule_code") or "meal_break_evening_window"),
             "evening_required_if_starts_before_local": str(
                 rules_json.get("evening_meal_required_if_starts_before_local") or "11:00"
@@ -533,10 +595,28 @@ def _meal_break_rule(
             "midshift_end_window_local": str(
                 rules_json.get("midshift_meal_end_window_local") or "06:00"
             ),
-            "midshift_min_break_minutes": _as_int(rules_json.get("midshift_meal_min_break_minutes")) or 45,
+            "midshift_min_break_minutes": _as_int(rules_json.get("midshift_meal_min_break_minutes")) or (60 if is_factory else 45),
             "midshift_midpoint_tolerance_minutes": _as_int(
                 rules_json.get("midshift_meal_midpoint_tolerance_minutes")
             ) or 120,
+        }
+
+    if raw_ruleset in {"wa_v1", "washington_v1"}:
+        return {
+            "mode": "wa_windowed",
+            "first_rule_code": str(rules_json.get("first_meal_rule_code") or "meal_break_first_window"),
+            "additional_rule_code": str(
+                rules_json.get("additional_meal_rule_code") or "meal_break_additional_window"
+            ),
+            "first_trigger_minutes": _as_int(rules_json.get("first_meal_trigger_minutes")) or 300,
+            "first_window_start_minutes": _as_int(rules_json.get("first_meal_window_start_minutes")) or 120,
+            "first_window_end_minutes": _as_int(rules_json.get("first_meal_window_end_minutes")) or 300,
+            "first_min_break_minutes": _as_int(rules_json.get("first_meal_min_break_minutes")) or 30,
+            "additional_trigger_beyond_normal_minutes": (
+                _as_int(rules_json.get("additional_meal_trigger_beyond_normal_minutes")) or 180
+            ),
+            "additional_interval_minutes": _as_int(rules_json.get("additional_meal_interval_minutes")) or 300,
+            "additional_min_break_minutes": _as_int(rules_json.get("additional_meal_min_break_minutes")) or 30,
         }
 
     return {
@@ -574,10 +654,38 @@ def _paid_rest_break_rule(
     enabled = _as_bool(rules_json.get("rest_breaks_required")) or raw_ruleset in {
         "ca_v1",
         "california_v1",
+        "co_v1",
+        "colorado_v1",
+        "or_v1",
+        "oregon_v1",
+        "wa_v1",
+        "washington_v1",
     }
     if not enabled:
         return None
+    if raw_ruleset in {"co_v1", "colorado_v1"}:
+        return {
+            "mode": "co_timed",
+            "rule_code": str(rules_json.get("rest_break_rule_code") or "paid_rest_break_quota"),
+            "min_break_minutes": _as_int(rules_json.get("rest_break_min_minutes")) or 10,
+            "max_continuous_work_minutes": _as_int(rules_json.get("rest_break_max_continuous_work_minutes")) or 240,
+        }
+    if raw_ruleset in {"or_v1", "oregon_v1"}:
+        return {
+            "mode": "or_timed",
+            "rule_code": str(rules_json.get("rest_break_rule_code") or "paid_rest_break_quota"),
+            "min_break_minutes": _as_int(rules_json.get("rest_break_min_minutes")) or 10,
+            "max_continuous_work_minutes": _as_int(rules_json.get("rest_break_max_continuous_work_minutes")) or 240,
+        }
+    if raw_ruleset in {"wa_v1", "washington_v1"}:
+        return {
+            "mode": "wa_timed",
+            "rule_code": str(rules_json.get("rest_break_rule_code") or "paid_rest_break_quota"),
+            "min_break_minutes": _as_int(rules_json.get("rest_break_min_minutes")) or 10,
+            "max_continuous_work_minutes": _as_int(rules_json.get("rest_break_max_continuous_work_minutes")) or 180,
+        }
     return {
+        "mode": "ca_count_only",
         "rule_code": str(rules_json.get("rest_break_rule_code") or "paid_rest_break_quota"),
         "min_break_minutes": _as_int(rules_json.get("rest_break_min_minutes")) or 10,
         "premium_cents": _as_int(rules_json.get("rest_break_premium_cents")),
@@ -619,10 +727,24 @@ def _spread_of_hours_rule(
         if rules_json.get("spread_of_hours_minimum_wage_cents") is not None
         else rules_json.get("minimum_wage_cents")
     )
+    if configured_premium_cents > 0:
+        premium_rate_basis = "configured_fixed_cents"
+        premium_rate_hourly_cents = None
+        premium_cents = configured_premium_cents
+    elif minimum_wage_cents > 0:
+        premium_rate_basis = "minimum_wage_floor"
+        premium_rate_hourly_cents = minimum_wage_cents
+        premium_cents = minimum_wage_cents
+    else:
+        premium_rate_basis = "wage_basis_missing"
+        premium_rate_hourly_cents = None
+        premium_cents = 0
     return {
         "rule_code": str(rules_json.get("spread_of_hours_rule_code") or "spread_of_hours_premium"),
         "threshold_minutes": _as_int(rules_json.get("spread_of_hours_threshold_minutes")) or 600,
-        "premium_cents": configured_premium_cents if configured_premium_cents > 0 else minimum_wage_cents,
+        "premium_cents": premium_cents,
+        "premium_rate_basis": premium_rate_basis,
+        "premium_rate_hourly_cents": premium_rate_hourly_cents,
     }
 
 
@@ -708,6 +830,12 @@ def _rest_window_rule_result(
         "reason_codes": reason_codes,
         "premium_required": _as_int(rest_rule.get("premium_cents")) > 0,
         "premium_type": "fixed_cents" if _as_int(rest_rule.get("premium_cents")) > 0 else None,
+        "premium_rate_basis": (
+            "configured_fixed_cents"
+            if _as_int(rest_rule.get("premium_cents")) > 0
+            else None
+        ),
+        "premium_rate_hourly_cents": None,
         "would_block": True,
         "minimum_rest_hours": minimum_rest_hours,
         "actual_rest_gap_hours": actual_rest_gap_hours,
@@ -725,16 +853,43 @@ def _rest_window_rule_result(
 
 
 def _meal_break_rule_results(
+    profile: labor_rules.LaborRuleProfileSnapshot,
     meal_rule: Mapping[str, object],
     *,
     candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
     shift_facts: Mapping[str, object],
     break_facts: Sequence[Mapping[str, object]],
-    employee_base_hourly_rate_cents: int | None,
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
 ) -> list[dict[str, object]]:
     mode = str(meal_rule.get("mode") or "relative_windowed").strip().lower()
+    if mode == "co_windowed":
+        return _meal_break_rule_results_colorado(
+            profile,
+            meal_rule,
+            candidate_shift=candidate_shift,
+            counted_intervals=counted_intervals,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+            employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+            employee_premium_rate_basis=employee_premium_rate_basis,
+        )
     if mode == "ny_non_factory_windowed":
         return _meal_break_rule_results_new_york_non_factory(
+            meal_rule,
+            candidate_shift=candidate_shift,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+        )
+    if mode == "or_windowed":
+        return _meal_break_rule_results_oregon(
+            meal_rule,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+        )
+    if mode == "wa_windowed":
+        return _meal_break_rule_results_washington(
             meal_rule,
             candidate_shift=candidate_shift,
             shift_facts=shift_facts,
@@ -745,7 +900,8 @@ def _meal_break_rule_results(
         candidate_shift=candidate_shift,
         shift_facts=shift_facts,
         break_facts=break_facts,
-        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
+        employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+        employee_premium_rate_basis=employee_premium_rate_basis,
     )
 
 
@@ -755,7 +911,8 @@ def _meal_break_rule_results_relative_windowed(
     candidate_shift: Shift,
     shift_facts: Mapping[str, object],
     break_facts: Sequence[Mapping[str, object]],
-    employee_base_hourly_rate_cents: int | None,
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
 ) -> list[dict[str, object]]:
     scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
     has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
@@ -799,6 +956,11 @@ def _meal_break_rule_results_relative_windowed(
             )
         else:
             waiver_possible = first_waiver_allowed and scheduled_span_minutes <= first_waiver_max_minutes
+            premium_metadata = _resolved_premium_metadata(
+                configured_premium_cents=_as_int(meal_rule.get("first_premium_cents")),
+                employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+                employee_premium_rate_basis=employee_premium_rate_basis,
+            )
             results.append(
                 {
                     "rule_code": first_rule_code,
@@ -814,14 +976,7 @@ def _meal_break_rule_results_relative_windowed(
                         waiver_allowed=first_waiver_allowed,
                     ),
                     "premium_required": True,
-                    "premium_type": _resolved_premium_type(
-                        configured_premium_cents=_as_int(meal_rule.get("first_premium_cents")),
-                        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-                    ),
-                    "premium_cents": _resolved_premium_cents(
-                        configured_premium_cents=_as_int(meal_rule.get("first_premium_cents")),
-                        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-                    ),
+                    **premium_metadata,
                     "would_block": has_structured_segments and not waiver_possible,
                     "required_break_minutes": _as_int(meal_rule.get("first_min_break_minutes")),
                     "meal_break_window_deadline_minutes": first_deadline_minutes,
@@ -875,6 +1030,11 @@ def _meal_break_rule_results_relative_windowed(
                 and scheduled_span_minutes <= second_waiver_max_minutes
                 and len(qualifying_meal_breaks) >= 1
             )
+            premium_metadata = _resolved_premium_metadata(
+                configured_premium_cents=_as_int(meal_rule.get("second_premium_cents")),
+                employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+                employee_premium_rate_basis=employee_premium_rate_basis,
+            )
             results.append(
                 {
                     "rule_code": second_rule_code,
@@ -890,14 +1050,7 @@ def _meal_break_rule_results_relative_windowed(
                         waiver_allowed=second_waiver_allowed,
                     ),
                     "premium_required": True,
-                    "premium_type": _resolved_premium_type(
-                        configured_premium_cents=_as_int(meal_rule.get("second_premium_cents")),
-                        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-                    ),
-                    "premium_cents": _resolved_premium_cents(
-                        configured_premium_cents=_as_int(meal_rule.get("second_premium_cents")),
-                        employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-                    ),
+                    **premium_metadata,
                     "would_block": has_structured_segments and not waiver_possible,
                     "required_break_minutes": second_min_break_minutes,
                     "meal_break_window_deadline_minutes": second_deadline_minutes,
@@ -911,6 +1064,417 @@ def _meal_break_rule_results_relative_windowed(
             )
 
     return results
+
+
+def _meal_break_rule_results_washington(
+    meal_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    first_trigger_minutes = _as_int(meal_rule.get("first_trigger_minutes")) or 300
+    if scheduled_span_minutes <= first_trigger_minutes:
+        return []
+    normal_workday_minutes = _washington_normal_workday_minutes(
+        candidate_shift=candidate_shift,
+        scheduled_span_minutes=scheduled_span_minutes,
+    )
+    required_meal_count = _required_washington_meal_break_count(
+        scheduled_span_minutes=scheduled_span_minutes,
+        normal_workday_minutes=normal_workday_minutes,
+        additional_trigger_beyond_normal_minutes=(
+            _as_int(meal_rule.get("additional_trigger_beyond_normal_minutes")) or 180
+        ),
+    )
+    first_window_start_minutes = _as_int(meal_rule.get("first_window_start_minutes")) or 120
+    first_window_end_minutes = _as_int(meal_rule.get("first_window_end_minutes")) or 300
+    first_min_break_minutes = _as_int(meal_rule.get("first_min_break_minutes")) or 30
+    qualifying_meal_breaks = sorted(
+        [
+            break_fact
+            for break_fact in break_facts
+            if str(break_fact.get("break_type") or "") == "meal"
+            and not _as_bool(break_fact.get("is_paid"))
+            and (_as_int(break_fact.get("duration_minutes")) or 0) >= first_min_break_minutes
+        ],
+        key=lambda break_fact: (
+            _as_int(break_fact.get("start_offset_minutes")) or 0,
+            _as_int(break_fact.get("end_offset_minutes")) or 0,
+        ),
+    )
+    results: list[dict[str, object]] = []
+
+    first_break_index, first_break = _next_qualifying_break_in_offset_window(
+        qualifying_meal_breaks,
+        minimum_index=0,
+        window_start_minutes=first_window_start_minutes,
+        window_end_minutes=first_window_end_minutes,
+        min_break_minutes=first_min_break_minutes,
+    )
+    if first_break is None:
+        return [
+            {
+                "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+                "status": "warning" if not has_structured_segments else "block",
+                "reason_codes": _meal_reason_codes(
+                    base_code="first_meal_break_missing",
+                    has_structured_segments=has_structured_segments,
+                    waiver_possible=False,
+                    waiver_allowed=True,
+                ),
+                "premium_required": False,
+                "would_block": has_structured_segments,
+                "required_break_minutes": first_min_break_minutes,
+                "meal_break_window_start_minutes": first_window_start_minutes,
+                "meal_break_window_end_minutes": first_window_end_minutes,
+                "normal_workday_minutes": normal_workday_minutes,
+                "required_meal_count": required_meal_count,
+            }
+        ]
+    results.append(
+        {
+            "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+            "status": "clear",
+            "reason_codes": ["first_meal_break_scheduled"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": first_min_break_minutes,
+            "scheduled_break_minutes": _as_int(first_break.get("duration_minutes")),
+            "break_start_offset_minutes": _as_int(first_break.get("start_offset_minutes")),
+            "meal_break_window_start_minutes": first_window_start_minutes,
+            "meal_break_window_end_minutes": first_window_end_minutes,
+            "required_meal_index": 1,
+            "normal_workday_minutes": normal_workday_minutes,
+            "required_meal_count": required_meal_count,
+        }
+    )
+
+    previous_break_end_minutes = _as_int(first_break.get("end_offset_minutes"))
+    next_minimum_index = first_break_index + 1
+    additional_rule_code = str(meal_rule.get("additional_rule_code") or "meal_break_additional_window")
+    additional_interval_minutes = _as_int(meal_rule.get("additional_interval_minutes")) or 300
+    additional_min_break_minutes = _as_int(meal_rule.get("additional_min_break_minutes")) or 30
+    overtime_extension_required = scheduled_span_minutes >= (
+        normal_workday_minutes + (_as_int(meal_rule.get("additional_trigger_beyond_normal_minutes")) or 180)
+    )
+    for required_meal_index in range(2, required_meal_count + 1):
+        window_start_minutes = previous_break_end_minutes
+        if required_meal_index == 2 and overtime_extension_required:
+            window_start_minutes = max(window_start_minutes, normal_workday_minutes)
+        window_end_minutes = min(
+            scheduled_span_minutes,
+            previous_break_end_minutes + additional_interval_minutes,
+        )
+        break_index, qualifying_break = _next_qualifying_break_in_offset_window(
+            qualifying_meal_breaks,
+            minimum_index=next_minimum_index,
+            window_start_minutes=window_start_minutes,
+            window_end_minutes=window_end_minutes,
+            min_break_minutes=additional_min_break_minutes,
+        )
+        if qualifying_break is None:
+            results.append(
+                {
+                    "rule_code": additional_rule_code,
+                    "status": "warning" if not has_structured_segments else "block",
+                    "reason_codes": _meal_reason_codes(
+                        base_code="additional_meal_break_missing",
+                        has_structured_segments=has_structured_segments,
+                        waiver_possible=False,
+                        waiver_allowed=True,
+                    ),
+                    "premium_required": False,
+                    "would_block": has_structured_segments,
+                    "required_break_minutes": additional_min_break_minutes,
+                    "required_meal_index": required_meal_index,
+                    "meal_break_window_start_minutes": window_start_minutes,
+                    "meal_break_window_end_minutes": window_end_minutes,
+                    "normal_workday_minutes": normal_workday_minutes,
+                    "overtime_extension_required": required_meal_index == 2 and overtime_extension_required,
+                }
+            )
+            break
+        results.append(
+            {
+                "rule_code": additional_rule_code,
+                "status": "clear",
+                "reason_codes": ["additional_meal_break_scheduled"],
+                "premium_required": False,
+                "would_block": False,
+                "required_break_minutes": additional_min_break_minutes,
+                "scheduled_break_minutes": _as_int(qualifying_break.get("duration_minutes")),
+                "break_start_offset_minutes": _as_int(qualifying_break.get("start_offset_minutes")),
+                "required_meal_index": required_meal_index,
+                "meal_break_window_start_minutes": window_start_minutes,
+                "meal_break_window_end_minutes": window_end_minutes,
+                "normal_workday_minutes": normal_workday_minutes,
+                "overtime_extension_required": required_meal_index == 2 and overtime_extension_required,
+            }
+        )
+        previous_break_end_minutes = _as_int(qualifying_break.get("end_offset_minutes"))
+        next_minimum_index = break_index + 1
+    return results
+
+
+def _meal_break_rule_results_oregon(
+    meal_rule: Mapping[str, object],
+    *,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    required_meal_count = _required_oregon_meal_break_count(scheduled_span_minutes)
+    if required_meal_count <= 0:
+        return []
+
+    first_min_break_minutes = _as_int(meal_rule.get("first_min_break_minutes")) or 30
+    if scheduled_span_minutes <= (_as_int(meal_rule.get("first_short_shift_max_minutes")) or 420):
+        first_window_start_minutes = _as_int(meal_rule.get("first_short_window_start_minutes")) or 120
+        first_window_end_minutes = _as_int(meal_rule.get("first_short_window_end_minutes")) or 300
+    else:
+        first_window_start_minutes = _as_int(meal_rule.get("first_long_window_start_minutes")) or 180
+        first_window_end_minutes = _as_int(meal_rule.get("first_long_window_end_minutes")) or 360
+
+    qualifying_meal_breaks = sorted(
+        [
+            break_fact
+            for break_fact in break_facts
+            if str(break_fact.get("break_type") or "") == "meal"
+            and not _as_bool(break_fact.get("is_paid"))
+            and (_as_int(break_fact.get("duration_minutes")) or 0) >= first_min_break_minutes
+        ],
+        key=lambda break_fact: (
+            _as_int(break_fact.get("start_offset_minutes")) or 0,
+            _as_int(break_fact.get("end_offset_minutes")) or 0,
+        ),
+    )
+
+    first_break_index = -1
+    first_break: Mapping[str, object] | None = None
+    for break_index, break_fact in enumerate(qualifying_meal_breaks):
+        start_offset_minutes = _as_int(break_fact.get("start_offset_minutes")) or 0
+        end_offset_minutes = _as_int(break_fact.get("end_offset_minutes")) or 0
+        if start_offset_minutes < first_window_start_minutes or end_offset_minutes > first_window_end_minutes:
+            continue
+        first_break_index = break_index
+        first_break = break_fact
+        break
+    if first_break is None:
+        return [
+            {
+                "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+                "status": "warning" if not has_structured_segments else "block",
+                "reason_codes": _meal_reason_codes(
+                    base_code="first_meal_break_missing",
+                    has_structured_segments=has_structured_segments,
+                    waiver_possible=False,
+                    waiver_allowed=False,
+                ),
+                "premium_required": False,
+                "would_block": has_structured_segments,
+                "required_break_minutes": first_min_break_minutes,
+                "meal_break_window_start_minutes": first_window_start_minutes,
+                "meal_break_window_end_minutes": first_window_end_minutes,
+                "required_meal_count": required_meal_count,
+            }
+        ]
+
+    results: list[dict[str, object]] = [
+        {
+            "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+            "status": "clear",
+            "reason_codes": ["first_meal_break_scheduled"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": first_min_break_minutes,
+            "scheduled_break_minutes": _as_int(first_break.get("duration_minutes")),
+            "break_start_offset_minutes": _as_int(first_break.get("start_offset_minutes")),
+            "meal_break_window_start_minutes": first_window_start_minutes,
+            "meal_break_window_end_minutes": first_window_end_minutes,
+            "required_meal_count": required_meal_count,
+        }
+    ]
+    if required_meal_count <= 1:
+        return results
+
+    additional_breaks = [
+        break_fact
+        for break_fact in qualifying_meal_breaks[first_break_index + 1 :]
+        if (_as_int(break_fact.get("start_offset_minutes")) or 0)
+        > (_as_int(first_break.get("end_offset_minutes")) or 0)
+    ]
+    if len(additional_breaks) < (required_meal_count - 1):
+        results.append(
+            {
+                "rule_code": str(meal_rule.get("additional_rule_code") or "meal_break_additional_window"),
+                "status": "warning" if not has_structured_segments else "block",
+                "reason_codes": _meal_reason_codes(
+                    base_code="additional_meal_break_missing",
+                    has_structured_segments=has_structured_segments,
+                    waiver_possible=False,
+                    waiver_allowed=False,
+                ),
+                "premium_required": False,
+                "would_block": has_structured_segments,
+                "required_break_minutes": first_min_break_minutes,
+                "required_meal_count": required_meal_count,
+                "actual_meal_count": 1 + len(additional_breaks),
+            }
+        )
+        return results
+
+    results.append(
+        {
+            "rule_code": str(meal_rule.get("additional_rule_code") or "meal_break_additional_window"),
+            "status": "clear",
+            "reason_codes": ["additional_meal_break_scheduled"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": first_min_break_minutes,
+            "required_meal_count": required_meal_count,
+            "actual_meal_count": 1 + len(additional_breaks),
+        }
+    )
+    return results
+
+
+def _meal_break_rule_results_colorado(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    meal_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
+) -> list[dict[str, object]]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    first_trigger_minutes = _as_int(meal_rule.get("first_trigger_minutes")) or 300
+    if scheduled_span_minutes <= first_trigger_minutes:
+        return []
+
+    first_window_start_minutes = _as_int(meal_rule.get("first_window_start_minutes")) or 60
+    first_window_end_minutes = max(
+        first_window_start_minutes,
+        scheduled_span_minutes - (_as_int(meal_rule.get("first_window_end_offset_minutes")) or 60),
+    )
+    first_min_break_minutes = _as_int(meal_rule.get("first_min_break_minutes")) or 30
+    allows_on_duty_paid_meal = _as_bool(meal_rule.get("allows_on_duty_paid_meal"))
+    provided_meal_minutes = sum(
+        max(0, _as_int(break_fact.get("duration_minutes")) or 0)
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "meal"
+    )
+    uncompensated_missing_meal_minutes = max(
+        0,
+        first_min_break_minutes - min(provided_meal_minutes, first_min_break_minutes),
+    )
+
+    qualifying_break = next(
+        (
+            break_fact
+            for break_fact in sorted(
+                break_facts,
+                key=lambda current_break: (
+                    _as_int(current_break.get("start_offset_minutes")) or 0,
+                    _as_int(current_break.get("end_offset_minutes")) or 0,
+                ),
+            )
+            if str(break_fact.get("break_type") or "") == "meal"
+            and (
+                allows_on_duty_paid_meal
+                or not _as_bool(break_fact.get("is_paid"))
+            )
+            and (_as_int(break_fact.get("duration_minutes")) or 0) >= first_min_break_minutes
+            and (_as_int(break_fact.get("start_offset_minutes")) or 0) >= first_window_start_minutes
+            and (_as_int(break_fact.get("end_offset_minutes")) or 0) <= first_window_end_minutes
+        ),
+        None,
+    )
+    if qualifying_break is None:
+        premium_required = False
+        premium_type: str | None = None
+        premium_cents = 0
+        premium_regular_minutes = 0
+        premium_ot_minutes = 0
+        premium_dt_minutes = 0
+        reason_codes = _meal_reason_codes(
+            base_code="first_meal_break_missing",
+            has_structured_segments=has_structured_segments,
+            waiver_possible=False,
+            waiver_allowed=False,
+        )
+        if has_structured_segments and uncompensated_missing_meal_minutes > 0:
+            reason_codes.append("meal_break_wages_due")
+            premium_required = True
+            if (employee_premium_hourly_rate_cents or 0) > 0:
+                incremental_wages = _incremental_wages_from_added_work_minutes(
+                    profile,
+                    candidate_shift=candidate_shift,
+                    counted_intervals=counted_intervals,
+                    added_work_minutes=uncompensated_missing_meal_minutes,
+                    employee_base_hourly_rate_cents=employee_premium_hourly_rate_cents,
+                )
+                premium_type = "fixed_cents"
+                premium_cents = incremental_wages["premium_cents"]
+                premium_regular_minutes = incremental_wages["regular_minutes"]
+                premium_ot_minutes = incremental_wages["ot_minutes"]
+                premium_dt_minutes = incremental_wages["dt_minutes"]
+                premium_rate_basis = employee_premium_rate_basis
+                premium_rate_hourly_cents = employee_premium_hourly_rate_cents
+                if premium_ot_minutes > 0 or premium_dt_minutes > 0:
+                    reason_codes.append("meal_break_wages_include_overtime")
+            else:
+                premium_type = "wage_dependent_unresolved"
+                premium_rate_basis = "wage_basis_missing"
+                premium_rate_hourly_cents = None
+                reason_codes.append("wage_dependent_premium_unresolved")
+        else:
+            premium_rate_basis = None
+            premium_rate_hourly_cents = None
+        return [
+            {
+                "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+                "status": "warning" if not has_structured_segments else "block",
+                "reason_codes": reason_codes,
+                "premium_required": premium_required,
+                "premium_type": premium_type,
+                "premium_cents": premium_cents,
+                "premium_rate_basis": premium_rate_basis,
+                "premium_rate_hourly_cents": premium_rate_hourly_cents,
+                "would_block": has_structured_segments,
+                "required_break_minutes": first_min_break_minutes,
+                "meal_break_window_start_minutes": first_window_start_minutes,
+                "meal_break_window_end_minutes": first_window_end_minutes,
+                "provided_meal_minutes": provided_meal_minutes,
+                "uncompensated_missing_meal_minutes": uncompensated_missing_meal_minutes,
+                "premium_regular_minutes": premium_regular_minutes,
+                "premium_ot_minutes": premium_ot_minutes,
+                "premium_dt_minutes": premium_dt_minutes,
+            }
+        ]
+    return [
+        {
+            "rule_code": str(meal_rule.get("first_rule_code") or "meal_break_first_window"),
+            "status": "clear",
+            "reason_codes": ["first_meal_break_scheduled"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_minutes": first_min_break_minutes,
+            "scheduled_break_minutes": _as_int(qualifying_break.get("duration_minutes")),
+            "break_start_offset_minutes": _as_int(qualifying_break.get("start_offset_minutes")),
+            "meal_break_window_start_minutes": first_window_start_minutes,
+            "meal_break_window_end_minutes": first_window_end_minutes,
+            "meal_break_is_paid": _as_bool(qualifying_break.get("is_paid")),
+            "provided_meal_minutes": provided_meal_minutes,
+        }
+    ]
 
 
 def _meal_break_rule_results_new_york_non_factory(
@@ -1074,11 +1638,57 @@ def _meal_break_rule_results_new_york_non_factory(
 
 
 def _paid_rest_break_rule_result(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    paid_rest_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
+) -> dict[str, object]:
+    mode = str(paid_rest_rule.get("mode") or "ca_count_only").strip().lower()
+    if mode == "co_timed":
+        return _paid_rest_break_rule_result_colorado(
+            profile,
+            paid_rest_rule,
+            candidate_shift=candidate_shift,
+            counted_intervals=counted_intervals,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+            employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+            employee_premium_rate_basis=employee_premium_rate_basis,
+        )
+    if mode == "or_timed":
+        return _paid_rest_break_rule_result_oregon(
+            paid_rest_rule,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+        )
+    if mode == "wa_timed":
+        return _paid_rest_break_rule_result_washington(
+            paid_rest_rule,
+            candidate_shift=candidate_shift,
+            shift_facts=shift_facts,
+            break_facts=break_facts,
+        )
+    return _paid_rest_break_rule_result_california(
+        paid_rest_rule,
+        shift_facts=shift_facts,
+        break_facts=break_facts,
+        employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+        employee_premium_rate_basis=employee_premium_rate_basis,
+    )
+
+
+def _paid_rest_break_rule_result_california(
     paid_rest_rule: Mapping[str, object],
     *,
     shift_facts: Mapping[str, object],
     break_facts: Sequence[Mapping[str, object]],
-    employee_base_hourly_rate_cents: int | None,
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
 ) -> dict[str, object]:
     net_active_work_minutes = _as_int(shift_facts.get("net_active_work_minutes"))
     has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
@@ -1119,24 +1729,292 @@ def _paid_rest_break_rule_result(
     reason_codes = ["rest_break_quota_missing"]
     if not has_structured_segments:
         reason_codes.append("structured_break_plan_missing")
+    premium_metadata = _resolved_premium_metadata(
+        configured_premium_cents=_as_int(paid_rest_rule.get("premium_cents")),
+        employee_premium_hourly_rate_cents=employee_premium_hourly_rate_cents,
+        employee_premium_rate_basis=employee_premium_rate_basis,
+    )
     return {
         "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
         "status": "warning",
         "reason_codes": reason_codes,
         "premium_required": True,
-        "premium_type": _resolved_premium_type(
-            configured_premium_cents=_as_int(paid_rest_rule.get("premium_cents")),
-            employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-        ),
-        "premium_cents": _resolved_premium_cents(
-            configured_premium_cents=_as_int(paid_rest_rule.get("premium_cents")),
-            employee_base_hourly_rate_cents=employee_base_hourly_rate_cents,
-        ),
+        **premium_metadata,
         "would_block": False,
         "required_break_count": required_break_count,
         "actual_break_count": actual_break_count,
         "missing_break_count": max(0, required_break_count - actual_break_count),
         "required_break_minutes": min_break_minutes,
+    }
+
+
+def _paid_rest_break_rule_result_washington(
+    paid_rest_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    net_active_work_minutes = _as_int(shift_facts.get("net_active_work_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    required_break_count = _required_washington_rest_break_count(net_active_work_minutes)
+    min_break_minutes = _as_int(paid_rest_rule.get("min_break_minutes")) or 10
+    max_continuous_work_minutes = _as_int(paid_rest_rule.get("max_continuous_work_minutes")) or 180
+    qualifying_breaks = [
+        break_fact
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "rest"
+        and _as_bool(break_fact.get("is_paid"))
+        and (_as_int(break_fact.get("duration_minutes")) or 0) >= min_break_minutes
+    ]
+    actual_break_count = len(qualifying_breaks)
+    longest_gap_minutes = _as_int(shift_facts.get("longest_continuous_work_minutes")) or 0
+    timing_gap_exceeded = longest_gap_minutes > max_continuous_work_minutes
+
+    if required_break_count <= 0 and not timing_gap_exceeded:
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_not_required"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": 0,
+            "actual_break_count": actual_break_count,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+        }
+
+    if actual_break_count >= required_break_count and not timing_gap_exceeded:
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_quota_satisfied"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": required_break_count,
+            "actual_break_count": actual_break_count,
+            "required_break_minutes": min_break_minutes,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+        }
+
+    reason_codes = ["rest_break_quota_missing"]
+    if timing_gap_exceeded:
+        reason_codes.append("rest_break_timing_gap_exceeded")
+    if not has_structured_segments:
+        reason_codes.append("structured_break_plan_missing")
+    return {
+        "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+        "status": "warning" if not has_structured_segments else "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": has_structured_segments,
+        "required_break_count": required_break_count,
+        "actual_break_count": actual_break_count,
+        "missing_break_count": max(0, required_break_count - actual_break_count),
+        "required_break_minutes": min_break_minutes,
+        "max_continuous_work_minutes": max_continuous_work_minutes,
+        "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+    }
+
+
+def _paid_rest_break_rule_result_colorado(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    paid_rest_rule: Mapping[str, object],
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
+) -> dict[str, object]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    required_break_count = _required_colorado_rest_break_count(scheduled_span_minutes)
+    min_break_minutes = _as_int(paid_rest_rule.get("min_break_minutes")) or 10
+    max_continuous_work_minutes = _as_int(paid_rest_rule.get("max_continuous_work_minutes")) or 240
+    qualifying_breaks = [
+        break_fact
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "rest"
+        and _as_bool(break_fact.get("is_paid"))
+        and (_as_int(break_fact.get("duration_minutes")) or 0) >= min_break_minutes
+    ]
+    provided_paid_rest_minutes = sum(
+        max(0, _as_int(break_fact.get("duration_minutes")) or 0)
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "rest"
+        and _as_bool(break_fact.get("is_paid"))
+    )
+    actual_break_count = len(qualifying_breaks)
+    longest_gap_minutes = _as_int(shift_facts.get("longest_continuous_work_minutes")) or 0
+    timing_gap_exceeded = longest_gap_minutes > max_continuous_work_minutes
+    required_total_paid_rest_minutes = required_break_count * min_break_minutes
+    missing_paid_rest_minutes = max(
+        0,
+        required_total_paid_rest_minutes
+        - min(provided_paid_rest_minutes, required_total_paid_rest_minutes),
+    )
+    if required_break_count <= 0 and not timing_gap_exceeded:
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_not_required"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": 0,
+            "actual_break_count": actual_break_count,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+            "provided_paid_rest_minutes": provided_paid_rest_minutes,
+        }
+
+    if (
+        actual_break_count >= required_break_count
+        and missing_paid_rest_minutes <= 0
+        and not timing_gap_exceeded
+    ):
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_quota_satisfied"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": required_break_count,
+            "actual_break_count": actual_break_count,
+            "required_break_minutes": min_break_minutes,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+            "provided_paid_rest_minutes": provided_paid_rest_minutes,
+        }
+
+    reason_codes = ["rest_break_quota_missing"]
+    if timing_gap_exceeded:
+        reason_codes.append("rest_break_timing_gap_exceeded")
+    if not has_structured_segments:
+        reason_codes.append("structured_break_plan_missing")
+    premium_required = False
+    premium_type: str | None = None
+    premium_cents = 0
+    premium_regular_minutes = 0
+    premium_ot_minutes = 0
+    premium_dt_minutes = 0
+    premium_rate_basis: str | None = None
+    premium_rate_hourly_cents: int | None = None
+    if has_structured_segments and missing_paid_rest_minutes > 0:
+        reason_codes.append("rest_break_wages_due")
+        premium_required = True
+        if (employee_premium_hourly_rate_cents or 0) > 0:
+            incremental_wages = _incremental_wages_from_added_work_minutes(
+                profile,
+                candidate_shift=candidate_shift,
+                counted_intervals=counted_intervals,
+                added_work_minutes=missing_paid_rest_minutes,
+                employee_base_hourly_rate_cents=employee_premium_hourly_rate_cents,
+            )
+            premium_type = "fixed_cents"
+            premium_cents = incremental_wages["premium_cents"]
+            premium_regular_minutes = incremental_wages["regular_minutes"]
+            premium_ot_minutes = incremental_wages["ot_minutes"]
+            premium_dt_minutes = incremental_wages["dt_minutes"]
+            premium_rate_basis = employee_premium_rate_basis
+            premium_rate_hourly_cents = employee_premium_hourly_rate_cents
+            if premium_ot_minutes > 0 or premium_dt_minutes > 0:
+                reason_codes.append("rest_break_wages_include_overtime")
+        else:
+            premium_type = "wage_dependent_unresolved"
+            premium_rate_basis = "wage_basis_missing"
+            reason_codes.append("wage_dependent_premium_unresolved")
+    return {
+        "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+        "status": "warning" if not has_structured_segments else "block",
+        "reason_codes": reason_codes,
+        "premium_required": premium_required,
+        "premium_type": premium_type,
+        "premium_cents": premium_cents,
+        "premium_rate_basis": premium_rate_basis,
+        "premium_rate_hourly_cents": premium_rate_hourly_cents,
+        "would_block": has_structured_segments,
+        "required_break_count": required_break_count,
+        "actual_break_count": actual_break_count,
+        "missing_break_count": max(0, required_break_count - actual_break_count),
+        "provided_paid_rest_minutes": provided_paid_rest_minutes,
+        "missing_paid_rest_minutes": missing_paid_rest_minutes,
+        "required_break_minutes": min_break_minutes,
+        "max_continuous_work_minutes": max_continuous_work_minutes,
+        "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+        "premium_regular_minutes": premium_regular_minutes,
+        "premium_ot_minutes": premium_ot_minutes,
+        "premium_dt_minutes": premium_dt_minutes,
+    }
+
+
+def _paid_rest_break_rule_result_oregon(
+    paid_rest_rule: Mapping[str, object],
+    *,
+    shift_facts: Mapping[str, object],
+    break_facts: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    scheduled_span_minutes = _as_int(shift_facts.get("scheduled_span_minutes"))
+    has_structured_segments = _as_bool(shift_facts.get("has_structured_segments"))
+    required_break_count = _required_oregon_rest_break_count(scheduled_span_minutes)
+    min_break_minutes = _as_int(paid_rest_rule.get("min_break_minutes")) or 10
+    max_continuous_work_minutes = _as_int(paid_rest_rule.get("max_continuous_work_minutes")) or 240
+    qualifying_breaks = [
+        break_fact
+        for break_fact in break_facts
+        if str(break_fact.get("break_type") or "") == "rest"
+        and _as_bool(break_fact.get("is_paid"))
+        and (_as_int(break_fact.get("duration_minutes")) or 0) >= min_break_minutes
+    ]
+    actual_break_count = len(qualifying_breaks)
+    longest_gap_minutes = _as_int(shift_facts.get("longest_continuous_work_minutes")) or 0
+    timing_gap_exceeded = longest_gap_minutes > max_continuous_work_minutes
+    if required_break_count <= 0 and not timing_gap_exceeded:
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_not_required"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": 0,
+            "actual_break_count": actual_break_count,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+        }
+
+    if actual_break_count >= required_break_count and not timing_gap_exceeded:
+        return {
+            "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+            "status": "clear",
+            "reason_codes": ["rest_break_quota_satisfied"],
+            "premium_required": False,
+            "would_block": False,
+            "required_break_count": required_break_count,
+            "actual_break_count": actual_break_count,
+            "required_break_minutes": min_break_minutes,
+            "max_continuous_work_minutes": max_continuous_work_minutes,
+            "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
+        }
+
+    reason_codes = ["rest_break_quota_missing"]
+    if timing_gap_exceeded:
+        reason_codes.append("rest_break_timing_gap_exceeded")
+    if not has_structured_segments:
+        reason_codes.append("structured_break_plan_missing")
+    return {
+        "rule_code": str(paid_rest_rule.get("rule_code") or "paid_rest_break_quota"),
+        "status": "warning" if not has_structured_segments else "block",
+        "reason_codes": reason_codes,
+        "premium_required": False,
+        "would_block": has_structured_segments,
+        "required_break_count": required_break_count,
+        "actual_break_count": actual_break_count,
+        "missing_break_count": max(0, required_break_count - actual_break_count),
+        "required_break_minutes": min_break_minutes,
+        "max_continuous_work_minutes": max_continuous_work_minutes,
+        "longest_work_gap_without_rest_break_minutes": longest_gap_minutes,
     }
 
 
@@ -1177,6 +2055,10 @@ def _split_shift_rule_result(
         "premium_required": True,
         "premium_type": premium_type,
         "premium_cents": premium_cents,
+        "premium_rate_basis": (
+            "configured_fixed_cents" if premium_type == "fixed_cents" else "wage_basis_missing"
+        ),
+        "premium_rate_hourly_cents": None,
         "would_block": False,
         "split_shift_gap_count": split_shift_gap_count,
         "inter_segment_gap_minutes": inter_segment_gap_minutes,
@@ -1217,6 +2099,12 @@ def _spread_of_hours_rule_result(
         "premium_required": True,
         "premium_type": premium_type,
         "premium_cents": premium_cents,
+        "premium_rate_basis": _normalized_optional_string(
+            spread_of_hours_rule.get("premium_rate_basis")
+        ),
+        "premium_rate_hourly_cents": _as_int(
+            spread_of_hours_rule.get("premium_rate_hourly_cents")
+        ),
         "would_block": False,
         "scheduled_span_minutes": scheduled_span_minutes,
         "threshold_minutes": threshold_minutes,
@@ -2260,26 +3148,105 @@ def _resolved_work_permit_latest_end_local_time(
     return _parse_local_time(fallback_time)
 
 
-def _resolved_premium_type(
+def _resolved_employee_premium_rate_context(
     *,
-    configured_premium_cents: int,
     employee_base_hourly_rate_cents: int | None,
-) -> str:
-    if configured_premium_cents > 0:
-        return "fixed_cents"
+    employee_premium_hourly_rate_cents: int | None,
+) -> dict[str, object]:
+    if (employee_premium_hourly_rate_cents or 0) > 0:
+        return {
+            "premium_rate_basis": "employee_compliance_regular_rate",
+            "premium_rate_hourly_cents": max(0, int(employee_premium_hourly_rate_cents or 0)),
+        }
     if (employee_base_hourly_rate_cents or 0) > 0:
-        return "fixed_cents"
-    return "wage_dependent_unresolved"
+        return {
+            "premium_rate_basis": "employee_base_hourly_rate_fallback",
+            "premium_rate_hourly_cents": max(0, int(employee_base_hourly_rate_cents or 0)),
+        }
+    return {
+        "premium_rate_basis": "wage_basis_missing",
+        "premium_rate_hourly_cents": None,
+    }
 
 
-def _resolved_premium_cents(
+def _incremental_wages_from_added_work_minutes(
+    profile: labor_rules.LaborRuleProfileSnapshot,
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[labor_rules.CountedInterval],
+    added_work_minutes: int,
+    employee_base_hourly_rate_cents: int,
+) -> dict[str, int]:
+    baseline_buckets = labor_rules.overtime_projection_buckets(
+        profile,
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    extended_shift = SimpleNamespace(
+        id=candidate_shift.id,
+        starts_at=candidate_shift.starts_at,
+        ends_at=candidate_shift.ends_at + timedelta(minutes=added_work_minutes),
+        timezone=candidate_shift.timezone,
+    )
+    extended_buckets = labor_rules.overtime_projection_buckets(
+        profile,
+        candidate_shift=extended_shift,
+        counted_intervals=counted_intervals,
+    )
+    regular_hours_delta = max(
+        0.0,
+        (_as_float(extended_buckets.get("projected_regular_hours")) or 0.0)
+        - (_as_float(baseline_buckets.get("projected_regular_hours")) or 0.0),
+    )
+    ot_hours_delta = max(
+        0.0,
+        (_as_float(extended_buckets.get("projected_ot_hours")) or 0.0)
+        - (_as_float(baseline_buckets.get("projected_ot_hours")) or 0.0),
+    )
+    dt_hours_delta = max(
+        0.0,
+        (_as_float(extended_buckets.get("projected_dt_hours")) or 0.0)
+        - (_as_float(baseline_buckets.get("projected_dt_hours")) or 0.0),
+    )
+    premium_cents = round(
+        (employee_base_hourly_rate_cents * regular_hours_delta)
+        + (employee_base_hourly_rate_cents * 1.5 * ot_hours_delta)
+        + (employee_base_hourly_rate_cents * 2.0 * dt_hours_delta)
+    )
+    return {
+        "premium_cents": max(0, premium_cents),
+        "regular_minutes": max(0, round(regular_hours_delta * 60)),
+        "ot_minutes": max(0, round(ot_hours_delta * 60)),
+        "dt_minutes": max(0, round(dt_hours_delta * 60)),
+    }
+
+
+def _resolved_premium_metadata(
     *,
     configured_premium_cents: int,
-    employee_base_hourly_rate_cents: int | None,
-) -> int:
+    employee_premium_hourly_rate_cents: int | None,
+    employee_premium_rate_basis: str | None,
+) -> dict[str, object]:
     if configured_premium_cents > 0:
-        return configured_premium_cents
-    return max(0, int(employee_base_hourly_rate_cents or 0))
+        return {
+            "premium_type": "fixed_cents",
+            "premium_cents": configured_premium_cents,
+            "premium_rate_basis": "configured_fixed_cents",
+            "premium_rate_hourly_cents": None,
+        }
+    if (employee_premium_hourly_rate_cents or 0) > 0:
+        return {
+            "premium_type": "fixed_cents",
+            "premium_cents": max(0, int(employee_premium_hourly_rate_cents or 0)),
+            "premium_rate_basis": employee_premium_rate_basis or "employee_base_hourly_rate_fallback",
+            "premium_rate_hourly_cents": max(0, int(employee_premium_hourly_rate_cents or 0)),
+        }
+    return {
+        "premium_type": "wage_dependent_unresolved",
+        "premium_cents": 0,
+        "premium_rate_basis": "wage_basis_missing",
+        "premium_rate_hourly_cents": None,
+    }
 
 
 def _customer_policy_rule_results(
@@ -2900,6 +3867,12 @@ def _premium_liability_summary(
             "rule_code": rule_code,
             "premium_type": premium_type or None,
             "premium_cents": premium_cents,
+            "premium_rate_basis": _normalized_optional_string(result.get("premium_rate_basis")),
+            "premium_rate_hourly_cents": (
+                _as_int(result.get("premium_rate_hourly_cents"))
+                if result.get("premium_rate_hourly_cents") is not None
+                else None
+            ),
             "status": str(result.get("status") or ""),
             "reason_codes": list(result.get("reason_codes") or []),
         }
@@ -2924,6 +3897,99 @@ def _required_california_rest_break_count(net_active_work_minutes: int) -> int:
     full_blocks = net_active_work_minutes // 240
     remainder = net_active_work_minutes % 240
     return full_blocks + (1 if remainder > 120 else 0)
+
+
+def _required_oregon_meal_break_count(scheduled_span_minutes: int) -> int:
+    if scheduled_span_minutes < 360:
+        return 0
+    if scheduled_span_minutes < 840:
+        return 1
+    if scheduled_span_minutes < 1320:
+        return 2
+    return 3
+
+
+def _required_oregon_rest_break_count(scheduled_span_minutes: int) -> int:
+    if scheduled_span_minutes <= 120:
+        return 0
+    full_blocks = scheduled_span_minutes // 240
+    remainder = scheduled_span_minutes % 240
+    return full_blocks + (1 if remainder > 120 else 0)
+
+
+def _required_colorado_rest_break_count(scheduled_span_minutes: int) -> int:
+    if scheduled_span_minutes <= 120:
+        return 0
+    full_blocks = scheduled_span_minutes // 240
+    remainder = scheduled_span_minutes % 240
+    return full_blocks + (1 if remainder > 120 else 0)
+
+
+def _required_washington_rest_break_count(net_active_work_minutes: int) -> int:
+    if net_active_work_minutes <= 180:
+        return 0
+    full_blocks = net_active_work_minutes // 240
+    remainder = net_active_work_minutes % 240
+    return full_blocks + (1 if remainder > 180 else 0)
+
+
+def _required_washington_meal_break_count(
+    *,
+    scheduled_span_minutes: int,
+    normal_workday_minutes: int,
+    additional_trigger_beyond_normal_minutes: int,
+) -> int:
+    if scheduled_span_minutes <= 300:
+        return 0
+    required_by_consecutive_hours = max(1, (scheduled_span_minutes - 300 + 329) // 330)
+    if scheduled_span_minutes >= normal_workday_minutes + additional_trigger_beyond_normal_minutes:
+        return max(required_by_consecutive_hours, 2)
+    return required_by_consecutive_hours
+
+
+def _washington_normal_workday_minutes(
+    *,
+    candidate_shift: Shift,
+    scheduled_span_minutes: int,
+) -> int:
+    shift_metadata = candidate_shift.shift_metadata if isinstance(candidate_shift.shift_metadata, Mapping) else {}
+    raw_minutes = _as_int(shift_metadata.get("compliance_normal_workday_minutes"))
+    if raw_minutes > 0:
+        return raw_minutes
+    raw_start = shift_metadata.get("compliance_normal_shift_starts_at")
+    raw_end = shift_metadata.get("compliance_normal_shift_ends_at")
+    if isinstance(raw_start, str) and isinstance(raw_end, str):
+        try:
+            starts_at = datetime.fromisoformat(raw_start)
+            ends_at = datetime.fromisoformat(raw_end)
+        except ValueError:
+            return scheduled_span_minutes
+        if starts_at.tzinfo is None:
+            starts_at = starts_at.replace(tzinfo=timezone.utc)
+        if ends_at.tzinfo is None:
+            ends_at = ends_at.replace(tzinfo=timezone.utc)
+        if ends_at > starts_at:
+            return max(0, int(round((ends_at - starts_at).total_seconds() / 60.0)))
+    return scheduled_span_minutes
+
+
+def _next_qualifying_break_in_offset_window(
+    break_facts: Sequence[Mapping[str, object]],
+    *,
+    minimum_index: int,
+    window_start_minutes: int,
+    window_end_minutes: int,
+    min_break_minutes: int,
+) -> tuple[int, Mapping[str, object] | None]:
+    for break_index in range(max(0, minimum_index), len(break_facts)):
+        break_fact = break_facts[break_index]
+        start_offset_minutes = _as_int(break_fact.get("start_offset_minutes")) or 0
+        if start_offset_minutes < window_start_minutes or start_offset_minutes > window_end_minutes:
+            continue
+        if (_as_int(break_fact.get("duration_minutes")) or 0) < min_break_minutes:
+            continue
+        return break_index, break_fact
+    return -1, None
 
 
 def _policy_settings_snapshot(compliance_settings: Mapping[str, object]) -> dict[str, object]:

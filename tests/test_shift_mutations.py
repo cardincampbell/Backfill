@@ -645,6 +645,117 @@ async def test_update_shift_replaces_structured_segments():
 
 
 @pytest.mark.asyncio
+async def test_create_shift_sets_normal_workday_metadata_snapshot():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    location_id = uuid4()
+    role_id = uuid4()
+
+    location = Location(
+        id=location_id,
+        business_id=business_id,
+        name="Downtown",
+        slug="downtown",
+        address_line_1="123 Main",
+        locality="Los Angeles",
+        region="CA",
+        postal_code="90001",
+        country_code="US",
+        timezone="America/Los_Angeles",
+        settings={},
+        google_place_metadata={},
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    role = Role(
+        id=role_id,
+        business_id=business_id,
+        code="server",
+        name="Server",
+        min_notice_minutes=0,
+        coverage_priority=100,
+        metadata_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    location_role = LocationRole(
+        id=uuid4(),
+        location_id=location_id,
+        role_id=role_id,
+        is_active=True,
+        premium_rules={},
+        coverage_settings={},
+        created_at=now,
+        updated_at=now,
+    )
+    fake_session.get_map[(Location, location_id)] = location
+    fake_session.get_map[(Role, role_id)] = role
+    fake_session.scalar_queue = [location_role]
+
+    shift = await scheduling.create_shift(
+        fake_session,
+        business_id,
+        scheduling.ShiftCreate(
+            location_id=location_id,
+            role_id=role_id,
+            timezone="America/Los_Angeles",
+            starts_at=now,
+            ends_at=now + timedelta(hours=8),
+        ),
+    )
+
+    assert shift.shift_metadata["compliance_normal_workday_minutes"] == 480
+    assert shift.shift_metadata["compliance_normal_workday_source"] == "current_shift"
+
+
+@pytest.mark.asyncio
+async def test_update_live_shift_preserves_normal_workday_metadata_when_extending_shift():
+    fake_session = FakeSchedulingSession()
+    now = datetime.now(timezone.utc)
+    business_id = uuid4()
+    shift_id = uuid4()
+
+    shift = Shift(
+        id=shift_id,
+        business_id=business_id,
+        location_id=uuid4(),
+        role_id=uuid4(),
+        source_system="backfill_native",
+        timezone="America/Los_Angeles",
+        starts_at=now,
+        ends_at=now + timedelta(hours=7),
+        lifecycle_status=ShiftLifecycleStatus.scheduled,
+        staffing_status=ShiftStaffingStatus.open,
+        seats_requested=1,
+        seats_filled=0,
+        requires_manager_approval=False,
+        premium_cents=0,
+        notes=None,
+        shift_metadata={},
+        created_at=now,
+        updated_at=now,
+    )
+    shift.assignments = []
+    shift.coverage_cases = []
+    shift.segments = []
+    fake_session.get_map[(Shift, shift_id)] = shift
+
+    updated = await scheduling.update_shift(
+        fake_session,
+        business_id,
+        shift_id,
+        scheduling.ShiftUpdate(
+            ends_at=now + timedelta(hours=10),
+        ),
+    )
+
+    assert updated.shift_metadata["compliance_normal_workday_minutes"] == 420
+    assert updated.shift_metadata["compliance_normal_workday_source"] == "preserved_live_extension"
+
+
+@pytest.mark.asyncio
 async def test_update_shift_clears_structure_snapshot_when_segments_are_removed():
     fake_session = FakeSchedulingSession()
     now = datetime.now(timezone.utc)
@@ -4570,6 +4681,8 @@ async def test_publish_schedule_week_raises_compliance_review_for_blocked_assign
                 "premium_required": True,
                 "premium_type": "fixed",
                 "premium_cents": 2500,
+                "premium_rate_basis": "employee_compliance_regular_rate",
+                "premium_rate_hourly_cents": 2500,
                 "would_block": True,
                 "artifact_type_allowed": "meal_waiver",
                 "override_artifact_id": None,
@@ -4609,6 +4722,8 @@ async def test_publish_schedule_week_raises_compliance_review_for_blocked_assign
     assert exc_info.value.review_items[0]["shift_id"] == draft_shift.id
     assert exc_info.value.review_items[0]["employee_id"] == employee_id
     assert exc_info.value.review_items[0]["issues"][0]["rule_code"] == "meal_break_first_window"
+    assert exc_info.value.review_items[0]["issues"][0]["premium_rate_basis"] == "employee_compliance_regular_rate"
+    assert exc_info.value.review_items[0]["issues"][0]["premium_rate_hourly_cents"] == 2500
     assert exc_info.value.review_items[0]["issues"][0]["rule_source_references"] == [
         {
             "rule_code": "meal_break_first_window",

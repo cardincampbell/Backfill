@@ -212,6 +212,8 @@ class ScheduleRunComplianceIssueRead(BaseSchema):
     premium_required: bool = False
     premium_type: Optional[str] = None
     premium_cents: int = 0
+    premium_rate_basis: Optional[str] = None
+    premium_rate_hourly_cents: Optional[int] = Field(default=None, ge=0)
     unresolved_premium: bool = False
     would_block: bool = False
     artifact_type_allowed: Optional[str] = None

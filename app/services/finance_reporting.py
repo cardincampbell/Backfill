@@ -187,6 +187,8 @@ class CompliancePayrollAdjustmentRow:
     source_rule_code: str | None = None
     source_reason_codes: list[str] = field(default_factory=list)
     rule_source_references: list[dict[str, object]] = field(default_factory=list)
+    premium_rate_basis: str | None = None
+    premium_rate_hourly_cents: int | None = None
 
 
 @dataclass(frozen=True)
@@ -671,6 +673,7 @@ async def _resolved_assignment_compliance_metadata(
             counted_intervals=(),
             reference_time=shift.starts_at,
             employee_base_hourly_rate_cents=employee.base_hourly_rate_cents,
+            employee_premium_hourly_rate_cents=employee.compliance_regular_rate_cents,
             employee_date_of_birth=employee.date_of_birth,
             employee_minor_school_status=employee.minor_school_status,
             employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -717,6 +720,7 @@ async def _resolved_assignment_compliance_metadata(
         reference_time=shift.starts_at,
         overtime_projection=overtime_projection,
         employee_base_hourly_rate_cents=employee.base_hourly_rate_cents,
+        employee_premium_hourly_rate_cents=employee.compliance_regular_rate_cents,
         employee_date_of_birth=employee.date_of_birth,
         employee_minor_school_status=employee.minor_school_status,
         employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -1291,6 +1295,12 @@ def _build_compliance_payroll_rows_for_shift(
                 compliance_status=shift.compliance_status,
                 profile_code=shift.profile_code,
                 premium_cents=premium_cents,
+                premium_rate_basis=str(component.get("premium_rate_basis") or "").strip() or None,
+                premium_rate_hourly_cents=(
+                    max(0, int(component.get("premium_rate_hourly_cents") or 0))
+                    if component.get("premium_rate_hourly_cents") is not None
+                    else None
+                ),
                 premium_rule_codes=[rule_code] if rule_code else [],
                 unresolved_premium_rule_codes=(
                     [rule_code] if premium_type == "wage_dependent_unresolved" and rule_code else []
@@ -1336,6 +1346,8 @@ def _build_compliance_payroll_rows_for_shift(
                 compliance_status=shift.compliance_status,
                 profile_code=shift.profile_code,
                 premium_cents=0,
+                premium_rate_basis="wage_basis_missing",
+                premium_rate_hourly_cents=None,
                 premium_rule_codes=[],
                 unresolved_premium_rule_codes=[rule_code],
                 premium_payment_required=False,
@@ -1373,6 +1385,8 @@ def _build_compliance_payroll_rows_for_shift(
                 compliance_status=shift.compliance_status,
                 profile_code=shift.profile_code,
                 premium_cents=0,
+                premium_rate_basis=None,
+                premium_rate_hourly_cents=None,
                 premium_rule_codes=[],
                 unresolved_premium_rule_codes=[],
                 premium_payment_required=False,
@@ -1662,7 +1676,8 @@ async def location_compliance_scheduled_policy_drift(
 ) -> LocationComplianceScheduledPolicyDrift:
     normalized_week_count = max(1, min(int(week_count or 1), 12))
     end_week_start_date = start_week_date + timedelta(days=7 * (normalized_week_count - 1))
-    reference_time = datetime.now(timezone.utc)
+    first_week_window = schedule_week_window(location.timezone, start_week_date)
+    reference_time = min(datetime.now(timezone.utc), first_week_window.starts_at)
     business = getattr(location, "business", None)
     session_get = getattr(session, "get", None)
     business_id = getattr(location, "business_id", None)
@@ -2094,7 +2109,8 @@ async def business_compliance_scheduled_policy_drift(
 ) -> BusinessComplianceScheduledPolicyDrift:
     normalized_week_count = max(1, min(int(week_count or 1), 12))
     end_week_start_date = start_week_date + timedelta(days=7 * (normalized_week_count - 1))
-    reference_time = datetime.now(timezone.utc)
+    first_week_window = schedule_week_window(business.timezone, start_week_date)
+    reference_time = min(datetime.now(timezone.utc), first_week_window.starts_at)
     locations = await _active_business_locations(session, business_id=business.id)
     frozen_business_settings = await settings_service.effective_business_settings_payload(
         session,
@@ -2196,11 +2212,7 @@ async def business_compliance_scheduled_policy_drift(
         )
     )
 
-    latest_window_end_at = datetime.combine(
-        end_week_start_date + timedelta(days=6),
-        datetime.max.time(),
-        tzinfo=timezone.utc,
-    )
+    latest_window_end_at = schedule_week_window(business.timezone, end_week_start_date).ends_at
     activating_policy_versions = await _scheduled_policy_versions_for_window(
         session,
         business_id=business.id,

@@ -28,6 +28,8 @@ const report = {
       compliance_status: "warning",
       profile_code: "ca_restaurant_v1",
       premium_cents: 2250,
+      premium_rate_basis: "employee_compliance_regular_rate",
+      premium_rate_hourly_cents: 2250,
       premium_rule_codes: ["meal_break_first_window"],
       unresolved_premium_rule_codes: ["split_shift_premium"],
       premium_payment_required: true,
@@ -75,10 +77,14 @@ describe("buildCompliancePayrollCsv", () => {
 
     expect(csv).toContain('"Employee Identifier"');
     expect(csv).toContain('"Premium Cents"');
+    expect(csv).toContain('"Premium Basis"');
+    expect(csv).toContain('"Premium Rate USD/Hour"');
     expect(csv).toContain('"Taylor Server"');
     expect(csv).toContain('"EMP-42"');
     expect(csv).toContain('"MEALPREM"');
     expect(csv).toContain('"2250"');
+    expect(csv).toContain('"saved_compliance_premium_rate"');
+    expect(csv).toContain('"22.50"');
     expect(csv).toContain('"meal_break_first_window"');
     expect(csv).toContain('"split_shift_premium"');
     expect(csv).toContain('"meal_waiver"');
@@ -99,6 +105,7 @@ describe("buildCompliancePayrollCsv", () => {
 
     expect(csv).toContain('"Employee Number"');
     expect(csv).toContain('"Amount USD"');
+    expect(csv).toContain('"Premium Basis"');
     expect(csv).not.toContain('"Employee Identifier Type"');
     expect(csv).toContain('"EMP-42"');
     expect(csv).toContain('"22.50"');

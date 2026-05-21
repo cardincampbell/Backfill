@@ -29,6 +29,7 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     phone_e164: Mapped[Optional[str]] = mapped_column(String(24))
     email: Mapped[Optional[str]] = mapped_column(String(320))
     base_hourly_rate_cents: Mapped[Optional[int]] = mapped_column(Integer)
+    compliance_regular_rate_cents: Mapped[Optional[int]] = mapped_column(Integer)
     date_of_birth: Mapped[Optional[date]] = mapped_column(Date)
     minor_school_status: Mapped[Optional[str]] = mapped_column(String(32))
     work_permit_number: Mapped[Optional[str]] = mapped_column(String(80))

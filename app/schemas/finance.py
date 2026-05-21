@@ -191,6 +191,8 @@ class CompliancePayrollAdjustmentRead(BaseSchema):
     compliance_status: str
     profile_code: str | None = None
     premium_cents: int = 0
+    premium_rate_basis: str | None = None
+    premium_rate_hourly_cents: int | None = Field(default=None, ge=0)
     premium_rule_codes: list[str] = Field(default_factory=list)
     unresolved_premium_rule_codes: list[str] = Field(default_factory=list)
     premium_payment_required: bool = False

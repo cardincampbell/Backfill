@@ -137,6 +137,7 @@ import {
   complianceReasonLabel,
   dedupeComplianceSourceReferences,
   describeComplianceIssue,
+  describeCompliancePremiumRateBasis,
   describeComplianceSourceReference,
   humanizeComplianceCode,
   summarizeComplianceReviewItems,
@@ -5823,6 +5824,14 @@ function PredictiveComplianceReviewModal({
                                 references={issue.rule_source_references}
                                 dark={dark}
                               />
+                              {issue.premium_required ? (
+                                <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                  {describeCompliancePremiumRateBasis(
+                                    issue.premium_rate_basis,
+                                    issue.premium_rate_hourly_cents,
+                                  ) ?? "Premium basis needs review."}
+                                </p>
+                              ) : null}
                             </div>
                             <div className="flex flex-col items-start gap-2 md:items-end">
                               {issue.premium_required ? (
@@ -6347,6 +6356,11 @@ function ManualComplianceReviewModal({
                               <p className={`mt-2 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
                                 {guidance.detail}
                               </p>
+                              {guidance.premiumBasisLabel ? (
+                                <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
+                                  {guidance.premiumBasisLabel}
+                                </p>
+                              ) : null}
                               {guidance.recommendedAction ? (
                                 <p className={`mt-1 text-[11px] ${textSecondary}`} style={{ fontWeight: 430 }}>
                                   {guidance.recommendedAction}

@@ -207,6 +207,126 @@ def _new_york_hospitality_profile() -> labor_rules.LaborRuleProfileSnapshot:
     )
 
 
+def _new_york_factory_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="us_ny_factory_nonexempt",
+        jurisdiction_code="US-NY",
+        display_name="New York Factory Nonexempt",
+        overtime_mode="weekly_only",
+        daily_ot_threshold_hours=None,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code="manufacturing",
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "ny_factory_v1",
+            "day_of_rest_workweek_required": True,
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:ny_factory_break_rules",
+        payload_json={},
+    )
+
+
+def _colorado_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="us_co_general_nonexempt",
+        jurisdiction_code="US-CO",
+        display_name="Colorado General Nonexempt",
+        overtime_mode="daily_12_or_consecutive_plus_weekly",
+        daily_ot_threshold_hours=12.0,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=12.0,
+        industry_profile_code=None,
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "co_v1",
+            "rest_break_ruleset": "co_v1",
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:co_break_rules",
+        payload_json={},
+    )
+
+
+def _washington_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="us_wa_general_nonexempt",
+        jurisdiction_code="US-WA",
+        display_name="Washington General Nonexempt",
+        overtime_mode="weekly_only",
+        daily_ot_threshold_hours=None,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code=None,
+        rules_json={
+            "workweek_start_day_local": "sunday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "wa_v1",
+            "rest_break_ruleset": "wa_v1",
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:wa_break_rules",
+        payload_json={},
+    )
+
+
+def _oregon_profile() -> labor_rules.LaborRuleProfileSnapshot:
+    return labor_rules.LaborRuleProfileSnapshot(
+        profile_id=uuid4(),
+        code="us_or_general_nonexempt",
+        jurisdiction_code="US-OR",
+        display_name="Oregon General Nonexempt",
+        overtime_mode="weekly_only",
+        daily_ot_threshold_hours=None,
+        weekly_ot_threshold_hours=40.0,
+        double_time_threshold_hours=None,
+        consecutive_hours_threshold_hours=None,
+        industry_profile_code=None,
+        rules_json={
+            "workweek_start_day_local": "monday",
+            "workweek_start_time_local": "00:00",
+            "meal_break_ruleset": "or_v1",
+            "rest_break_ruleset": "or_v1",
+        },
+        effective_start_date=None,
+        effective_end_date=None,
+        source_urls=(),
+        source_version="seed",
+        source_hash="seed",
+        version_id=uuid4(),
+        version_no=1,
+        payload_hash="sha256:or_break_rules",
+        payload_json={},
+    )
+
+
 def _reliability_payload_for(employee_id) -> ReliabilitySnapshotPayload:
     return ReliabilitySnapshotPayload(
         generated_at=datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc),
@@ -1927,6 +2047,159 @@ async def test_attach_generated_demand_break_plans_to_inputs_plans_new_york_wind
 
 
 @pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_new_york_factory_hour_meal(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    location.timezone = "America/New_York"
+    location.region = "NY"
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].timezone = "America/New_York"
+    generated_demand.proposed_shifts[0].starts_at = datetime(2026, 4, 22, 14, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].ends_at = datetime(2026, 4, 22, 23, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].demand_key = f"{location.id}:{role.id}:2026-04-22T14:00:00+00:00"
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _new_york_factory_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    meal_break = next(
+        item
+        for item in generation_payload["planned_segments"][0]["breaks"]
+        if item["notes"] == "planned_midday_meal_break"
+    )
+    start_at = datetime.fromisoformat(meal_break["starts_at"])
+    end_at = datetime.fromisoformat(meal_break["ends_at"])
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert int(round((end_at - start_at).total_seconds() / 60.0)) == 60
+
+
+@pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_washington_meal_and_rest_breaks(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    location.timezone = "America/Los_Angeles"
+    location.region = "WA"
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].timezone = "America/Los_Angeles"
+    generated_demand.proposed_shifts[0].starts_at = datetime(2026, 4, 22, 16, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].ends_at = datetime(2026, 4, 23, 2, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].demand_key = f"{location.id}:{role.id}:2026-04-22T16:00:00+00:00"
+    generated_demand.proposed_shifts[0].generation_payload = {
+        "compliance_normal_workday_minutes": 420,
+        "compliance_normal_shift_starts_at": datetime(2026, 4, 22, 16, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_shift_ends_at": datetime(2026, 4, 22, 23, 0, tzinfo=timezone.utc).isoformat(),
+        "compliance_normal_workday_source": "preserved_live_extension",
+    }
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _washington_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    notes = [item["notes"] for item in generation_payload["planned_segments"][0]["breaks"]]
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert "planned_first_meal_break" in notes
+    assert "planned_additional_meal_break" in notes
+    assert notes.count("planned_rest_break") == 2
+
+
+@pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_oregon_meals_and_rest_breaks(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    location.timezone = "America/Los_Angeles"
+    location.region = "OR"
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].timezone = "America/Los_Angeles"
+    generated_demand.proposed_shifts[0].starts_at = datetime(2026, 4, 22, 15, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].ends_at = datetime(2026, 4, 23, 5, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].demand_key = f"{location.id}:{role.id}:2026-04-22T15:00:00+00:00"
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _oregon_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    notes = [item["notes"] for item in generation_payload["planned_segments"][0]["breaks"]]
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert "planned_first_meal_break" in notes
+    assert "planned_additional_meal_break" in notes
+    assert notes.count("planned_rest_break") == 3
+
+
+@pytest.mark.asyncio
+async def test_attach_generated_demand_break_plans_to_inputs_plans_colorado_meal_and_rest_breaks(monkeypatch):
+    session = FakeAutoSchedulerSession()
+    business = _make_business()
+    location = _make_location(business_id=business.id)
+    location.timezone = "America/Denver"
+    location.region = "CO"
+    role = _make_role(business_id=business.id)
+    generated_demand = _generated_demand_payload(location_id=location.id, role_id=role.id)
+    generated_demand.proposed_shifts[0].timezone = "America/Denver"
+    generated_demand.proposed_shifts[0].starts_at = datetime(2026, 4, 22, 14, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].ends_at = datetime(2026, 4, 23, 0, 0, tzinfo=timezone.utc)
+    generated_demand.proposed_shifts[0].demand_key = f"{location.id}:{role.id}:2026-04-22T14:00:00+00:00"
+
+    async def fake_runtime_resolved_profile(_session, *, location, business=None, as_of=None):
+        return _colorado_profile()
+
+    monkeypatch.setattr(labor_rules, "runtime_resolved_profile", fake_runtime_resolved_profile)
+
+    inputs, metadata = await auto_scheduler._attach_generated_demand_break_plans_to_inputs(
+        session,
+        business_id=business.id,
+        inputs=_run_inputs().model_copy(update={"generated_demand_payload": generated_demand}),
+        reference_time=datetime(2026, 4, 18, 12, 0, tzinfo=timezone.utc),
+        business_settings={},
+        generated_locations={location.id: location},
+    )
+
+    generation_payload = inputs.generated_demand_payload.proposed_shifts[0].generation_payload
+    notes = [item["notes"] for item in generation_payload["planned_segments"][0]["breaks"]]
+    assert metadata["compliance_break_planned_shift_count"] == 1
+    assert notes.count("planned_first_meal_break") == 1
+    assert notes.count("planned_rest_break") == 2
+
+
+@pytest.mark.asyncio
 async def test_build_scope_compliance_payload_includes_generated_shift_rows(monkeypatch):
     session = FakeAutoSchedulerSession()
     business = _make_business()
@@ -2036,6 +2309,7 @@ async def test_build_scope_compliance_payload_applies_override_artifacts_for_per
         reference_time,
         overtime_projection=None,
         employee_base_hourly_rate_cents=None,
+        employee_premium_hourly_rate_cents=None,
         employee_date_of_birth=None,
         employee_minor_school_status=None,
         employee_work_permit_number=None,

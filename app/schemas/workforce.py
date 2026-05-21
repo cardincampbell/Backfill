@@ -104,6 +104,7 @@ class EmployeeCreate(BaseSchema):
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
     base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    compliance_regular_rate_cents: Optional[int] = Field(default=None, ge=0)
     date_of_birth: Optional[date] = None
     minor_school_status: Optional[str] = None
     work_permit_number: Optional[str] = None
@@ -152,6 +153,7 @@ class EmployeeRead(BaseSchema):
     phone_e164: Optional[str]
     email: Optional[str]
     base_hourly_rate_cents: Optional[int] = None
+    compliance_regular_rate_cents: Optional[int] = None
     date_of_birth: Optional[date] = None
     minor_school_status: Optional[str] = None
     work_permit_number: Optional[str] = None
@@ -190,6 +192,7 @@ class EmployeeEnrollAtLocationCreate(BaseSchema):
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
     base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    compliance_regular_rate_cents: Optional[int] = Field(default=None, ge=0)
     date_of_birth: Optional[date] = None
     minor_school_status: Optional[str] = None
     work_permit_number: Optional[str] = None
@@ -300,6 +303,7 @@ class EmployeeUpdate(BaseSchema):
     employee_number: Optional[str] = None
     employment_type: Optional[str] = None
     base_hourly_rate_cents: Optional[int] = Field(default=None, ge=0)
+    compliance_regular_rate_cents: Optional[int] = Field(default=None, ge=0)
     date_of_birth: Optional[date] = None
     minor_school_status: Optional[str] = None
     work_permit_number: Optional[str] = None

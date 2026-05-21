@@ -303,13 +303,14 @@ async def runtime_resolved_profile(
     business: Business | None = None,
     as_of: datetime | None = None,
 ) -> LaborRuleProfileSnapshot | None:
+    target_jurisdiction = resolve_jurisdiction_code(location)
     resolution = await load_authoritative_location_resolution(session, location_id=location.id)
     if resolution is not None:
         snapshot = await load_profile_snapshot_by_version_id(session, resolution.resolved_profile_version_id)
         if snapshot is not None and _is_profile_effective(snapshot, as_of_date=(as_of or datetime.now(timezone.utc)).date()):
             return snapshot
 
-    profiles = await active_profiles_for_jurisdiction(session, resolve_jurisdiction_code(location), as_of=as_of)
+    profiles = await active_profiles_for_jurisdiction(session, target_jurisdiction, as_of=as_of)
     if not profiles:
         return None
 
@@ -321,10 +322,20 @@ async def runtime_resolved_profile(
 
     if industry_code:
         matching = [profile for profile in profiles if profile.industry_profile_code == industry_code]
+        exact_jurisdiction_matches = [
+            profile for profile in matching if profile.jurisdiction_code == target_jurisdiction
+        ]
+        if len(exact_jurisdiction_matches) == 1:
+            return exact_jurisdiction_matches[0]
         if len(matching) == 1:
             return matching[0]
 
     generic_profiles = [profile for profile in profiles if not profile.industry_profile_code]
+    exact_jurisdiction_generics = [
+        profile for profile in generic_profiles if profile.jurisdiction_code == target_jurisdiction
+    ]
+    if len(exact_jurisdiction_generics) == 1:
+        return exact_jurisdiction_generics[0]
     if len(generic_profiles) == 1:
         return generic_profiles[0]
     if len(profiles) == 1:
@@ -697,6 +708,73 @@ def evaluate_overtime_projection(
             "evaluation_reference_time": reference_time.isoformat(),
         }
 
+    buckets = overtime_projection_buckets(
+        profile,
+        candidate_shift=candidate_shift,
+        counted_intervals=counted_intervals,
+    )
+    projected_regular_hours = _as_float(buckets.get("projected_regular_hours")) or 0.0
+    projected_ot_hours = _as_float(buckets.get("projected_ot_hours")) or 0.0
+    projected_dt_hours = _as_float(buckets.get("projected_dt_hours")) or 0.0
+    projected_total_hours = _as_float(buckets.get("projected_total_hours")) or 0.0
+    projected_max_day_hours = _as_float(buckets.get("projected_max_day_hours")) or 0.0
+    week_hours_total = _as_float(buckets.get("week_hours_total")) or 0.0
+    candidate_day_hours = _as_float(buckets.get("candidate_day_hours")) or 0.0
+    reason_codes_list = list(buckets.get("reason_codes") or []) or ["no_overtime_triggered"]
+
+    weighted_cost = projected_regular_hours + (1.5 * projected_ot_hours) + (2.0 * projected_dt_hours)
+    projected_cost_multiplier = round(weighted_cost / projected_total_hours, 4) if projected_total_hours > 0 else 1.0
+
+    status = "clear"
+    if projected_dt_hours > 0:
+        status = "high"
+    elif projected_ot_hours > 0:
+        status = "elevated"
+    else:
+        weekly_threshold = float(profile.weekly_ot_threshold_hours or 0.0)
+        daily_threshold = float(profile.daily_ot_threshold_hours or 0.0)
+        if (
+            (weekly_threshold > 0 and weekly_threshold - week_hours_total <= 4.0)
+            or (daily_threshold > 0 and daily_threshold - candidate_day_hours <= 2.0)
+        ):
+            status = "watch"
+
+    return {
+        "profile_code": profile.code,
+        "profile_version_id": str(profile.version_id),
+        "profile_payload_hash": profile.payload_hash,
+        "jurisdiction_code": profile.jurisdiction_code,
+        "status": status,
+        "projected_regular_hours": round(projected_regular_hours, 2),
+        "projected_ot_hours": round(projected_ot_hours, 2),
+        "projected_dt_hours": round(projected_dt_hours, 2),
+        "projected_total_hours": round(projected_total_hours, 2),
+        "projected_max_day_hours": round(projected_max_day_hours, 2),
+        "projected_cost_multiplier": round(projected_cost_multiplier, 4),
+        "reason_codes": reason_codes_list,
+        "evaluation_source": "deterministic_profile_engine",
+        "evaluation_reference_time": reference_time.isoformat(),
+    }
+
+
+def overtime_projection_buckets(
+    profile: LaborRuleProfileSnapshot | None,
+    *,
+    candidate_shift: Shift,
+    counted_intervals: Sequence[CountedInterval],
+) -> dict[str, object]:
+    if profile is None:
+        return {
+            "projected_regular_hours": 0.0,
+            "projected_ot_hours": 0.0,
+            "projected_dt_hours": 0.0,
+            "projected_total_hours": 0.0,
+            "projected_max_day_hours": 0.0,
+            "reason_codes": ["no_matching_labor_rule_profile"],
+            "week_hours_total": 0.0,
+            "candidate_day_hours": 0.0,
+        }
+
     workweek_start, workweek_end = workweek_window_for_shift(profile, shift=candidate_shift)
     projected_intervals = _merge_intervals([*counted_intervals, _candidate_interval(candidate_shift)])
     week_hours_total = _interval_duration_hours(
@@ -747,41 +825,20 @@ def evaluate_overtime_projection(
                 total_ot += additional_ot
             reason_codes.add("consecutive_hours_triggered")
 
-    weighted_cost = total_regular + (1.5 * total_ot) + (2.0 * total_dt)
     total_hours = total_regular + total_ot + total_dt
-    projected_cost_multiplier = round(weighted_cost / total_hours, 4) if total_hours > 0 else 1.0
-
-    status = "clear"
-    if total_dt > 0:
-        status = "high"
-    elif total_ot > 0:
-        status = "elevated"
-    else:
-        weekly_threshold = float(profile.weekly_ot_threshold_hours or 0.0)
-        daily_threshold = float(profile.daily_ot_threshold_hours or 0.0)
-        candidate_day_hours = hours_by_day.get(candidate_shift.starts_at.astimezone(ZoneInfo(candidate_shift.timezone)).date(), 0.0)
-        if (
-            (weekly_threshold > 0 and weekly_threshold - week_hours_total <= 4.0)
-            or (daily_threshold > 0 and daily_threshold - candidate_day_hours <= 2.0)
-        ):
-            status = "watch"
-
-    reason_codes_list = sorted(reason_codes) or ["no_overtime_triggered"]
+    candidate_day_hours = hours_by_day.get(
+        candidate_shift.starts_at.astimezone(ZoneInfo(candidate_shift.timezone)).date(),
+        0.0,
+    )
     return {
-        "profile_code": profile.code,
-        "profile_version_id": str(profile.version_id),
-        "profile_payload_hash": profile.payload_hash,
-        "jurisdiction_code": profile.jurisdiction_code,
-        "status": status,
-        "projected_regular_hours": round(total_regular, 2),
-        "projected_ot_hours": round(total_ot, 2),
-        "projected_dt_hours": round(total_dt, 2),
-        "projected_total_hours": round(total_hours, 2),
-        "projected_max_day_hours": round(max(hours_by_day.values(), default=0.0), 2),
-        "projected_cost_multiplier": round(projected_cost_multiplier, 4),
-        "reason_codes": reason_codes_list,
-        "evaluation_source": "deterministic_profile_engine",
-        "evaluation_reference_time": reference_time.isoformat(),
+        "projected_regular_hours": round(total_regular, 4),
+        "projected_ot_hours": round(total_ot, 4),
+        "projected_dt_hours": round(total_dt, 4),
+        "projected_total_hours": round(total_hours, 4),
+        "projected_max_day_hours": round(max(hours_by_day.values(), default=0.0), 4),
+        "reason_codes": sorted(reason_codes) or ["no_overtime_triggered"],
+        "week_hours_total": round(week_hours_total, 4),
+        "candidate_day_hours": round(candidate_day_hours, 4),
     }
 
 

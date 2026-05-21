@@ -238,6 +238,12 @@ def test_ensure_predictive_schedule_route_returns_compliance_summary(monkeypatch
                             {
                                 "rule_code": "meal_break_first_window",
                                 "status": "warning",
+                                "premium_required": True,
+                                "premium_type": "wage_dependent_unresolved",
+                                "premium_cents": 0,
+                                "premium_rate_basis": "wage_basis_missing",
+                                "premium_rate_hourly_cents": None,
+                                "reason_codes": ["wage_dependent_premium_unresolved"],
                                 "artifact_type_allowed": "meal_waiver",
                             }
                         ],
@@ -320,6 +326,8 @@ def test_ensure_predictive_schedule_route_returns_compliance_summary(monkeypatch
         assert payload["compliance_review_items"][0]["override_eligible_artifact_types"] == ["meal_waiver"]
         assert payload["compliance_review_items"][0]["issues"][0]["rule_code"] == "meal_break_first_window"
         assert payload["compliance_review_items"][0]["issues"][0]["artifact_type_allowed"] == "meal_waiver"
+        assert payload["compliance_review_items"][0]["issues"][0]["premium_rate_basis"] == "wage_basis_missing"
+        assert payload["compliance_review_items"][0]["issues"][0]["premium_rate_hourly_cents"] is None
         assert payload["compliance_review_items"][0]["issues"][0]["rule_source_references"] == [
             {
                 "rule_code": "meal_break_first_window",

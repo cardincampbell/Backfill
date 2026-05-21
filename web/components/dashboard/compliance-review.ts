@@ -32,6 +32,13 @@ export function complianceArtifactRecordedLabel(value: string | null | undefined
   return value === "meal_waiver" ? "Meal waiver applied" : "Consent artifact applied";
 }
 
+function formatHourlyRateLabel(hourlyRateCents: number | null | undefined) {
+  if ((hourlyRateCents ?? 0) <= 0) {
+    return null;
+  }
+  return `${USD_FORMATTER.format((hourlyRateCents ?? 0) / 100)}/hr`;
+}
+
 export function complianceReasonLabel(value: string) {
   const normalized = value.trim().toLowerCase();
   const labels: Record<string, string> = {
@@ -45,6 +52,9 @@ export function complianceReasonLabel(value: string) {
     spread_of_hours_detected: "Spread-of-hours threshold exceeded",
     minimum_rest_window_violation: "Required rest window not met",
     first_meal_break_missing: "First meal break missing",
+    meal_break_wages_due: "Missed meal-break wages are due",
+    meal_break_wages_include_overtime: "Missed meal-break wages include overtime",
+    additional_meal_break_missing: "Additional meal break missing",
     second_meal_break_missing: "Second meal break missing",
     midday_meal_break_missing: "Midday meal break missing",
     evening_meal_break_missing: "Evening meal break missing",
@@ -52,7 +62,11 @@ export function complianceReasonLabel(value: string) {
     midday_meal_break_scheduled: "Midday meal break scheduled",
     evening_meal_break_scheduled: "Evening meal break scheduled",
     midshift_meal_break_scheduled: "Midshift meal break scheduled",
+    additional_meal_break_scheduled: "Additional meal break scheduled",
     rest_break_quota_missing: "Required paid rest break missing",
+    rest_break_timing_gap_exceeded: "Rest break timing gap exceeded",
+    rest_break_wages_due: "Missed rest-break wages are due",
+    rest_break_wages_include_overtime: "Missed rest-break wages include overtime",
     consecutive_workday_limit_exceeded: "Consecutive-day limit exceeded",
     consecutive_workday_limit_satisfied: "Consecutive-day limit satisfied",
     seven_consecutive_workdays_projected: "Seven consecutive workdays projected",
@@ -104,6 +118,36 @@ export function humanizeComplianceSourceKind(value: string | null | undefined) {
     unknown: "Source needs review",
   };
   return labels[normalized] ?? humanizeComplianceCode(normalized || "compliance_source");
+}
+
+export function describeCompliancePremiumRateBasis(
+  basis: string | null | undefined,
+  hourlyRateCents: number | null | undefined,
+) {
+  const normalized = (basis ?? "").trim().toLowerCase();
+  const hourlyLabel = formatHourlyRateLabel(hourlyRateCents);
+  switch (normalized) {
+    case "employee_compliance_regular_rate":
+      return hourlyLabel
+        ? `Using saved compliance premium rate (${hourlyLabel}).`
+        : "Using saved compliance premium rate.";
+    case "employee_base_hourly_rate_fallback":
+      return hourlyLabel
+        ? `Using base hourly fallback (${hourlyLabel}).`
+        : "Using base hourly fallback.";
+    case "configured_fixed_cents":
+      return "Using configured fixed premium amount.";
+    case "minimum_wage_floor":
+      return hourlyLabel
+        ? `Using configured minimum-wage floor (${hourlyLabel}).`
+        : "Using configured minimum-wage floor.";
+    case "wage_basis_missing":
+      return "Missing wage basis for final premium pricing.";
+    case "projected_cost_multiplier":
+      return "Using projected overtime cost multiplier.";
+    default:
+      return null;
+  }
 }
 
 export function dedupeComplianceSourceReferences(
@@ -318,6 +362,9 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
   } else if (normalizedRuleCode === "meal_break_second_window") {
     title = "Second meal break is missing";
     detail = "This long shift needs a compliant second meal break unless a valid waiver applies.";
+  } else if (normalizedRuleCode === "meal_break_additional_window") {
+    title = "Additional meal period is missing";
+    detail = "This Washington shift extends far enough that it needs another compliant meal period later in the shift or overtime window.";
   } else if (normalizedRuleCode === "meal_break_midday_window") {
     title = "Midday meal period is missing";
     detail = "This New York shift extends over the noonday period and needs a compliant meal break between 11:00 AM and 2:00 PM.";
@@ -329,7 +376,10 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
     detail = "This New York evening or overnight shift needs a compliant midshift meal period near the middle of the shift.";
   } else if (normalizedRuleCode === "paid_rest_break_quota") {
     title = "Paid rest break quota is missing";
-    detail = "This shift structure does not currently include enough paid rest break time.";
+    detail =
+      reasonCodes.has("rest_break_timing_gap_exceeded")
+        ? "This shift structure either skips required paid rest breaks or leaves too much continuous work time between them."
+        : "This shift structure does not currently include enough paid rest break time.";
   } else if (normalizedRuleCode === "split_shift_premium") {
     title = "Split-shift premium applies";
     detail = "The current segment layout creates a split shift and can trigger a premium obligation.";
@@ -466,10 +516,18 @@ export function describeComplianceIssue(issue: ComplianceReviewIssue) {
     premiumLabel = "Premium applies";
   }
 
+  const premiumBasisLabel = issue.premium_required
+    ? describeCompliancePremiumRateBasis(
+        issue.premium_rate_basis,
+        issue.premium_rate_hourly_cents,
+      )
+    : null;
+
   return {
     title,
     detail,
     recommendedAction,
     premiumLabel,
+    premiumBasisLabel,
   };
 }

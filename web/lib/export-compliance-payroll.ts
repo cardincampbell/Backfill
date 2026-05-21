@@ -37,6 +37,34 @@ function formatMoney(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
+function formatHourlyRate(cents: number | null | undefined) {
+  if ((cents ?? 0) <= 0) {
+    return "";
+  }
+  return (Number(cents) / 100).toFixed(2);
+}
+
+function formatPremiumRateBasis(
+  row: LocationCompliancePayrollExport["rows"][number],
+) {
+  switch ((row.premium_rate_basis ?? "").trim().toLowerCase()) {
+    case "employee_compliance_regular_rate":
+      return "saved_compliance_premium_rate";
+    case "employee_base_hourly_rate_fallback":
+      return "base_hourly_fallback";
+    case "configured_fixed_cents":
+      return "configured_fixed_premium";
+    case "minimum_wage_floor":
+      return "minimum_wage_floor";
+    case "wage_basis_missing":
+      return "wage_basis_missing";
+    case "projected_cost_multiplier":
+      return "projected_cost_multiplier";
+    default:
+      return row.premium_rate_basis ?? "";
+  }
+}
+
 function safeFilename(
   locationName: string,
   weekLabel: string,
@@ -137,6 +165,8 @@ function payrollCsvHeaderForProfile(
         "Shift End",
         "Compliance Status",
         "Source Rule",
+        "Premium Basis",
+        "Premium Rate USD/Hour",
         "Rule Sources",
         "Notes",
       ];
@@ -154,6 +184,8 @@ function payrollCsvHeaderForProfile(
         "Shift End",
         "Compliance Status",
         "Source Rule",
+        "Premium Basis",
+        "Premium Rate USD/Hour",
         "Rule Sources",
         "Notes",
       ];
@@ -172,6 +204,8 @@ function payrollCsvHeaderForProfile(
         "Compliance Status",
         "Manual Review Required",
         "Source Rule",
+        "Premium Basis",
+        "Premium Rate USD/Hour",
         "Rule Sources",
         "Notes",
       ];
@@ -194,6 +228,8 @@ function payrollCsvHeaderForProfile(
         "Source Rule",
         "Premium Cents",
         "Premium USD",
+        "Premium Basis",
+        "Premium Rate USD/Hour",
         "Premium Rules",
         "Unresolved Premium Rules",
         "Premium Payment Required",
@@ -227,6 +263,8 @@ function payrollCsvRowForProfile(
         row.ends_at,
         row.compliance_status,
         row.source_rule_code ?? "",
+        formatPremiumRateBasis(row),
+        formatHourlyRate(row.premium_rate_hourly_cents),
         ruleSources,
         notes,
       ];
@@ -244,6 +282,8 @@ function payrollCsvRowForProfile(
         row.ends_at,
         row.compliance_status,
         row.source_rule_code ?? "",
+        formatPremiumRateBasis(row),
+        formatHourlyRate(row.premium_rate_hourly_cents),
         ruleSources,
         notes,
       ];
@@ -262,6 +302,8 @@ function payrollCsvRowForProfile(
         row.compliance_status,
         row.manual_review_required ? "yes" : "no",
         row.source_rule_code ?? "",
+        formatPremiumRateBasis(row),
+        formatHourlyRate(row.premium_rate_hourly_cents),
         ruleSources,
         notes,
       ];
@@ -284,6 +326,8 @@ function payrollCsvRowForProfile(
         row.source_rule_code ?? "",
         String(row.premium_cents),
         formatMoney(row.premium_cents),
+        formatPremiumRateBasis(row),
+        formatHourlyRate(row.premium_rate_hourly_cents),
         row.premium_rule_codes.join("; "),
         row.unresolved_premium_rule_codes.join("; "),
         row.premium_payment_required ? "yes" : "no",

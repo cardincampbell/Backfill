@@ -982,6 +982,14 @@ def _schedule_run_compliance_review_issues(
                     default=0,
                     minimum=0,
                 ),
+                "premium_rate_basis": str(result.get("premium_rate_basis") or "").strip() or None,
+                "premium_rate_hourly_cents": _int_setting(
+                    result.get("premium_rate_hourly_cents"),
+                    default=0,
+                    minimum=0,
+                )
+                if result.get("premium_rate_hourly_cents") is not None
+                else None,
                 "unresolved_premium": premium_type == "wage_dependent_unresolved",
                 "would_block": bool(result.get("would_block")),
                 "artifact_type_allowed": artifact_type_allowed,
@@ -1004,6 +1012,8 @@ def _schedule_run_compliance_review_issues(
                 "premium_required": False,
                 "premium_type": None,
                 "premium_cents": 0,
+                "premium_rate_basis": None,
+                "premium_rate_hourly_cents": None,
                 "unresolved_premium": False,
                 "would_block": False,
                 "artifact_type_allowed": None,
@@ -3074,6 +3084,7 @@ async def _build_scope_compliance_payload(
                     counted_intervals=(),
                     reference_time=reference_time,
                     employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+                    employee_premium_hourly_rate_cents=getattr(employee, "compliance_regular_rate_cents", None),
                     employee_date_of_birth=getattr(employee, "date_of_birth", None),
                     employee_minor_school_status=getattr(employee, "minor_school_status", None),
                     employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -3128,6 +3139,7 @@ async def _build_scope_compliance_payload(
                     reference_time=reference_time,
                     overtime_projection=overtime_projection,
                     employee_base_hourly_rate_cents=getattr(employee, "base_hourly_rate_cents", None),
+                    employee_premium_hourly_rate_cents=getattr(employee, "compliance_regular_rate_cents", None),
                     employee_date_of_birth=getattr(employee, "date_of_birth", None),
                     employee_minor_school_status=getattr(employee, "minor_school_status", None),
                     employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -3252,6 +3264,25 @@ async def _attach_generated_demand_break_plans_to_inputs(
             ),
         )
         if planned_segments:
+            generation_payload.setdefault(
+                "compliance_normal_workday_minutes",
+                max(
+                    0,
+                    int(round((proposed_shift.ends_at - proposed_shift.starts_at).total_seconds() / 60.0)),
+                ),
+            )
+            generation_payload.setdefault(
+                "compliance_normal_shift_starts_at",
+                proposed_shift.starts_at.isoformat(),
+            )
+            generation_payload.setdefault(
+                "compliance_normal_shift_ends_at",
+                proposed_shift.ends_at.isoformat(),
+            )
+            generation_payload.setdefault(
+                "compliance_normal_workday_source",
+                "generated_shift",
+            )
             generation_payload.update(
                 {
                     "planned_segments": planned_segments,

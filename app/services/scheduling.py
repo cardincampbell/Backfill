@@ -72,6 +72,10 @@ _LIVE_SHIFT_LIFECYCLE_STATUSES = {
 }
 _PUBLISHED_AMENDMENT_METADATA_KEY = "published_amendment"
 _SHIFT_HISTORICAL_ARTIFACTS_KEY = "historical_artifacts"
+_COMPLIANCE_NORMAL_WORKDAY_MINUTES_KEY = "compliance_normal_workday_minutes"
+_COMPLIANCE_NORMAL_SHIFT_STARTS_AT_KEY = "compliance_normal_shift_starts_at"
+_COMPLIANCE_NORMAL_SHIFT_ENDS_AT_KEY = "compliance_normal_shift_ends_at"
+_COMPLIANCE_NORMAL_WORKDAY_SOURCE_KEY = "compliance_normal_workday_source"
 
 
 class ShiftAssignmentConflictError(Exception):
@@ -237,6 +241,82 @@ def _assignment_employee_name(assignment: ShiftAssignment | None) -> str | None:
         if name:
             return name
     return None
+
+
+def _shift_duration_minutes(*, starts_at: datetime, ends_at: datetime) -> int:
+    return max(0, int(round((ends_at - starts_at).total_seconds() / 60.0)))
+
+
+def _metadata_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _synchronize_shift_normal_workday_metadata(
+    shift: Shift,
+    *,
+    previous_starts_at: datetime | None = None,
+    previous_ends_at: datetime | None = None,
+    previous_metadata: Mapping[str, object] | None = None,
+    preserve_previous_for_live_extension: bool = False,
+) -> bool:
+    current_metadata = dict(shift.shift_metadata or {})
+    next_metadata = dict(current_metadata)
+
+    explicit_start = _metadata_datetime(current_metadata.get(_COMPLIANCE_NORMAL_SHIFT_STARTS_AT_KEY))
+    explicit_end = _metadata_datetime(current_metadata.get(_COMPLIANCE_NORMAL_SHIFT_ENDS_AT_KEY))
+    explicit_minutes = current_metadata.get(_COMPLIANCE_NORMAL_WORKDAY_MINUTES_KEY)
+    if (
+        isinstance(explicit_minutes, int)
+        and explicit_minutes > 0
+        and explicit_start is not None
+        and explicit_end is not None
+        and explicit_end > explicit_start
+    ):
+        baseline_start = explicit_start
+        baseline_end = explicit_end
+        baseline_source = str(
+            current_metadata.get(_COMPLIANCE_NORMAL_WORKDAY_SOURCE_KEY) or "metadata_preserved"
+        )
+    elif preserve_previous_for_live_extension:
+        raw_previous_metadata = dict(previous_metadata or {})
+        baseline_start = (
+            _metadata_datetime(raw_previous_metadata.get(_COMPLIANCE_NORMAL_SHIFT_STARTS_AT_KEY))
+            or previous_starts_at
+            or shift.starts_at
+        )
+        baseline_end = (
+            _metadata_datetime(raw_previous_metadata.get(_COMPLIANCE_NORMAL_SHIFT_ENDS_AT_KEY))
+            or previous_ends_at
+            or shift.ends_at
+        )
+        if baseline_end <= baseline_start:
+            baseline_start = previous_starts_at or shift.starts_at
+            baseline_end = previous_ends_at or shift.ends_at
+        baseline_source = "preserved_live_extension"
+    else:
+        baseline_start = shift.starts_at
+        baseline_end = shift.ends_at
+        baseline_source = "current_shift"
+
+    next_metadata[_COMPLIANCE_NORMAL_WORKDAY_MINUTES_KEY] = _shift_duration_minutes(
+        starts_at=baseline_start,
+        ends_at=baseline_end,
+    )
+    next_metadata[_COMPLIANCE_NORMAL_SHIFT_STARTS_AT_KEY] = baseline_start.isoformat()
+    next_metadata[_COMPLIANCE_NORMAL_SHIFT_ENDS_AT_KEY] = baseline_end.isoformat()
+    next_metadata[_COMPLIANCE_NORMAL_WORKDAY_SOURCE_KEY] = baseline_source
+    if next_metadata == current_metadata:
+        return False
+    shift.shift_metadata = next_metadata
+    return True
 
 
 def _assignment_read(assignment: ShiftAssignment | None) -> ShiftAssignmentRead | None:
@@ -737,6 +817,14 @@ def _schedule_week_publish_review_issues(
                     default=0,
                     minimum=0,
                 ),
+                "premium_rate_basis": str(result.get("premium_rate_basis") or "").strip() or None,
+                "premium_rate_hourly_cents": _publish_review_int_setting(
+                    result.get("premium_rate_hourly_cents"),
+                    default=0,
+                    minimum=0,
+                )
+                if result.get("premium_rate_hourly_cents") is not None
+                else None,
                 "unresolved_premium": premium_type == "wage_dependent_unresolved",
                 "would_block": bool(result.get("would_block")),
                 "artifact_type_allowed": artifact_type_allowed,
@@ -758,6 +846,8 @@ def _schedule_week_publish_review_issues(
                 "premium_required": False,
                 "premium_type": None,
                 "premium_cents": 0,
+                "premium_rate_basis": None,
+                "premium_rate_hourly_cents": None,
                 "unresolved_premium": False,
                 "would_block": False,
                 "artifact_type_allowed": None,
@@ -890,6 +980,7 @@ async def _resolve_assignment_compliance(
             counted_intervals=(),
             reference_time=reference_time,
             employee_base_hourly_rate_cents=employee.base_hourly_rate_cents,
+            employee_premium_hourly_rate_cents=employee.compliance_regular_rate_cents,
             employee_date_of_birth=employee.date_of_birth,
             employee_minor_school_status=employee.minor_school_status,
             employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -936,6 +1027,7 @@ async def _resolve_assignment_compliance(
         reference_time=reference_time,
         overtime_projection=overtime_projection,
         employee_base_hourly_rate_cents=employee.base_hourly_rate_cents,
+        employee_premium_hourly_rate_cents=employee.compliance_regular_rate_cents,
         employee_date_of_birth=employee.date_of_birth,
         employee_minor_school_status=employee.minor_school_status,
         employee_work_permit_number=work_permit_context.get("permit_number"),
@@ -1708,6 +1800,7 @@ async def create_shift(session: AsyncSession, business_id: UUID, payload: ShiftC
         notes=payload.notes,
         shift_metadata=payload.shift_metadata,
     )
+    _synchronize_shift_normal_workday_metadata(shift)
     _replace_shift_segments(shift, payload.segments)
     _synchronize_shift_structure_metadata(shift)
     session.add(shift)
@@ -1737,6 +1830,10 @@ async def update_shift(
         raise ValueError("cancelled_shift_update_not_allowed")
 
     changed = False
+    previous_starts_at = shift.starts_at
+    previous_ends_at = shift.ends_at
+    previous_metadata = dict(shift.shift_metadata or {})
+    was_live_shift = _is_live_shift(shift)
 
     if payload.role_id is not None and payload.role_id != shift.role_id:
         role = await session.get(Role, payload.role_id)
@@ -1795,6 +1892,17 @@ async def update_shift(
         changed = True
     if payload.shift_metadata is not None and payload.shift_metadata != shift.shift_metadata:
         shift.shift_metadata = payload.shift_metadata
+        changed = True
+    preserve_previous_normal_workday = was_live_shift and (
+        shift.starts_at < previous_starts_at or shift.ends_at > previous_ends_at
+    )
+    if _synchronize_shift_normal_workday_metadata(
+        shift,
+        previous_starts_at=previous_starts_at,
+        previous_ends_at=previous_ends_at,
+        previous_metadata=previous_metadata,
+        preserve_previous_for_live_extension=preserve_previous_normal_workday,
+    ):
         changed = True
     if _synchronize_shift_structure_metadata(shift):
         changed = True

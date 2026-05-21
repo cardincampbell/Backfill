@@ -199,11 +199,13 @@ async def test_create_employee_persists_base_hourly_rate(monkeypatch):
             phone_e164="+15555550123",
             email="jamie@example.com",
             base_hourly_rate_cents=2150,
+            compliance_regular_rate_cents=2375,
             employee_metadata={"source": "team_ui"},
         ),
     )
 
     assert employee.base_hourly_rate_cents == 2150
+    assert employee.compliance_regular_rate_cents == 2375
 
 
 @pytest.mark.asyncio
@@ -979,6 +981,7 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
         phone_e164="+15555550123",
         email="jamie@example.com",
         base_hourly_rate_cents=1800,
+        compliance_regular_rate_cents=2100,
         status="active",
         employee_metadata={},
         created_at=now,
@@ -1054,6 +1057,7 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
         employee_id,
         workforce.EmployeeUpdate(
             base_hourly_rate_cents=2250,
+            compliance_regular_rate_cents=2550,
             notification_preferences=workforce.EmployeeNotificationPreferencesUpdate(
                 schedule_publish_sms_enabled=True,
                 sms_opt_out_reason="manager_enabled_after_consent",
@@ -1066,6 +1070,7 @@ async def test_update_employee_hydrates_role_and_location_assignments(monkeypatc
     assert updated.role_ids == [role_id]
     assert updated.location_ids == [location_id]
     assert updated.base_hourly_rate_cents == 2250
+    assert updated.compliance_regular_rate_cents == 2550
     payload = EmployeeProfileRead.model_validate(updated)
     assert payload.roles[0].role_name == "Server"
     assert payload.locations[0].location_name == "Pasadena"
@@ -1811,6 +1816,20 @@ def test_parse_employee_import_file_parses_hourly_pay_rate_to_cents():
     assert errors == []
     assert len(employees) == 1
     assert employees[0].base_hourly_rate_cents == 1875
+
+
+def test_parse_employee_import_file_parses_compliance_regular_rate_to_cents():
+    employees, errors = parse_employee_import_file(
+        "employees.csv",
+        (
+            b"first_name,last_name,email_address,phone_number,regular_rate\n"
+            b"Jamie,Rivera,jamie@example.com,+15555550123,21.40\n"
+        ),
+    )
+
+    assert errors == []
+    assert len(employees) == 1
+    assert employees[0].compliance_regular_rate_cents == 2140
 
 
 def test_parse_employee_import_file_parses_minor_compliance_fields():
